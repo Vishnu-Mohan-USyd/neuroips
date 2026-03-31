@@ -1,0 +1,89 @@
+# ============================================================
+# Default hyperparameters for Laminar V1-V2 Expectation Model
+# ============================================================
+
+model:
+  # Orientation space
+  n_orientations: 36          # 0-175 deg in 5 deg steps
+  orientation_range: 180.0    # 180-periodic
+
+  # V1 L4
+  sigma_ff: 12.0              # Feedforward tuning width (degrees)
+  tau_l4: 5                   # L4 membrane time constant (timesteps)
+  tau_adaptation: 200         # Adaptation time constant (timesteps)
+  alpha_adaptation: 0.3       # Adaptation strength
+  adaptation_clamp: 10.0      # Max adaptation value
+  naka_rushton_n: 2.0         # Naka-Rushton exponent
+  naka_rushton_c50: 0.3       # Naka-Rushton half-saturation contrast
+
+  # PV pool
+  tau_pv: 5                   # PV time constant (timesteps)
+  sigma_norm: 1.0             # Divisive normalization constant (sigma^2)
+
+  # V1 L2/3
+  tau_l23: 10                  # L2/3 membrane time constant (timesteps)
+  sigma_rec: 15.0             # Recurrent kernel width (degrees)
+  gain_rec: 0.3               # Recurrent kernel gain
+
+  # SOM
+  tau_som: 10                 # SOM time constant (timesteps)
+
+  # V2 context
+  v2_hidden_dim: 16           # GRU hidden dimension
+  pi_max: 5.0                 # Max prediction precision
+
+  # Deep template
+  template_gain: 1.0          # Deep template gain
+
+  # Feedback mechanism
+  mechanism: "center_surround"  # One of: dampening, sharpening, center_surround, adaptation_only, predictive_error
+
+  # Numerical stability
+  dt: 1                       # Simulation timestep (dimensionless)
+
+training:
+  # Stage 1: Sensory scaffold
+  stage1:
+    n_steps: 2000
+    lr: 1.0e-3
+    contrast_range: [0.1, 1.0]
+
+  # Stage 2: V2 + Feedback
+  stage2:
+    n_steps: 80000
+    lr_v2: 3.0e-4
+    lr_feedback: 1.0e-4
+    weight_decay: 1.0e-4
+    warmup_steps: 1000
+    gradient_clip: 1.0
+    contrast_range: [0.15, 1.0]
+    ambiguous_fraction: 0.15
+
+  # Loss weights
+  lambda_sensory: 1.0
+  lambda_pred: 0.5
+  lambda_energy: 0.01
+  lambda_homeo: 1.0
+
+  # Batching
+  batch_size: 32
+  seq_length: 50              # Presentations per sequence
+  steps_on: 8                 # Timesteps per grating
+  steps_isi: 4                # Inter-stimulus interval
+
+  # Seeds for mechanism comparison
+  n_seeds: 5
+
+stimulus:
+  # HMM transition structure
+  n_states: 3                 # CW, CCW, neutral
+  p_transition_cw: 0.80       # CW transition probability
+  p_transition_ccw: 0.80      # CCW transition probability
+  p_self: 0.95                # Self-transition probability
+  n_anchors: 12               # Canonical orientations (15 deg spacing)
+  jitter_range: 7.5           # Jitter around anchors (degrees)
+  transition_step: 15.0       # CW/CCW step size (degrees)
+
+  # Task state
+  cue_dim: 2                  # Cue input dimension (zeroed by default)
+  task_state_dim: 2           # Task state dimension [relevant, irrelevant]
