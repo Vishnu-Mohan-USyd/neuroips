@@ -57,6 +57,9 @@ class ModelConfig:
     # Feedback mechanism
     mechanism: MechanismType = MechanismType.CENTER_SURROUND
 
+    # V2 input mode: 'l23' (default), 'l4', or 'l4_l23'
+    v2_input_mode: str = 'l23'
+
     # Numerical stability
     dt: int = 1
 

@@ -47,7 +47,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        q_pred, pi_pred, state_logits, h_v2_new = v2(r_l23, cue, task_state, h_v2)
+        q_pred, pi_pred, state_logits, h_v2_new = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
         assert q_pred.shape == (B, N)
         assert pi_pred.shape == (B, 1)
@@ -62,7 +62,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        q_pred, _, _, _ = v2(r_l23, cue, task_state, h_v2)
+        q_pred, _, _, _ = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
         assert torch.allclose(q_pred.sum(dim=-1), torch.ones(B), atol=1e-5)
 
@@ -74,7 +74,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        q_pred, _, _, _ = v2(r_l23, cue, task_state, h_v2)
+        q_pred, _, _, _ = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
         assert (q_pred >= 0).all()
 
@@ -89,7 +89,7 @@ class TestV2Context:
             task_state = torch.zeros(B, 2)
             h_v2 = torch.randn(B, H) * 5
 
-            _, pi_pred, _, _ = v2(r_l23, cue, task_state, h_v2)
+            _, pi_pred, _, _ = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
             assert (pi_pred >= 0).all()
             assert (pi_pred <= cfg.pi_max).all()
@@ -103,7 +103,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.randn(B, H) * 3
 
-        _, _, state_logits, _ = v2(r_l23, cue, task_state, h_v2)
+        _, _, state_logits, _ = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
         # Raw logits should NOT sum to 1 in general
         sums = state_logits.sum(dim=-1)
@@ -118,7 +118,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        _, _, _, h_v2_new = v2(r_l23, cue, task_state, h_v2)
+        _, _, _, h_v2_new = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
         assert not torch.allclose(h_v2, h_v2_new)
 
@@ -549,7 +549,7 @@ class TestPhase4Numerical:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        q_pred, pi_pred, state_logits, _ = v2(r_l23, cue, task_state, h_v2)
+        q_pred, pi_pred, state_logits, _ = v2(torch.zeros_like(r_l23), r_l23, cue, task_state, h_v2)
 
         print(f"\n=== V2 initial output (all-zero inputs) ===")
         print(f"  q_pred max: {q_pred.max().item():.4f}, min: {q_pred.min().item():.4f}")

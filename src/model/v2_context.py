@@ -28,10 +28,19 @@ class V2ContextModule(nn.Module):
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         n = cfg.n_orientations
-        # Input: L2/3 (N) + cue (N) + task_state (2)
-        input_dim = n + n + 2
+        self.v2_input_mode = cfg.v2_input_mode
         self.hidden_dim = cfg.v2_hidden_dim
         self.pi_max = cfg.pi_max
+
+        # Input dimension depends on mode
+        if self.v2_input_mode == 'l23':
+            input_dim = n + n + 2        # L2/3 + cue + task_state
+        elif self.v2_input_mode == 'l4':
+            input_dim = n + n + 2        # L4 + cue + task_state
+        elif self.v2_input_mode == 'l4_l23':
+            input_dim = n + n + n + 2    # L4 + L2/3 + cue + task_state
+        else:
+            raise ValueError(f"Unknown v2_input_mode: {self.v2_input_mode}")
 
         self.gru = nn.GRUCell(input_dim, cfg.v2_hidden_dim)
 
@@ -45,6 +54,7 @@ class V2ContextModule(nn.Module):
 
     def forward(
         self,
+        r_l4: Tensor,
         r_l23_prev: Tensor,
         cue: Tensor,
         task_state: Tensor,
@@ -53,6 +63,7 @@ class V2ContextModule(nn.Module):
         """One step of V2 context inference.
 
         Args:
+            r_l4: [B, N] — current L4 rates (stable, pre-feedback).
             r_l23_prev: [B, N] — L2/3 rates from PREVIOUS timestep.
             cue: [B, N] — cue input (zeros by default).
             task_state: [B, 2] — task relevance state.
@@ -64,7 +75,12 @@ class V2ContextModule(nn.Module):
             state_logits: [B, 3] — raw logits for CW/CCW/neutral.
             h_v2: [B, H] — updated GRU hidden state.
         """
-        v2_input = torch.cat([r_l23_prev, cue, task_state], dim=-1)  # [B, input_dim]
+        if self.v2_input_mode == 'l23':
+            v2_input = torch.cat([r_l23_prev, cue, task_state], dim=-1)
+        elif self.v2_input_mode == 'l4':
+            v2_input = torch.cat([r_l4, cue, task_state], dim=-1)
+        elif self.v2_input_mode == 'l4_l23':
+            v2_input = torch.cat([r_l4, r_l23_prev, cue, task_state], dim=-1)
         h_v2 = self.gru(v2_input, h_v2_prev)  # [B, H]
 
         q_pred = F.softmax(self.head_q(h_v2), dim=-1)                  # [B, N]

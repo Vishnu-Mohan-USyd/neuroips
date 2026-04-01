@@ -36,6 +36,12 @@ class LaminarV1V2Network(nn.Module):
         # Feedback warmup scale: registered as buffer so torch.compile can see it
         self.register_buffer("feedback_scale", torch.tensor(1.0))
 
+        # Oracle mode: bypass V2 with injected predictions
+        self.oracle_mode = False
+        self.oracle_q_pred = None   # set externally: [B, N] (per-step) or [B, T, N] (per-sequence)
+        self.oracle_pi_pred = None  # set externally: [B, 1] (scalar) or [B, T, 1] (per-sequence)
+        self._oracle_t = 0          # timestep counter for sequence oracle mode
+
     def step(
         self,
         stimulus: Tensor,
@@ -61,10 +67,22 @@ class LaminarV1V2Network(nn.Module):
         # 2. PV (uses new L4, old L2/3)
         r_pv = self.pv(r_l4, state.r_l23, state.r_pv)
 
-        # 3. V2 (uses old L2/3 — one-step feedback delay)
-        q_pred, pi_pred_raw, state_logits, h_v2 = self.v2(
-            state.r_l23, cue, task_state, state.h_v2
-        )
+        # 3. V2 (uses r_l4 from this step + old L2/3 — one-step feedback delay)
+        if self.oracle_mode and self.oracle_q_pred is not None:
+            # Support both per-step [B, N] and per-sequence [B, T, N] oracle
+            if self.oracle_q_pred.dim() == 3:
+                q_pred = self.oracle_q_pred[:, self._oracle_t]
+                pi_pred_raw = self.oracle_pi_pred[:, self._oracle_t]
+                self._oracle_t += 1
+            else:
+                q_pred = self.oracle_q_pred
+                pi_pred_raw = self.oracle_pi_pred
+            state_logits = torch.zeros(stimulus.shape[0], 3, device=stimulus.device)
+            h_v2 = state.h_v2
+        else:
+            q_pred, pi_pred_raw, state_logits, h_v2 = self.v2(
+                r_l4, state.r_l23, cue, task_state, state.h_v2
+            )
 
         # Effective precision for V1 feedback (scaled by warmup ramp during training)
         pi_pred_eff = pi_pred_raw * self.feedback_scale
@@ -177,6 +195,9 @@ class LaminarV1V2Network(nn.Module):
         pi_pred_eff_all = torch.empty(B, T, 1, device=device)
         state_logits_all = torch.empty(B, T, 3, device=device)
         deep_template_all = torch.empty(B, T, N, device=device)
+
+        # Reset oracle timestep counter for sequence mode
+        self._oracle_t = 0
 
         # Cache kernels once for all timesteps (params don't change within forward)
         self.l23.cache_kernels()

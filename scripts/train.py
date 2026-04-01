@@ -57,6 +57,9 @@ def parse_args() -> argparse.Namespace:
                         help="Override batch size")
     parser.add_argument("--checkpoint-at", type=int, nargs="*", default=None,
                         help="Save intermediate checkpoints at these step numbers")
+    parser.add_argument("--v2-input", type=str, default=None,
+                        choices=['l23', 'l4', 'l4_l23'],
+                        help="Override V2 input mode")
     return parser.parse_args()
 
 
@@ -72,6 +75,10 @@ def main() -> None:
             **{k: v for k, v in model_cfg.__dict__.items() if k != "mechanism"},
             mechanism=MechanismType(args.mechanism),
         )
+
+    # Override V2 input mode if specified
+    if args.v2_input:
+        model_cfg.v2_input_mode = args.v2_input
 
     # Override Stage 2 steps if specified
     if args.stage2_steps is not None:
