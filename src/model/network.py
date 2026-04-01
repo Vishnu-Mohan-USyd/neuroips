@@ -60,19 +60,23 @@ class LaminarV1V2Network(nn.Module):
         r_pv = self.pv(r_l4, state.r_l23, state.r_pv)
 
         # 3. V2 (uses old L2/3 — one-step feedback delay)
-        q_pred, pi_pred, state_logits, h_v2 = self.v2(
+        q_pred, pi_pred_raw, state_logits, h_v2 = self.v2(
             state.r_l23, cue, task_state, state.h_v2
         )
 
-        # 4. Deep template
-        deep_tmpl = self.deep_template(q_pred, pi_pred)
+        # Effective precision for V1 feedback (scaled by warmup ramp during training)
+        feedback_scale = getattr(self, 'feedback_scale', 1.0)
+        pi_pred_eff = pi_pred_raw * feedback_scale
 
-        # 5. SOM (mechanism-dependent drive)
-        som_drive = self.feedback.compute_som_drive(q_pred, pi_pred)
+        # 4. Deep template (uses effective precision)
+        deep_tmpl = self.deep_template(q_pred, pi_pred_eff)
+
+        # 5. SOM (mechanism-dependent drive, uses effective precision)
+        som_drive = self.feedback.compute_som_drive(q_pred, pi_pred_eff)
         r_som = self.som(som_drive, state.r_som)
 
-        # 6. L2/3 (mechanism-dependent inputs)
-        template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred)
+        # 6. L2/3 (mechanism-dependent inputs, uses effective precision)
+        template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
         l4_to_l23 = self.feedback.compute_error_signal(r_l4, deep_tmpl)
         r_l23 = self.l23(l4_to_l23, state.r_l23, template_modulation, r_som, r_pv)
 
@@ -88,7 +92,8 @@ class LaminarV1V2Network(nn.Module):
 
         aux = {
             "q_pred": q_pred,
-            "pi_pred": pi_pred,
+            "pi_pred": pi_pred_raw,        # raw — for probes and calibration
+            "pi_pred_eff": pi_pred_eff,    # effective — what V1 actually saw
             "state_logits": state_logits,
         }
 
@@ -167,6 +172,7 @@ class LaminarV1V2Network(nn.Module):
         som_history = []
         q_pred_history = []
         pi_pred_history = []
+        pi_pred_eff_history = []
         state_logits_history = []
         template_history = []
 
@@ -180,6 +186,7 @@ class LaminarV1V2Network(nn.Module):
             som_history.append(state.r_som)
             q_pred_history.append(aux_t["q_pred"])
             pi_pred_history.append(aux_t["pi_pred"])
+            pi_pred_eff_history.append(aux_t["pi_pred_eff"])
             state_logits_history.append(aux_t["state_logits"])
             template_history.append(state.deep_template)
 
@@ -188,6 +195,7 @@ class LaminarV1V2Network(nn.Module):
         aux = {
             "q_pred_all": torch.stack(q_pred_history, dim=1),           # [B, T, N]
             "pi_pred_all": torch.stack(pi_pred_history, dim=1),         # [B, T, 1]
+            "pi_pred_eff_all": torch.stack(pi_pred_eff_history, dim=1), # [B, T, 1]
             "state_logits_all": torch.stack(state_logits_history, dim=1),  # [B, T, 3]
             "deep_template_all": torch.stack(template_history, dim=1),  # [B, T, N]
             "r_l4_all": torch.stack(l4_history, dim=1),                 # [B, T, N]

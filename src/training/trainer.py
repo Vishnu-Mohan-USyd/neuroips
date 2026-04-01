@@ -127,6 +127,7 @@ def build_stimulus_sequence(
         task_state_seq: [B, T_total, 2] — task states.
         true_thetas: [B, seq_length] — true orientations in degrees.
         true_next_thetas: [B, seq_length] — next orientations in degrees.
+        true_states: [B, seq_length] — HMM state indices (long).
     """
     B, S = metadata.orientations.shape
     N = model_cfg.n_orientations
@@ -188,7 +189,9 @@ def build_stimulus_sequence(
         [metadata.orientations[:, 1:], metadata.orientations[:, :1]], dim=1
     )  # [B, S]
 
-    return stimulus_seq, cue_seq, task_state_seq, true_thetas, true_next_thetas
+    true_states = metadata.states  # [B, S] — HMM state indices
+
+    return stimulus_seq, cue_seq, task_state_seq, true_thetas, true_next_thetas, true_states
 
 
 # ---------------------------------------------------------------------------
@@ -222,29 +225,36 @@ def compute_readout_indices(
 def extract_readout_data(
     outputs: dict[str, Tensor],
     readout_indices: list[tuple[int, list[int]]],
-) -> tuple[Tensor, Tensor]:
-    """Extract L2/3 and q_pred at readout windows, averaged over each window.
+) -> tuple[Tensor, Tensor, Tensor | None]:
+    """Extract L2/3, q_pred, and state_logits at readout windows, averaged over each window.
 
     Args:
-        outputs: dict with 'r_l23' [B, T, N] and 'q_pred' [B, T, N].
+        outputs: dict with 'r_l23' [B, T, N], 'q_pred' [B, T, N],
+                 and optionally 'state_logits' [B, T, 3].
         readout_indices: from compute_readout_indices.
 
     Returns:
         r_l23_windows: [B, n_presentations, N]
         q_pred_windows: [B, n_presentations, N]
+        state_logits_windows: [B, n_presentations, 3] or None
     """
     r_l23_all = outputs["r_l23"]
     q_pred_all = outputs["q_pred"]
+    state_logits_all = outputs.get("state_logits")
 
     r_l23_windows = []
     q_pred_windows = []
+    state_logits_windows = [] if state_logits_all is not None else None
 
     for _, ts_indices in readout_indices:
         # Average over window timesteps
         r_l23_windows.append(r_l23_all[:, ts_indices].mean(dim=1))
         q_pred_windows.append(q_pred_all[:, ts_indices].mean(dim=1))
+        if state_logits_all is not None:
+            state_logits_windows.append(state_logits_all[:, ts_indices].mean(dim=1))
 
     return (
         torch.stack(r_l23_windows, dim=1),
         torch.stack(q_pred_windows, dim=1),
+        torch.stack(state_logits_windows, dim=1) if state_logits_windows is not None else None,
     )

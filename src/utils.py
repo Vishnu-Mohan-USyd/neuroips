@@ -84,8 +84,17 @@ _SOFTPLUS_ZERO = F.softplus(torch.zeros(1)).item()
 
 
 def shifted_softplus(x: Tensor) -> Tensor:
-    """Softplus shifted so that shifted_softplus(0) = 0 exactly."""
+    """Softplus shifted so that shifted_softplus(0) = 0 exactly.
+
+    NOTE: Can return negative values for x < 0 (down to -0.693).
+    Use rectified_softplus for firing rate activations.
+    """
     return F.softplus(x) - _SOFTPLUS_ZERO
+
+
+def rectified_softplus(x: Tensor) -> Tensor:
+    """Shifted softplus clamped to non-negative. f(0)=0, smooth for x>0."""
+    return F.relu(F.softplus(x) - _SOFTPLUS_ZERO)
 
 
 # ---------------------------------------------------------------------------

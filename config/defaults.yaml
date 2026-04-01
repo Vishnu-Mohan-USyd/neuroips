@@ -64,6 +64,7 @@ training:
   lambda_pred: 0.5
   lambda_energy: 0.01
   lambda_homeo: 1.0
+  lambda_state: 0.25
 
   # Batching
   batch_size: 32

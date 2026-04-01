@@ -32,6 +32,7 @@ class CompositeLoss(nn.Module):
         self.lambda_pred = cfg.lambda_pred         # 0.5
         self.lambda_energy = cfg.lambda_energy     # 0.01
         self.lambda_homeo = cfg.lambda_homeo       # 1.0
+        self.lambda_state = cfg.lambda_state       # 0.25
 
         N = model_cfg.n_orientations  # 36
         self.orient_step = model_cfg.orientation_range / N  # 5.0
@@ -121,6 +122,24 @@ class CompositeLoss(nn.Module):
         )
         return penalty
 
+    def state_classification_loss(
+        self, state_logits_windows: Tensor, true_states_windows: Tensor
+    ) -> Tensor:
+        """Cross-entropy loss for HMM state classification.
+
+        Args:
+            state_logits_windows: [B, n_windows, 3] — raw logits for CW/CCW/neutral.
+            true_states_windows: [B, n_windows] — true HMM state indices (long).
+
+        Returns:
+            Scalar loss.
+        """
+        B, W, C = state_logits_windows.shape
+        return F.cross_entropy(
+            state_logits_windows.reshape(B * W, C),
+            true_states_windows.reshape(B * W),
+        )
+
     def forward(
         self,
         outputs: dict[str, Tensor],
@@ -128,6 +147,8 @@ class CompositeLoss(nn.Module):
         true_next_theta_windows: Tensor,
         r_l23_windows: Tensor,
         q_pred_windows: Tensor,
+        state_logits_windows: Tensor | None = None,
+        true_states_windows: Tensor | None = None,
         use_e_total: bool = True,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
@@ -138,6 +159,8 @@ class CompositeLoss(nn.Module):
             true_next_theta_windows: [B, n_windows] next orientations in degrees.
             r_l23_windows: [B, n_windows, N] L2/3 at readout times.
             q_pred_windows: [B, n_windows, N] V2 predictions at readout times.
+            state_logits_windows: [B, n_windows, 3] state logits (optional).
+            true_states_windows: [B, n_windows] true HMM states (optional).
             use_e_total: If True, use E_total; else E_excitatory.
 
         Returns:
@@ -157,11 +180,22 @@ class CompositeLoss(nn.Module):
             + self.lambda_homeo * l_homeo
         )
 
-        return total, {
+        loss_dict = {
             "sensory": l_sens.item(),
             "prediction": l_pred.item(),
             "energy_exc": e_exc.item(),
             "energy_total": e_total.item(),
             "homeostasis": l_homeo.item(),
-            "total": total.item(),
         }
+
+        # State classification loss (Fix 4)
+        if state_logits_windows is not None and true_states_windows is not None:
+            l_state = self.state_classification_loss(state_logits_windows, true_states_windows)
+            total = total + self.lambda_state * l_state
+            loss_dict["state"] = l_state.item()
+        else:
+            loss_dict["state"] = 0.0
+
+        loss_dict["total"] = total.item()
+
+        return total, loss_dict

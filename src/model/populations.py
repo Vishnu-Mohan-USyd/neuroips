@@ -11,7 +11,7 @@ from torch import Tensor
 
 from src.config import ModelConfig
 from src.utils import (
-    shifted_softplus,
+    rectified_softplus,
     InhibitoryGain,
     circular_distance_abs,
     circular_gaussian,
@@ -29,7 +29,7 @@ class V1L4Ring(nn.Module):
     Equations (one timestep, semi-implicit Euler):
         l4_input = W_ff @ stimulus            (W_ff = identity)
         l4_drive = l4_input / (σ_norm² + pv)  - adaptation
-        r_l4 += dt/τ_l4 * (-r_l4 + shifted_softplus(l4_drive))
+        r_l4 += dt/τ_l4 * (-r_l4 + rectified_softplus(l4_drive))
         adaptation += dt/τ_a * (-adaptation + α * r_l4)
     """
 
@@ -80,7 +80,7 @@ class V1L4Ring(nn.Module):
 
         # Euler update for L4 rate
         r_l4 = r_l4_prev + (self.dt / self.tau_l4) * (
-            -r_l4_prev + shifted_softplus(l4_drive)
+            -r_l4_prev + rectified_softplus(l4_drive)
         )
 
         # Euler update for adaptation (uses new r_l4)
@@ -100,7 +100,7 @@ class PVPool(nn.Module):
 
     Equation:
         pv_drive = w_pv_l4 * r_l4.sum(-1) + w_pv_l23 * r_l23.sum(-1)
-        r_pv += dt/τ_pv * (-r_pv + shifted_softplus(pv_drive))
+        r_pv += dt/τ_pv * (-r_pv + rectified_softplus(pv_drive))
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -145,7 +145,7 @@ class PVPool(nn.Module):
 
         # Euler update
         r_pv = r_pv_prev + (self.dt / self.tau_pv) * (
-            -r_pv_prev + shifted_softplus(pv_drive)
+            -r_pv_prev + rectified_softplus(pv_drive)
         )
 
         return r_pv
@@ -160,17 +160,19 @@ def _build_rec_kernel(
 ) -> Tensor:
     """Build a recurrent kernel from learnable (raw) sigma and gain.
 
-    Effective sigma = softplus(sigma_raw), gain = softplus(gain_raw).
-    Returns [n, n] kernel = gain * K(sigma).
+    Effective sigma = softplus(sigma_raw), gain = clamp(softplus(gain_raw), max=0.95).
+    K is row-normalised so each row sums to 1, then scaled by gain.
+    This guarantees spectral radius ≤ 0.95 → strictly contractive recurrence.
     """
-    sigma = F.softplus(sigma_raw)  # scalar, positive
-    gain = F.softplus(gain_raw)    # scalar, positive
+    sigma = F.softplus(sigma_raw)
+    gain = torch.clamp(F.softplus(gain_raw), max=0.95)  # strictly contractive
     step = period / n
     thetas = torch.arange(n, dtype=torch.float32, device=sigma_raw.device) * step
     dists = circular_distance_abs(
         thetas.unsqueeze(1), thetas.unsqueeze(0), period=period
     )
     K = torch.exp(-dists ** 2 / (2.0 * sigma ** 2))
+    K = K / K.sum(dim=-1, keepdim=True)  # row-normalise
     return gain * K
 
 
@@ -187,7 +189,7 @@ class V1L23Ring(nn.Module):
     L2/3 drive:
         l23_drive = W_l4_to_l23 @ r_l4 + W_rec @ r_l23_prev
                     + template_modulation - w_som * r_som - w_pv_l23 * r_pv
-        r_l23 += dt/τ_l23 * (-r_l23 + shifted_softplus(l23_drive))
+        r_l23 += dt/τ_l23 * (-r_l23 + rectified_softplus(l23_drive))
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -262,7 +264,7 @@ class V1L23Ring(nn.Module):
 
         # Euler update
         r_l23 = r_l23_prev + (self.dt / self.tau_l23) * (
-            -r_l23_prev + shifted_softplus(l23_drive)
+            -r_l23_prev + rectified_softplus(l23_drive)
         )
 
         return r_l23
@@ -309,7 +311,7 @@ class SOMRing(nn.Module):
     Drive is mechanism-dependent (provided externally by feedback module).
 
     Equation:
-        r_som += dt/τ_som * (-r_som + shifted_softplus(som_drive))
+        r_som += dt/τ_som * (-r_som + rectified_softplus(som_drive))
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -328,6 +330,6 @@ class SOMRing(nn.Module):
             r_som: Updated SOM rates [B, N].
         """
         r_som = r_som_prev + (self.dt / self.tau_som) * (
-            -r_som_prev + shifted_softplus(som_drive)
+            -r_som_prev + rectified_softplus(som_drive)
         )
         return r_som

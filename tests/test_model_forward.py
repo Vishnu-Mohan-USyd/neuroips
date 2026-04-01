@@ -9,7 +9,7 @@ import torch
 import pytest
 
 from src.config import ModelConfig
-from src.utils import circular_gaussian_fwhm, shifted_softplus
+from src.utils import circular_gaussian_fwhm, shifted_softplus, rectified_softplus
 from src.state import initial_state
 from src.stimulus.gratings import population_code, naka_rushton, generate_grating
 from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
@@ -297,8 +297,8 @@ class TestPVPool:
 
         w = pv.w_pv_l4.item()
         expected_drive = cfg.n_orientations * w  # 36 * w
-        # PV should converge to shifted_softplus(drive)
-        expected_ss = shifted_softplus(torch.tensor(expected_drive)).item()
+        # PV should converge to rectified_softplus(drive)
+        expected_ss = rectified_softplus(torch.tensor(expected_drive)).item()
 
         assert r_pv.item() > 0, "PV should be positive"
         assert abs(r_pv.item() - expected_ss) / max(expected_ss, 1e-6) < 0.1, \
@@ -519,12 +519,12 @@ class TestNumericalResults:
 
         w_l4 = pv.w_pv_l4.item()
         drive = cfg.n_orientations * w_l4
-        expected_ss = shifted_softplus(torch.tensor(drive)).item()
+        expected_ss = rectified_softplus(torch.tensor(drive)).item()
 
         print(f"\n=== PV pool (L4 all 1.0, 50 steps) ===")
         print(f"  w_pv_l4 = softplus(raw) = {w_l4:.4f}")
         print(f"  Drive = N * w = {cfg.n_orientations} * {w_l4:.4f} = {drive:.4f}")
-        print(f"  Expected SS = shifted_softplus({drive:.4f}) = {expected_ss:.4f}")
+        print(f"  Expected SS = rectified_softplus({drive:.4f}) = {expected_ss:.4f}")
         print(f"  Actual PV = {r_pv.item():.4f}")
 
         assert r_pv.item() > 0
@@ -819,11 +819,11 @@ class TestSOMRing:
         assert (r_som >= -1e-7).all()
 
     def test_som_trajectory(self, cfg, capsys):
-        """SOM with constant drive=1.0 should approach shifted_softplus(1.0)≈0.81."""
+        """SOM with constant drive=1.0 should approach rectified_softplus(1.0)≈0.81."""
         som = SOMRing(cfg)
         r_som = torch.zeros(1, cfg.n_orientations)
         drive = torch.ones(1, cfg.n_orientations)
-        expected_ss = shifted_softplus(torch.tensor(1.0)).item()
+        expected_ss = rectified_softplus(torch.tensor(1.0)).item()
 
         trajectory = []
         for _ in range(50):

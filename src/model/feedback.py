@@ -58,12 +58,11 @@ class FeedbackMechanism(nn.Module):
                 self.surround_width_raw = nn.Parameter(torch.tensor(_inv_softplus(10.0)))
 
             elif self.mechanism == MechanismType.SHARPENING:
-                # Model B: signed DoG (broad - narrow), 5 params
+                # Model B: signed DoG (broad - narrow), 4 params (no baseline needed with centered q)
                 self.surround_gain_raw = nn.Parameter(torch.tensor(_inv_softplus(1.0)))
                 self.surround_width_raw = nn.Parameter(torch.tensor(_inv_softplus(35.0)))
                 self.center_gain_raw = nn.Parameter(torch.tensor(_inv_softplus(1.5)))
                 self.center_width_raw = nn.Parameter(torch.tensor(_inv_softplus(10.0)))
-                self.som_baseline_raw = nn.Parameter(torch.tensor(_inv_softplus(1.0)))
 
             else:  # CENTER_SURROUND
                 # Model C: broad positive SOM + narrow excitation to L2/3, 4 params
@@ -81,8 +80,9 @@ class FeedbackMechanism(nn.Module):
         self.register_buffer("dists_sq", dists ** 2)
 
     def _make_kernel(self, sigma: Tensor) -> Tensor:
-        """Build a circular Gaussian kernel [N, N] from sigma."""
-        return torch.exp(-self.dists_sq / (2.0 * sigma ** 2))
+        """Build a row-normalised circular Gaussian kernel [N, N] from sigma."""
+        K = torch.exp(-self.dists_sq / (2.0 * sigma ** 2))
+        return K / K.sum(dim=-1, keepdim=True)
 
     @property
     def surround_width(self) -> Tensor:
@@ -108,12 +108,10 @@ class FeedbackMechanism(nn.Module):
     def center_gain(self) -> Tensor:
         return F.softplus(self.center_gain_raw)
 
-    @property
-    def som_baseline(self) -> Tensor:
-        return F.softplus(self.som_baseline_raw)
-
     def compute_som_drive(self, q_pred: Tensor, pi_pred: Tensor) -> Tensor:
         """Compute SOM drive based on mechanism type.
+
+        Uses centered q_pred (q - 1/N) so feedback = 0 when V2 is uninformative.
 
         Args:
             q_pred: [B, N] — predicted orientation distribution.
@@ -125,57 +123,50 @@ class FeedbackMechanism(nn.Module):
         if self.mechanism in (MechanismType.ADAPTATION_ONLY, MechanismType.PREDICTIVE_ERROR):
             return torch.zeros_like(q_pred)
 
+        N = q_pred.shape[-1]
+        q_centered = q_pred - 1.0 / N
+
         if self.mechanism == MechanismType.DAMPENING:
             # Model A: narrow positive kernel → peaks AT expected
-            K_surround = self._make_kernel(self.surround_width)
-            return self.surround_gain * (
-                (K_surround @ q_pred.unsqueeze(-1)).squeeze(-1)
-            ) * pi_pred
+            K = self._make_kernel(self.surround_width)  # row-normalised
+            return self.surround_gain * (K @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
 
         elif self.mechanism == MechanismType.SHARPENING:
             # Model B: signed DoG → minimum at expected, maximum at flanks
-            # SOM = b_som + pi_pred * (g_surr * K_broad - g_ctr * K_narrow) @ q_pred
-            K_broad = self._make_kernel(self.surround_width)
-            K_narrow = self._make_kernel(self.center_width)
-
-            broad_component = self.surround_gain * (
-                (K_broad @ q_pred.unsqueeze(-1)).squeeze(-1)
-            )
-            narrow_component = self.center_gain * (
-                (K_narrow @ q_pred.unsqueeze(-1)).squeeze(-1)
-            )
-            return self.som_baseline + pi_pred * (broad_component - narrow_component)
+            K_broad = self._make_kernel(self.surround_width)   # row-normalised
+            K_narrow = self._make_kernel(self.center_width)     # row-normalised
+            broad = self.surround_gain * (K_broad @ q_centered.unsqueeze(-1)).squeeze(-1)
+            narrow = self.center_gain * (K_narrow @ q_centered.unsqueeze(-1)).squeeze(-1)
+            return pi_pred * (broad - narrow)  # no baseline needed with centered q
 
         else:  # CENTER_SURROUND
             # Model C: broad positive SOM (surround - center)
-            K_surround = self._make_kernel(self.surround_width)
-            K_center = self._make_kernel(self.center_width)
-
-            surround_component = self.surround_gain * (
-                (K_surround @ q_pred.unsqueeze(-1)).squeeze(-1)
-            ) * pi_pred
-            center_component = self.center_gain * (
-                (K_center @ q_pred.unsqueeze(-1)).squeeze(-1)
-            ) * pi_pred
-            return surround_component - center_component
+            K_surround = self._make_kernel(self.surround_width)  # row-normalised
+            K_center = self._make_kernel(self.center_width)      # row-normalised
+            surround = self.surround_gain * (K_surround @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
+            center = self.center_gain * (K_center @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
+            return surround - center
 
     def compute_center_excitation(self, q_pred: Tensor, pi_pred: Tensor) -> Tensor:
         """Compute center excitation for L2/3 (only nonzero for Model C).
+
+        Uses centered q_pred and clamps non-negative (excitation only).
 
         Args:
             q_pred: [B, N] — predicted orientation distribution.
             pi_pred: [B, 1] — prediction precision.
 
         Returns:
-            center_excitation: [B, N] — excitatory input to L2/3 drive.
+            center_excitation: [B, N] — excitatory input to L2/3 drive (>= 0).
         """
         if self.mechanism != MechanismType.CENTER_SURROUND:
             return torch.zeros_like(q_pred)
 
+        N = q_pred.shape[-1]
+        q_centered = q_pred - 1.0 / N
         K_center = self._make_kernel(self.center_width)
-        return self.center_gain * (
-            (K_center @ q_pred.unsqueeze(-1)).squeeze(-1)
-        ) * pi_pred
+        raw_excitation = self.center_gain * (K_center @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
+        return F.relu(raw_excitation)  # Clamp non-negative — excitation only
 
     def compute_error_signal(self, r_l4: Tensor, deep_template: Tensor) -> Tensor:
         """Compute prediction error for Model E, or pass-through for others.

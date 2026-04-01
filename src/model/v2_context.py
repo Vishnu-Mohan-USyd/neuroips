@@ -37,8 +37,11 @@ class V2ContextModule(nn.Module):
 
         # Output heads
         self.head_q = nn.Linear(cfg.v2_hidden_dim, n)        # → softmax → q_pred
-        self.head_pi = nn.Linear(cfg.v2_hidden_dim, 1)       # → sigmoid * pi_max
+        self.head_pi = nn.Linear(cfg.v2_hidden_dim, 1)       # → softplus + clamp
         self.head_state = nn.Linear(cfg.v2_hidden_dim, 3)    # → raw logits
+
+        # Initialize head_pi bias so softplus(0) = 0.693 (moderate precision)
+        nn.init.constant_(self.head_pi.bias, 0.0)
 
     def forward(
         self,
@@ -65,7 +68,7 @@ class V2ContextModule(nn.Module):
         h_v2 = self.gru(v2_input, h_v2_prev)  # [B, H]
 
         q_pred = F.softmax(self.head_q(h_v2), dim=-1)                  # [B, N]
-        pi_pred = self.pi_max * torch.sigmoid(self.head_pi(h_v2))      # [B, 1]
+        pi_pred = torch.clamp(F.softplus(self.head_pi(h_v2)), max=self.pi_max)  # [B, 1]
         state_logits = self.head_state(h_v2)                            # [B, 3]
 
         return q_pred, pi_pred, state_logits, h_v2

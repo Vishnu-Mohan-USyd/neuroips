@@ -88,10 +88,10 @@ def run_stage2(
     freeze_stage1(net)
     unfreeze_stage2(net)
 
-    # Compile full model for reduced Python/CUDA kernel launch overhead.
-    # Uses reduce-overhead mode with packed single-tensor input for best perf.
-    # NOTE: max-autotune CUDA graphs crash with recurrent state; reduce-overhead is safe.
-    compiled_net = torch.compile(net, mode='reduce-overhead')
+    # Compile step function for reduced Python/CUDA kernel launch overhead.
+    # Step-level compile avoids the 600-step graph unrolling that makes
+    # full-model compile impractical for recurrent networks.
+    net.step = torch.compile(net.step, mode='max-autotune-no-cudagraphs')
 
     # Optimizer with separate LR groups
     optimizer = create_stage2_optimizer(net, loss_fn, train_cfg)
@@ -125,14 +125,29 @@ def run_stage2(
     last_sensory_acc = 0.0
     last_pred_acc = 0.0
 
+    # Fix 3: Feedback warmup ramp
+    feedback_warmup_steps = 5000
+
+    # Fix 5: Freeze-then-unfreeze W_rec gain
+    gain_unfreeze_step = 5000
+    net.l23.gain_rec_raw.requires_grad_(False)  # Start frozen
+
     for step in range(n_steps):
+        # Fix 3: Set feedback scale (ramps from 0 to 1 over warmup period)
+        net.feedback_scale = min(1.0, step / feedback_warmup_steps)
+
+        # Fix 5: Unfreeze gain_rec after warmup
+        if step == gain_unfreeze_step:
+            net.l23.gain_rec_raw.requires_grad_(True)
+            logger.info(f"Step {step}: unfreezing gain_rec_raw")
+
         optimizer.zero_grad()
 
         # Generate HMM sequence batch
         metadata = hmm_gen.generate(batch_size, seq_length, gen)
 
         # Build temporal stimulus sequence
-        stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas = (
+        stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas, true_states = (
             build_stimulus_sequence(metadata, model_cfg, train_cfg)
         )
         stim_seq = stim_seq.to(dev)
@@ -140,10 +155,11 @@ def run_stage2(
         task_seq = task_seq.to(dev)
         true_thetas = true_thetas.to(dev)
         true_next_thetas = true_next_thetas.to(dev)
+        true_states = true_states.to(dev)
 
-        # Forward pass (packed single-tensor input for torch.compile compatibility)
+        # Forward pass (packed single-tensor input)
         packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
-        r_l23_all, final_state, aux = compiled_net(packed)
+        r_l23_all, final_state, aux = net(packed)
 
         # Build outputs dict for loss computation
         outputs = {
@@ -153,15 +169,20 @@ def run_stage2(
             "r_pv": aux["r_pv_all"],
             "r_som": aux["r_som_all"],
             "deep_template": aux["deep_template_all"],
+            "state_logits": aux["state_logits_all"],
         }
 
-        # Extract readout windows
-        r_l23_windows, q_pred_windows = extract_readout_data(outputs, readout_indices)
+        # Extract readout windows (now also extracts state_logits)
+        r_l23_windows, q_pred_windows, state_logits_windows = extract_readout_data(
+            outputs, readout_indices
+        )
 
-        # Compute loss
+        # Compute loss (with state classification loss)
         total_loss, loss_dict = loss_fn(
             outputs, true_thetas, true_next_thetas,
             r_l23_windows, q_pred_windows,
+            state_logits_windows=state_logits_windows,
+            true_states_windows=true_states,
         )
 
         total_loss.backward()
@@ -199,15 +220,21 @@ def run_stage2(
                         total_norm += p.grad.data.norm(2).item() ** 2
                 total_norm = total_norm ** 0.5
 
+                # Fix 4d: pi_pred ceiling monitoring
+                pi_ceiling_frac = (aux["pi_pred_all"] >= model_cfg.pi_max - 0.01).float().mean().item()
+
             logger.info(
                 f"Stage 2 step {step+1}/{n_steps}: "
                 f"loss={loss_dict['total']:.4f}, "
                 f"sens={loss_dict['sensory']:.4f}, "
                 f"pred={loss_dict['prediction']:.4f}, "
+                f"state={loss_dict['state']:.4f}, "
                 f"energy={loss_dict['energy_total']:.4f}, "
                 f"homeo={loss_dict['homeostasis']:.4f}, "
                 f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
-                f"grad_norm={total_norm:.3f}"
+                f"grad_norm={total_norm:.3f}, "
+                f"pi_ceil={pi_ceiling_frac:.3f}, "
+                f"fb_scale={net.feedback_scale:.3f}"
             )
 
         # Checkpoint callback
