@@ -356,7 +356,8 @@ class TestNetworkForward:
             assert not torch.isnan(v).any()
 
     def test_step_returns_state_and_aux(self, cfg):
-        """step() should return (NetworkState, dict)."""
+        """step() should return (NetworkState, StepAux)."""
+        from src.state import StepAux
         net = LaminarV1V2Network(cfg)
         B, N = 2, cfg.n_orientations
         state = initial_state(B, N, cfg.v2_hidden_dim)
@@ -368,9 +369,10 @@ class TestNetworkForward:
         assert isinstance(result, tuple) and len(result) == 2
         new_state, aux = result
         assert isinstance(new_state, NetworkState)
-        assert "q_pred" in aux
-        assert "pi_pred" in aux
-        assert "state_logits" in aux
+        assert isinstance(aux, StepAux)
+        assert aux.q_pred.shape == (B, N)
+        assert aux.pi_pred.shape == (B, 1)
+        assert aux.state_logits.shape == (B, 3)
 
     def test_default_cue_and_task_state(self, cfg):
         """forward() should work with cue_seq=None and task_state_seq=None."""

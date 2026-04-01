@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 
 from src.config import ModelConfig
-from src.state import NetworkState, initial_state
+from src.state import NetworkState, StepAux, initial_state
 from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
 from src.model.v2_context import V2ContextModule
 from src.model.feedback import FeedbackMechanism
@@ -33,6 +33,8 @@ class LaminarV1V2Network(nn.Module):
         self.som = SOMRing(cfg)
         self.v2 = V2ContextModule(cfg)
         self.feedback = FeedbackMechanism(cfg)
+        # Feedback warmup scale: registered as buffer so torch.compile can see it
+        self.register_buffer("feedback_scale", torch.tensor(1.0))
 
     def step(
         self,
@@ -40,7 +42,7 @@ class LaminarV1V2Network(nn.Module):
         cue: Tensor,
         task_state: Tensor,
         state: NetworkState,
-    ) -> tuple[NetworkState, dict[str, Tensor]]:
+    ) -> tuple[NetworkState, StepAux]:
         """One timestep of the full network.
 
         Args:
@@ -51,7 +53,7 @@ class LaminarV1V2Network(nn.Module):
 
         Returns:
             new_state: Updated NetworkState.
-            aux: dict with q_pred, pi_pred, state_logits from V2.
+            aux: StepAux with q_pred, pi_pred, pi_pred_eff, state_logits.
         """
         # 1. L4 (uses PV from previous step)
         r_l4, adaptation = self.l4(stimulus, state.r_l4, state.r_pv, state.adaptation)
@@ -65,8 +67,7 @@ class LaminarV1V2Network(nn.Module):
         )
 
         # Effective precision for V1 feedback (scaled by warmup ramp during training)
-        feedback_scale = getattr(self, 'feedback_scale', 1.0)
-        pi_pred_eff = pi_pred_raw * feedback_scale
+        pi_pred_eff = pi_pred_raw * self.feedback_scale
 
         # 4. Deep template (uses effective precision)
         deep_tmpl = self.deep_template(q_pred, pi_pred_eff)
@@ -90,12 +91,12 @@ class LaminarV1V2Network(nn.Module):
             deep_template=deep_tmpl,
         )
 
-        aux = {
-            "q_pred": q_pred,
-            "pi_pred": pi_pred_raw,        # raw — for probes and calibration
-            "pi_pred_eff": pi_pred_eff,    # effective — what V1 actually saw
-            "state_logits": state_logits,
-        }
+        aux = StepAux(
+            q_pred=q_pred,
+            pi_pred=pi_pred_raw,
+            pi_pred_eff=pi_pred_eff,
+            state_logits=state_logits,
+        )
 
         return new_state, aux
 
@@ -166,41 +167,47 @@ class LaminarV1V2Network(nn.Module):
                 B, self.cfg.n_orientations, self.cfg.v2_hidden_dim, device=device
             )
 
-        l23_history = []
-        l4_history = []
-        pv_history = []
-        som_history = []
-        q_pred_history = []
-        pi_pred_history = []
-        pi_pred_eff_history = []
-        state_logits_history = []
-        template_history = []
+        # Preallocate output tensors (avoids list appends + torch.stack overhead)
+        r_l23_all = torch.empty(B, T, N, device=device)
+        r_l4_all = torch.empty(B, T, N, device=device)
+        r_pv_all = torch.empty(B, T, 1, device=device)
+        r_som_all = torch.empty(B, T, N, device=device)
+        q_pred_all = torch.empty(B, T, N, device=device)
+        pi_pred_all = torch.empty(B, T, 1, device=device)
+        pi_pred_eff_all = torch.empty(B, T, 1, device=device)
+        state_logits_all = torch.empty(B, T, 3, device=device)
+        deep_template_all = torch.empty(B, T, N, device=device)
 
-        for t in range(T):
-            state, aux_t = self.step(
-                stimulus_seq[:, t], cue_seq[:, t], task_state_seq[:, t], state
-            )
-            l23_history.append(state.r_l23)
-            l4_history.append(state.r_l4)
-            pv_history.append(state.r_pv)
-            som_history.append(state.r_som)
-            q_pred_history.append(aux_t["q_pred"])
-            pi_pred_history.append(aux_t["pi_pred"])
-            pi_pred_eff_history.append(aux_t["pi_pred_eff"])
-            state_logits_history.append(aux_t["state_logits"])
-            template_history.append(state.deep_template)
-
-        r_l23_all = torch.stack(l23_history, dim=1)  # [B, T, N]
+        # Cache kernels once for all timesteps (params don't change within forward)
+        self.l23.cache_kernels()
+        self.feedback.cache_kernels()
+        try:
+            for t in range(T):
+                state, aux_t = self.step(
+                    stimulus_seq[:, t], cue_seq[:, t], task_state_seq[:, t], state
+                )
+                r_l23_all[:, t] = state.r_l23
+                r_l4_all[:, t] = state.r_l4
+                r_pv_all[:, t] = state.r_pv
+                r_som_all[:, t] = state.r_som
+                q_pred_all[:, t] = aux_t.q_pred
+                pi_pred_all[:, t] = aux_t.pi_pred
+                pi_pred_eff_all[:, t] = aux_t.pi_pred_eff
+                state_logits_all[:, t] = aux_t.state_logits
+                deep_template_all[:, t] = state.deep_template
+        finally:
+            self.l23.uncache_kernels()
+            self.feedback.uncache_kernels()
 
         aux = {
-            "q_pred_all": torch.stack(q_pred_history, dim=1),           # [B, T, N]
-            "pi_pred_all": torch.stack(pi_pred_history, dim=1),         # [B, T, 1]
-            "pi_pred_eff_all": torch.stack(pi_pred_eff_history, dim=1), # [B, T, 1]
-            "state_logits_all": torch.stack(state_logits_history, dim=1),  # [B, T, 3]
-            "deep_template_all": torch.stack(template_history, dim=1),  # [B, T, N]
-            "r_l4_all": torch.stack(l4_history, dim=1),                 # [B, T, N]
-            "r_pv_all": torch.stack(pv_history, dim=1),                 # [B, T, 1]
-            "r_som_all": torch.stack(som_history, dim=1),               # [B, T, N]
+            "q_pred_all": q_pred_all,             # [B, T, N]
+            "pi_pred_all": pi_pred_all,           # [B, T, 1]
+            "pi_pred_eff_all": pi_pred_eff_all,   # [B, T, 1]
+            "state_logits_all": state_logits_all,  # [B, T, 3]
+            "deep_template_all": deep_template_all,  # [B, T, N]
+            "r_l4_all": r_l4_all,                 # [B, T, N]
+            "r_pv_all": r_pv_all,                 # [B, T, 1]
+            "r_som_all": r_som_all,               # [B, T, N]
         }
 
         return r_l23_all, state, aux

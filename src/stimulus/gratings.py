@@ -9,6 +9,18 @@ from src.utils import circular_distance_abs, circular_gaussian
 
 __all__ = ["population_code", "naka_rushton", "generate_grating", "make_ambiguous_stimulus"]
 
+# Cache for preferred orientation tensors (keyed by (n_orientations, period, device))
+_prefs_cache: dict[tuple[int, float, torch.device], Tensor] = {}
+
+
+def _get_prefs(n_orientations: int, period: float, device: torch.device) -> Tensor:
+    """Return cached preferred orientations [n_orientations] on the given device."""
+    key = (n_orientations, period, device)
+    if key not in _prefs_cache:
+        step = period / n_orientations
+        _prefs_cache[key] = torch.arange(n_orientations, dtype=torch.float32, device=device) * step
+    return _prefs_cache[key]
+
 
 def population_code(
     orientation: Tensor,
@@ -31,9 +43,7 @@ def population_code(
     if orientation.dim() == 0:
         orientation = orientation.unsqueeze(0)
 
-    step = period / n_orientations
-    # Preferred orientations: [n_orientations]
-    prefs = torch.arange(n_orientations, dtype=torch.float32, device=orientation.device) * step
+    prefs = _get_prefs(n_orientations, period, orientation.device)
     # Circular distances: [B, n_orientations]
     dists = circular_distance_abs(
         orientation.unsqueeze(-1),  # [B, 1]
