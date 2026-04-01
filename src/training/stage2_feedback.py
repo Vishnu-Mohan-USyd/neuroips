@@ -89,10 +89,15 @@ def run_stage2(
     freeze_stage1(net)
     unfreeze_stage2(net)
 
-    # Compile step function for reduced Python/CUDA kernel launch overhead.
-    # Step-level compile avoids the 600-step graph unrolling that makes
-    # full-model compile impractical for recurrent networks.
-    net.step = torch.compile(net.step, mode='max-autotune-no-cudagraphs')
+    # Full-model compile: Phase 4 removed graph breaks (dict→NamedTuple,
+    # getattr→buffer, list.append→preallocated tensors), enabling full-model
+    # compile. reduce-overhead uses CUDA graphs to eliminate kernel launch
+    # overhead across all 600 timesteps. Falls back to step-level compile
+    # if reduce-overhead fails (e.g., CPU-only or older CUDA).
+    try:
+        compiled_net = torch.compile(net, mode='reduce-overhead')
+    except Exception:
+        compiled_net = torch.compile(net, mode='max-autotune-no-cudagraphs')
 
     # Optimizer with separate LR groups
     optimizer = create_stage2_optimizer(net, loss_fn, train_cfg)
@@ -144,10 +149,10 @@ def run_stage2(
     for step in range(n_steps):
         # Fix E: V2 curriculum — hard zero during burn-in, then ramp
         if step < predictor_burnin_steps:
-            net.feedback_scale = 0.0
+            net.feedback_scale.fill_(0.0)
         else:
             ramp_progress = (step - predictor_burnin_steps) / feedback_ramp_steps
-            net.feedback_scale = min(1.0, ramp_progress)
+            net.feedback_scale.fill_(min(1.0, ramp_progress))
 
         # Fix 5: Unfreeze gain_rec after burn-in
         if step == gain_unfreeze_step:
@@ -163,16 +168,16 @@ def run_stage2(
         stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas, true_states = (
             build_stimulus_sequence(metadata, model_cfg, train_cfg)
         )
-        stim_seq = stim_seq.to(dev)
-        cue_seq = cue_seq.to(dev)
-        task_seq = task_seq.to(dev)
-        true_thetas = true_thetas.to(dev)
-        true_next_thetas = true_next_thetas.to(dev)
-        true_states = true_states.to(dev)
+        stim_seq = stim_seq.to(dev, non_blocking=True)
+        cue_seq = cue_seq.to(dev, non_blocking=True)
+        task_seq = task_seq.to(dev, non_blocking=True)
+        true_thetas = true_thetas.to(dev, non_blocking=True)
+        true_next_thetas = true_next_thetas.to(dev, non_blocking=True)
+        true_states = true_states.to(dev, non_blocking=True)
 
-        # Forward pass (packed single-tensor input)
+        # Forward pass (packed single-tensor input, through compiled model)
         packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
-        r_l23_all, final_state, aux = net(packed)
+        r_l23_all, final_state, aux = compiled_net(packed)
 
         # Build outputs dict for loss computation
         outputs = {
@@ -276,7 +281,7 @@ def run_stage2(
                 f"anchor={anchor_acc:.3f}, "
                 f"grad_norm={total_norm:.3f}, "
                 f"pi_ceil={pi_ceiling_frac:.3f}, "
-                f"fb_scale={net.feedback_scale:.3f}"
+                f"fb_scale={net.feedback_scale.item():.3f}"
             )
 
         # Checkpoint callback

@@ -79,10 +79,39 @@ class FeedbackMechanism(nn.Module):
         )
         self.register_buffer("dists_sq", dists ** 2)
 
+        # Kernel cache (populated by cache_kernels(), cleared by uncache_kernels())
+        self._cached_surround_kernel: Tensor | None = None
+        self._cached_center_kernel: Tensor | None = None
+
+    def cache_kernels(self) -> None:
+        """Build and cache feedback kernels for reuse across timesteps."""
+        if self.mechanism in (MechanismType.ADAPTATION_ONLY, MechanismType.PREDICTIVE_ERROR):
+            return
+        self._cached_surround_kernel = self._make_kernel(self.surround_width)
+        if self.mechanism in (MechanismType.SHARPENING, MechanismType.CENTER_SURROUND):
+            self._cached_center_kernel = self._make_kernel(self.center_width)
+
+    def uncache_kernels(self) -> None:
+        """Clear cached kernels after the forward pass."""
+        self._cached_surround_kernel = None
+        self._cached_center_kernel = None
+
     def _make_kernel(self, sigma: Tensor) -> Tensor:
         """Build a row-normalised circular Gaussian kernel [N, N] from sigma."""
         K = torch.exp(-self.dists_sq / (2.0 * sigma ** 2))
         return K / K.sum(dim=-1, keepdim=True)
+
+    def _get_surround_kernel(self) -> Tensor:
+        """Return cached surround kernel or build one."""
+        if self._cached_surround_kernel is not None:
+            return self._cached_surround_kernel
+        return self._make_kernel(self.surround_width)
+
+    def _get_center_kernel(self) -> Tensor:
+        """Return cached center kernel or build one."""
+        if self._cached_center_kernel is not None:
+            return self._cached_center_kernel
+        return self._make_kernel(self.center_width)
 
     @property
     def surround_width(self) -> Tensor:
@@ -128,21 +157,21 @@ class FeedbackMechanism(nn.Module):
 
         if self.mechanism == MechanismType.DAMPENING:
             # Model A: narrow positive kernel → peaks AT expected
-            K = self._make_kernel(self.surround_width)  # row-normalised
+            K = self._get_surround_kernel()
             return self.surround_gain * (K @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
 
         elif self.mechanism == MechanismType.SHARPENING:
             # Model B: signed DoG → minimum at expected, maximum at flanks
-            K_broad = self._make_kernel(self.surround_width)   # row-normalised
-            K_narrow = self._make_kernel(self.center_width)     # row-normalised
+            K_broad = self._get_surround_kernel()
+            K_narrow = self._get_center_kernel()
             broad = self.surround_gain * (K_broad @ q_centered.unsqueeze(-1)).squeeze(-1)
             narrow = self.center_gain * (K_narrow @ q_centered.unsqueeze(-1)).squeeze(-1)
             return pi_pred * (broad - narrow)  # no baseline needed with centered q
 
         else:  # CENTER_SURROUND
             # Model C: broad positive SOM (surround - center)
-            K_surround = self._make_kernel(self.surround_width)  # row-normalised
-            K_center = self._make_kernel(self.center_width)      # row-normalised
+            K_surround = self._get_surround_kernel()
+            K_center = self._get_center_kernel()
             surround = self.surround_gain * (K_surround @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
             center = self.center_gain * (K_center @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
             return surround - center
@@ -164,7 +193,7 @@ class FeedbackMechanism(nn.Module):
 
         N = q_pred.shape[-1]
         q_centered = q_pred - 1.0 / N
-        K_center = self._make_kernel(self.center_width)
+        K_center = self._get_center_kernel()
         raw_excitation = self.center_gain * (K_center @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
         return F.relu(raw_excitation)  # Clamp non-negative — excitation only
 

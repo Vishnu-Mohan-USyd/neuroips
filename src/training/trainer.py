@@ -136,58 +136,49 @@ def build_stimulus_sequence(
     steps_per = steps_on + steps_isi
     T_total = S * steps_per
 
-    stimulus_seq = torch.zeros(B, T_total, N)
-    cue_seq = torch.zeros(B, T_total, N)
-    task_state_seq = torch.zeros(B, T_total, 2)
+    # Generate all stimuli at once: flatten [B, S] → [B*S], one call to generate_grating
+    oris_flat = metadata.orientations.reshape(-1)       # [B*S]
+    contrasts_flat = metadata.contrasts.reshape(-1)      # [B*S]
+    stim_all = generate_grating(
+        oris_flat, contrasts_flat,
+        n_orientations=N,
+        sigma=model_cfg.sigma_ff,
+        n=model_cfg.naka_rushton_n,
+        c50=model_cfg.naka_rushton_c50,
+        period=model_cfg.orientation_range,
+    ).reshape(B, S, N)  # [B, S, N]
 
-    for s in range(S):
-        t_start = s * steps_per
-
-        oris = metadata.orientations[:, s]
-        contrasts = metadata.contrasts[:, s]
-        is_amb = metadata.is_ambiguous[:, s]
-
-        # Normal gratings
-        stim = generate_grating(
-            oris, contrasts,
+    # Handle ambiguous stimuli in batch
+    is_amb_flat = metadata.is_ambiguous.reshape(-1)      # [B*S]
+    if is_amb_flat.any():
+        oris2_flat = (oris_flat + 15.0) % model_cfg.orientation_range
+        stim_amb = make_ambiguous_stimulus(
+            oris_flat[is_amb_flat], oris2_flat[is_amb_flat], contrasts_flat[is_amb_flat],
             n_orientations=N,
             sigma=model_cfg.sigma_ff,
             n=model_cfg.naka_rushton_n,
             c50=model_cfg.naka_rushton_c50,
             period=model_cfg.orientation_range,
         )
+        stim_all.reshape(-1, N)[is_amb_flat] = stim_amb
 
-        # Ambiguous stimuli: mix with offset orientation
-        if is_amb.any():
-            oris2 = (oris + 15.0) % model_cfg.orientation_range
-            stim_amb = make_ambiguous_stimulus(
-                oris[is_amb], oris2[is_amb], contrasts[is_amb],
-                n_orientations=N,
-                sigma=model_cfg.sigma_ff,
-                n=model_cfg.naka_rushton_n,
-                c50=model_cfg.naka_rushton_c50,
-                period=model_cfg.orientation_range,
-            )
-            stim[is_amb] = stim_amb
+    # Temporal expansion: [B, S, N] → [B, S, steps_per, N] → [B, T_total, N]
+    # Stimulus fills first steps_on timesteps per presentation, ISI is zero
+    temporal = torch.zeros(B, S, steps_per, N)
+    temporal[:, :, :steps_on, :] = stim_all.unsqueeze(2).expand(-1, -1, steps_on, -1)
+    stimulus_seq = temporal.reshape(B, T_total, N)
 
-        # Fill steps_on timesteps with the stimulus
-        for dt in range(steps_on):
-            stimulus_seq[:, t_start + dt] = stim
+    # Cue: [B, S, N] → expand to all timesteps per presentation
+    cue_seq = metadata.cues.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, T_total, N)
 
-        # ISI timesteps remain zero
-
-        # Cue and task_state: same for all timesteps in this presentation
-        for dt in range(steps_per):
-            cue_seq[:, t_start + dt] = metadata.cues[:, s]
-            task_state_seq[:, t_start + dt] = metadata.task_states[:, s]
+    # Task state: [B, S, 2] → expand to all timesteps per presentation
+    task_state_seq = metadata.task_states.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, T_total, 2)
 
     # True orientations in degrees
     true_thetas = metadata.orientations  # [B, S]
 
     # Next-orientation: shifted by 1, last wraps to first
-    true_next_thetas = torch.cat(
-        [metadata.orientations[:, 1:], metadata.orientations[:, :1]], dim=1
-    )  # [B, S]
+    true_next_thetas = torch.roll(metadata.orientations, -1, dims=1)  # [B, S]
 
     # Shift states by 1 to align with prediction targets: q_pred predicts
     # next orientation, so state_logits should predict next state.
@@ -228,36 +219,51 @@ def compute_readout_indices(
 def extract_readout_data(
     outputs: dict[str, Tensor],
     readout_indices: list[tuple[int, list[int]]],
+    steps_on: int = 8,
+    steps_isi: int = 4,
 ) -> tuple[Tensor, Tensor, Tensor | None]:
     """Extract L2/3, q_pred, and state_logits at readout windows, averaged over each window.
+
+    Uses reshape-based slicing instead of per-presentation loops:
+    reshape [B, T, D] → [B, S, steps_per, D], slice the window, mean over dim=2.
 
     Args:
         outputs: dict with 'r_l23' [B, T, N], 'q_pred' [B, T, N],
                  and optionally 'state_logits' [B, T, 3].
-        readout_indices: from compute_readout_indices.
+        readout_indices: from compute_readout_indices (used to extract window bounds).
+        steps_on: Timesteps per stimulus presentation.
+        steps_isi: Inter-stimulus interval timesteps.
 
     Returns:
         r_l23_windows: [B, n_presentations, N]
         q_pred_windows: [B, n_presentations, N]
         state_logits_windows: [B, n_presentations, 3] or None
     """
-    r_l23_all = outputs["r_l23"]
-    q_pred_all = outputs["q_pred"]
-    state_logits_all = outputs.get("state_logits")
+    r_l23_all = outputs["r_l23"]       # [B, T, N]
+    q_pred_all = outputs["q_pred"]     # [B, T, N]
+    state_logits_all = outputs.get("state_logits")  # [B, T, 3] or None
 
-    r_l23_windows = []
-    q_pred_windows = []
-    state_logits_windows = [] if state_logits_all is not None else None
+    # Extract window bounds from readout_indices (all presentations use the same relative window)
+    _, ts_first = readout_indices[0]
+    steps_per = steps_on + steps_isi
+    window_start = ts_first[0]  # Relative offset within first presentation
+    window_end = ts_first[-1] + 1  # Exclusive end
 
-    for _, ts_indices in readout_indices:
-        # Average over window timesteps
-        r_l23_windows.append(r_l23_all[:, ts_indices].mean(dim=1))
-        q_pred_windows.append(q_pred_all[:, ts_indices].mean(dim=1))
-        if state_logits_all is not None:
-            state_logits_windows.append(state_logits_all[:, ts_indices].mean(dim=1))
+    B, T, N = r_l23_all.shape
+    S = len(readout_indices)
 
-    return (
-        torch.stack(r_l23_windows, dim=1),
-        torch.stack(q_pred_windows, dim=1),
-        torch.stack(state_logits_windows, dim=1) if state_logits_windows is not None else None,
+    # Reshape [B, T, D] → [B, S, steps_per, D], slice window, mean over window dim
+    r_l23_windows = (
+        r_l23_all.reshape(B, S, steps_per, N)[:, :, window_start:window_end].mean(dim=2)
     )
+    q_pred_windows = (
+        q_pred_all.reshape(B, S, steps_per, q_pred_all.shape[-1])[:, :, window_start:window_end].mean(dim=2)
+    )
+
+    state_logits_windows = None
+    if state_logits_all is not None:
+        state_logits_windows = (
+            state_logits_all.reshape(B, S, steps_per, state_logits_all.shape[-1])[:, :, window_start:window_end].mean(dim=2)
+        )
+
+    return r_l23_windows, q_pred_windows, state_logits_windows

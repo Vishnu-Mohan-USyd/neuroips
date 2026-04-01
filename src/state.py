@@ -22,6 +22,17 @@ class NetworkState(NamedTuple):
     deep_template: Tensor # [B, 36] — Deep-V1 expectation template
 
 
+class StepAux(NamedTuple):
+    """Auxiliary outputs from a single network timestep.
+
+    Attribute access is faster than dict lookup in the 600-step inner loop.
+    """
+    q_pred: Tensor        # [B, N]  — predicted orientation distribution
+    pi_pred: Tensor       # [B, 1]  — raw prediction precision
+    pi_pred_eff: Tensor   # [B, 1]  — effective precision (after warmup scaling)
+    state_logits: Tensor  # [B, 3]  — HMM state logits
+
+
 def initial_state(batch_size: int, n_orientations: int = 36,
                   v2_hidden_dim: int = 16, device: torch.device | None = None) -> NetworkState:
     """Create a zero-initialized NetworkState."""

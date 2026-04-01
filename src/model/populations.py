@@ -215,9 +215,24 @@ class V1L23Ring(nn.Module):
         self.w_som = InhibitoryGain(init_gain=1.0)       # SOM feature-specific
         self.w_pv_l23 = InhibitoryGain(init_gain=1.0)    # PV subtractive
 
+        # Kernel cache (populated by cache_kernels(), cleared by uncache_kernels())
+        self._cached_W_rec: Tensor | None = None
+
+    def cache_kernels(self) -> None:
+        """Build and cache W_rec for reuse across timesteps within one forward pass."""
+        self._cached_W_rec = _build_rec_kernel(
+            self.n, self.sigma_rec_raw, self.gain_rec_raw, self.period
+        )
+
+    def uncache_kernels(self) -> None:
+        """Clear cached kernels after the forward pass."""
+        self._cached_W_rec = None
+
     @property
     def W_rec(self) -> Tensor:
         """The effective recurrent kernel [N, N], built from σ_rec and g_rec."""
+        if self._cached_W_rec is not None:
+            return self._cached_W_rec
         return _build_rec_kernel(
             self.n, self.sigma_rec_raw, self.gain_rec_raw, self.period
         )

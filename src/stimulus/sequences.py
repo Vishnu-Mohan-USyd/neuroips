@@ -76,6 +76,38 @@ def sample_state_sequence(
     return states
 
 
+def batch_sample_state_sequence(
+    batch_size: int,
+    n_steps: int,
+    p_self: float = 0.95,
+    generator: torch.Generator | None = None,
+) -> Tensor:
+    """Sample a batch of HMM state sequences in parallel.
+
+    Vectorizes across batch — one multinomial call per timestep instead of per element.
+
+    Args:
+        batch_size: Number of sequences.
+        n_steps: Length of each sequence.
+        p_self: Self-transition probability.
+        generator: Optional RNG for reproducibility.
+
+    Returns:
+        State indices [B, n_steps] with values in {0, 1, 2}.
+    """
+    T = build_transition_matrix(p_self)
+    states = torch.empty(batch_size, n_steps, dtype=torch.long)
+
+    # Uniform initial state for all batch elements
+    states[:, 0] = torch.randint(3, (batch_size,), generator=generator)
+
+    for t in range(1, n_steps):
+        probs = T[states[:, t - 1]]  # [B, 3]
+        states[:, t] = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
+
+    return states
+
+
 def generate_orientation_sequence(
     n_steps: int,
     p_self: float = 0.95,
@@ -147,6 +179,89 @@ def generate_orientation_sequence(
     return orientations, states
 
 
+def batch_generate_orientation_sequence(
+    batch_size: int,
+    n_steps: int,
+    p_self: float = 0.95,
+    p_transition_cw: Tensor | float = 0.80,
+    p_transition_ccw: Tensor | float = 0.80,
+    n_anchors: int = 12,
+    jitter_range: float = 7.5,
+    transition_step: float = 15.0,
+    period: float = 180.0,
+    generator: torch.Generator | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Generate a batch of orientation sequences driven by HMM.
+
+    Vectorizes across batch — masked tensor ops replace per-element branching.
+
+    Args:
+        batch_size: Number of sequences.
+        n_steps: Presentations per sequence.
+        p_self: HMM self-transition probability.
+        p_transition_cw: Per-batch CW transition probability ([B] tensor or scalar).
+        p_transition_ccw: Per-batch CCW transition probability ([B] tensor or scalar).
+        n_anchors: Number of canonical anchor orientations.
+        jitter_range: Max jitter around anchors (degrees).
+        transition_step: Step size for CW/CCW transitions (degrees).
+        period: Orientation period.
+        generator: Optional RNG.
+
+    Returns:
+        orientations: [B, n_steps] orientation in degrees.
+        states: [B, n_steps] latent state indices.
+    """
+    B = batch_size
+    states = batch_sample_state_sequence(B, n_steps, p_self, generator)
+
+    anchor_step = period / n_anchors
+    anchors = torch.arange(n_anchors, dtype=torch.float32) * anchor_step
+
+    # Convert scalar p_cw/p_ccw to [B] tensors
+    if not isinstance(p_transition_cw, Tensor):
+        p_cw = torch.full((B,), p_transition_cw)
+    else:
+        p_cw = p_transition_cw
+    if not isinstance(p_transition_ccw, Tensor):
+        p_ccw = torch.full((B,), p_transition_ccw)
+    else:
+        p_ccw = p_transition_ccw
+
+    # Pre-sample all random values at once
+    rand_transition = torch.rand(B, n_steps, generator=generator)
+    rand_anchor_idx = torch.randint(n_anchors, (B, n_steps), generator=generator)
+    rand_jitter = (torch.rand(B, n_steps, generator=generator) * 2 - 1) * jitter_range
+
+    orientations = torch.empty(B, n_steps, dtype=torch.float32)
+
+    # Initial: random anchor + jitter
+    orientations[:, 0] = (anchors[rand_anchor_idx[:, 0]] + rand_jitter[:, 0]) % period
+
+    for t in range(1, n_steps):
+        prev = orientations[:, t - 1]
+        state_t = states[:, t]
+
+        # Transition bases
+        cw_base = (prev + transition_step) % period
+        ccw_base = (prev - transition_step) % period
+        random_base = anchors[rand_anchor_idx[:, t]]
+
+        # State masks and transition decisions
+        is_cw = (state_t == HMMState.CW)
+        is_ccw = (state_t == HMMState.CCW)
+        uses_cw_step = is_cw & (rand_transition[:, t] < p_cw)
+        uses_ccw_step = is_ccw & (rand_transition[:, t] < p_ccw)
+
+        # Default: random anchor (NEUTRAL and non-transitioning CW/CCW)
+        base = random_base.clone()
+        base[uses_cw_step] = cw_base[uses_cw_step]
+        base[uses_ccw_step] = ccw_base[uses_ccw_step]
+
+        orientations[:, t] = (base + rand_jitter[:, t]) % period
+
+    return orientations, states
+
+
 class HMMSequenceGenerator:
     """Full-featured HMM sequence generator for training/evaluation.
 
@@ -206,6 +321,8 @@ class HMMSequenceGenerator:
     ) -> SequenceMetadata:
         """Generate a full batch of stimulus sequences with all metadata.
 
+        Uses batch-vectorized HMM sampling and orientation generation.
+
         Args:
             batch_size: Number of sequences.
             seq_length: Presentations per sequence.
@@ -215,57 +332,47 @@ class HMMSequenceGenerator:
             SequenceMetadata with orientations, states, contrasts, is_ambiguous,
             task_states, and cues.
         """
-        all_oris = []
-        all_states = []
+        B = batch_size
 
-        for _ in range(batch_size):
-            # Occasional reliability drops: per-sequence coin flip
-            p_cw = self.p_transition_cw
-            p_ccw = self.p_transition_ccw
-            if torch.rand(1, generator=generator).item() < self.reliability_drop_prob:
-                p_cw = self.reliability_drop_value
-                p_ccw = self.reliability_drop_value
+        # Per-batch reliability drop (vectorized)
+        drop_mask = torch.rand(B, generator=generator) < self.reliability_drop_prob
+        p_cw = torch.full((B,), self.p_transition_cw)
+        p_ccw = torch.full((B,), self.p_transition_ccw)
+        p_cw[drop_mask] = self.reliability_drop_value
+        p_ccw[drop_mask] = self.reliability_drop_value
 
-            oris, sts = generate_orientation_sequence(
-                n_steps=seq_length,
-                p_self=self.p_self,
-                p_transition_cw=p_cw,
-                p_transition_ccw=p_ccw,
-                n_anchors=self.n_anchors,
-                jitter_range=self.jitter_range,
-                transition_step=self.transition_step,
-                period=self.period,
-                generator=generator,
-            )
-            all_oris.append(oris)
-            all_states.append(sts)
-
-        orientations = torch.stack(all_oris)   # [B, T]
-        states = torch.stack(all_states)        # [B, T]
+        # Batch-vectorized orientation + state generation
+        orientations, states = batch_generate_orientation_sequence(
+            batch_size=B,
+            n_steps=seq_length,
+            p_self=self.p_self,
+            p_transition_cw=p_cw,
+            p_transition_ccw=p_ccw,
+            n_anchors=self.n_anchors,
+            jitter_range=self.jitter_range,
+            transition_step=self.transition_step,
+            period=self.period,
+            generator=generator,
+        )
 
         # Random contrasts
         lo, hi = self.contrast_range
-        contrasts = lo + (hi - lo) * torch.rand(batch_size, seq_length, generator=generator)
+        contrasts = lo + (hi - lo) * torch.rand(B, seq_length, generator=generator)
 
         # Ambiguous presentations: mark ~ambiguous_fraction of positions
-        is_ambiguous = torch.rand(batch_size, seq_length, generator=generator) < self.ambiguous_fraction
+        is_ambiguous = torch.rand(B, seq_length, generator=generator) < self.ambiguous_fraction
 
         # For ambiguous stimuli, reduce contrast to low level
-        # (the actual mixing happens at stimulus generation time)
         contrasts[is_ambiguous] = torch.clamp(contrasts[is_ambiguous], max=0.20)
 
-        # Task states: ~50/50 interleaved, one per sequence
-        # [1, 0] = orientation-relevant, [0, 1] = orientation-irrelevant
-        task_relevant = torch.rand(batch_size, generator=generator) < 0.5  # [B]
-        task_states = torch.zeros(batch_size, seq_length, 2)
-        for b in range(batch_size):
-            if task_relevant[b]:
-                task_states[b, :, 0] = 1.0
-            else:
-                task_states[b, :, 1] = 1.0
+        # Task states: vectorized (no per-batch loop)
+        task_relevant = torch.rand(B, generator=generator) < 0.5  # [B]
+        task_states = torch.zeros(B, seq_length, 2)
+        task_states[task_relevant, :, 0] = 1.0
+        task_states[~task_relevant, :, 1] = 1.0
 
         # Cue input: zeros by default
-        cues = torch.zeros(batch_size, seq_length, self.n_orientations)
+        cues = torch.zeros(B, seq_length, self.n_orientations)
 
         return SequenceMetadata(
             orientations=orientations,
@@ -296,26 +403,18 @@ def generate_batch_sequences(
     Simpler interface that returns (orientations, states, contrasts).
     For full metadata including task_state and ambiguity, use HMMSequenceGenerator.
     """
-    all_oris = []
-    all_states = []
-
-    for _ in range(batch_size):
-        oris, sts = generate_orientation_sequence(
-            n_steps=seq_length,
-            p_self=p_self,
-            p_transition_cw=p_transition_cw,
-            p_transition_ccw=p_transition_ccw,
-            n_anchors=n_anchors,
-            jitter_range=jitter_range,
-            transition_step=transition_step,
-            period=period,
-            generator=generator,
-        )
-        all_oris.append(oris)
-        all_states.append(sts)
-
-    orientations = torch.stack(all_oris)
-    states = torch.stack(all_states)
+    orientations, states = batch_generate_orientation_sequence(
+        batch_size=batch_size,
+        n_steps=seq_length,
+        p_self=p_self,
+        p_transition_cw=p_transition_cw,
+        p_transition_ccw=p_transition_ccw,
+        n_anchors=n_anchors,
+        jitter_range=jitter_range,
+        transition_step=transition_step,
+        period=period,
+        generator=generator,
+    )
 
     lo, hi = contrast_range
     contrasts = lo + (hi - lo) * torch.rand(batch_size, seq_length, generator=generator)
