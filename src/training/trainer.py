@@ -189,9 +189,12 @@ def build_stimulus_sequence(
         [metadata.orientations[:, 1:], metadata.orientations[:, :1]], dim=1
     )  # [B, S]
 
-    true_states = metadata.states  # [B, S] — HMM state indices
+    # Shift states by 1 to align with prediction targets: q_pred predicts
+    # next orientation, so state_logits should predict next state.
+    true_next_states = torch.roll(metadata.states, -1, dims=1)
+    true_next_states[:, -1] = metadata.states[:, -1]  # last: keep current (no valid next)
 
-    return stimulus_seq, cue_seq, task_state_seq, true_thetas, true_next_thetas, true_states
+    return stimulus_seq, cue_seq, task_state_seq, true_thetas, true_next_thetas, true_next_states
 
 
 # ---------------------------------------------------------------------------

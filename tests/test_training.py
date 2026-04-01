@@ -121,11 +121,18 @@ class TestCompositeLoss:
         assert loss.item() > 0
 
     def test_prediction_loss_perfect(self, loss_fn):
-        """When q_pred peaks at correct channel, loss should be near zero."""
+        """When q_pred matches the soft Gaussian target, loss should be near zero."""
         thetas = torch.tensor([[25.0, 50.0]])  # ch5, ch10
-        q_pred = torch.zeros(1, 2, 36)
-        q_pred[0, 0, 5] = 1.0
-        q_pred[0, 1, 10] = 1.0
+        N = 36
+        step = 5.0
+        preferred = torch.arange(N).float() * step
+        # Build matching circular Gaussian targets (sigma=10)
+        q_pred = torch.zeros(1, 2, N)
+        for i, theta in enumerate([25.0, 50.0]):
+            dists = torch.abs(preferred - theta)
+            dists = torch.min(dists, 180.0 - dists)
+            q_pred[0, i] = torch.exp(-dists**2 / (2 * 10.0**2))
+            q_pred[0, i] /= q_pred[0, i].sum()
         loss = loss_fn.prediction_loss(q_pred, thetas)
         assert loss.item() < 0.01
 

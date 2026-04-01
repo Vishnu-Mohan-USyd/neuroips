@@ -20,6 +20,7 @@ from src.config import ModelConfig, TrainingConfig, StimulusConfig
 from src.model.network import LaminarV1V2Network
 from src.stimulus.sequences import HMMSequenceGenerator
 from src.training.losses import CompositeLoss
+from src.utils import circular_distance_abs
 from src.training.trainer import (
     freeze_stage1,
     unfreeze_stage2,
@@ -125,18 +126,30 @@ def run_stage2(
     last_sensory_acc = 0.0
     last_pred_acc = 0.0
 
-    # Fix 3: Feedback warmup ramp
-    feedback_warmup_steps = 5000
+    # Reference baselines for interpreting metrics
+    logger.info(
+        "Baselines: uniform=0.028 (1/36), same_as_current≈0.20, "
+        "oracle_with_state≈0.75 (within ±1 channel)"
+    )
 
-    # Fix 5: Freeze-then-unfreeze W_rec gain
-    gain_unfreeze_step = 5000
+    # Fix E: V2 curriculum — hard zero feedback for predictor burn-in,
+    # then ramp feedback from 0 to 1.
+    predictor_burnin_steps = 5000
+    feedback_ramp_steps = 5000  # ramp from 0→1 over this many steps after burn-in
+
+    # Fix 5: Freeze-then-unfreeze W_rec gain (aligned with end of burn-in)
+    gain_unfreeze_step = predictor_burnin_steps
     net.l23.gain_rec_raw.requires_grad_(False)  # Start frozen
 
     for step in range(n_steps):
-        # Fix 3: Set feedback scale (ramps from 0 to 1 over warmup period)
-        net.feedback_scale = min(1.0, step / feedback_warmup_steps)
+        # Fix E: V2 curriculum — hard zero during burn-in, then ramp
+        if step < predictor_burnin_steps:
+            net.feedback_scale = 0.0
+        else:
+            ramp_progress = (step - predictor_burnin_steps) / feedback_ramp_steps
+            net.feedback_scale = min(1.0, ramp_progress)
 
-        # Fix 5: Unfreeze gain_rec after warmup
+        # Fix 5: Unfreeze gain_rec after burn-in
         if step == gain_unfreeze_step:
             net.l23.gain_rec_raw.requires_grad_(True)
             logger.info(f"Step {step}: unfreezing gain_rec_raw")
@@ -223,6 +236,31 @@ def run_stage2(
                 # Fix 4d: pi_pred ceiling monitoring
                 pi_ceiling_frac = (aux["pi_pred_all"] >= model_cfg.pi_max - 0.01).float().mean().item()
 
+                # Fix C: Better metrics
+                orient_step = model_cfg.orientation_range / N
+
+                # 1. Latent state accuracy (3-way: CW/CCW/neutral)
+                if state_logits_windows is not None:
+                    state_pred = state_logits_windows.argmax(dim=-1)
+                    state_acc = (state_pred == true_states).float().mean().item()
+                else:
+                    state_acc = 0.0
+
+                # 2. Circular angular error (degrees)
+                pred_theta = q_pred_windows[:, :-1].argmax(dim=-1).float() * orient_step
+                true_theta_next = true_next_thetas[:, :-1]
+                angular_error = circular_distance_abs(pred_theta, true_theta_next).mean().item()
+
+                # 3. Top-3 channel accuracy
+                top3 = q_pred_windows[:, :-1].topk(3, dim=-1).indices
+                true_ch = loss_fn._theta_to_channel(true_next_thetas[:, :-1]).unsqueeze(-1)
+                top3_acc = (top3 == true_ch).any(dim=-1).float().mean().item()
+
+                # 4. 12-anchor accuracy (within ±1 channel of nearest anchor)
+                pred_ch = q_pred_windows[:, :-1].argmax(dim=-1)
+                true_anchor = ((true_ch.squeeze(-1).float() / 3.0).round().long() * 3) % N
+                anchor_acc = ((pred_ch - true_anchor).abs() % N).clamp(max=N // 2).le(1).float().mean().item()
+
             logger.info(
                 f"Stage 2 step {step+1}/{n_steps}: "
                 f"loss={loss_dict['total']:.4f}, "
@@ -232,6 +270,10 @@ def run_stage2(
                 f"energy={loss_dict['energy_total']:.4f}, "
                 f"homeo={loss_dict['homeostasis']:.4f}, "
                 f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
+                f"state_acc={state_acc:.3f}, "
+                f"ang_err={angular_error:.1f}, "
+                f"top3={top3_acc:.3f}, "
+                f"anchor={anchor_acc:.3f}, "
                 f"grad_norm={total_norm:.3f}, "
                 f"pi_ceil={pi_ceiling_frac:.3f}, "
                 f"fb_scale={net.feedback_scale:.3f}"

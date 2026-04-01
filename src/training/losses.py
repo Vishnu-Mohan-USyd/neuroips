@@ -69,7 +69,10 @@ class CompositeLoss(nn.Module):
     def prediction_loss(
         self, q_pred_windows: Tensor, true_next_theta_windows: Tensor
     ) -> Tensor:
-        """NLL loss for V2 next-orientation prediction.
+        """KL divergence between q_pred and a circular Gaussian target distribution.
+
+        V2 gets partial credit for being close — a prediction 1 channel off
+        is penalised far less than being 90° off.
 
         Args:
             q_pred_windows: [B, n_windows, N] — V2 predicted dist (softmax).
@@ -79,9 +82,25 @@ class CompositeLoss(nn.Module):
             Scalar loss.
         """
         B, W, N = q_pred_windows.shape
+
+        # Build soft target: circular Gaussian centered on true next orientation
+        step = self.orient_step  # 5.0
+        preferred = torch.arange(N, device=q_pred_windows.device).float() * step  # [N]
+
+        # Circular distance from each channel to the true next orientation
+        true_theta = true_next_theta_windows.unsqueeze(-1)  # [B, W, 1]
+        dists = torch.abs(preferred.unsqueeze(0).unsqueeze(0) - true_theta)  # [B, W, N]
+        dists = torch.min(dists, 180.0 - dists)  # circular distance
+
+        sigma_target = 10.0  # ~2 channels width
+        target_dist = torch.exp(-dists**2 / (2 * sigma_target**2))
+        target_dist = target_dist / target_dist.sum(dim=-1, keepdim=True)  # normalise
+
+        # KL divergence: sum_i target_i * log(target_i / q_pred_i)
         log_q = torch.log(q_pred_windows.reshape(B * W, N) + 1e-8)
-        targets = self._theta_to_channel(true_next_theta_windows).reshape(B * W)
-        return F.nll_loss(log_q, targets)
+        kl = F.kl_div(log_q, target_dist.reshape(B * W, N), reduction='batchmean', log_target=False)
+
+        return kl
 
     def energy_cost(self, outputs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Compute energy costs from network output trajectories.
