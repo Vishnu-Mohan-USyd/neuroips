@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=59", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lvc-expectation"
+version = "0.1.0"
+description = "Phase-1 mechanistic expectation modeling for lower visual cortex."
+readme = "docs/research_log.md"
+requires-python = ">=3.10"
+dependencies = [
+  "PyYAML>=5.4",
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,299 @@
+{
+  "benchmark_anchor_id": "phase15_probe_positive_v1",
+  "benchmark_classification": "phase-1.5 decisive positive",
+  "benchmark_registry_version": "2026-04-01.frozen-benchmarks.v1",
+  "classification_rule_version": "stage2_diagnostic_calibration_rules_v1",
+  "diagnostic_schema_version": "stage2_hidden_state_diagnostics_v2",
+  "metric_schema_version": "stage2_metric_schema_v2",
+  "metric_versions": {
+    "learned_probe_expected_target_confidence__v2": "v2",
+    "learned_probe_expected_target_margin__v2": "v2",
+    "learned_probe_precision_gap__v2": "v2",
+    "learned_probe_top1_confidence__v2": "v2",
+    "oracle_probe_expected_target_confidence__v2": "v2",
+    "oracle_probe_expected_target_margin__v2": "v2",
+    "oracle_probe_precision_gap__v2": "v2",
+    "oracle_probe_top1_confidence__v2": "v2",
+    "probe_collapse_index__v2": "v2",
+    "probe_correct_pair_flip_rate__v2": "v2",
+    "probe_entropy_correct_gap__v2": "v2",
+    "probe_maxprob_correct_gap__v2": "v2",
+    "probe_source_bin_kl__v2": "v2",
+    "probe_source_bin_top1__v2": "v2",
+    "probe_target_aligned_specificity_contrast__block_early_v2": "v2",
+    "probe_target_aligned_specificity_contrast__block_late_v2": "v2",
+    "probe_target_aligned_specificity_contrast__context0_v2": "v2",
+    "probe_target_aligned_specificity_contrast__context1_v2": "v2",
+    "probe_within_pair_mass__v2": "v2",
+    "probe_within_pair_mass_correct_gap__v2": "v2"
+  },
+  "run_ids": [
+    "4fee7e5512c6",
+    "15dc413c7865",
+    "c146791dd90b",
+    "436f74d942e1",
+    "42fb81e97a17"
+  ],
+  "seedwise": [
+    {
+      "learned_probe_expected_target_confidence__v2": 0.3877913070221742,
+      "learned_probe_expected_target_margin__v2": 0.14392511484523615,
+      "learned_probe_precision_gap__v2": 0.0820777527987957,
+      "learned_probe_top1_confidence__v2": 0.3877913070221742,
+      "oracle_probe_expected_target_confidence__v2": 0.7999999523162842,
+      "oracle_probe_expected_target_margin__v2": 0.5999999642372131,
+      "oracle_probe_precision_gap__v2": -0.2999999523162842,
+      "oracle_probe_top1_confidence__v2": 0.7999999523162842,
+      "probe_collapse_index__v2": -1.0,
+      "probe_correct_pair_flip_rate__v2": 1.0,
+      "probe_entropy_correct_gap__v2": 0.0,
+      "probe_maxprob_correct_gap__v2": 0.0,
+      "probe_source_bin_kl__v2": 2.462112605571747,
+      "probe_source_bin_top1__v2": 0.0,
+      "probe_target_aligned_specificity_contrast__block_early_v2": 0.011667678753534952,
+      "probe_target_aligned_specificity_contrast__block_late_v2": 0.017016867796579998,
+      "probe_target_aligned_specificity_contrast__context0_v2": 0.02047714591026306,
+      "probe_target_aligned_specificity_contrast__context1_v2": 0.014873186747233072,
+      "probe_within_pair_mass__v2": 0.6316574985782305,
+      "probe_within_pair_mass_correct_gap__v2": 0.0,
+      "run_id": "4fee7e5512c6"
+    },
+    {
+      "learned_probe_expected_target_confidence__v2": 0.3872374929487705,
+      "learned_probe_expected_target_margin__v2": 0.14982818191250166,
+      "learned_probe_precision_gap__v2": 0.22418232386310896,
+      "learned_probe_top1_confidence__v2": 0.3872374929487705,
+      "oracle_probe_expected_target_confidence__v2": 0.7999999523162842,
+      "oracle_probe_expected_target_margin__v2": 0.5999999642372131,
+      "oracle_probe_precision_gap__v2": -0.2999999523162842,
+      "oracle_probe_top1_confidence__v2": 0.7999999523162842,
+      "probe_collapse_index__v2": -1.0,
+      "probe_correct_pair_flip_rate__v2": 1.0,
+      "probe_entropy_correct_gap__v2": 0.0,
+      "probe_maxprob_correct_gap__v2": 0.0,
+      "probe_source_bin_kl__v2": 2.517071266969045,
+      "probe_source_bin_top1__v2": 0.0,
+      "probe_target_aligned_specificity_contrast__block_early_v2": 0.019543588161468506,
+      "probe_target_aligned_specificity_contrast__block_late_v2": 0.017398610711097717,
+      "probe_target_aligned_specificity_contrast__context0_v2": 0.019690295060475666,
+      "probe_target_aligned_specificity_contrast__context1_v2": 0.015735437472661335,
+      "probe_within_pair_mass__v2": 0.6246468052268028,
+      "probe_within_pair_mass_correct_gap__v2": 0.0,
+      "run_id": "15dc413c7865"
+    },
+    {
+      "learned_probe_expected_target_confidence__v2": 0.41241027663151425,
+      "learned_probe_expected_target_margin__v2": 0.17164028560121855,
+      "learned_probe_precision_gap__v2": 0.05487259725729624,
+      "learned_probe_top1_confidence__v2": 0.41241027663151425,
+      "oracle_probe_expected_target_confidence__v2": 0.7999999523162842,
+      "oracle_probe_expected_target_margin__v2": 0.5999999642372131,
+      "oracle_probe_precision_gap__v2": -0.2999999523162842,
+      "oracle_probe_top1_confidence__v2": 0.7999999523162842,
+      "probe_collapse_index__v2": -1.0,
+      "probe_correct_pair_flip_rate__v2": 1.0,
+      "probe_entropy_correct_gap__v2": 0.0,
+      "probe_maxprob_correct_gap__v2": 0.0,
+      "probe_source_bin_kl__v2": 2.7144678036371865,
+      "probe_source_bin_top1__v2": 0.0,
+      "probe_target_aligned_specificity_contrast__block_early_v2": 0.016051054000854492,
+      "probe_target_aligned_specificity_contrast__block_late_v2": 0.017019381125768025,
+      "probe_target_aligned_specificity_contrast__context0_v2": 0.020305087169011433,
+      "probe_target_aligned_specificity_contrast__context1_v2": 0.020824193954467773,
+      "probe_within_pair_mass__v2": 0.6531802713871002,
+      "probe_within_pair_mass_correct_gap__v2": 0.0,
+      "run_id": "c146791dd90b"
+    },
+    {
+      "learned_probe_expected_target_confidence__v2": 0.4003442203005155,
+      "learned_probe_expected_target_margin__v2": 0.15592167774836221,
+      "learned_probe_precision_gap__v2": 0.10798905789852142,
+      "learned_probe_top1_confidence__v2": 0.4003442203005155,
+      "oracle_probe_expected_target_confidence__v2": 0.7999999523162842,
+      "oracle_probe_expected_target_margin__v2": 0.5999999642372131,
+      "oracle_probe_precision_gap__v2": -0.2999999523162842,
+      "oracle_probe_top1_confidence__v2": 0.7999999523162842,
+      "probe_collapse_index__v2": -1.0,
+      "probe_correct_pair_flip_rate__v2": 1.0,
+      "probe_entropy_correct_gap__v2": 0.0,
+      "probe_maxprob_correct_gap__v2": 0.0,
+      "probe_source_bin_kl__v2": 2.767038196325302,
+      "probe_source_bin_top1__v2": 0.0,
+      "probe_target_aligned_specificity_contrast__block_early_v2": 0.01702575385570526,
+      "probe_target_aligned_specificity_contrast__block_late_v2": 0.014637152353922525,
+      "probe_target_aligned_specificity_contrast__context0_v2": 0.017028719186782837,
+      "probe_target_aligned_specificity_contrast__context1_v2": 0.021264056364695232,
+      "probe_within_pair_mass__v2": 0.6447667603691419,
+      "probe_within_pair_mass_correct_gap__v2": 0.0,
+      "run_id": "436f74d942e1"
+    },
+    {
+      "learned_probe_expected_target_confidence__v2": 0.4386032645901044,
+      "learned_probe_expected_target_margin__v2": 0.16084459548195204,
+      "learned_probe_precision_gap__v2": 0.1629495993256569,
+      "learned_probe_top1_confidence__v2": 0.4386032645901044,
+      "oracle_probe_expected_target_confidence__v2": 0.7999999523162842,
+      "oracle_probe_expected_target_margin__v2": 0.5999999642372131,
+      "oracle_probe_precision_gap__v2": -0.2999999523162842,
+      "oracle_probe_top1_confidence__v2": 0.7999999523162842,
+      "probe_collapse_index__v2": -1.0,
+      "probe_correct_pair_flip_rate__v2": 1.0,
+      "probe_entropy_correct_gap__v2": 0.0,
+      "probe_maxprob_correct_gap__v2": 0.0,
+      "probe_source_bin_kl__v2": 2.911891202131907,
+      "probe_source_bin_top1__v2": 0.0,
+      "probe_target_aligned_specificity_contrast__block_early_v2": 0.022530116140842438,
+      "probe_target_aligned_specificity_contrast__block_late_v2": 0.014657899737358093,
+      "probe_target_aligned_specificity_contrast__context0_v2": 0.019216229518254597,
+      "probe_target_aligned_specificity_contrast__context1_v2": 0.017590304215749104,
+      "probe_within_pair_mass__v2": 0.7163619349400202,
+      "probe_within_pair_mass_correct_gap__v2": 0.0,
+      "run_id": "42fb81e97a17"
+    }
+  ],
+  "source_metric_versions": [
+    "benchmark_v1_frozen"
+  ],
+  "summary": {
+    "learned_probe_expected_target_confidence__v2": {
+      "max": 0.4386032645901044,
+      "mean": 0.40527731229861574,
+      "median": 0.4003442203005155,
+      "min": 0.3872374929487705,
+      "n": 5
+    },
+    "learned_probe_expected_target_margin__v2": {
+      "max": 0.17164028560121855,
+      "mean": 0.15643197111785412,
+      "median": 0.15592167774836221,
+      "min": 0.14392511484523615,
+      "n": 5
+    },
+    "learned_probe_precision_gap__v2": {
+      "max": 0.22418232386310896,
+      "mean": 0.12641426622867585,
+      "median": 0.10798905789852142,
+      "min": 0.05487259725729624,
+      "n": 5
+    },
+    "learned_probe_top1_confidence__v2": {
+      "max": 0.4386032645901044,
+      "mean": 0.40527731229861574,
+      "median": 0.4003442203005155,
+      "min": 0.3872374929487705,
+      "n": 5
+    },
+    "oracle_probe_expected_target_confidence__v2": {
+      "max": 0.7999999523162842,
+      "mean": 0.7999999523162842,
+      "median": 0.7999999523162842,
+      "min": 0.7999999523162842,
+      "n": 5
+    },
+    "oracle_probe_expected_target_margin__v2": {
+      "max": 0.5999999642372131,
+      "mean": 0.5999999642372131,
+      "median": 0.5999999642372131,
+      "min": 0.5999999642372131,
+      "n": 5
+    },
+    "oracle_probe_precision_gap__v2": {
+      "max": -0.2999999523162842,
+      "mean": -0.2999999523162842,
+      "median": -0.2999999523162842,
+      "min": -0.2999999523162842,
+      "n": 5
+    },
+    "oracle_probe_top1_confidence__v2": {
+      "max": 0.7999999523162842,
+      "mean": 0.7999999523162842,
+      "median": 0.7999999523162842,
+      "min": 0.7999999523162842,
+      "n": 5
+    },
+    "probe_collapse_index__v2": {
+      "max": -1.0,
+      "mean": -1.0,
+      "median": -1.0,
+      "min": -1.0,
+      "n": 5
+    },
+    "probe_correct_pair_flip_rate__v2": {
+      "max": 1.0,
+      "mean": 1.0,
+      "median": 1.0,
+      "min": 1.0,
+      "n": 5
+    },
+    "probe_entropy_correct_gap__v2": {
+      "max": 0.0,
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "n": 5
+    },
+    "probe_maxprob_correct_gap__v2": {
+      "max": 0.0,
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "n": 5
+    },
+    "probe_source_bin_kl__v2": {
+      "max": 2.911891202131907,
+      "mean": 2.6745162149270376,
+      "median": 2.7144678036371865,
+      "min": 2.462112605571747,
+      "n": 5
+    },
+    "probe_source_bin_top1__v2": {
+      "max": 0.0,
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "n": 5
+    },
+    "probe_target_aligned_specificity_contrast__block_early_v2": {
+      "max": 0.022530116140842438,
+      "mean": 0.017363638182481128,
+      "median": 0.01702575385570526,
+      "min": 0.011667678753534952,
+      "n": 5
+    },
+    "probe_target_aligned_specificity_contrast__block_late_v2": {
+      "max": 0.017398610711097717,
+      "mean": 0.016145982344945273,
+      "median": 0.017016867796579998,
+      "min": 0.014637152353922525,
+      "n": 5
+    },
+    "probe_target_aligned_specificity_contrast__context0_v2": {
+      "max": 0.02047714591026306,
+      "mean": 0.019343495368957516,
+      "median": 0.019690295060475666,
+      "min": 0.017028719186782837,
+      "n": 5
+    },
+    "probe_target_aligned_specificity_contrast__context1_v2": {
+      "max": 0.021264056364695232,
+      "mean": 0.018057435750961304,
+      "median": 0.017590304215749104,
+      "min": 0.014873186747233072,
+      "n": 5
+    },
+    "probe_within_pair_mass__v2": {
+      "max": 0.7163619349400202,
+      "mean": 0.6541226541002592,
+      "median": 0.6447667603691419,
+      "min": 0.6246468052268028,
+      "n": 5
+    },
+    "probe_within_pair_mass_correct_gap__v2": {
+      "max": 0.0,
+      "mean": 0.0,
+      "median": 0.0,
+      "min": 0.0,
+      "n": 5
+    }
+  }
+}
