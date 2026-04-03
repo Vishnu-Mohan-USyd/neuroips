@@ -82,11 +82,12 @@ def create_stage2_optimizer(
         },
         {"params": list(loss_fn.orientation_decoder.parameters()), "lr": cfg.stage1_lr},
     ]
-    # Add surprise detector params if present
-    if hasattr(loss_fn, 'surprise_detector'):
-        param_groups.append(
-            {"params": list(loss_fn.surprise_detector.parameters()), "lr": cfg.stage1_lr}
-        )
+    # Add optional readout head params
+    for head_name in ('surprise_detector', 'error_decoder', 'detection_head'):
+        if hasattr(loss_fn, head_name):
+            param_groups.append(
+                {"params": list(getattr(loss_fn, head_name).parameters()), "lr": cfg.stage1_lr}
+            )
     # Filter empty groups
     param_groups = [g for g in param_groups if len(list(g["params"])) > 0]
     return AdamW(param_groups, weight_decay=cfg.stage2_weight_decay)

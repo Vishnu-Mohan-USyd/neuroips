@@ -45,20 +45,30 @@ class CompositeLoss(nn.Module):
         self.lambda_state = cfg.lambda_state       # 0.25
         self.lambda_fb = cfg.lambda_fb             # 0.01
         self.lambda_surprise = cfg.lambda_surprise   # 0.0 (disabled by default)
+        self.lambda_error = cfg.lambda_error         # 0.0 (disabled by default)
+        self.lambda_detection = cfg.lambda_detection # 0.0 (disabled by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
         N = model_cfg.n_orientations  # 36
         self.orient_step = model_cfg.orientation_range / N  # 5.0
         self.n_orient = N
+        self.period = model_cfg.orientation_range  # 180.0
 
         # Trainable linear decoder: L2/3 activity -> orientation logits
         self.orientation_decoder = nn.Linear(N, N)
 
         # Surprise detection head: L2/3 -> binary (expected vs unexpected)
-        # Only used when lambda_surprise > 0
         if self.lambda_surprise > 0:
             self.surprise_detector = nn.Linear(N, 1)
+
+        # Prediction error readout: L2/3 -> 12 error bins (Experiment A)
+        if self.lambda_error > 0:
+            self.error_decoder = nn.Linear(N, 12)
+
+        # Detection head: L2/3 -> binary "is expected orientation present?" (Experiment C)
+        if self.lambda_detection > 0:
+            self.detection_head = nn.Linear(N, 1)
 
         # Homeostasis target range
         self.target_min = 0.05
@@ -215,6 +225,46 @@ class CompositeLoss(nn.Module):
         targets = is_expected.reshape(B * W, 1).float()
         return F.binary_cross_entropy_with_logits(logits, targets)
 
+    def prediction_error_readout_loss(
+        self, r_l23_windows: Tensor, true_theta: Tensor, predicted_theta: Tensor
+    ) -> Tensor:
+        """L2/3 must encode the prediction error, not the stimulus itself.
+
+        Args:
+            r_l23_windows: [B, W, N] -- L2/3 at readout timepoints.
+            true_theta: [B, W] -- true orientations in degrees.
+            predicted_theta: [B, W] -- predicted next orientations in degrees.
+
+        Returns:
+            Scalar cross-entropy loss over 12 error bins.
+        """
+        from src.utils import circular_distance
+        B, W, N = r_l23_windows.shape
+        # Signed angular error in degrees
+        error = circular_distance(true_theta, predicted_theta, self.period)  # [B, W]
+        # Discretize into 12 bins: [-90, -75, ..., -15, 0, 15, ..., 75, 90] -> [0..11]
+        error_channel = (error / 15.0).round().long()  # ~ [-6, 6]
+        error_channel = (error_channel + 6) % 12  # shift to [0, 11]
+        logits = self.error_decoder(r_l23_windows.reshape(B * W, N))  # [B*W, 12]
+        return F.cross_entropy(logits, error_channel.reshape(B * W))
+
+    def detection_confirmation_loss(
+        self, r_l23_windows: Tensor, is_expected: Tensor
+    ) -> Tensor:
+        """Binary: is the expected orientation present in this stimulus?
+
+        Args:
+            r_l23_windows: [B, W, N] -- L2/3 at readout timepoints.
+            is_expected: [B, W] -- binary (1=expected, 0=unexpected).
+
+        Returns:
+            Scalar BCE loss.
+        """
+        B, W, N = r_l23_windows.shape
+        logits = self.detection_head(r_l23_windows.reshape(B * W, N))  # [B*W, 1]
+        targets = is_expected.reshape(B * W, 1).float()
+        return F.binary_cross_entropy_with_logits(logits, targets)
+
     def feedback_sparsity_loss(self, model: nn.Module) -> Tensor:
         """L1 sparsity penalty on emergent feedback operator weights.
 
@@ -240,7 +290,9 @@ class CompositeLoss(nn.Module):
         p_cw_windows: Tensor | None = None,
         model: nn.Module | None = None,
         is_expected: Tensor | None = None,
+        predicted_theta: Tensor | None = None,
         use_e_total: bool = True,
+        fb_scale: float = 1.0,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -255,6 +307,8 @@ class CompositeLoss(nn.Module):
             p_cw_windows: [B, n_windows, 1] CW probability (emergent mode).
             model: Network module (for feedback sparsity loss).
             use_e_total: If True, use E_total; else E_excitatory.
+            fb_scale: Feedback scale (0 during burn-in, ramps to 1). Scales
+                L1 sparsity penalty to prevent alpha death during burn-in.
 
         Returns:
             (total_loss, loss_dict) where loss_dict has .item() scalar values.
@@ -290,7 +344,7 @@ class CompositeLoss(nn.Module):
 
             if model is not None:
                 l_fb = self.feedback_sparsity_loss(model)
-                total = total + self.lambda_fb * l_fb
+                total = total + self.lambda_fb * fb_scale * l_fb
                 loss_dict["fb_sparsity"] = l_fb.item()
             else:
                 loss_dict["fb_sparsity"] = 0.0
@@ -316,6 +370,24 @@ class CompositeLoss(nn.Module):
             loss_dict["surprise"] = l_surprise.item()
         else:
             loss_dict["surprise"] = 0.0
+
+        # Prediction error readout loss (Experiment A)
+        if self.lambda_error > 0 and predicted_theta is not None:
+            l_error = self.prediction_error_readout_loss(
+                r_l23_windows, true_theta_windows, predicted_theta
+            )
+            total = total + self.lambda_error * l_error
+            loss_dict["error_readout"] = l_error.item()
+        else:
+            loss_dict["error_readout"] = 0.0
+
+        # Detection confirmation loss (Experiment C)
+        if self.lambda_detection > 0 and is_expected is not None:
+            l_detect = self.detection_confirmation_loss(r_l23_windows, is_expected)
+            total = total + self.lambda_detection * l_detect
+            loss_dict["detection"] = l_detect.item()
+        else:
+            loss_dict["detection"] = 0.0
 
         loss_dict["total"] = total.item()
 

@@ -225,23 +225,27 @@ def run_stage2(
                 .mean(dim=2)
             )
 
-        # Compute is_expected for surprise detection (if enabled)
+        # Compute is_expected for surprise/detection losses (if enabled)
         is_expected = None
-        if train_cfg.lambda_surprise > 0:
-            # Expected = actual orientation within ±1 channel of predicted next
+        if train_cfg.lambda_surprise > 0 or train_cfg.lambda_detection > 0:
             orient_step = model_cfg.orientation_range / N
             pred_next_ch = q_pred_windows[:, :-1].argmax(dim=-1)  # [B, W-1]
             true_next_ch = loss_fn._theta_to_channel(true_next_thetas[:, :-1])  # [B, W-1]
             ch_dist = (pred_next_ch - true_next_ch).abs() % N
             ch_dist = torch.min(ch_dist, N - ch_dist)
             is_expected_partial = (ch_dist <= 1).long()  # [B, W-1]
-            # Pad first window position (no prediction for first stimulus)
             is_expected = torch.cat([
                 torch.ones(is_expected_partial.shape[0], 1, device=dev, dtype=torch.long),
                 is_expected_partial,
             ], dim=1)  # [B, W]
 
-        # Compute loss
+        # Compute predicted_theta for error readout loss (if enabled)
+        predicted_theta = None
+        if train_cfg.lambda_error > 0:
+            orient_step = model_cfg.orientation_range / N
+            predicted_theta = q_pred_windows.argmax(dim=-1).float() * orient_step  # [B, W]
+
+        # Compute loss (scale L1 sparsity by fb_scale to prevent alpha death during burn-in)
         total_loss, loss_dict = loss_fn(
             outputs, true_thetas, true_next_thetas,
             r_l23_windows, q_pred_windows,
@@ -250,6 +254,8 @@ def run_stage2(
             p_cw_windows=p_cw_windows,
             model=net if feedback_mode == 'emergent' else None,
             is_expected=is_expected,
+            predicted_theta=predicted_theta,
+            fb_scale=net.feedback_scale.item(),
         )
 
         total_loss.backward()
