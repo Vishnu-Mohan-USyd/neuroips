@@ -57,6 +57,15 @@ class ModelConfig:
     # Feedback mechanism
     mechanism: MechanismType = MechanismType.CENTER_SURROUND
 
+    # Feedback mode: 'emergent' (learned basis) or 'fixed' (hardcoded mechanism)
+    feedback_mode: str = 'emergent'
+
+    # Transition step for analytical q_pred construction (degrees)
+    transition_step: float = 15.0
+
+    # Number of basis functions for emergent feedback operator
+    n_basis: int = 7
+
     # V2 input mode: 'l23' (default), 'l4', or 'l4_l23'
     v2_input_mode: str = 'l23'
 
@@ -87,6 +96,8 @@ class TrainingConfig:
     stage2_lr_feedback: float = 1e-4
     stage2_weight_decay: float = 1e-4
     stage2_warmup_steps: int = 1000
+    stage2_burnin_steps: int = 5000
+    stage2_ramp_steps: int = 5000
     gradient_clip: float = 1.0
     stage2_contrast_range: Tuple[float, float] = (0.15, 1.0)
     ambiguous_fraction: float = 0.15
@@ -97,6 +108,7 @@ class TrainingConfig:
     lambda_energy: float = 0.01
     lambda_homeo: float = 1.0
     lambda_state: float = 0.25
+    lambda_fb: float = 0.01          # L1 sparsity on emergent feedback weights
 
     # Batching
     batch_size: int = 32
@@ -130,7 +142,9 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
     model_raw = raw.get("model", {})
     # Convert mechanism string to enum
     mech_str = model_raw.pop("mechanism", "center_surround")
-    model_cfg = ModelConfig(**model_raw, mechanism=MechanismType(mech_str))
+    # Extract feedback_mode with default
+    feedback_mode = model_raw.pop("feedback_mode", "emergent")
+    model_cfg = ModelConfig(**model_raw, mechanism=MechanismType(mech_str), feedback_mode=feedback_mode)
 
     train_raw = raw.get("training", {})
     # Flatten nested stage configs
@@ -145,6 +159,8 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         stage2_lr_feedback=stage2.get("lr_feedback", 1e-4),
         stage2_weight_decay=stage2.get("weight_decay", 1e-4),
         stage2_warmup_steps=stage2.get("warmup_steps", 1000),
+        stage2_burnin_steps=stage2.get("burnin_steps", 5000),
+        stage2_ramp_steps=stage2.get("ramp_steps", 5000),
         gradient_clip=stage2.get("gradient_clip", 1.0),
         stage2_contrast_range=tuple(stage2.get("contrast_range", [0.15, 1.0])),
         ambiguous_fraction=stage2.get("ambiguous_fraction", 0.15),
@@ -153,6 +169,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_energy=train_raw.get("lambda_energy", 0.01),
         lambda_homeo=train_raw.get("lambda_homeo", 1.0),
         lambda_state=train_raw.get("lambda_state", 0.25),
+        lambda_fb=train_raw.get("lambda_fb", 0.01),
         batch_size=train_raw.get("batch_size", 32),
         seq_length=train_raw.get("seq_length", 50),
         steps_on=train_raw.get("steps_on", 8),

@@ -41,7 +41,7 @@ from src.stimulus.sequences import HMMSequenceGenerator
 
 @pytest.fixture
 def model_cfg():
-    return ModelConfig(mechanism=MechanismType.CENTER_SURROUND)
+    return ModelConfig(mechanism=MechanismType.CENTER_SURROUND, feedback_mode='fixed')
 
 @pytest.fixture
 def train_cfg():
@@ -199,7 +199,7 @@ class TestCompositeLoss:
 
         assert isinstance(total_loss, torch.Tensor)
         assert total_loss.shape == ()
-        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state"}
+        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity"}
         assert set(loss_dict.keys()) == expected_keys
         for k, v in loss_dict.items():
             assert isinstance(v, float), f"{k} should be float, got {type(v)}"
@@ -365,7 +365,7 @@ class TestBuildStimulusSequence:
 class TestStage1Smoke:
     def test_stage1_runs(self):
         """Stage 1 completes with a few steps without errors."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING)
+        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
         train = TrainingConfig(stage1_n_steps=10)
         net = LaminarV1V2Network(cfg)
 
@@ -385,7 +385,7 @@ class TestStage1Smoke:
         the gains to produce nonzero L2/3. Here we just verify V1 forward
         runs without error and V2 is not involved.
         """
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING)
+        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
         train = TrainingConfig(stage1_n_steps=5)
         net = LaminarV1V2Network(cfg)
 
@@ -399,7 +399,7 @@ class TestStage1Smoke:
 
     def test_stage1_freezes_params(self):
         """After Stage 1, L4 and PV params are frozen."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING)
+        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
         train = TrainingConfig(stage1_n_steps=5)
         net = LaminarV1V2Network(cfg)
 
@@ -414,7 +414,7 @@ class TestStage1Smoke:
 class TestStage2Smoke:
     def test_stage2_runs(self):
         """Stage 2 completes with a few steps without errors."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING)
+        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
         train = TrainingConfig(stage2_n_steps=3, batch_size=2, seq_length=5)
         stim = StimulusConfig()
         net = LaminarV1V2Network(cfg)
@@ -432,7 +432,7 @@ class TestStage2Smoke:
         stim = StimulusConfig()
 
         for mech in MechanismType:
-            cfg = ModelConfig(mechanism=mech)
+            cfg = ModelConfig(mechanism=mech, feedback_mode='fixed')
             net = LaminarV1V2Network(cfg)
             loss_fn = CompositeLoss(train, cfg)
             from src.training.stage2_feedback import run_stage2
@@ -447,7 +447,7 @@ class TestStage2Smoke:
 class TestCheckpoint:
     def test_save_load_identical(self):
         """Save checkpoint, reload, verify forward pass is identical."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING)
+        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
         train = TrainingConfig()
         net = LaminarV1V2Network(cfg)
         loss_fn = CompositeLoss(train, cfg)

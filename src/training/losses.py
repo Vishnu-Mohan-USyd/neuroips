@@ -2,9 +2,12 @@
 
 Components:
     1. Sensory readout: cross-entropy on L2/3 -> decoded orientation
-    2. Prediction: cross-entropy on V2 q_pred -> next orientation
-    3. Energy cost: L1 on population rates (E_excitatory and E_total variants)
-    4. Homeostasis: penalizes mean L2/3 rate outside target range
+    2. Prediction: cross-entropy on V2 q_pred -> next orientation (fixed mode)
+    3. State BCE: binary cross-entropy on p_cw vs true CW label (emergent mode)
+    4. State classification: cross-entropy on state_logits (fixed mode)
+    5. Energy cost: L1 on population rates
+    6. Homeostasis: penalizes mean L2/3 rate outside target range
+    7. Feedback sparsity: L1 on emergent operator weights (emergent mode)
 """
 
 from __future__ import annotations
@@ -20,10 +23,17 @@ from src.config import ModelConfig, TrainingConfig
 class CompositeLoss(nn.Module):
     """Multi-objective loss for the V1-V2 network.
 
-    L = lambda_sensory * sensory_readout_loss    (decode current orientation from L2/3)
-      + lambda_pred   * prediction_loss           (V2 predicts next orientation)
-      + lambda_energy * energy_cost               (activity penalty)
-      + lambda_homeo  * homeostasis_penalty       (keep mean activity in range)
+    Supports both feedback modes:
+
+    Fixed mode:
+        L = lambda_sensory * sensory + lambda_pred * prediction
+          + lambda_state * state_CE + lambda_energy * energy
+          + lambda_homeo * homeostasis
+
+    Emergent mode:
+        L = lambda_sensory * sensory + lambda_state * BCE(p_cw, true_cw)
+          + lambda_energy * energy + lambda_homeo * homeostasis
+          + lambda_fb * (|alpha_inh|_1 + |alpha_exc|_1)
     """
 
     def __init__(self, cfg: TrainingConfig, model_cfg: ModelConfig):
@@ -33,6 +43,9 @@ class CompositeLoss(nn.Module):
         self.lambda_energy = cfg.lambda_energy     # 0.01
         self.lambda_homeo = cfg.lambda_homeo       # 1.0
         self.lambda_state = cfg.lambda_state       # 0.25
+        self.lambda_fb = cfg.lambda_fb             # 0.01
+
+        self.feedback_mode = model_cfg.feedback_mode
 
         N = model_cfg.n_orientations  # 36
         self.orient_step = model_cfg.orientation_range / N  # 5.0
@@ -55,8 +68,8 @@ class CompositeLoss(nn.Module):
         """Cross-entropy loss for orientation decoding from L2/3.
 
         Args:
-            r_l23_windows: [B, n_windows, N] — L2/3 at readout timepoints.
-            true_theta_windows: [B, n_windows] — true orientations in degrees.
+            r_l23_windows: [B, n_windows, N] -- L2/3 at readout timepoints.
+            true_theta_windows: [B, n_windows] -- true orientations in degrees.
 
         Returns:
             Scalar loss.
@@ -71,12 +84,11 @@ class CompositeLoss(nn.Module):
     ) -> Tensor:
         """KL divergence between q_pred and a circular Gaussian target distribution.
 
-        V2 gets partial credit for being close — a prediction 1 channel off
-        is penalised far less than being 90° off.
+        Only used in fixed feedback mode. V2 gets partial credit for being close.
 
         Args:
-            q_pred_windows: [B, n_windows, N] — V2 predicted dist (softmax).
-            true_next_theta_windows: [B, n_windows] — actual next orientation degrees.
+            q_pred_windows: [B, n_windows, N] -- V2 predicted dist (softmax).
+            true_next_theta_windows: [B, n_windows] -- actual next orientation degrees.
 
         Returns:
             Scalar loss.
@@ -101,6 +113,25 @@ class CompositeLoss(nn.Module):
         kl = F.kl_div(log_q, target_dist.reshape(B * W, N), reduction='batchmean', log_target=False)
 
         return kl
+
+    def state_bce_loss(
+        self, p_cw_windows: Tensor, true_states_windows: Tensor
+    ) -> Tensor:
+        """Binary cross-entropy loss on p_cw vs true CW/CCW label.
+
+        Used in emergent mode where V2 outputs p_cw (probability of CW).
+
+        Args:
+            p_cw_windows: [B, n_windows, 1] -- predicted CW probability (sigmoid).
+            true_states_windows: [B, n_windows] -- true HMM state indices
+                (0=CW, 1=CCW; in 2-state mode).
+
+        Returns:
+            Scalar loss.
+        """
+        # Target: 1.0 for CW (state==0), 0.0 for CCW (state==1)
+        target = (true_states_windows == 0).float().unsqueeze(-1)  # [B, W, 1]
+        return F.binary_cross_entropy(p_cw_windows, target)
 
     def energy_cost(self, outputs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Compute energy costs from network output trajectories.
@@ -129,7 +160,7 @@ class CompositeLoss(nn.Module):
         Uses squared penalty for smooth gradients.
 
         Args:
-            r_l23: [B, T, N] or [B, N] — L2/3 rates.
+            r_l23: [B, T, N] or [B, N] -- L2/3 rates.
 
         Returns:
             Scalar penalty.
@@ -146,9 +177,11 @@ class CompositeLoss(nn.Module):
     ) -> Tensor:
         """Cross-entropy loss for HMM state classification.
 
+        Used in fixed mode only.
+
         Args:
-            state_logits_windows: [B, n_windows, 3] — raw logits for CW/CCW/neutral.
-            true_states_windows: [B, n_windows] — true HMM state indices (long).
+            state_logits_windows: [B, n_windows, 3] -- raw logits for CW/CCW/neutral.
+            true_states_windows: [B, n_windows] -- true HMM state indices (long).
 
         Returns:
             Scalar loss.
@@ -159,6 +192,19 @@ class CompositeLoss(nn.Module):
             true_states_windows.reshape(B * W),
         )
 
+    def feedback_sparsity_loss(self, model: nn.Module) -> Tensor:
+        """L1 sparsity penalty on emergent feedback operator weights.
+
+        Args:
+            model: The network (must have feedback.alpha_inh and feedback.alpha_exc).
+
+        Returns:
+            Scalar L1 penalty.
+        """
+        if not hasattr(model, 'feedback') or not hasattr(model.feedback, 'alpha_inh'):
+            return torch.tensor(0.0)
+        return model.feedback.alpha_inh.abs().sum() + model.feedback.alpha_exc.abs().sum()
+
     def forward(
         self,
         outputs: dict[str, Tensor],
@@ -168,6 +214,8 @@ class CompositeLoss(nn.Module):
         q_pred_windows: Tensor,
         state_logits_windows: Tensor | None = None,
         true_states_windows: Tensor | None = None,
+        p_cw_windows: Tensor | None = None,
+        model: nn.Module | None = None,
         use_e_total: bool = True,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
@@ -178,42 +226,64 @@ class CompositeLoss(nn.Module):
             true_next_theta_windows: [B, n_windows] next orientations in degrees.
             r_l23_windows: [B, n_windows, N] L2/3 at readout times.
             q_pred_windows: [B, n_windows, N] V2 predictions at readout times.
-            state_logits_windows: [B, n_windows, 3] state logits (optional).
-            true_states_windows: [B, n_windows] true HMM states (optional).
+            state_logits_windows: [B, n_windows, 3] state logits (fixed mode).
+            true_states_windows: [B, n_windows] true HMM states.
+            p_cw_windows: [B, n_windows, 1] CW probability (emergent mode).
+            model: Network module (for feedback sparsity loss).
             use_e_total: If True, use E_total; else E_excitatory.
 
         Returns:
             (total_loss, loss_dict) where loss_dict has .item() scalar values.
         """
         l_sens = self.sensory_readout_loss(r_l23_windows, true_theta_windows)
-        l_pred = self.prediction_loss(q_pred_windows, true_next_theta_windows)
         e_exc, e_total = self.energy_cost(outputs)
         l_homeo = self.homeostasis_penalty(outputs["r_l23"])
-
         l_energy = e_total if use_e_total else e_exc
 
         total = (
             self.lambda_sensory * l_sens
-            + self.lambda_pred * l_pred
             + self.lambda_energy * l_energy
             + self.lambda_homeo * l_homeo
         )
 
         loss_dict = {
             "sensory": l_sens.item(),
-            "prediction": l_pred.item(),
             "energy_exc": e_exc.item(),
             "energy_total": e_total.item(),
             "homeostasis": l_homeo.item(),
         }
 
-        # State classification loss (Fix 4)
-        if state_logits_windows is not None and true_states_windows is not None:
-            l_state = self.state_classification_loss(state_logits_windows, true_states_windows)
-            total = total + self.lambda_state * l_state
-            loss_dict["state"] = l_state.item()
+        if self.feedback_mode == 'emergent':
+            # Emergent mode: BCE on p_cw + feedback sparsity
+            loss_dict["prediction"] = 0.0  # No prediction KL in emergent mode
+
+            if p_cw_windows is not None and true_states_windows is not None:
+                l_state = self.state_bce_loss(p_cw_windows, true_states_windows)
+                total = total + self.lambda_state * l_state
+                loss_dict["state"] = l_state.item()
+            else:
+                loss_dict["state"] = 0.0
+
+            if model is not None:
+                l_fb = self.feedback_sparsity_loss(model)
+                total = total + self.lambda_fb * l_fb
+                loss_dict["fb_sparsity"] = l_fb.item()
+            else:
+                loss_dict["fb_sparsity"] = 0.0
         else:
-            loss_dict["state"] = 0.0
+            # Fixed mode: prediction KL + state classification
+            l_pred = self.prediction_loss(q_pred_windows, true_next_theta_windows)
+            total = total + self.lambda_pred * l_pred
+            loss_dict["prediction"] = l_pred.item()
+
+            if state_logits_windows is not None and true_states_windows is not None:
+                l_state = self.state_classification_loss(state_logits_windows, true_states_windows)
+                total = total + self.lambda_state * l_state
+                loss_dict["state"] = l_state.item()
+            else:
+                loss_dict["state"] = 0.0
+
+            loss_dict["fb_sparsity"] = 0.0
 
         loss_dict["total"] = total.item()
 

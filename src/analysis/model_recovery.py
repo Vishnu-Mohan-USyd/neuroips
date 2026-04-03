@@ -70,7 +70,7 @@ def generate_synthetic_responses(
     """
     torch.manual_seed(seed)
     N = n_orientations
-    cfg = ModelConfig(mechanism=mechanism, n_orientations=N)
+    cfg = ModelConfig(mechanism=mechanism, n_orientations=N, feedback_mode='fixed')
     net = LaminarV1V2Network(cfg)
     net.eval()
 

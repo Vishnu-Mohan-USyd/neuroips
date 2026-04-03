@@ -105,8 +105,15 @@ def run_ablation(
         orig_forward = net.v2.forward
 
         def patched_forward(*args, **kwargs):
-            q_pred, pi_pred, state_logits, h_v2 = orig_forward(*args, **kwargs)
-            return q_pred, torch.ones_like(pi_pred), state_logits, h_v2
+            outputs = orig_forward(*args, **kwargs)
+            if len(outputs) == 3:
+                # Emergent mode: (p_cw, pi_pred, h_v2)
+                p_cw, pi_pred, h_v2 = outputs
+                return p_cw, torch.ones_like(pi_pred), h_v2
+            else:
+                # Fixed mode: (q_pred, pi_pred, state_logits, h_v2)
+                q_pred, pi_pred, state_logits, h_v2 = outputs
+                return q_pred, torch.ones_like(pi_pred), state_logits, h_v2
 
         net.v2.forward = patched_forward
         try:

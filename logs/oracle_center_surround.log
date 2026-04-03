@@ -1,0 +1,25 @@
+2026-04-02 11:13:36,263 [INFO] Oracle test: mechanism=center_surround, steps=5000, pi=3.0, device=cuda
+2026-04-02 11:13:36,271 [INFO] [center_surround] Stage 1: sensory scaffold
+2026-04-02 11:13:53,645 [INFO] Stage 1 step 200/2000: loss=3.5942, acc=0.000, l23_mean=0.0002
+2026-04-02 11:14:07,162 [INFO] Stage 1 step 400/2000: loss=3.4904, acc=0.125, l23_mean=0.0035
+2026-04-02 11:14:23,561 [INFO] Stage 1 step 600/2000: loss=3.0056, acc=0.688, l23_mean=0.0124
+2026-04-02 11:14:37,178 [INFO] Stage 1 step 800/2000: loss=2.7529, acc=0.719, l23_mean=0.0152
+2026-04-02 11:14:50,580 [INFO] Stage 1 step 1000/2000: loss=2.2920, acc=0.781, l23_mean=0.0232
+2026-04-02 11:15:07,081 [INFO] Stage 1 step 1200/2000: loss=2.1378, acc=0.688, l23_mean=0.0254
+2026-04-02 11:15:20,501 [INFO] Stage 1 step 1400/2000: loss=2.0168, acc=0.875, l23_mean=0.0269
+2026-04-02 11:15:36,924 [INFO] Stage 1 step 1600/2000: loss=1.9948, acc=0.750, l23_mean=0.0273
+2026-04-02 11:15:50,659 [INFO] Stage 1 step 1800/2000: loss=1.9343, acc=0.781, l23_mean=0.0273
+2026-04-02 11:16:06,997 [INFO] Stage 1 step 2000/2000: loss=1.7440, acc=0.812, l23_mean=0.0322
+2026-04-02 11:16:07,028 [INFO] Gating 1 - Decoder accuracy: 1.000 (need >= 0.90)
+2026-04-02 11:16:07,045 [INFO] Gating 2 - Unimodal units: 36/36
+2026-04-02 11:16:07,061 [INFO] Gating 3 - Unique preferred orientations: 36/36
+2026-04-02 11:16:07,101 [INFO] Gating 4 - FWHM in range: 36/36
+2026-04-02 11:16:07,102 [INFO] Gating 5 - Mean L2/3 rate: 0.0396
+2026-04-02 11:16:07,156 [INFO] Gating 6 - FWHM high=25.0, low=25.0
+2026-04-02 11:16:07,188 [INFO] [center_surround] Stage 1 done: acc=0.859
+2026-04-02 11:16:07,189 [INFO] [center_surround] Stage 2 ORACLE: 5000 steps, pi=3.0
+2026-04-02 11:20:51,348 [INFO] [center_surround] step 100/5000: loss=3.8596, s_acc=0.007, suppression=-0.039, som=0.0153
+2026-04-02 11:25:34,436 [INFO] [center_surround] step 200/5000: loss=3.8322, s_acc=0.016, suppression=-0.049, som=0.0154
+2026-04-02 11:30:16,061 [INFO] [center_surround] step 300/5000: loss=3.7864, s_acc=0.099, suppression=-0.017, som=0.0155
+2026-04-02 11:34:57,534 [INFO] [center_surround] step 400/5000: loss=3.7174, s_acc=0.140, suppression=-0.015, som=0.0157
+2026-04-02 11:47:17,692 [INFO] [center_surround] step 500/5000: loss=3.6386, s_acc=0.151, suppression=-0.035, som=0.0159

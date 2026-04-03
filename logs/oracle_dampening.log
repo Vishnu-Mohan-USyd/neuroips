@@ -1,0 +1,26 @@
+2026-04-02 11:13:34,669 [INFO] Oracle test: mechanism=dampening, steps=5000, pi=3.0, device=cuda
+2026-04-02 11:13:34,678 [INFO] [dampening] Stage 1: sensory scaffold
+2026-04-02 11:13:51,822 [INFO] Stage 1 step 200/2000: loss=3.5942, acc=0.000, l23_mean=0.0002
+2026-04-02 11:14:05,202 [INFO] Stage 1 step 400/2000: loss=3.4904, acc=0.125, l23_mean=0.0035
+2026-04-02 11:14:21,525 [INFO] Stage 1 step 600/2000: loss=3.0056, acc=0.688, l23_mean=0.0124
+2026-04-02 11:14:34,857 [INFO] Stage 1 step 800/2000: loss=2.7529, acc=0.719, l23_mean=0.0152
+2026-04-02 11:14:48,233 [INFO] Stage 1 step 1000/2000: loss=2.2920, acc=0.781, l23_mean=0.0232
+2026-04-02 11:15:04,592 [INFO] Stage 1 step 1200/2000: loss=2.1378, acc=0.688, l23_mean=0.0254
+2026-04-02 11:15:18,108 [INFO] Stage 1 step 1400/2000: loss=2.0168, acc=0.875, l23_mean=0.0269
+2026-04-02 11:15:34,744 [INFO] Stage 1 step 1600/2000: loss=1.9948, acc=0.750, l23_mean=0.0273
+2026-04-02 11:15:48,438 [INFO] Stage 1 step 1800/2000: loss=1.9343, acc=0.781, l23_mean=0.0273
+2026-04-02 11:16:04,847 [INFO] Stage 1 step 2000/2000: loss=1.7440, acc=0.812, l23_mean=0.0322
+2026-04-02 11:16:04,878 [INFO] Gating 1 - Decoder accuracy: 1.000 (need >= 0.90)
+2026-04-02 11:16:04,909 [INFO] Gating 2 - Unimodal units: 36/36
+2026-04-02 11:16:04,931 [INFO] Gating 3 - Unique preferred orientations: 36/36
+2026-04-02 11:16:04,948 [INFO] Gating 4 - FWHM in range: 36/36
+2026-04-02 11:16:04,949 [INFO] Gating 5 - Mean L2/3 rate: 0.0396
+2026-04-02 11:16:05,011 [INFO] Gating 6 - FWHM high=25.0, low=25.0
+2026-04-02 11:16:05,046 [INFO] [dampening] Stage 1 done: acc=0.859
+2026-04-02 11:16:05,048 [INFO] [dampening] Stage 2 ORACLE: 5000 steps, pi=3.0
+2026-04-02 11:20:00,858 [INFO] [dampening] step 100/5000: loss=3.8676, s_acc=0.021, suppression=0.819, som=0.0282
+2026-04-02 11:24:02,815 [INFO] [dampening] step 200/5000: loss=3.8658, s_acc=0.018, suppression=0.817, som=0.0281
+2026-04-02 11:27:56,966 [INFO] [dampening] step 300/5000: loss=3.8572, s_acc=0.028, suppression=0.816, som=0.0280
+2026-04-02 11:31:53,337 [INFO] [dampening] step 400/5000: loss=3.8438, s_acc=0.045, suppression=0.814, som=0.0279
+2026-04-02 11:35:49,684 [INFO] [dampening] step 500/5000: loss=3.8382, s_acc=0.060, suppression=0.815, som=0.0277
+2026-04-02 11:47:21,314 [INFO] [dampening] step 600/5000: loss=3.8255, s_acc=0.069, suppression=0.812, som=0.0275

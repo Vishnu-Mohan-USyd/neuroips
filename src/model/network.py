@@ -2,25 +2,34 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from src.config import ModelConfig
 from src.state import NetworkState, StepAux, initial_state
 from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
 from src.model.v2_context import V2ContextModule
-from src.model.feedback import FeedbackMechanism
+from src.model.feedback import FeedbackMechanism, EmergentFeedbackOperator
+from src.utils import circular_distance_abs, circular_gaussian
 
 
 class LaminarV1V2Network(nn.Module):
     """Complete laminar V1-V2 network.
 
     Composes: V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing,
-              V2ContextModule, FeedbackMechanism.
+              V2ContextModule, FeedbackMechanism or EmergentFeedbackOperator.
 
     Dependency order per timestep:
         L4 -> PV -> V2 (uses L2/3_{t-1}) -> template -> SOM -> L2/3
+
+    Two feedback modes (cfg.feedback_mode):
+        'fixed': V2 outputs q_pred directly; FeedbackMechanism (hardcoded A-E).
+        'emergent': V2 outputs p_cw; q_pred constructed analytically from L4;
+                    EmergentFeedbackOperator (learned basis functions).
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -32,7 +41,13 @@ class LaminarV1V2Network(nn.Module):
         self.deep_template = DeepTemplate(cfg)
         self.som = SOMRing(cfg)
         self.v2 = V2ContextModule(cfg)
-        self.feedback = FeedbackMechanism(cfg)
+
+        # Feedback: emergent (learned) or fixed (hardcoded mechanism)
+        if cfg.feedback_mode == 'emergent':
+            self.feedback = EmergentFeedbackOperator(cfg)
+        else:
+            self.feedback = FeedbackMechanism(cfg)
+
         # Feedback warmup scale: registered as buffer so torch.compile can see it
         self.register_buffer("feedback_scale", torch.tensor(1.0))
 
@@ -41,6 +56,75 @@ class LaminarV1V2Network(nn.Module):
         self.oracle_q_pred = None   # set externally: [B, N] (per-step) or [B, T, N] (per-sequence)
         self.oracle_pi_pred = None  # set externally: [B, 1] (scalar) or [B, T, 1] (per-sequence)
         self._oracle_t = 0          # timestep counter for sequence oracle mode
+
+    def _decode_orientation(self, r_l4: Tensor) -> Tensor:
+        """Population vector decode from L4 firing rates.
+
+        Uses complex exponential weighting for circular mean on the
+        doubled-angle representation (180-deg periodic orientation space).
+
+        Args:
+            r_l4: [B, N] -- L4 population rates.
+
+        Returns:
+            theta: [B] -- decoded orientation in degrees, in [0, period).
+        """
+        N = r_l4.shape[-1]
+        step = self.cfg.orientation_range / N
+        prefs = torch.arange(N, device=r_l4.device, dtype=torch.float32) * step  # [N]
+
+        # Map orientation to doubled angle: 0-180 deg -> 0-2pi radians
+        angles_rad = prefs * (2.0 * math.pi / self.cfg.orientation_range)  # [N]
+
+        # Complex exponential population vector
+        z = (r_l4 * torch.exp(1j * angles_rad.unsqueeze(0).to(torch.cfloat))).sum(dim=-1)  # [B]
+
+        # Convert back from doubled angle to orientation degrees
+        theta = torch.angle(z) * (self.cfg.orientation_range / (2.0 * math.pi))  # [B]
+        return theta % self.cfg.orientation_range
+
+    def _make_bump(self, theta: Tensor) -> Tensor:
+        """Create a population-coded Gaussian bump at orientation theta.
+
+        Uses the same sigma_ff as the feedforward tuning curves for consistency.
+
+        Args:
+            theta: [B] -- target orientation in degrees.
+
+        Returns:
+            bump: [B, N] -- circular Gaussian bump (unnormalized).
+        """
+        N = self.cfg.n_orientations
+        step = self.cfg.orientation_range / N
+        prefs = torch.arange(N, device=theta.device, dtype=torch.float32) * step  # [N]
+        dists = circular_distance_abs(
+            theta.unsqueeze(-1), prefs.unsqueeze(0), self.cfg.orientation_range
+        )  # [B, N]
+        return torch.exp(-dists ** 2 / (2 * self.cfg.sigma_ff ** 2))
+
+    def _construct_q_pred(self, r_l4: Tensor, p_cw: Tensor) -> Tensor:
+        """Construct q_pred analytically from L4 orientation + state belief.
+
+        CW state: predicted next = current + transition_step
+        CCW state: predicted next = current - transition_step
+        q_pred = p_cw * bump(current + step) + (1 - p_cw) * bump(current - step)
+
+        Args:
+            r_l4: [B, N] -- L4 population rates (for decoding current orientation).
+            p_cw: [B, 1] -- probability that the rule is CW.
+
+        Returns:
+            q_pred: [B, N] -- predicted next-orientation distribution (normalized).
+        """
+        theta_current = self._decode_orientation(r_l4)  # [B]
+        step = self.cfg.transition_step
+
+        q_cw = self._make_bump(theta_current + step)    # [B, N]
+        q_ccw = self._make_bump(theta_current - step)   # [B, N]
+
+        q_pred = p_cw * q_cw + (1 - p_cw) * q_ccw      # [B, N]
+        q_pred = q_pred / (q_pred.sum(dim=-1, keepdim=True) + 1e-8)  # normalize
+        return q_pred
 
     def step(
         self,
@@ -52,9 +136,9 @@ class LaminarV1V2Network(nn.Module):
         """One timestep of the full network.
 
         Args:
-            stimulus: [B, N] — population-coded, contrast-scaled grating.
-            cue: [B, N] — cue input (zeros by default).
-            task_state: [B, 2] — task relevance state.
+            stimulus: [B, N] -- population-coded, contrast-scaled grating.
+            cue: [B, N] -- cue input (zeros by default).
+            task_state: [B, 2] -- task relevance state.
             state: Previous NetworkState.
 
         Returns:
@@ -67,7 +151,7 @@ class LaminarV1V2Network(nn.Module):
         # 2. PV (uses new L4, old L2/3)
         r_pv = self.pv(r_l4, state.r_l23, state.r_pv)
 
-        # 3. V2 (uses r_l4 from this step + old L2/3 — one-step feedback delay)
+        # 3. V2 (uses r_l4 from this step + old L2/3 -- one-step feedback delay)
         if self.oracle_mode and self.oracle_q_pred is not None:
             # Support both per-step [B, N] and per-sequence [B, T, N] oracle
             if self.oracle_q_pred.dim() == 3:
@@ -78,11 +162,20 @@ class LaminarV1V2Network(nn.Module):
                 q_pred = self.oracle_q_pred
                 pi_pred_raw = self.oracle_pi_pred
             state_logits = torch.zeros(stimulus.shape[0], 3, device=stimulus.device)
+            p_cw = torch.full((stimulus.shape[0], 1), 0.5, device=stimulus.device)
             h_v2 = state.h_v2
+        elif self.cfg.feedback_mode == 'emergent':
+            p_cw, pi_pred_raw, h_v2 = self.v2(
+                r_l4, state.r_l23, cue, task_state, state.h_v2
+            )
+            q_pred = self._construct_q_pred(r_l4, p_cw)
+            # No state_logits in emergent mode; use zeros placeholder for StepAux
+            state_logits = torch.zeros(stimulus.shape[0], 3, device=stimulus.device)
         else:
             q_pred, pi_pred_raw, state_logits, h_v2 = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
             )
+            p_cw = torch.full((stimulus.shape[0], 1), 0.5, device=stimulus.device)
 
         # Effective precision for V1 feedback (scaled by warmup ramp during training)
         pi_pred_eff = pi_pred_raw * self.feedback_scale
@@ -90,14 +183,20 @@ class LaminarV1V2Network(nn.Module):
         # 4. Deep template (uses effective precision)
         deep_tmpl = self.deep_template(q_pred, pi_pred_eff)
 
-        # 5. SOM (mechanism-dependent drive, uses effective precision)
-        som_drive = self.feedback.compute_som_drive(q_pred, pi_pred_eff)
-        r_som = self.som(som_drive, state.r_som)
-
-        # 6. L2/3 (mechanism-dependent inputs, uses effective precision)
-        template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
-        l4_to_l23 = self.feedback.compute_error_signal(r_l4, deep_tmpl)
-        r_l23 = self.l23(l4_to_l23, state.r_l23, template_modulation, r_som, r_pv)
+        # 5-6. Feedback pathway (branched by mode)
+        if self.cfg.feedback_mode == 'emergent':
+            # Emergent: learned operator outputs both SOM drive and center excitation
+            som_drive, center_exc = self.feedback(q_pred, pi_pred_eff)
+            r_som = self.som(som_drive, state.r_som)
+            l4_to_l23 = r_l4  # No error signal in emergent mode
+            r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
+        else:
+            # Fixed: mechanism-specific computation
+            som_drive = self.feedback.compute_som_drive(q_pred, pi_pred_eff)
+            r_som = self.som(som_drive, state.r_som)
+            template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
+            l4_to_l23 = self.feedback.compute_error_signal(r_l4, deep_tmpl)
+            r_l23 = self.l23(l4_to_l23, state.r_l23, template_modulation, r_som, r_pv)
 
         new_state = NetworkState(
             r_l4=r_l4,
@@ -114,6 +213,7 @@ class LaminarV1V2Network(nn.Module):
             pi_pred=pi_pred_raw,
             pi_pred_eff=pi_pred_eff,
             state_logits=state_logits,
+            p_cw=p_cw,
         )
 
         return new_state, aux
@@ -150,24 +250,25 @@ class LaminarV1V2Network(nn.Module):
         """Run a sequence of timesteps.
 
         Args:
-            packed_input: [B, T, N+N+2] — packed stimulus + cue + task_state.
+            packed_input: [B, T, N+N+2] -- packed stimulus + cue + task_state.
                 Use LaminarV1V2Network.pack_inputs() to create this, or pass
                 a raw [B, T, N] stimulus (cue and task_state default to zeros).
             state: Initial NetworkState or None (defaults to zeros).
 
         Returns:
-            r_l23_all: [B, T, N] — L2/3 trajectory.
+            r_l23_all: [B, T, N] -- L2/3 trajectory.
             final_state: NetworkState after last timestep.
             aux: dict with stacked trajectories:
                  q_pred_all [B, T, N], pi_pred_all [B, T, 1],
                  state_logits_all [B, T, 3], deep_template_all [B, T, N],
-                 r_l4_all [B, T, N], r_pv_all [B, T, 1], r_som_all [B, T, N].
+                 r_l4_all [B, T, N], r_pv_all [B, T, 1], r_som_all [B, T, N],
+                 p_cw_all [B, T, 1].
         """
         N = self.cfg.n_orientations
 
         # Support both packed [B, T, N+N+2] and unpacked [B, T, N] inputs
         if packed_input.shape[-1] == N:
-            # Raw stimulus only — generate zero cue and task_state
+            # Raw stimulus only -- generate zero cue and task_state
             B, T, _ = packed_input.shape
             device = packed_input.device
             stimulus_seq = packed_input
@@ -195,13 +296,15 @@ class LaminarV1V2Network(nn.Module):
         pi_pred_eff_all = torch.empty(B, T, 1, device=device)
         state_logits_all = torch.empty(B, T, 3, device=device)
         deep_template_all = torch.empty(B, T, N, device=device)
+        p_cw_all = torch.empty(B, T, 1, device=device)
 
         # Reset oracle timestep counter for sequence mode
         self._oracle_t = 0
 
         # Cache kernels once for all timesteps (params don't change within forward)
         self.l23.cache_kernels()
-        self.feedback.cache_kernels()
+        if hasattr(self.feedback, 'cache_kernels'):
+            self.feedback.cache_kernels()
         try:
             for t in range(T):
                 state, aux_t = self.step(
@@ -216,9 +319,11 @@ class LaminarV1V2Network(nn.Module):
                 pi_pred_eff_all[:, t] = aux_t.pi_pred_eff
                 state_logits_all[:, t] = aux_t.state_logits
                 deep_template_all[:, t] = state.deep_template
+                p_cw_all[:, t] = aux_t.p_cw
         finally:
             self.l23.uncache_kernels()
-            self.feedback.uncache_kernels()
+            if hasattr(self.feedback, 'uncache_kernels'):
+                self.feedback.uncache_kernels()
 
         aux = {
             "q_pred_all": q_pred_all,             # [B, T, N]
@@ -229,6 +334,7 @@ class LaminarV1V2Network(nn.Module):
             "r_l4_all": r_l4_all,                 # [B, T, N]
             "r_pv_all": r_pv_all,                 # [B, T, 1]
             "r_som_all": r_som_all,               # [B, T, N]
+            "p_cw_all": p_cw_all,                 # [B, T, 1]
         }
 
         return r_l23_all, state, aux

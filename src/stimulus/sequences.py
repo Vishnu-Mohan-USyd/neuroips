@@ -30,27 +30,28 @@ class SequenceMetadata:
 
 def build_transition_matrix(
     p_self: float = 0.95,
+    n_states: int = 3,
 ) -> Tensor:
-    """Build the 3x3 HMM state transition matrix.
+    """Build the NxN HMM state transition matrix.
 
-    States: CW, CCW, NEUTRAL.
+    States: CW, CCW, [NEUTRAL] (neutral only if n_states=3).
     p_self = probability of staying in the same state.
     Remaining probability split equally among other states.
 
     Returns:
-        Transition matrix [3, 3] where T[i, j] = P(state_t+1=j | state_t=i).
+        Transition matrix [N, N] where T[i, j] = P(state_t+1=j | state_t=i).
     """
-    p_switch = (1.0 - p_self) / 2.0
-    T = torch.full((3, 3), p_switch)
-    T[0, 0] = p_self
-    T[1, 1] = p_self
-    T[2, 2] = p_self
+    p_switch = (1.0 - p_self) / (n_states - 1)
+    T = torch.full((n_states, n_states), p_switch)
+    for i in range(n_states):
+        T[i, i] = p_self
     return T
 
 
 def sample_state_sequence(
     n_steps: int,
     p_self: float = 0.95,
+    n_states: int = 3,
     generator: torch.Generator | None = None,
 ) -> Tensor:
     """Sample a sequence of HMM latent states.
@@ -58,16 +59,17 @@ def sample_state_sequence(
     Args:
         n_steps: Length of sequence.
         p_self: Self-transition probability.
+        n_states: Number of HMM states (2 or 3).
         generator: Optional RNG for reproducibility.
 
     Returns:
-        State indices [n_steps] with values in {0, 1, 2}.
+        State indices [n_steps] with values in {0, ..., n_states-1}.
     """
-    T = build_transition_matrix(p_self)
+    T = build_transition_matrix(p_self, n_states)
     states = torch.empty(n_steps, dtype=torch.long)
 
     # Uniform initial state
-    states[0] = torch.randint(3, (1,), generator=generator).item()
+    states[0] = torch.randint(n_states, (1,), generator=generator).item()
 
     for t in range(1, n_steps):
         probs = T[states[t - 1]]
@@ -80,6 +82,7 @@ def batch_sample_state_sequence(
     batch_size: int,
     n_steps: int,
     p_self: float = 0.95,
+    n_states: int = 3,
     generator: torch.Generator | None = None,
 ) -> Tensor:
     """Sample a batch of HMM state sequences in parallel.
@@ -90,19 +93,20 @@ def batch_sample_state_sequence(
         batch_size: Number of sequences.
         n_steps: Length of each sequence.
         p_self: Self-transition probability.
+        n_states: Number of HMM states (2 or 3).
         generator: Optional RNG for reproducibility.
 
     Returns:
-        State indices [B, n_steps] with values in {0, 1, 2}.
+        State indices [B, n_steps] with values in {0, ..., n_states-1}.
     """
-    T = build_transition_matrix(p_self)
+    T = build_transition_matrix(p_self, n_states)
     states = torch.empty(batch_size, n_steps, dtype=torch.long)
 
     # Uniform initial state for all batch elements
-    states[:, 0] = torch.randint(3, (batch_size,), generator=generator)
+    states[:, 0] = torch.randint(n_states, (batch_size,), generator=generator)
 
     for t in range(1, n_steps):
-        probs = T[states[:, t - 1]]  # [B, 3]
+        probs = T[states[:, t - 1]]  # [B, n_states]
         states[:, t] = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
 
     return states
@@ -144,7 +148,7 @@ def generate_orientation_sequence(
         orientations: [n_steps] orientation in degrees (continuous, with jitter).
         states: [n_steps] latent state indices.
     """
-    states = sample_state_sequence(n_steps, p_self, generator)
+    states = sample_state_sequence(n_steps, p_self, generator=generator)
 
     anchor_step = period / n_anchors
     anchors = torch.arange(n_anchors, dtype=torch.float32) * anchor_step  # [n_anchors]
@@ -189,6 +193,7 @@ def batch_generate_orientation_sequence(
     jitter_range: float = 7.5,
     transition_step: float = 15.0,
     period: float = 180.0,
+    n_states: int = 3,
     generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Generate a batch of orientation sequences driven by HMM.
@@ -205,6 +210,7 @@ def batch_generate_orientation_sequence(
         jitter_range: Max jitter around anchors (degrees).
         transition_step: Step size for CW/CCW transitions (degrees).
         period: Orientation period.
+        n_states: Number of HMM states (2 or 3).
         generator: Optional RNG.
 
     Returns:
@@ -212,7 +218,7 @@ def batch_generate_orientation_sequence(
         states: [B, n_steps] latent state indices.
     """
     B = batch_size
-    states = batch_sample_state_sequence(B, n_steps, p_self, generator)
+    states = batch_sample_state_sequence(B, n_steps, p_self, n_states, generator)
 
     anchor_step = period / n_anchors
     anchors = torch.arange(n_anchors, dtype=torch.float32) * anchor_step
@@ -297,6 +303,7 @@ class HMMSequenceGenerator:
         reliability_drop_prob: float = 0.05,
         reliability_drop_value: float = 0.50,
         cue_dim: int = 2,
+        n_states: int = 3,
     ):
         self.n_orientations = n_orientations
         self.p_self = p_self
@@ -312,6 +319,7 @@ class HMMSequenceGenerator:
         self.reliability_drop_prob = reliability_drop_prob
         self.reliability_drop_value = reliability_drop_value
         self.cue_dim = cue_dim
+        self.n_states = n_states
 
     def generate(
         self,
@@ -352,6 +360,7 @@ class HMMSequenceGenerator:
             jitter_range=self.jitter_range,
             transition_step=self.transition_step,
             period=self.period,
+            n_states=self.n_states,
             generator=generator,
         )
 

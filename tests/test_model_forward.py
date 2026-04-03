@@ -17,7 +17,7 @@ from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOM
 
 @pytest.fixture
 def cfg():
-    return ModelConfig()
+    return ModelConfig(feedback_mode='fixed')
 
 
 @pytest.fixture

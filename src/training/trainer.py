@@ -14,6 +14,7 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from src.config import ModelConfig, TrainingConfig, StimulusConfig
 from src.model.network import LaminarV1V2Network
+from src.model.feedback import EmergentFeedbackOperator
 from src.stimulus.gratings import generate_grating, make_ambiguous_stimulus
 from src.stimulus.sequences import HMMSequenceGenerator
 
@@ -65,9 +66,12 @@ def create_stage2_optimizer(
     Group 3: W_rec + deep_template (lr_feedback)
     Group 4: Decoder (stage1_lr)
     """
+    # Feedback params: works for both FeedbackMechanism and EmergentFeedbackOperator
+    feedback_params = [p for p in net.feedback.parameters() if p.requires_grad]
+
     param_groups = [
         {"params": list(net.v2.parameters()), "lr": cfg.stage2_lr_v2},
-        {"params": list(net.feedback.parameters()), "lr": cfg.stage2_lr_feedback},
+        {"params": feedback_params, "lr": cfg.stage2_lr_feedback},
         {
             "params": [
                 net.l23.sigma_rec_raw,

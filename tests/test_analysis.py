@@ -55,7 +55,7 @@ from src.analysis.ablations import run_ablation, AblationResult
 @pytest.fixture(scope="module")
 def net_and_cfg():
     torch.manual_seed(0)
-    cfg = ModelConfig(mechanism=MechanismType.DAMPENING, n_orientations=36)
+    cfg = ModelConfig(mechanism=MechanismType.DAMPENING, n_orientations=36, feedback_mode='fixed')
     net = LaminarV1V2Network(cfg)
     net.eval()
     return net, cfg

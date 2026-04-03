@@ -1,14 +1,18 @@
 """Stage 2: V2 sequence learning + feedback training.
 
 Goal: V2 learns transition statistics. Feedback learns to modulate V1.
-80K steps with BPTT over HMM sequences.
+Supports both 'fixed' (hardcoded mechanisms) and 'emergent' (learned operator)
+feedback modes.
+
 Separate LR groups (V2: 3e-4, feedback: 1e-4), gradient clip 1.0,
 linear warmup + cosine decay.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Callable
 
@@ -55,6 +59,7 @@ def run_stage2(
     log_interval: int = 100,
     checkpoint_fn: Callable[[int], None] | None = None,
     checkpoint_steps: list[int] | None = None,
+    output_dir: str | None = None,
 ) -> Stage2Result:
     """Run Stage 2 training: V2 + feedback with BPTT over HMM sequences.
 
@@ -68,8 +73,8 @@ def run_stage2(
         seed: Random seed.
         log_interval: Steps between log messages.
         checkpoint_fn: Optional callback called at each checkpoint step.
-            Signature: checkpoint_fn(step) where step is the 1-indexed step number.
         checkpoint_steps: List of step numbers at which to call checkpoint_fn.
+        output_dir: Directory for writing metrics.jsonl (optional).
 
     Returns:
         Stage2Result with training metrics.
@@ -84,20 +89,15 @@ def run_stage2(
     n_steps = train_cfg.stage2_n_steps
     batch_size = train_cfg.batch_size
     seq_length = train_cfg.seq_length
+    feedback_mode = model_cfg.feedback_mode
 
     # Ensure correct freeze/unfreeze state
     freeze_stage1(net)
     unfreeze_stage2(net)
 
-    # Full-model compile: Phase 4 removed graph breaks (dict→NamedTuple,
-    # getattr→buffer, list.append→preallocated tensors), enabling full-model
-    # compile. reduce-overhead uses CUDA graphs to eliminate kernel launch
-    # overhead across all 600 timesteps. Falls back to step-level compile
-    # if reduce-overhead fails (e.g., CPU-only or older CUDA).
-    try:
-        compiled_net = torch.compile(net, mode='reduce-overhead')
-    except Exception:
-        compiled_net = torch.compile(net, mode='max-autotune-no-cudagraphs')
+    # Step-level compile: fast (~13s), low RAM (~1.2GB), same throughput at T=600.
+    net.step = torch.compile(net.step, mode='max-autotune-no-cudagraphs')
+    compiled_net = net
 
     # Optimizer with separate LR groups
     optimizer = create_stage2_optimizer(net, loss_fn, train_cfg)
@@ -119,42 +119,50 @@ def run_stage2(
         period=model_cfg.orientation_range,
         contrast_range=train_cfg.stage2_contrast_range,
         ambiguous_fraction=train_cfg.ambiguous_fraction,
+        n_states=stim_cfg.n_states,
     )
 
-    # Readout indices (timesteps 4-7 of each ON period)
+    # Readout indices (last half of ON period)
+    window_start = max(1, train_cfg.steps_on // 2)
+    window_end = train_cfg.steps_on - 1
     readout_indices = compute_readout_indices(
         seq_length, train_cfg.steps_on, train_cfg.steps_isi,
-        window_start=4, window_end=7,
+        window_start=window_start, window_end=window_end,
     )
 
     loss_history = []
     last_sensory_acc = 0.0
     last_pred_acc = 0.0
 
-    # Reference baselines for interpreting metrics
-    logger.info(
-        "Baselines: uniform=0.028 (1/36), same_as_current≈0.20, "
-        "oracle_with_state≈0.75 (within ±1 channel)"
-    )
+    # Reference baselines
+    if feedback_mode == 'emergent':
+        logger.info(
+            "Baselines (emergent): CW_accuracy chance=0.50, "
+            "sensory uniform=0.028 (1/36)"
+        )
+    else:
+        logger.info(
+            "Baselines: uniform=0.028 (1/36), same_as_current~0.20, "
+            "oracle_with_state~0.75 (within +/-1 channel)"
+        )
 
-    # Fix E: V2 curriculum — hard zero feedback for predictor burn-in,
-    # then ramp feedback from 0 to 1.
-    predictor_burnin_steps = 5000
-    feedback_ramp_steps = 5000  # ramp from 0→1 over this many steps after burn-in
+    # V2 curriculum: hard zero feedback for predictor burn-in, then ramp 0->1
+    predictor_burnin_steps = train_cfg.stage2_burnin_steps
+    feedback_ramp_steps = train_cfg.stage2_ramp_steps
 
-    # Fix 5: Freeze-then-unfreeze W_rec gain (aligned with end of burn-in)
+    # Freeze-then-unfreeze W_rec gain (aligned with end of burn-in)
     gain_unfreeze_step = predictor_burnin_steps
     net.l23.gain_rec_raw.requires_grad_(False)  # Start frozen
 
     for step in range(n_steps):
-        # Fix E: V2 curriculum — hard zero during burn-in, then ramp
+        # V2 curriculum: hard zero during burn-in, then ramp
         if step < predictor_burnin_steps:
             net.feedback_scale.fill_(0.0)
         else:
             ramp_progress = (step - predictor_burnin_steps) / feedback_ramp_steps
             net.feedback_scale.fill_(min(1.0, ramp_progress))
 
-        # Fix 5: Unfreeze gain_rec after burn-in
+        # Unfreeze gain_rec after burn-in
         if step == gain_unfreeze_step:
             net.l23.gain_rec_raw.requires_grad_(True)
             logger.info(f"Step {step}: unfreezing gain_rec_raw")
@@ -175,7 +183,7 @@ def run_stage2(
         true_next_thetas = true_next_thetas.to(dev, non_blocking=True)
         true_states = true_states.to(dev, non_blocking=True)
 
-        # Forward pass (packed single-tensor input, through compiled model)
+        # Forward pass
         packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
         r_l23_all, final_state, aux = compiled_net(packed)
 
@@ -188,19 +196,38 @@ def run_stage2(
             "r_som": aux["r_som_all"],
             "deep_template": aux["deep_template_all"],
             "state_logits": aux["state_logits_all"],
+            "p_cw": aux["p_cw_all"],
         }
 
-        # Extract readout windows (now also extracts state_logits)
+        # Extract readout windows
         r_l23_windows, q_pred_windows, state_logits_windows = extract_readout_data(
-            outputs, readout_indices
+            outputs, readout_indices,
+            steps_on=train_cfg.steps_on, steps_isi=train_cfg.steps_isi,
         )
 
-        # Compute loss (with state classification loss)
+        # Extract p_cw windows for emergent mode
+        p_cw_windows = None
+        if feedback_mode == 'emergent':
+            steps_per = train_cfg.steps_on + train_cfg.steps_isi
+            _, ts_first = readout_indices[0]
+            w_start = ts_first[0]
+            w_end = ts_first[-1] + 1
+            B_batch = aux["p_cw_all"].shape[0]
+            S = len(readout_indices)
+            p_cw_windows = (
+                aux["p_cw_all"]
+                .reshape(B_batch, S, steps_per, 1)[:, :, w_start:w_end]
+                .mean(dim=2)
+            )
+
+        # Compute loss
         total_loss, loss_dict = loss_fn(
             outputs, true_thetas, true_next_thetas,
             r_l23_windows, q_pred_windows,
-            state_logits_windows=state_logits_windows,
+            state_logits_windows=state_logits_windows if feedback_mode == 'fixed' else None,
             true_states_windows=true_states,
+            p_cw_windows=p_cw_windows,
+            model=net if feedback_mode == 'emergent' else None,
         )
 
         total_loss.backward()
@@ -225,12 +252,6 @@ def run_stage2(
                 ).float().mean().item()
                 last_sensory_acc = sensory_acc
 
-                # Prediction accuracy (skip last presentation)
-                pred_channels = q_pred_windows[:, :-1].argmax(dim=-1)
-                true_channels = loss_fn._theta_to_channel(true_next_thetas[:, :-1])
-                pred_acc = (pred_channels == true_channels).float().mean().item()
-                last_pred_acc = pred_acc
-
                 # Gradient norms
                 total_norm = 0.0
                 for p in net.parameters():
@@ -238,51 +259,131 @@ def run_stage2(
                         total_norm += p.grad.data.norm(2).item() ** 2
                 total_norm = total_norm ** 0.5
 
-                # Fix 4d: pi_pred ceiling monitoring
+                # pi_pred ceiling monitoring
                 pi_ceiling_frac = (aux["pi_pred_all"] >= model_cfg.pi_max - 0.01).float().mean().item()
 
-                # Fix C: Better metrics
                 orient_step = model_cfg.orientation_range / N
 
-                # 1. Latent state accuracy (3-way: CW/CCW/neutral)
-                if state_logits_windows is not None:
-                    state_pred = state_logits_windows.argmax(dim=-1)
-                    state_acc = (state_pred == true_states).float().mean().item()
+                if feedback_mode == 'emergent':
+                    # Emergent mode metrics: CW accuracy from p_cw
+                    if p_cw_windows is not None:
+                        cw_pred = (p_cw_windows.squeeze(-1) > 0.5).long()
+                        cw_target = (true_states == 0).long()
+                        state_acc = (cw_pred == cw_target).float().mean().item()
+                    else:
+                        state_acc = 0.0
+
+                    # Prediction accuracy via analytically-constructed q_pred
+                    pred_channels = q_pred_windows[:, :-1].argmax(dim=-1)
+                    true_channels = loss_fn._theta_to_channel(true_next_thetas[:, :-1])
+                    pred_acc = (pred_channels == true_channels).float().mean().item()
+                    last_pred_acc = pred_acc
+
+                    # Circular angular error
+                    pred_theta = q_pred_windows[:, :-1].argmax(dim=-1).float() * orient_step
+                    true_theta_next = true_next_thetas[:, :-1]
+                    angular_error = circular_distance_abs(pred_theta, true_theta_next).mean().item()
+
+                    # Feedback operator profile info
+                    fb_info = ""
+                    if hasattr(net.feedback, 'alpha_inh'):
+                        a_inh_norm = net.feedback.alpha_inh.abs().sum().item()
+                        a_exc_norm = net.feedback.alpha_exc.abs().sum().item()
+                        fb_info = f"a_inh={a_inh_norm:.3f}, a_exc={a_exc_norm:.3f}, "
+
+                    logger.info(
+                        f"Stage 2 step {step+1}/{n_steps}: "
+                        f"loss={loss_dict['total']:.4f}, "
+                        f"sens={loss_dict['sensory']:.4f}, "
+                        f"state_bce={loss_dict['state']:.4f}, "
+                        f"fb_sparse={loss_dict['fb_sparsity']:.4f}, "
+                        f"energy={loss_dict['energy_total']:.4f}, "
+                        f"homeo={loss_dict['homeostasis']:.4f}, "
+                        f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
+                        f"cw_acc={state_acc:.3f}, "
+                        f"ang_err={angular_error:.1f}, "
+                        f"{fb_info}"
+                        f"grad_norm={total_norm:.3f}, "
+                        f"pi_ceil={pi_ceiling_frac:.3f}, "
+                        f"fb_scale={net.feedback_scale.item():.3f}"
+                    )
                 else:
-                    state_acc = 0.0
+                    # Fixed mode metrics (unchanged)
+                    # Prediction accuracy
+                    pred_channels = q_pred_windows[:, :-1].argmax(dim=-1)
+                    true_channels = loss_fn._theta_to_channel(true_next_thetas[:, :-1])
+                    pred_acc = (pred_channels == true_channels).float().mean().item()
+                    last_pred_acc = pred_acc
 
-                # 2. Circular angular error (degrees)
-                pred_theta = q_pred_windows[:, :-1].argmax(dim=-1).float() * orient_step
-                true_theta_next = true_next_thetas[:, :-1]
-                angular_error = circular_distance_abs(pred_theta, true_theta_next).mean().item()
+                    # State accuracy
+                    if state_logits_windows is not None:
+                        state_pred = state_logits_windows.argmax(dim=-1)
+                        state_acc = (state_pred == true_states).float().mean().item()
+                    else:
+                        state_acc = 0.0
 
-                # 3. Top-3 channel accuracy
-                top3 = q_pred_windows[:, :-1].topk(3, dim=-1).indices
-                true_ch = loss_fn._theta_to_channel(true_next_thetas[:, :-1]).unsqueeze(-1)
-                top3_acc = (top3 == true_ch).any(dim=-1).float().mean().item()
+                    # Circular angular error
+                    pred_theta = q_pred_windows[:, :-1].argmax(dim=-1).float() * orient_step
+                    true_theta_next = true_next_thetas[:, :-1]
+                    angular_error = circular_distance_abs(pred_theta, true_theta_next).mean().item()
 
-                # 4. 12-anchor accuracy (within ±1 channel of nearest anchor)
-                pred_ch = q_pred_windows[:, :-1].argmax(dim=-1)
-                true_anchor = ((true_ch.squeeze(-1).float() / 3.0).round().long() * 3) % N
-                anchor_acc = ((pred_ch - true_anchor).abs() % N).clamp(max=N // 2).le(1).float().mean().item()
+                    # Top-3 channel accuracy
+                    top3 = q_pred_windows[:, :-1].topk(3, dim=-1).indices
+                    true_ch = loss_fn._theta_to_channel(true_next_thetas[:, :-1]).unsqueeze(-1)
+                    top3_acc = (top3 == true_ch).any(dim=-1).float().mean().item()
 
-            logger.info(
-                f"Stage 2 step {step+1}/{n_steps}: "
-                f"loss={loss_dict['total']:.4f}, "
-                f"sens={loss_dict['sensory']:.4f}, "
-                f"pred={loss_dict['prediction']:.4f}, "
-                f"state={loss_dict['state']:.4f}, "
-                f"energy={loss_dict['energy_total']:.4f}, "
-                f"homeo={loss_dict['homeostasis']:.4f}, "
-                f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
-                f"state_acc={state_acc:.3f}, "
-                f"ang_err={angular_error:.1f}, "
-                f"top3={top3_acc:.3f}, "
-                f"anchor={anchor_acc:.3f}, "
-                f"grad_norm={total_norm:.3f}, "
-                f"pi_ceil={pi_ceiling_frac:.3f}, "
-                f"fb_scale={net.feedback_scale.item():.3f}"
-            )
+                    # 12-anchor accuracy
+                    pred_ch = q_pred_windows[:, :-1].argmax(dim=-1)
+                    true_anchor = ((true_ch.squeeze(-1).float() / 3.0).round().long() * 3) % N
+                    anchor_acc = ((pred_ch - true_anchor).abs() % N).clamp(max=N // 2).le(1).float().mean().item()
+
+                    logger.info(
+                        f"Stage 2 step {step+1}/{n_steps}: "
+                        f"loss={loss_dict['total']:.4f}, "
+                        f"sens={loss_dict['sensory']:.4f}, "
+                        f"pred={loss_dict['prediction']:.4f}, "
+                        f"state={loss_dict['state']:.4f}, "
+                        f"energy={loss_dict['energy_total']:.4f}, "
+                        f"homeo={loss_dict['homeostasis']:.4f}, "
+                        f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
+                        f"state_acc={state_acc:.3f}, "
+                        f"ang_err={angular_error:.1f}, "
+                        f"top3={top3_acc:.3f}, "
+                        f"anchor={anchor_acc:.3f}, "
+                        f"grad_norm={total_norm:.3f}, "
+                        f"pi_ceil={pi_ceiling_frac:.3f}, "
+                        f"fb_scale={net.feedback_scale.item():.3f}"
+                    )
+
+                # Write metrics to JSONL file for monitoring
+                if output_dir is not None:
+                    metrics = {
+                        'step': step + 1,
+                        'loss': round(loss_dict['total'], 4),
+                        'sens': round(loss_dict['sensory'], 4),
+                        'pred': round(loss_dict.get('prediction', 0.0), 4),
+                        'state': round(loss_dict['state'], 4),
+                        'energy': round(loss_dict['energy_total'], 4),
+                        'homeo': round(loss_dict['homeostasis'], 4),
+                        's_acc': round(sensory_acc, 3),
+                        'p_acc': round(pred_acc if 'pred_acc' in dir() else last_pred_acc, 3),
+                        'state_acc': round(state_acc, 3),
+                        'ang_err': round(angular_error, 1),
+                        'grad_norm': round(total_norm, 3),
+                        'pi_ceil': round(pi_ceiling_frac, 3),
+                        'fb_scale': round(net.feedback_scale.item(), 3),
+                        'feedback_mode': feedback_mode,
+                    }
+                    if feedback_mode == 'emergent' and hasattr(net.feedback, 'alpha_inh'):
+                        metrics['a_inh_norm'] = round(net.feedback.alpha_inh.abs().sum().item(), 4)
+                        metrics['a_exc_norm'] = round(net.feedback.alpha_exc.abs().sum().item(), 4)
+                        metrics['fb_sparsity'] = round(loss_dict.get('fb_sparsity', 0.0), 4)
+                    if feedback_mode == 'fixed':
+                        metrics['top3'] = round(top3_acc, 3)
+                        metrics['anchor'] = round(anchor_acc, 3)
+                    metrics_path = os.path.join(output_dir, 'metrics.jsonl')
+                    with open(metrics_path, 'a') as f:
+                        f.write(json.dumps(metrics) + '\n')
 
         # Checkpoint callback
         if checkpoint_fn and checkpoint_steps and (step + 1) in checkpoint_steps:

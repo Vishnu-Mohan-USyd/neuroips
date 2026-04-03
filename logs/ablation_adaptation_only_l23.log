@@ -1,0 +1,30 @@
+2026-04-02 11:36:47,040 [INFO] Mechanism: adaptation_only
+2026-04-02 11:36:47,040 [INFO] Device: cuda
+2026-04-02 11:36:47,041 [INFO] Seed: 42
+2026-04-02 11:36:47,052 [INFO] Network parameters: 5104
+2026-04-02 11:36:47,052 [INFO] ============================================================
+2026-04-02 11:36:47,053 [INFO] STAGE 1: Sensory Scaffold
+2026-04-02 11:36:47,053 [INFO] ============================================================
+2026-04-02 11:37:55,005 [INFO] Stage 1 step 200/2000: loss=3.5903, acc=0.031, l23_mean=0.0002
+2026-04-02 11:38:55,769 [INFO] Stage 1 step 400/2000: loss=3.4817, acc=0.250, l23_mean=0.0038
+2026-04-02 11:39:54,829 [INFO] Stage 1 step 600/2000: loss=2.9814, acc=0.750, l23_mean=0.0125
+2026-04-02 11:40:55,539 [INFO] Stage 1 step 800/2000: loss=2.7586, acc=0.812, l23_mean=0.0153
+2026-04-02 11:41:56,600 [INFO] Stage 1 step 1000/2000: loss=2.2916, acc=0.750, l23_mean=0.0233
+2026-04-02 11:42:54,250 [INFO] Stage 1 step 1200/2000: loss=2.1428, acc=0.625, l23_mean=0.0254
+2026-04-02 11:43:56,249 [INFO] Stage 1 step 1400/2000: loss=2.0215, acc=0.781, l23_mean=0.0269
+2026-04-02 11:44:57,993 [INFO] Stage 1 step 1600/2000: loss=1.9976, acc=0.719, l23_mean=0.0273
+2026-04-02 11:45:58,388 [INFO] Stage 1 step 1800/2000: loss=1.9398, acc=0.688, l23_mean=0.0274
+2026-04-02 11:46:54,837 [INFO] Stage 1 step 2000/2000: loss=1.7380, acc=0.812, l23_mean=0.0322
+2026-04-02 11:46:54,905 [INFO] Gating 1 - Decoder accuracy: 1.000 (need >= 0.90)
+2026-04-02 11:46:54,956 [INFO] Gating 2 - Unimodal units: 36/36
+2026-04-02 11:46:54,989 [INFO] Gating 3 - Unique preferred orientations: 36/36
+2026-04-02 11:46:55,044 [INFO] Gating 4 - FWHM in range: 36/36
+2026-04-02 11:46:55,044 [INFO] Gating 5 - Mean L2/3 rate: 0.0397
+2026-04-02 11:46:55,204 [INFO] Gating 6 - FWHM high=25.0, low=25.0
+2026-04-02 11:46:55,275 [INFO] Stage 1 complete: loss=1.7380, acc=0.871
+2026-04-02 11:46:55,275 [INFO] Gating checks: {'decoder_accuracy_90': True, 'unimodal_tuning': True, 'orientation_tiling': True, 'fwhm_range': True, 'mean_activity': True, 'contrast_invariant_width': True}
+2026-04-02 11:46:55,297 [INFO] Stage 1 checkpoint saved to checkpoints/ablation_adaptation_only_l23/adaptation_only_seed42/stage1_checkpoint.pt
+2026-04-02 11:46:55,298 [INFO] ============================================================
+2026-04-02 11:46:55,298 [INFO] STAGE 2: V2 + Feedback
+2026-04-02 11:46:55,298 [INFO] ============================================================
+2026-04-02 11:46:55,903 [INFO] Baselines: uniform=0.028 (1/36), same_as_current≈0.20, oracle_with_state≈0.75 (within ±1 channel)

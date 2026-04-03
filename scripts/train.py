@@ -60,6 +60,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--v2-input", type=str, default=None,
                         choices=['l23', 'l4', 'l4_l23'],
                         help="Override V2 input mode")
+    parser.add_argument("--feedback-mode", type=str, default=None,
+                        choices=['emergent', 'fixed'],
+                        help="Override feedback mode")
     return parser.parse_args()
 
 
@@ -80,6 +83,10 @@ def main() -> None:
     if args.v2_input:
         model_cfg.v2_input_mode = args.v2_input
 
+    # Override feedback mode if specified
+    if args.feedback_mode:
+        model_cfg.feedback_mode = args.feedback_mode
+
     # Override Stage 2 steps if specified
     if args.stage2_steps is not None:
         train_cfg.stage2_n_steps = args.stage2_steps
@@ -97,6 +104,7 @@ def main() -> None:
     torch.manual_seed(args.seed)
 
     logger.info(f"Mechanism: {model_cfg.mechanism.value}")
+    logger.info(f"Feedback mode: {model_cfg.feedback_mode}")
     logger.info(f"Device: {device}")
     logger.info(f"Seed: {args.seed}")
 
@@ -173,6 +181,7 @@ def main() -> None:
             net, loss_fn, model_cfg, train_cfg, stim_cfg, device, args.seed,
             checkpoint_fn=save_intermediate if ckpt_steps else None,
             checkpoint_steps=ckpt_steps,
+            output_dir=str(out_dir),
         )
 
         logger.info(f"Stage 2 complete: loss={result2.final_loss:.4f}, "

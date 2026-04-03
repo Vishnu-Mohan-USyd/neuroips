@@ -30,7 +30,8 @@ class StepAux(NamedTuple):
     q_pred: Tensor        # [B, N]  — predicted orientation distribution
     pi_pred: Tensor       # [B, 1]  — raw prediction precision
     pi_pred_eff: Tensor   # [B, 1]  — effective precision (after warmup scaling)
-    state_logits: Tensor  # [B, 3]  — HMM state logits
+    state_logits: Tensor  # [B, 3]  — HMM state logits (zeros in emergent mode)
+    p_cw: Tensor          # [B, 1]  — CW probability (emergent mode; 0.5 in fixed mode)
 
 
 def initial_state(batch_size: int, n_orientations: int = 36,

@@ -1,8 +1,11 @@
-"""Unified feedback mechanism for Models A-E.
+"""Feedback mechanisms for the laminar V1-V2 model.
 
-All models share the same kernel family. Mechanism identity is imposed by
-constraining specific parameters to zero. This is the most important class
-in the project — the mechanism comparison lives here.
+Two feedback systems:
+1. FeedbackMechanism (fixed): Models A-E with hardcoded kernel shapes.
+2. EmergentFeedbackOperator: Learned circulant kernel via basis functions.
+
+Mechanism identity is imposed by constraining specific parameters to zero
+(fixed mode) or emerges from training objectives (emergent mode).
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from src.config import ModelConfig, MechanismType
-from src.utils import circular_distance_abs, shifted_softplus
+from src.utils import circular_distance_abs, circular_distance, shifted_softplus
 
 
 def _inv_softplus(x: float) -> float:
@@ -214,3 +217,161 @@ class FeedbackMechanism(nn.Module):
             return r_l4  # pass through unchanged
 
         return shifted_softplus(r_l4 - deep_template)
+
+
+class EmergentFeedbackOperator(nn.Module):
+    """Learned feedback operator via circulant basis functions.
+
+    Instead of hardcoded kernel shapes (dampening, sharpening, center-surround),
+    this operator learns two profiles (inhibitory and excitatory) as linear
+    combinations of fixed circular basis functions.
+
+    Basis functions (K ~ 7):
+        Even: narrow (sigma=5), medium (sigma=15), broad (sigma=30),
+              very broad (sigma=60), Mexican hat (narrow - broad), constant.
+        Odd: sin-like for tuning shift detection.
+
+    Learnable parameters:
+        alpha_inh [K]: weights for SOM (inhibitory) pathway
+        alpha_exc [K]: weights for direct L2/3 excitation pathway
+
+    The scientific result is a phase diagram: under different loss weights,
+    the operator converges to different kernel shapes that can be classified
+    post-hoc against the known mechanism templates.
+    """
+
+    def __init__(self, cfg: ModelConfig):
+        super().__init__()
+        N = cfg.n_orientations
+        self.n_orient = N
+        self.period = cfg.orientation_range
+
+        # Build fixed circular basis functions
+        basis = self._build_basis(N, cfg.orientation_range)  # [K, N]
+        self.register_buffer("basis", basis)
+        K = basis.shape[0]
+
+        # Learnable weights for inhibitory and excitatory profiles
+        # Initialized to zero -> feedback is off at start (like adaptation-only)
+        self.alpha_inh = nn.Parameter(torch.zeros(K))
+        self.alpha_exc = nn.Parameter(torch.zeros(K))
+
+        # Cache for circulant matrices (populated by cache_kernels)
+        self._cached_inh_circulant: Tensor | None = None
+        self._cached_exc_circulant: Tensor | None = None
+
+    def _build_basis(self, N: int, period: float) -> Tensor:
+        """Build circular basis functions over orientation space.
+
+        Args:
+            N: Number of orientation channels (e.g. 36).
+            period: Orientation range in degrees (e.g. 180).
+
+        Returns:
+            Basis matrix [K, N] where K ~ 7 basis functions.
+        """
+        step = period / N
+        thetas = torch.arange(N, dtype=torch.float32) * step  # [N]
+
+        # Unsigned circular distances from channel 0
+        dists = circular_distance_abs(
+            thetas.unsqueeze(0), thetas[0:1].unsqueeze(1), period
+        ).squeeze(0)  # [N]
+
+        bases = []
+
+        # Even Gaussians at different widths (4 bases)
+        for sigma in [5.0, 15.0, 30.0, 60.0]:
+            g = torch.exp(-dists ** 2 / (2 * sigma ** 2))
+            g = g / g.sum()  # normalize to sum=1
+            bases.append(g)
+
+        # Mexican hat: narrow - broad (1 basis)
+        narrow = torch.exp(-dists ** 2 / (2 * 10.0 ** 2))
+        broad = torch.exp(-dists ** 2 / (2 * 30.0 ** 2))
+        mh = narrow / narrow.sum() - broad / broad.sum()
+        bases.append(mh)
+
+        # Constant / global gain (1 basis)
+        bases.append(torch.ones(N) / N)
+
+        # Odd basis: sin-like for tuning shifts (1 basis)
+        signed_dists = circular_distance(
+            thetas.unsqueeze(0), thetas[0:1].unsqueeze(1), period
+        ).squeeze(0)  # [N], signed
+        odd1 = torch.sin(signed_dists * math.pi / (period / 2))  # one cycle over +/- period/2
+        odd1 = odd1 / (odd1.abs().sum() + 1e-8)
+        bases.append(odd1)
+
+        return torch.stack(bases)  # [K, N]
+
+    def get_profiles(self) -> tuple[Tensor, Tensor]:
+        """Return the current inhibitory and excitatory kernel profiles.
+
+        Returns:
+            K_inh: [N] inhibitory (SOM) kernel profile.
+            K_exc: [N] excitatory (L2/3 center) kernel profile.
+        """
+        K_inh = (self.alpha_inh.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
+        K_exc = (self.alpha_exc.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
+        return K_inh, K_exc
+
+    def _to_circulant(self, profile: Tensor) -> Tensor:
+        """Convert a 1D profile [N] to a circulant matrix [N, N].
+
+        Row i of the circulant matrix is profile shifted by i positions.
+        Entry (i, j) = profile[(j - i) % N].
+
+        Args:
+            profile: [N] kernel profile (centered at channel 0).
+
+        Returns:
+            Circulant matrix [N, N].
+        """
+        N = profile.shape[0]
+        indices = torch.arange(N, device=profile.device)
+        return profile[(indices.unsqueeze(0) - indices.unsqueeze(1)) % N]
+
+    def cache_kernels(self) -> None:
+        """Build and cache circulant matrices for reuse across timesteps."""
+        K_inh, K_exc = self.get_profiles()
+        self._cached_inh_circulant = self._to_circulant(K_inh)
+        self._cached_exc_circulant = self._to_circulant(K_exc)
+
+    def uncache_kernels(self) -> None:
+        """Clear cached circulant matrices after the forward pass."""
+        self._cached_inh_circulant = None
+        self._cached_exc_circulant = None
+
+    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> tuple[Tensor, Tensor]:
+        """Compute SOM drive and center excitation from learned profiles.
+
+        Args:
+            q_pred: [B, N] -- predicted orientation distribution.
+            pi_eff: [B, 1] -- effective precision (after warmup scaling).
+
+        Returns:
+            som_drive: [B, N] -- non-negative drive for SOM ring.
+            center_exc: [B, N] -- non-negative excitation for L2/3.
+        """
+        N = q_pred.shape[-1]
+        q_centered = q_pred - 1.0 / N  # zero-mean so feedback=0 when uninformative
+
+        # Use cached or compute circulant matrices
+        if self._cached_inh_circulant is not None:
+            inh_circulant = self._cached_inh_circulant
+            exc_circulant = self._cached_exc_circulant
+        else:
+            K_inh, K_exc = self.get_profiles()
+            inh_circulant = self._to_circulant(K_inh)
+            exc_circulant = self._to_circulant(K_exc)
+
+        # Circular convolution: circulant @ q_centered
+        inh_field = (inh_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
+        exc_field = (exc_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
+
+        # Scale by precision and clamp non-negative
+        som_drive = pi_eff * F.relu(inh_field)    # non-negative SOM drive
+        center_exc = pi_eff * F.relu(exc_field)   # non-negative excitation
+
+        return som_drive, center_exc
