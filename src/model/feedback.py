@@ -252,9 +252,11 @@ class EmergentFeedbackOperator(nn.Module):
         K = basis.shape[0]
 
         # Learnable weights for inhibitory and excitatory profiles
-        # Initialized to zero -> feedback is off at start (like adaptation-only)
-        self.alpha_inh = nn.Parameter(torch.zeros(K))
-        self.alpha_exc = nn.Parameter(torch.zeros(K))
+        # Small non-zero init to avoid dead ReLU gradient (relu(0) has grad 0).
+        # At 0.01, feedback output is ~0.01 * pi — effectively off but gradient
+        # can flow. During burn-in (feedback_scale=0), this is fully zeroed out.
+        self.alpha_inh = nn.Parameter(torch.full((K,), 0.01))
+        self.alpha_exc = nn.Parameter(torch.full((K,), 0.01))
 
         # Cache for circulant matrices (populated by cache_kernels)
         self._cached_inh_circulant: Tensor | None = None
@@ -370,8 +372,10 @@ class EmergentFeedbackOperator(nn.Module):
         inh_field = (inh_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
         exc_field = (exc_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
 
-        # Scale by precision and clamp non-negative
-        som_drive = pi_eff * F.relu(inh_field)    # non-negative SOM drive
-        center_exc = pi_eff * F.relu(exc_field)   # non-negative excitation
+        # Scale by precision. Use softplus (not relu) to keep output non-negative
+        # while preserving gradient flow at zero (relu has zero gradient at 0,
+        # which causes dead weights when alpha is pushed to zero by L1 sparsity).
+        som_drive = pi_eff * F.softplus(inh_field)
+        center_exc = pi_eff * F.softplus(exc_field)
 
         return som_drive, center_exc

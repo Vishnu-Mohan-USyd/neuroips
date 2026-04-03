@@ -109,6 +109,10 @@ class TrainingConfig:
     lambda_homeo: float = 1.0
     lambda_state: float = 0.25
     lambda_fb: float = 0.01          # L1 sparsity on emergent feedback weights
+    lambda_surprise: float = 0.0     # Surprise detection loss (0 = disabled)
+
+    # Stimulus noise (std of Gaussian noise added to population-coded stimulus in Stage 2)
+    stimulus_noise: float = 0.0
 
     # Batching
     batch_size: int = 32
@@ -170,6 +174,8 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_homeo=train_raw.get("lambda_homeo", 1.0),
         lambda_state=train_raw.get("lambda_state", 0.25),
         lambda_fb=train_raw.get("lambda_fb", 0.01),
+        lambda_surprise=train_raw.get("lambda_surprise", 0.0),
+        stimulus_noise=train_raw.get("stimulus_noise", 0.0),
         batch_size=train_raw.get("batch_size", 32),
         seq_length=train_raw.get("seq_length", 50),
         steps_on=train_raw.get("steps_on", 8),

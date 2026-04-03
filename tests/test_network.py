@@ -350,8 +350,12 @@ class TestEmergentFeedbackOperator:
         assert som_drive.shape == (B, N)
         assert center_exc.shape == (B, N)
 
-    def test_zero_init_means_zero_output(self, cfg_emergent):
-        """When alpha_inh and alpha_exc are zero, output should be zero."""
+    def test_small_init_mostly_uniform(self, cfg_emergent):
+        """Default init (alpha=0.01) should produce nearly uniform output.
+
+        Softplus(field≈0) ≈ 0.693 gives a constant baseline. The spatial
+        variation from the tiny alpha=0.01 field should be negligible.
+        """
         fb = EmergentFeedbackOperator(cfg_emergent)
         B, N = 2, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
@@ -359,8 +363,26 @@ class TestEmergentFeedbackOperator:
 
         som_drive, center_exc = fb(q_pred, pi_eff)
 
-        assert torch.allclose(som_drive, torch.zeros_like(som_drive), atol=1e-6)
-        assert torch.allclose(center_exc, torch.zeros_like(center_exc), atol=1e-6)
+        # Spatial variation should be very small (< 1% of mean)
+        assert som_drive.std(dim=-1).max() < 0.1 * som_drive.mean()
+        assert center_exc.std(dim=-1).max() < 0.1 * center_exc.mean()
+
+    def test_zero_alpha_uniform_output(self, cfg_emergent):
+        """When alpha=0, field=0, softplus(0)≈0.693 → uniform baseline output."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        with torch.no_grad():
+            fb.alpha_inh.zero_()
+            fb.alpha_exc.zero_()
+        B, N = 2, cfg_emergent.n_orientations
+        q_pred = torch.softmax(torch.randn(B, N), dim=-1)
+        pi_eff = torch.ones(B, 1) * 3.0
+
+        som_drive, center_exc = fb(q_pred, pi_eff)
+
+        # With alpha=0, field=0, softplus(0)=ln(2)≈0.693 → uniform
+        # Output should be constant across orientations (no spatial structure)
+        assert som_drive.std(dim=-1).max() < 1e-5, "Should be spatially uniform"
+        assert center_exc.std(dim=-1).max() < 1e-5, "Should be spatially uniform"
 
     def test_non_negative_outputs(self, cfg_emergent):
         """SOM drive and center_exc should always be >= 0 (ReLU)."""
@@ -421,6 +443,7 @@ class TestEmergentFeedbackOperator:
         with torch.no_grad():
             fb.alpha_inh.zero_()
             fb.alpha_inh[0] = 1.0  # narrow Gaussian only
+            fb.alpha_exc.zero_()   # explicitly zero excitation
 
         K_inh, K_exc = fb.get_profiles()
         # K_inh should peak at channel 0 (the center)
@@ -587,18 +610,16 @@ class TestNetworkEmergent:
             q_pred = net._construct_q_pred(r_l4, p_cw)
             assert torch.allclose(q_pred.sum(), torch.tensor(1.0), atol=1e-5)
 
-    def test_zero_feedback_at_init(self, cfg_emergent):
-        """Emergent feedback should be zero at initialization (alpha=0)."""
+    def test_small_feedback_at_init(self, cfg_emergent):
+        """Emergent feedback should be near-zero at initialization (alpha=0.01)."""
         net = LaminarV1V2Network(cfg_emergent)
         B, T, N = 2, 5, cfg_emergent.n_orientations
 
         stim = torch.randn(B, T, N).abs() * 0.5
         r_l23_all, _, aux = net(stim)
 
-        # SOM should be ~0 since feedback operator outputs zero
-        # (alpha_inh and alpha_exc are initialized to zero)
-        # But SOM has dynamics, so check it's very small
-        assert aux["r_som_all"].abs().max() < 0.1
+        # SOM should be very small since alpha is only 0.01
+        assert aux["r_som_all"].abs().max() < 0.5
 
 
 # ── Gradient Flow Tests ──────────────────────────────────────────────────

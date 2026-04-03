@@ -44,6 +44,7 @@ class CompositeLoss(nn.Module):
         self.lambda_homeo = cfg.lambda_homeo       # 1.0
         self.lambda_state = cfg.lambda_state       # 0.25
         self.lambda_fb = cfg.lambda_fb             # 0.01
+        self.lambda_surprise = cfg.lambda_surprise   # 0.0 (disabled by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -53,6 +54,11 @@ class CompositeLoss(nn.Module):
 
         # Trainable linear decoder: L2/3 activity -> orientation logits
         self.orientation_decoder = nn.Linear(N, N)
+
+        # Surprise detection head: L2/3 -> binary (expected vs unexpected)
+        # Only used when lambda_surprise > 0
+        if self.lambda_surprise > 0:
+            self.surprise_detector = nn.Linear(N, 1)
 
         # Homeostasis target range
         self.target_min = 0.05
@@ -192,6 +198,23 @@ class CompositeLoss(nn.Module):
             true_states_windows.reshape(B * W),
         )
 
+    def surprise_detection_loss(
+        self, r_l23_windows: Tensor, is_expected: Tensor
+    ) -> Tensor:
+        """BCE loss on a binary 'expected vs unexpected' classifier reading L2/3.
+
+        Args:
+            r_l23_windows: [B, W, N] -- L2/3 at readout timepoints.
+            is_expected: [B, W] -- binary (1=expected, 0=unexpected).
+
+        Returns:
+            Scalar loss.
+        """
+        B, W, N = r_l23_windows.shape
+        logits = self.surprise_detector(r_l23_windows.reshape(B * W, N))  # [B*W, 1]
+        targets = is_expected.reshape(B * W, 1).float()
+        return F.binary_cross_entropy_with_logits(logits, targets)
+
     def feedback_sparsity_loss(self, model: nn.Module) -> Tensor:
         """L1 sparsity penalty on emergent feedback operator weights.
 
@@ -216,6 +239,7 @@ class CompositeLoss(nn.Module):
         true_states_windows: Tensor | None = None,
         p_cw_windows: Tensor | None = None,
         model: nn.Module | None = None,
+        is_expected: Tensor | None = None,
         use_e_total: bool = True,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
@@ -284,6 +308,14 @@ class CompositeLoss(nn.Module):
                 loss_dict["state"] = 0.0
 
             loss_dict["fb_sparsity"] = 0.0
+
+        # Surprise detection loss (when enabled)
+        if self.lambda_surprise > 0 and is_expected is not None:
+            l_surprise = self.surprise_detection_loss(r_l23_windows, is_expected)
+            total = total + self.lambda_surprise * l_surprise
+            loss_dict["surprise"] = l_surprise.item()
+        else:
+            loss_dict["surprise"] = 0.0
 
         loss_dict["total"] = total.item()
 

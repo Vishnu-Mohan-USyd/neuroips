@@ -1,0 +1,66 @@
+model:
+  adaptation_clamp: 10.0
+  alpha_adaptation: 0.3
+  dt: 1
+  feedback_mode: emergent
+  gain_rec: 0.3
+  mechanism: center_surround
+  n_basis: 7
+  n_orientations: 36
+  naka_rushton_c50: 0.3
+  naka_rushton_n: 2.0
+  orientation_range: 180.0
+  pi_max: 5.0
+  sigma_ff: 12.0
+  sigma_norm: 1.0
+  sigma_rec: 15.0
+  tau_adaptation: 200
+  tau_l23: 10
+  tau_l4: 5
+  tau_pv: 5
+  tau_som: 10
+  template_gain: 1.0
+  transition_step: 15.0
+  v2_hidden_dim: 16
+stimulus:
+  cue_dim: 2
+  jitter_range: 0.0
+  n_anchors: 12
+  n_states: 2
+  p_self: 0.95
+  p_transition_ccw: 0.95
+  p_transition_cw: 0.95
+  task_state_dim: 2
+  transition_step: 15.0
+training:
+  batch_size: 32
+  lambda_energy: 0.01
+  lambda_fb: 0.01
+  lambda_homeo: 1.0
+  lambda_pred: 0.5
+  lambda_sensory: 1.0
+  lambda_state: 0.25
+  n_seeds: 5
+  seq_length: 25
+  stage1:
+    contrast_range:
+    - 0.1
+    - 1.0
+    lr: 0.001
+    n_steps: 2000
+  stage2:
+    ambiguous_fraction: 0.0
+    burnin_steps: 1000
+    contrast_range:
+    - 0.15
+    - 1.0
+    gradient_clip: 1.0
+    lr_feedback: 0.0001
+    lr_v2: 0.0003
+    n_steps: 5000
+    ramp_steps: 1000
+    warmup_steps: 500
+    weight_decay: 0.0001
+  steps_isi: 2
+  steps_on: 3
+  stimulus_noise: 0.5
