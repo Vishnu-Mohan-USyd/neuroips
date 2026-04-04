@@ -23,17 +23,19 @@ from src.utils import circular_distance_abs
 
 
 def extract_profiles(model) -> tuple[Tensor, Tensor]:
-    """Get the learned K_inh and K_exc profiles from the emergent operator.
+    """Get the learned K_inh profile from the emergent operator.
 
     Args:
         model: LaminarV1V2Network with feedback_mode='emergent'.
 
     Returns:
         K_inh: [N] inhibitory (SOM) kernel profile.
-        K_exc: [N] excitatory (L2/3 center) kernel profile.
+        K_exc: [N] zeros (excitatory pathway removed; kept for API compat).
     """
-    K_inh, K_exc = model.feedback.get_profiles()
-    return K_inh.detach().cpu(), K_exc.detach().cpu()
+    K_inh = model.feedback.get_profiles()
+    K_inh = K_inh.detach().cpu()
+    K_exc = torch.zeros_like(K_inh)
+    return K_inh, K_exc
 
 
 def _make_template(

@@ -33,7 +33,7 @@ class CompositeLoss(nn.Module):
     Emergent mode:
         L = lambda_sensory * sensory + lambda_state * BCE(p_cw, true_cw)
           + lambda_energy * energy + lambda_homeo * homeostasis
-          + lambda_fb * (|alpha_inh|_1 + |alpha_exc|_1)
+          + lambda_fb * |alpha_inh|_1
     """
 
     def __init__(self, cfg: TrainingConfig, model_cfg: ModelConfig):
@@ -47,6 +47,8 @@ class CompositeLoss(nn.Module):
         self.lambda_surprise = cfg.lambda_surprise   # 0.0 (disabled by default)
         self.lambda_error = cfg.lambda_error         # 0.0 (disabled by default)
         self.lambda_detection = cfg.lambda_detection # 0.0 (disabled by default)
+        self.lambda_l4_sensory = cfg.lambda_l4_sensory  # 0.0 (disabled by default)
+        self.lambda_mismatch = cfg.lambda_mismatch      # 0.0 (disabled by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -57,6 +59,14 @@ class CompositeLoss(nn.Module):
 
         # Trainable linear decoder: L2/3 activity -> orientation logits
         self.orientation_decoder = nn.Linear(N, N)
+
+        # L4 sensory decoder: L4 activity -> orientation logits
+        if self.lambda_l4_sensory > 0:
+            self.l4_decoder = nn.Linear(N, N)
+
+        # L2/3 mismatch detection head: L2/3 -> binary (expected vs deviant)
+        if self.lambda_mismatch > 0:
+            self.mismatch_head = nn.Linear(N, 1)
 
         # Surprise detection head: L2/3 -> binary (expected vs unexpected)
         if self.lambda_surprise > 0:
@@ -94,6 +104,58 @@ class CompositeLoss(nn.Module):
         logits = self.orientation_decoder(r_l23_windows.reshape(B * W, N))
         targets = self._theta_to_channel(true_theta_windows).reshape(B * W)
         return F.cross_entropy(logits, targets)
+
+    def l4_sensory_readout_loss(
+        self, r_l4_windows: Tensor, true_theta_windows: Tensor
+    ) -> Tensor:
+        """Cross-entropy loss for orientation decoding from L4.
+
+        Args:
+            r_l4_windows: [B, n_windows, N] -- L4 at readout timepoints.
+            true_theta_windows: [B, n_windows] -- true orientations in degrees.
+
+        Returns:
+            Scalar loss.
+        """
+        B, W, N = r_l4_windows.shape
+        logits = self.l4_decoder(r_l4_windows.reshape(B * W, N))
+        targets = self._theta_to_channel(true_theta_windows).reshape(B * W)
+        return F.cross_entropy(logits, targets)
+
+    def mismatch_detection_loss(
+        self,
+        r_l23_windows: Tensor,
+        mismatch_labels: Tensor,
+        mismatch_mask: Tensor | None = None,
+    ) -> Tensor:
+        """Weighted BCE loss for mismatch detection from L2/3.
+
+        Args:
+            r_l23_windows: [B, n_windows, N] -- L2/3 at readout timepoints.
+            mismatch_labels: [B, n_windows] -- binary (1=mismatch, 0=expected).
+            mismatch_mask: [B, n_windows] -- mask (1=valid, 0=exclude).
+                Used to exclude first presentation where no prediction exists.
+
+        Returns:
+            Scalar loss.
+        """
+        B, W, N = r_l23_windows.shape
+        logits = self.mismatch_head(r_l23_windows.reshape(B * W, N))  # [B*W, 1]
+        targets = mismatch_labels.reshape(B * W, 1).float()
+
+        # Compute pos_weight for class imbalance (~24% mismatch → weight ~3.2)
+        n_pos = targets.sum().clamp(min=1.0)
+        n_neg = (1.0 - targets).sum().clamp(min=1.0)
+        pos_weight = n_neg / n_pos
+
+        raw_loss = F.binary_cross_entropy_with_logits(
+            logits, targets, pos_weight=pos_weight, reduction='none'
+        )  # [B*W, 1]
+
+        if mismatch_mask is not None:
+            mask = mismatch_mask.reshape(B * W, 1).float()
+            return (raw_loss * mask).sum() / mask.sum().clamp(min=1.0)
+        return raw_loss.mean()
 
     def prediction_loss(
         self, q_pred_windows: Tensor, true_next_theta_windows: Tensor
@@ -269,14 +331,14 @@ class CompositeLoss(nn.Module):
         """L1 sparsity penalty on emergent feedback operator weights.
 
         Args:
-            model: The network (must have feedback.alpha_inh and feedback.alpha_exc).
+            model: The network (must have feedback.alpha_inh).
 
         Returns:
             Scalar L1 penalty.
         """
         if not hasattr(model, 'feedback') or not hasattr(model.feedback, 'alpha_inh'):
             return torch.tensor(0.0)
-        return model.feedback.alpha_inh.abs().sum() + model.feedback.alpha_exc.abs().sum()
+        return model.feedback.alpha_inh.abs().sum()
 
     def forward(
         self,
@@ -293,6 +355,9 @@ class CompositeLoss(nn.Module):
         predicted_theta: Tensor | None = None,
         use_e_total: bool = True,
         fb_scale: float = 1.0,
+        r_l4_windows: Tensor | None = None,
+        mismatch_labels: Tensor | None = None,
+        mismatch_mask: Tensor | None = None,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -388,6 +453,24 @@ class CompositeLoss(nn.Module):
             loss_dict["detection"] = l_detect.item()
         else:
             loss_dict["detection"] = 0.0
+
+        # L4 sensory readout loss (deviance objective)
+        if self.lambda_l4_sensory > 0 and r_l4_windows is not None:
+            l_l4_sens = self.l4_sensory_readout_loss(r_l4_windows, true_theta_windows)
+            total = total + self.lambda_l4_sensory * l_l4_sens
+            loss_dict["l4_sensory"] = l_l4_sens.item()
+        else:
+            loss_dict["l4_sensory"] = 0.0
+
+        # L2/3 mismatch detection loss (deviance objective)
+        if self.lambda_mismatch > 0 and mismatch_labels is not None:
+            l_mismatch = self.mismatch_detection_loss(
+                r_l23_windows, mismatch_labels, mismatch_mask
+            )
+            total = total + self.lambda_mismatch * l_mismatch
+            loss_dict["mismatch"] = l_mismatch.item()
+        else:
+            loss_dict["mismatch"] = 0.0
 
         loss_dict["total"] = total.item()
 

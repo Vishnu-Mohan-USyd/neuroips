@@ -83,7 +83,7 @@ def create_stage2_optimizer(
         {"params": list(loss_fn.orientation_decoder.parameters()), "lr": cfg.stage1_lr},
     ]
     # Add optional readout head params
-    for head_name in ('surprise_detector', 'error_decoder', 'detection_head'):
+    for head_name in ('surprise_detector', 'error_decoder', 'detection_head', 'l4_decoder', 'mismatch_head'):
         if hasattr(loss_fn, head_name):
             param_groups.append(
                 {"params": list(getattr(loss_fn, head_name).parameters()), "lr": cfg.stage1_lr}

@@ -41,6 +41,7 @@ class Stage1Result:
     decoder_accuracy: float
     gating_passed: dict[str, bool]
     n_steps_trained: int
+    decoder_state_dict: dict | None = None  # Trained decoder weights for transfer
 
 
 def _run_v1_only(
@@ -192,11 +193,15 @@ def run_stage1(
     # Freeze Stage 1 params
     freeze_stage1(net)
 
+    # Extract trained decoder weights for transfer to Stage 2
+    decoder_sd = {k: v.cpu().clone() for k, v in loss_fn.orientation_decoder.state_dict().items()}
+
     return Stage1Result(
         final_loss=losses[-1] if losses else float("nan"),
         decoder_accuracy=final_acc,
         gating_passed=gating,
         n_steps_trained=n_steps,
+        decoder_state_dict=decoder_sd,
     )
 
 

@@ -233,34 +233,37 @@ class EmergentFeedbackOperator(nn.Module):
 
     Learnable parameters:
         alpha_inh [K]: weights for SOM (inhibitory) pathway
-        alpha_exc [K]: weights for direct L2/3 excitation pathway
 
     The scientific result is a phase diagram: under different loss weights,
     the operator converges to different kernel shapes that can be classified
     post-hoc against the known mechanism templates.
     """
 
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, delta_som: bool = False):
         super().__init__()
         N = cfg.n_orientations
         self.n_orient = N
         self.period = cfg.orientation_range
+        self.delta_som = delta_som
 
         # Build fixed circular basis functions
         basis = self._build_basis(N, cfg.orientation_range)  # [K, N]
         self.register_buffer("basis", basis)
         K = basis.shape[0]
 
-        # Learnable weights for inhibitory and excitatory profiles
+        # Learnable weights for inhibitory (SOM) profile only.
         # Small non-zero init to avoid dead ReLU gradient (relu(0) has grad 0).
         # At 0.01, feedback output is ~0.01 * pi — effectively off but gradient
         # can flow. During burn-in (feedback_scale=0), this is fully zeroed out.
         self.alpha_inh = nn.Parameter(torch.full((K,), 0.01))
-        self.alpha_exc = nn.Parameter(torch.full((K,), 0.01))
 
-        # Cache for circulant matrices (populated by cache_kernels)
+        # Delta-SOM baseline: softplus(baseline + field) - softplus(baseline)
+        # removes the constant bias from softplus, so zero field → zero drive.
+        if self.delta_som:
+            self.som_baseline = nn.Parameter(torch.tensor(0.0))
+
+        # Cache for circulant matrix (populated by cache_kernels)
         self._cached_inh_circulant: Tensor | None = None
-        self._cached_exc_circulant: Tensor | None = None
 
     def _build_basis(self, N: int, period: float) -> Tensor:
         """Build circular basis functions over orientation space.
@@ -307,16 +310,14 @@ class EmergentFeedbackOperator(nn.Module):
 
         return torch.stack(bases)  # [K, N]
 
-    def get_profiles(self) -> tuple[Tensor, Tensor]:
-        """Return the current inhibitory and excitatory kernel profiles.
+    def get_profiles(self) -> Tensor:
+        """Return the current inhibitory (SOM) kernel profile.
 
         Returns:
             K_inh: [N] inhibitory (SOM) kernel profile.
-            K_exc: [N] excitatory (L2/3 center) kernel profile.
         """
         K_inh = (self.alpha_inh.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
-        K_exc = (self.alpha_exc.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
-        return K_inh, K_exc
+        return K_inh
 
     def _to_circulant(self, profile: Tensor) -> Tensor:
         """Convert a 1D profile [N] to a circulant matrix [N, N].
@@ -335,18 +336,16 @@ class EmergentFeedbackOperator(nn.Module):
         return profile[(indices.unsqueeze(0) - indices.unsqueeze(1)) % N]
 
     def cache_kernels(self) -> None:
-        """Build and cache circulant matrices for reuse across timesteps."""
-        K_inh, K_exc = self.get_profiles()
+        """Build and cache circulant matrix for reuse across timesteps."""
+        K_inh = self.get_profiles()
         self._cached_inh_circulant = self._to_circulant(K_inh)
-        self._cached_exc_circulant = self._to_circulant(K_exc)
 
     def uncache_kernels(self) -> None:
-        """Clear cached circulant matrices after the forward pass."""
+        """Clear cached circulant matrix after the forward pass."""
         self._cached_inh_circulant = None
-        self._cached_exc_circulant = None
 
-    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> tuple[Tensor, Tensor]:
-        """Compute SOM drive and center excitation from learned profiles.
+    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> Tensor:
+        """Compute SOM drive from learned inhibitory profile.
 
         Args:
             q_pred: [B, N] -- predicted orientation distribution.
@@ -354,28 +353,28 @@ class EmergentFeedbackOperator(nn.Module):
 
         Returns:
             som_drive: [B, N] -- non-negative drive for SOM ring.
-            center_exc: [B, N] -- non-negative excitation for L2/3.
         """
         N = q_pred.shape[-1]
         q_centered = q_pred - 1.0 / N  # zero-mean so feedback=0 when uninformative
 
-        # Use cached or compute circulant matrices
+        # Use cached or compute circulant matrix
         if self._cached_inh_circulant is not None:
             inh_circulant = self._cached_inh_circulant
-            exc_circulant = self._cached_exc_circulant
         else:
-            K_inh, K_exc = self.get_profiles()
+            K_inh = self.get_profiles()
             inh_circulant = self._to_circulant(K_inh)
-            exc_circulant = self._to_circulant(K_exc)
 
         # Circular convolution: circulant @ q_centered
         inh_field = (inh_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
-        exc_field = (exc_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
 
         # Scale by precision. Use softplus (not relu) to keep output non-negative
         # while preserving gradient flow at zero (relu has zero gradient at 0,
         # which causes dead weights when alpha is pushed to zero by L1 sparsity).
-        som_drive = pi_eff * F.softplus(inh_field)
-        center_exc = pi_eff * F.softplus(exc_field)
+        if self.delta_som:
+            # Delta-SOM: softplus(baseline + field) - softplus(baseline)
+            # Removes constant bias so zero field → zero drive.
+            som_drive = pi_eff * (F.softplus(self.som_baseline + inh_field) - F.softplus(self.som_baseline))
+        else:
+            som_drive = pi_eff * F.softplus(inh_field)
 
-        return som_drive, center_exc
+        return som_drive

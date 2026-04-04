@@ -113,8 +113,10 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Build network
-    net = LaminarV1V2Network(model_cfg)
+    net = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
     logger.info(f"Network parameters: {sum(p.numel() for p in net.parameters())}")
+    if train_cfg.delta_som:
+        logger.info("Delta-SOM mode enabled")
 
     # Loss function (shared between stages for decoder continuity)
     loss_fn = CompositeLoss(train_cfg, model_cfg)
@@ -126,6 +128,11 @@ def main() -> None:
         logger.info("=" * 60)
 
         result1 = run_stage1(net, model_cfg, train_cfg, device, args.seed)
+
+        # Transfer trained decoder to the shared loss_fn
+        if result1.decoder_state_dict is not None:
+            loss_fn.orientation_decoder.load_state_dict(result1.decoder_state_dict)
+            logger.info("Transferred trained decoder from Stage 1 to shared loss_fn")
 
         logger.info(f"Stage 1 complete: loss={result1.final_loss:.4f}, "
                      f"acc={result1.decoder_accuracy:.3f}")

@@ -32,7 +32,7 @@ class LaminarV1V2Network(nn.Module):
                     EmergentFeedbackOperator (learned basis functions).
     """
 
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, delta_som: bool = False):
         super().__init__()
         self.cfg = cfg
         self.l4 = V1L4Ring(cfg)
@@ -44,7 +44,7 @@ class LaminarV1V2Network(nn.Module):
 
         # Feedback: emergent (learned) or fixed (hardcoded mechanism)
         if cfg.feedback_mode == 'emergent':
-            self.feedback = EmergentFeedbackOperator(cfg)
+            self.feedback = EmergentFeedbackOperator(cfg, delta_som=delta_som)
         else:
             self.feedback = FeedbackMechanism(cfg)
 
@@ -55,7 +55,10 @@ class LaminarV1V2Network(nn.Module):
         self.oracle_mode = False
         self.oracle_q_pred = None   # set externally: [B, N] (per-step) or [B, T, N] (per-sequence)
         self.oracle_pi_pred = None  # set externally: [B, 1] (scalar) or [B, T, 1] (per-sequence)
-        self._oracle_t = 0          # timestep counter for sequence oracle mode
+        # Per-timestep oracle slices (set by forward() for sequence mode to avoid
+        # storing a Python int counter that causes torch.compile recompilation)
+        self._oracle_q_step: Tensor | None = None
+        self._oracle_pi_step: Tensor | None = None
 
     def _decode_orientation(self, r_l4: Tensor) -> Tensor:
         """Population vector decode from L4 firing rates.
@@ -153,11 +156,12 @@ class LaminarV1V2Network(nn.Module):
 
         # 3. V2 (uses r_l4 from this step + old L2/3 -- one-step feedback delay)
         if self.oracle_mode and self.oracle_q_pred is not None:
-            # Support both per-step [B, N] and per-sequence [B, T, N] oracle
+            # Support both per-step [B, N] and per-sequence [B, T, N] oracle.
+            # For sequence mode, forward() pre-slices into _oracle_q_step/pi_step
+            # to avoid a Python int counter that triggers torch.compile recompilation.
             if self.oracle_q_pred.dim() == 3:
-                q_pred = self.oracle_q_pred[:, self._oracle_t]
-                pi_pred_raw = self.oracle_pi_pred[:, self._oracle_t]
-                self._oracle_t += 1
+                q_pred = self._oracle_q_step
+                pi_pred_raw = self._oracle_pi_step
             else:
                 q_pred = self.oracle_q_pred
                 pi_pred_raw = self.oracle_pi_pred
@@ -185,8 +189,9 @@ class LaminarV1V2Network(nn.Module):
 
         # 5-6. Feedback pathway (branched by mode)
         if self.cfg.feedback_mode == 'emergent':
-            # Emergent: learned operator outputs both SOM drive and center excitation
-            som_drive, center_exc = self.feedback(q_pred, pi_pred_eff)
+            # Emergent: learned operator outputs SOM drive only
+            som_drive = self.feedback(q_pred, pi_pred_eff)
+            center_exc = torch.zeros_like(som_drive)
             r_som = self.som(som_drive, state.r_som)
             l4_to_l23 = r_l4  # No error signal in emergent mode
             r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
@@ -298,8 +303,9 @@ class LaminarV1V2Network(nn.Module):
         deep_template_all = torch.empty(B, T, N, device=device)
         p_cw_all = torch.empty(B, T, 1, device=device)
 
-        # Reset oracle timestep counter for sequence mode
-        self._oracle_t = 0
+        # Check if oracle mode uses sequence-length tensors [B, T, ...]
+        _oracle_seq = (self.oracle_mode and self.oracle_q_pred is not None
+                       and self.oracle_q_pred.dim() == 3)
 
         # Cache kernels once for all timesteps (params don't change within forward)
         self.l23.cache_kernels()
@@ -307,6 +313,12 @@ class LaminarV1V2Network(nn.Module):
             self.feedback.cache_kernels()
         try:
             for t in range(T):
+                # Pre-slice oracle tensors per-timestep (avoids Python int counter
+                # on module that causes torch.compile recompilation)
+                if _oracle_seq:
+                    self._oracle_q_step = self.oracle_q_pred[:, t]
+                    self._oracle_pi_step = self.oracle_pi_pred[:, t]
+
                 state, aux_t = self.step(
                     stimulus_seq[:, t], cue_seq[:, t], task_state_seq[:, t], state
                 )

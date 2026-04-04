@@ -38,6 +38,55 @@ from src.training.trainer import (
 logger = logging.getLogger(__name__)
 
 
+def compute_mismatch_labels(
+    metadata,
+    transition_step: float = 15.0,
+    threshold: float = 10.0,
+    orientation_range: float = 180.0,
+) -> tuple[Tensor, Tensor]:
+    """Compute binary mismatch labels from generator ground truth.
+
+    A presentation is "mismatch" if the actual orientation deviates from
+    the expected orientation (given previous orientation and current state)
+    by more than `threshold` degrees, or if the state is NEUTRAL.
+
+    Args:
+        metadata: SequenceMetadata with .orientations [B, S] and .states [B, S].
+        transition_step: Expected step size in degrees for CW/CCW.
+        threshold: Circular distance threshold for mismatch (degrees).
+        orientation_range: Period of orientation space (degrees).
+
+    Returns:
+        mismatch_labels: [B, S] binary labels (1=mismatch, 0=expected).
+        mismatch_mask: [B, S] validity mask (0 for first presentation, 1 elsewhere).
+    """
+    orientations = metadata.orientations  # [B, S]
+    states = metadata.states  # [B, S] — current state at each presentation
+
+    prev_theta = orientations[:, :-1]  # [B, S-1]
+    curr_theta = orientations[:, 1:]   # [B, S-1]
+    curr_state = states[:, 1:]         # [B, S-1]
+
+    # Expected orientation given state: CW → +step, CCW → -step
+    expected_cw = (prev_theta + transition_step) % orientation_range
+    expected_ccw = (prev_theta - transition_step) % orientation_range
+    expected = torch.where(curr_state == 0, expected_cw, expected_ccw)
+
+    # NEUTRAL state (state >= 2) is always mismatch (unpredictable)
+    is_neutral = (curr_state >= 2)
+
+    circ_dist = circular_distance_abs(curr_theta, expected, orientation_range)
+    mismatch = ((circ_dist > threshold) | is_neutral).float()
+
+    # Pad first presentation (no valid prediction for t=0)
+    B = orientations.shape[0]
+    device = orientations.device
+    mismatch_labels = torch.cat([torch.zeros(B, 1, device=device), mismatch], dim=1)
+    mismatch_mask = torch.cat([torch.zeros(B, 1, device=device),
+                               torch.ones_like(mismatch)], dim=1)
+    return mismatch_labels, mismatch_mask
+
+
 @dataclass
 class Stage2Result:
     """Result of Stage 2 training."""
@@ -95,6 +144,12 @@ def run_stage2(
     freeze_stage1(net)
     unfreeze_stage2(net)
 
+    # Freeze V2 when using oracle mode (must be before optimizer creation)
+    if train_cfg.freeze_v2:
+        for p in net.v2.parameters():
+            p.requires_grad_(False)
+        logger.info("V2 frozen (oracle/freeze mode): V2 parameters excluded from training")
+
     # Step-level compile: fast (~13s), low RAM (~1.2GB), same throughput at T=600.
     net.step = torch.compile(net.step, mode='max-autotune-no-cudagraphs')
     compiled_net = net
@@ -122,8 +177,8 @@ def run_stage2(
         n_states=stim_cfg.n_states,
     )
 
-    # Readout indices (last half of ON period)
-    window_start = max(1, train_cfg.steps_on // 2)
+    # Readout indices (last 3 steps of ON period — L2/3 needs time to settle)
+    window_start = max(1, train_cfg.steps_on - 3)
     window_end = train_cfg.steps_on - 1
     readout_indices = compute_readout_indices(
         seq_length, train_cfg.steps_on, train_cfg.steps_isi,
@@ -188,9 +243,55 @@ def run_stage2(
         true_next_thetas = true_next_thetas.to(dev, non_blocking=True)
         true_states = true_states.to(dev, non_blocking=True)
 
+        # Oracle / freeze V2 mode: bypass V2 with ground-truth predictions
+        if train_cfg.freeze_v2:
+            net.oracle_mode = True
+            steps_per_pres = train_cfg.steps_on + train_cfg.steps_isi
+            T_total = seq_length * steps_per_pres
+
+            # Construct oracle q_pred from ground truth.
+            # For each presentation s, q_pred = bump at expected next orientation:
+            #   CW → theta[s] + transition_step
+            #   CCW → theta[s] - transition_step
+            #   NEUTRAL → uniform (average of CW and CCW)
+            oris = metadata.orientations  # [B, S]
+            cur_states = metadata.states  # [B, S] — current state
+            step_deg = model_cfg.transition_step
+
+            theta_cw = (oris + step_deg) % model_cfg.orientation_range
+            theta_ccw = (oris - step_deg) % model_cfg.orientation_range
+
+            # Build per-presentation q_pred using make_bump
+            B_cur = oris.shape[0]
+            q_cw = net._make_bump(theta_cw.reshape(-1)).reshape(B_cur, seq_length, N)
+            q_ccw = net._make_bump(theta_ccw.reshape(-1)).reshape(B_cur, seq_length, N)
+            p_cw_oracle = (cur_states == 0).float().unsqueeze(-1)  # [B, S, 1]
+            p_ccw_oracle = (cur_states == 1).float().unsqueeze(-1)
+            # For neutral: average of CW and CCW
+            p_neutral = (1.0 - p_cw_oracle - p_ccw_oracle).clamp(min=0)
+            q_oracle = (p_cw_oracle * q_cw + p_ccw_oracle * q_ccw
+                        + p_neutral * 0.5 * (q_cw + q_ccw))
+            q_oracle = q_oracle / (q_oracle.sum(dim=-1, keepdim=True) + 1e-8)
+
+            # Expand to all timesteps: [B, S, N] → [B, T_total, N]
+            oracle_q = q_oracle.unsqueeze(2).expand(
+                -1, -1, steps_per_pres, -1
+            ).reshape(B_cur, T_total, N).to(dev)
+            oracle_pi = torch.full(
+                (B_cur, T_total, 1), train_cfg.oracle_pi, device=dev,
+            )
+            net.oracle_q_pred = oracle_q
+            net.oracle_pi_pred = oracle_pi
+
         # Forward pass
         packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
         r_l23_all, final_state, aux = compiled_net(packed)
+
+        # Reset oracle mode after forward pass
+        if train_cfg.freeze_v2:
+            net.oracle_mode = False
+            net.oracle_q_pred = None
+            net.oracle_pi_pred = None
 
         # Build outputs dict for loss computation
         outputs = {
@@ -225,6 +326,34 @@ def run_stage2(
                 .mean(dim=2)
             )
 
+        # Extract L4 readout windows (same extraction pattern as L2/3)
+        r_l4_windows = None
+        if train_cfg.lambda_l4_sensory > 0:
+            steps_per = train_cfg.steps_on + train_cfg.steps_isi
+            _, ts_first = readout_indices[0]
+            w_start = ts_first[0]
+            w_end = ts_first[-1] + 1
+            B_batch = aux["r_l4_all"].shape[0]
+            S = len(readout_indices)
+            r_l4_windows = (
+                aux["r_l4_all"]
+                .reshape(B_batch, S, steps_per, N)[:, :, w_start:w_end]
+                .mean(dim=2)
+            )
+
+        # Compute mismatch labels from ground truth
+        mm_labels_windows = None
+        mm_mask_windows = None
+        if train_cfg.lambda_mismatch > 0:
+            mm_labels, mm_mask = compute_mismatch_labels(
+                metadata,
+                transition_step=stim_cfg.transition_step,
+                threshold=10.0,
+                orientation_range=model_cfg.orientation_range,
+            )
+            mm_labels_windows = mm_labels.to(dev)
+            mm_mask_windows = mm_mask.to(dev)
+
         # Compute is_expected for surprise/detection losses (if enabled)
         is_expected = None
         if train_cfg.lambda_surprise > 0 or train_cfg.lambda_detection > 0:
@@ -256,6 +385,9 @@ def run_stage2(
             is_expected=is_expected,
             predicted_theta=predicted_theta,
             fb_scale=net.feedback_scale.item(),
+            r_l4_windows=r_l4_windows,
+            mismatch_labels=mm_labels_windows,
+            mismatch_mask=mm_mask_windows,
         )
 
         total_loss.backward()
@@ -316,8 +448,31 @@ def run_stage2(
                     fb_info = ""
                     if hasattr(net.feedback, 'alpha_inh'):
                         a_inh_norm = net.feedback.alpha_inh.abs().sum().item()
-                        a_exc_norm = net.feedback.alpha_exc.abs().sum().item()
-                        fb_info = f"a_inh={a_inh_norm:.3f}, a_exc={a_exc_norm:.3f}, "
+                        fb_info = f"a_inh={a_inh_norm:.3f}, "
+
+                    # L4 sensory accuracy (when enabled)
+                    l4_info = ""
+                    if r_l4_windows is not None and hasattr(loss_fn, 'l4_decoder'):
+                        l4_logits = loss_fn.l4_decoder(r_l4_windows)
+                        B_W_l4 = l4_logits.shape[0] * l4_logits.shape[1]
+                        l4_acc = (
+                            l4_logits.reshape(B_W_l4, N).argmax(dim=-1)
+                            == loss_fn._theta_to_channel(true_thetas).reshape(-1)
+                        ).float().mean().item()
+                        l4_info = f"l4_acc={l4_acc:.3f}, "
+
+                    # Mismatch accuracy (when enabled)
+                    mm_info = ""
+                    if mm_labels_windows is not None and hasattr(loss_fn, 'mismatch_head'):
+                        mm_logits = loss_fn.mismatch_head(
+                            r_l23_windows.reshape(-1, N)
+                        ).squeeze(-1)
+                        mm_preds = (mm_logits > 0).float()
+                        mm_targets = mm_labels_windows.reshape(-1)
+                        mm_valid = mm_mask_windows.reshape(-1).bool() if mm_mask_windows is not None else torch.ones_like(mm_targets).bool()
+                        if mm_valid.any():
+                            mm_acc = (mm_preds[mm_valid] == mm_targets[mm_valid]).float().mean().item()
+                            mm_info = f"mm_acc={mm_acc:.3f}, "
 
                     logger.info(
                         f"Stage 2 step {step+1}/{n_steps}: "
@@ -330,7 +485,7 @@ def run_stage2(
                         f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
                         f"cw_acc={state_acc:.3f}, "
                         f"ang_err={angular_error:.1f}, "
-                        f"{fb_info}"
+                        f"{fb_info}{l4_info}{mm_info}"
                         f"grad_norm={total_norm:.3f}, "
                         f"pi_ceil={pi_ceiling_frac:.3f}, "
                         f"fb_scale={net.feedback_scale.item():.3f}"
@@ -404,11 +559,14 @@ def run_stage2(
                     }
                     if feedback_mode == 'emergent' and hasattr(net.feedback, 'alpha_inh'):
                         metrics['a_inh_norm'] = round(net.feedback.alpha_inh.abs().sum().item(), 4)
-                        metrics['a_exc_norm'] = round(net.feedback.alpha_exc.abs().sum().item(), 4)
                         metrics['fb_sparsity'] = round(loss_dict.get('fb_sparsity', 0.0), 4)
                     if feedback_mode == 'fixed':
                         metrics['top3'] = round(top3_acc, 3)
                         metrics['anchor'] = round(anchor_acc, 3)
+                    if loss_dict.get('l4_sensory', 0.0) > 0:
+                        metrics['l4_sensory'] = round(loss_dict['l4_sensory'], 4)
+                    if loss_dict.get('mismatch', 0.0) > 0:
+                        metrics['mismatch'] = round(loss_dict['mismatch'], 4)
                     metrics_path = os.path.join(output_dir, 'metrics.jsonl')
                     with open(metrics_path, 'a') as f:
                         f.write(json.dumps(metrics) + '\n')

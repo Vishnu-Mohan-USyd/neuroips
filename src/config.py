@@ -112,6 +112,15 @@ class TrainingConfig:
     lambda_surprise: float = 0.0     # Surprise detection loss (0 = disabled)
     lambda_error: float = 0.0        # Prediction error readout loss (0 = disabled)
     lambda_detection: float = 0.0    # Detection confirmation loss (0 = disabled)
+    lambda_l4_sensory: float = 0.0  # L4 sensory readout weight (0 = disabled)
+    lambda_mismatch: float = 0.0    # L2/3 mismatch detection weight (0 = disabled)
+
+    # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
+    delta_som: bool = False
+
+    # Freeze V2 / use oracle predictor
+    freeze_v2: bool = False
+    oracle_pi: float = 1.0          # pi value when using oracle mode
 
     # Stimulus noise (std of Gaussian noise added to population-coded stimulus in Stage 2)
     stimulus_noise: float = 0.0
@@ -179,6 +188,11 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_surprise=train_raw.get("lambda_surprise", 0.0),
         lambda_error=train_raw.get("lambda_error", 0.0),
         lambda_detection=train_raw.get("lambda_detection", 0.0),
+        lambda_l4_sensory=train_raw.get("lambda_l4_sensory", 0.0),
+        lambda_mismatch=train_raw.get("lambda_mismatch", 0.0),
+        delta_som=train_raw.get("delta_som", False),
+        freeze_v2=train_raw.get("freeze_v2", False),
+        oracle_pi=train_raw.get("oracle_pi", 1.0),
         stimulus_noise=train_raw.get("stimulus_noise", 0.0),
         batch_size=train_raw.get("batch_size", 32),
         seq_length=train_raw.get("seq_length", 50),

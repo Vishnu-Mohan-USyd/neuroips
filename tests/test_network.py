@@ -345,10 +345,9 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
-        som_drive, center_exc = fb(q_pred, pi_eff)
+        som_drive = fb(q_pred, pi_eff)
 
         assert som_drive.shape == (B, N)
-        assert center_exc.shape == (B, N)
 
     def test_small_init_mostly_uniform(self, cfg_emergent):
         """Default init (alpha=0.01) should produce nearly uniform output.
@@ -361,45 +360,40 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
 
-        som_drive, center_exc = fb(q_pred, pi_eff)
+        som_drive = fb(q_pred, pi_eff)
 
         # Spatial variation should be very small (< 1% of mean)
         assert som_drive.std(dim=-1).max() < 0.1 * som_drive.mean()
-        assert center_exc.std(dim=-1).max() < 0.1 * center_exc.mean()
 
     def test_zero_alpha_uniform_output(self, cfg_emergent):
         """When alpha=0, field=0, softplus(0)≈0.693 → uniform baseline output."""
         fb = EmergentFeedbackOperator(cfg_emergent)
         with torch.no_grad():
             fb.alpha_inh.zero_()
-            fb.alpha_exc.zero_()
         B, N = 2, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
 
-        som_drive, center_exc = fb(q_pred, pi_eff)
+        som_drive = fb(q_pred, pi_eff)
 
         # With alpha=0, field=0, softplus(0)=ln(2)≈0.693 → uniform
         # Output should be constant across orientations (no spatial structure)
         assert som_drive.std(dim=-1).max() < 1e-5, "Should be spatially uniform"
-        assert center_exc.std(dim=-1).max() < 1e-5, "Should be spatially uniform"
 
     def test_non_negative_outputs(self, cfg_emergent):
-        """SOM drive and center_exc should always be >= 0 (ReLU)."""
+        """SOM drive should always be >= 0 (softplus)."""
         fb = EmergentFeedbackOperator(cfg_emergent)
         # Set random weights
         with torch.no_grad():
             fb.alpha_inh.normal_()
-            fb.alpha_exc.normal_()
 
         B, N = 8, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
-        som_drive, center_exc = fb(q_pred, pi_eff)
+        som_drive = fb(q_pred, pi_eff)
 
         assert (som_drive >= -1e-6).all()
-        assert (center_exc >= -1e-6).all()
 
     def test_basis_shape(self, cfg_emergent):
         """Basis should be [K, N] with K ~ 7."""
@@ -410,31 +404,28 @@ class TestEmergentFeedbackOperator:
 
     def test_profiles_shape(self, cfg_emergent):
         fb = EmergentFeedbackOperator(cfg_emergent)
-        K_inh, K_exc = fb.get_profiles()
+        K_inh = fb.get_profiles()
         assert K_inh.shape == (cfg_emergent.n_orientations,)
-        assert K_exc.shape == (cfg_emergent.n_orientations,)
 
     def test_kernel_caching(self, cfg_emergent):
         """Cached and uncached should give same results."""
         fb = EmergentFeedbackOperator(cfg_emergent)
         with torch.no_grad():
             fb.alpha_inh.normal_(std=0.5)
-            fb.alpha_exc.normal_(std=0.5)
 
         B, N = 4, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
         # Without cache
-        som1, exc1 = fb(q_pred, pi_eff)
+        som1 = fb(q_pred, pi_eff)
 
         # With cache
         fb.cache_kernels()
-        som2, exc2 = fb(q_pred, pi_eff)
+        som2 = fb(q_pred, pi_eff)
         fb.uncache_kernels()
 
         assert torch.allclose(som1, som2, atol=1e-6)
-        assert torch.allclose(exc1, exc2, atol=1e-6)
 
     def test_manual_dampening_profile(self, cfg_emergent):
         """Setting alpha_inh to mimic narrow Gaussian should produce dampening-like profile."""
@@ -443,13 +434,10 @@ class TestEmergentFeedbackOperator:
         with torch.no_grad():
             fb.alpha_inh.zero_()
             fb.alpha_inh[0] = 1.0  # narrow Gaussian only
-            fb.alpha_exc.zero_()   # explicitly zero excitation
 
-        K_inh, K_exc = fb.get_profiles()
+        K_inh = fb.get_profiles()
         # K_inh should peak at channel 0 (the center)
         assert K_inh.argmax().item() == 0
-        # K_exc should be zero
-        assert torch.allclose(K_exc, torch.zeros_like(K_exc), atol=1e-6)
 
 
 # ── Full Network Tests (fixed mode) ─────────────────────────────────────
@@ -665,7 +653,6 @@ class TestGradientFlowNetwork:
 
         # Check emergent-specific params
         assert net.feedback.alpha_inh.grad is not None
-        assert net.feedback.alpha_exc.grad is not None
         # Check V2 p_cw head
         assert net.v2.head_p_cw.weight.grad is not None
 
