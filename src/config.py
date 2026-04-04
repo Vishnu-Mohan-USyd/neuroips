@@ -114,6 +114,7 @@ class TrainingConfig:
     lambda_detection: float = 0.0    # Detection confirmation loss (0 = disabled)
     lambda_l4_sensory: float = 0.0  # L4 sensory readout weight (0 = disabled)
     lambda_mismatch: float = 0.0    # L2/3 mismatch detection weight (0 = disabled)
+    lambda_sharp: float = 0.0       # Tuning sharpness: penalize L2/3 activity at flanks (0 = disabled)
 
     # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
     delta_som: bool = False

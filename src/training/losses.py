@@ -49,6 +49,7 @@ class CompositeLoss(nn.Module):
         self.lambda_detection = cfg.lambda_detection # 0.0 (disabled by default)
         self.lambda_l4_sensory = cfg.lambda_l4_sensory  # 0.0 (disabled by default)
         self.lambda_mismatch = cfg.lambda_mismatch      # 0.0 (disabled by default)
+        self.lambda_sharp = cfg.lambda_sharp            # 0.0 (disabled by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -210,6 +211,34 @@ class CompositeLoss(nn.Module):
         # Target: 1.0 for CW (state==0), 0.0 for CCW (state==1)
         target = (true_states_windows == 0).float().unsqueeze(-1)  # [B, W, 1]
         return F.binary_cross_entropy(p_cw_windows, target)
+
+    def tuning_sharpness_loss(
+        self, r_l23_windows: Tensor, true_theta_windows: Tensor
+    ) -> Tensor:
+        """Penalize L2/3 activity proportional to angular distance from stimulus.
+
+        Creates gradient pressure for sharpening: zero penalty at the stimulus
+        channel, maximal penalty at the antipode. Through SOM, this pushes the
+        feedback operator toward broad/surround inhibition (sharpening).
+
+        Args:
+            r_l23_windows: [B, W, N] L2/3 activity at readout windows.
+            true_theta_windows: [B, W] true orientation in degrees.
+        Returns:
+            Scalar loss.
+        """
+        B, W, N = r_l23_windows.shape
+        step = self.orient_step
+        prefs = torch.arange(N, device=r_l23_windows.device).float() * step  # [N]
+        true_degs = true_theta_windows.unsqueeze(-1)  # [B, W, 1]
+        # Circular distance from each channel to the stimulus orientation
+        dists = torch.min(
+            torch.abs(prefs.unsqueeze(0).unsqueeze(0) - true_degs),
+            self.period - torch.abs(prefs.unsqueeze(0).unsqueeze(0) - true_degs)
+        )  # [B, W, N]
+        # Weight: 0 at stimulus channel, 1 at antipode (90° away for 180° period)
+        weight = dists / (self.period / 2)  # [0, 1]
+        return (r_l23_windows * weight).mean()
 
     def energy_cost(self, outputs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Compute energy costs from network output trajectories.
@@ -471,6 +500,14 @@ class CompositeLoss(nn.Module):
             loss_dict["mismatch"] = l_mismatch.item()
         else:
             loss_dict["mismatch"] = 0.0
+
+        # Tuning sharpness loss (penalize flank activity)
+        if self.lambda_sharp > 0:
+            l_sharp = self.tuning_sharpness_loss(r_l23_windows, true_theta_windows)
+            total = total + self.lambda_sharp * l_sharp
+            loss_dict["sharp"] = l_sharp.item()
+        else:
+            loss_dict["sharp"] = 0.0
 
         loss_dict["total"] = total.item()
 
