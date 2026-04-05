@@ -1,11 +1,12 @@
 # ============================================================
-# Confound Control: Deviance Objective WITHOUT predictable transitions
+# Template Manipulation: oracle_wrong (CW <-> CCW swap)
 # ============================================================
 # Parent: exp_deviance.yaml
-# Change: p_transition_cw/ccw: 0.5 (random/uninformative transitions)
-# Purpose: Test whether suppression requires predictability.
-#          With random transitions, oracle predictions are at chance,
-#          so feedback should be uninformative.
+# Change: oracle_template: oracle_wrong
+# Purpose: Phase F1 diagnostic. Template is peaked but systematically
+#          anti-correlated with the upcoming stimulus (swap CW<->CCW).
+#          If dampening still emerges, it cannot be a prediction-error
+#          signal — it's indifferent to whether the template is right.
 
 model:
   n_orientations: 36
@@ -61,6 +62,7 @@ training:
   delta_som: true
   freeze_v2: true
   oracle_pi: 1.0
+  oracle_template: oracle_wrong       # CW<->CCW swap
   stimulus_noise: 0.1
 
   batch_size: 32
@@ -71,8 +73,8 @@ training:
 
 stimulus:
   n_states: 2
-  p_transition_cw: 0.5               # UNINFORMATIVE — confound control
-  p_transition_ccw: 0.5              # UNINFORMATIVE — confound control
+  p_transition_cw: 0.80
+  p_transition_ccw: 0.80
   p_self: 0.95
   n_anchors: 12
   jitter_range: 0.0

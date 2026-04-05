@@ -71,6 +71,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    # Reproducibility guard: Stage 2 alone requires a Stage 1 checkpoint.
+    # Starting Stage 2 from random init produces a model that looks trained
+    # but has an unscaffolded V1 circuit — results are not reproducible or
+    # interpretable. Fail loudly rather than silently training garbage.
+    if args.stage == 2 and not args.stage1_checkpoint:
+        raise ValueError(
+            "Stage 2 training requires a Stage 1 checkpoint. "
+            "Pass --stage1-checkpoint PATH to load a trained Stage 1 scaffold, "
+            "or run the full pipeline without --stage to train both stages."
+        )
+
     # Load config
     model_cfg, train_cfg, stim_cfg = load_config(args.config)
 
@@ -162,15 +173,14 @@ def main() -> None:
                 )
 
     # Load Stage 1 checkpoint if doing Stage 2 only
+    # (Presence of args.stage1_checkpoint is enforced at start of main() when
+    # args.stage == 2, so this branch is always taken here.)
     if args.stage == 2:
-        if args.stage1_checkpoint:
-            ckpt = torch.load(args.stage1_checkpoint, map_location=device, weights_only=False)
-            net.load_state_dict(ckpt["model_state"])
-            if "decoder_state" in ckpt:
-                loss_fn.orientation_decoder.load_state_dict(ckpt["decoder_state"])
-            logger.info(f"Loaded Stage 1 checkpoint from {args.stage1_checkpoint}")
-        else:
-            logger.warning("No Stage 1 checkpoint provided for Stage 2. Using random init.")
+        ckpt = torch.load(args.stage1_checkpoint, map_location=device, weights_only=False)
+        net.load_state_dict(ckpt["model_state"])
+        if "decoder_state" in ckpt:
+            loss_fn.orientation_decoder.load_state_dict(ckpt["decoder_state"])
+        logger.info(f"Loaded Stage 1 checkpoint from {args.stage1_checkpoint}")
 
     # Stage 2
     if args.stage is None or args.stage == 2:

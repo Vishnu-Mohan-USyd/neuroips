@@ -255,32 +255,78 @@ def run_stage2(
             steps_per_pres = train_cfg.steps_on + train_cfg.steps_isi
             T_total = seq_length * steps_per_pres
 
-            # Construct oracle q_pred from ground truth.
-            # For each presentation s, q_pred = bump at expected next orientation:
-            #   CW → theta[s] + transition_step
-            #   CCW → theta[s] - transition_step
-            #   NEUTRAL → uniform (average of CW and CCW)
             oris = metadata.orientations.to(dev)  # [B, S]
             # Use true_states (shifted next-state from build_stimulus_sequence)
             # because states[t+1] determines the transition from ori[t] to ori[t+1].
             # metadata.states[t] is the state that generated ori[t] from ori[t-1].
             cur_states = true_states  # [B, S] — next state (shifted), already on dev
             step_deg = model_cfg.transition_step
-
-            theta_cw = (oris + step_deg) % model_cfg.orientation_range
-            theta_ccw = (oris - step_deg) % model_cfg.orientation_range
-
-            # Build per-presentation q_pred using make_bump
             B_cur = oris.shape[0]
-            q_cw = net._make_bump(theta_cw.reshape(-1)).reshape(B_cur, seq_length, N)
-            q_ccw = net._make_bump(theta_ccw.reshape(-1)).reshape(B_cur, seq_length, N)
-            p_cw_oracle = (cur_states == 0).float().unsqueeze(-1)  # [B, S, 1]
-            p_ccw_oracle = (cur_states == 1).float().unsqueeze(-1)
-            # For neutral: average of CW and CCW
-            p_neutral = (1.0 - p_cw_oracle - p_ccw_oracle).clamp(min=0)
-            q_oracle = (p_cw_oracle * q_cw + p_ccw_oracle * q_ccw
-                        + p_neutral * 0.5 * (q_cw + q_ccw))
-            q_oracle = q_oracle / (q_oracle.sum(dim=-1, keepdim=True) + 1e-8)
+            template_mode = train_cfg.oracle_template
+
+            if template_mode == "oracle_true":
+                # Normal oracle: bump at next orientation given TRUE state
+                #   CW → theta[s] + transition_step
+                #   CCW → theta[s] - transition_step
+                #   NEUTRAL → uniform (average of CW and CCW)
+                theta_cw = (oris + step_deg) % model_cfg.orientation_range
+                theta_ccw = (oris - step_deg) % model_cfg.orientation_range
+                q_cw = net._make_bump(theta_cw.reshape(-1)).reshape(B_cur, seq_length, N)
+                q_ccw = net._make_bump(theta_ccw.reshape(-1)).reshape(B_cur, seq_length, N)
+                p_cw_oracle = (cur_states == 0).float().unsqueeze(-1)  # [B, S, 1]
+                p_ccw_oracle = (cur_states == 1).float().unsqueeze(-1)
+                p_neutral = (1.0 - p_cw_oracle - p_ccw_oracle).clamp(min=0)
+                q_oracle = (p_cw_oracle * q_cw + p_ccw_oracle * q_ccw
+                            + p_neutral * 0.5 * (q_cw + q_ccw))
+                q_oracle = q_oracle / (q_oracle.sum(dim=-1, keepdim=True) + 1e-8)
+
+            elif template_mode == "oracle_wrong":
+                # Swap CW <-> CCW: use the OPPOSITE state's prediction.
+                # Same peakedness and same set of predicted orientations as oracle_true,
+                # but the prediction is anti-correlated with the true next stimulus.
+                theta_cw = (oris + step_deg) % model_cfg.orientation_range
+                theta_ccw = (oris - step_deg) % model_cfg.orientation_range
+                q_cw = net._make_bump(theta_cw.reshape(-1)).reshape(B_cur, seq_length, N)
+                q_ccw = net._make_bump(theta_ccw.reshape(-1)).reshape(B_cur, seq_length, N)
+                # INVERTED: if state is CW use theta_ccw, if CCW use theta_cw
+                p_cw_oracle = (cur_states == 1).float().unsqueeze(-1)  # inverted
+                p_ccw_oracle = (cur_states == 0).float().unsqueeze(-1)  # inverted
+                p_neutral = (1.0 - p_cw_oracle - p_ccw_oracle).clamp(min=0)
+                q_oracle = (p_cw_oracle * q_cw + p_ccw_oracle * q_ccw
+                            + p_neutral * 0.5 * (q_cw + q_ccw))
+                q_oracle = q_oracle / (q_oracle.sum(dim=-1, keepdim=True) + 1e-8)
+
+            elif template_mode == "oracle_random":
+                # Bump at a randomly chosen orientation, independent of stimulus.
+                # Same peakedness as oracle_true (via _make_bump) but random center.
+                # Fresh random draw per (batch, presentation) — the "prediction"
+                # is peaked but uncorrelated with the upcoming stimulus. This is
+                # the correct null for "does the shape of the template matter?":
+                # a peaked-but-wrong template has the same statistics as a
+                # peaked-and-right template.
+                random_thetas = (
+                    torch.rand(B_cur, seq_length, device=dev, generator=None)
+                    * model_cfg.orientation_range
+                )
+                q_rand = net._make_bump(random_thetas.reshape(-1)).reshape(
+                    B_cur, seq_length, N
+                )
+                q_oracle = q_rand / (q_rand.sum(dim=-1, keepdim=True) + 1e-8)
+
+            elif template_mode == "oracle_uniform":
+                # Flat distribution over orientations — no peak, no structure.
+                # The feedback operator receives a uniform template at every
+                # presentation. This is the correct null for "does the template
+                # need to be peaked at all?".
+                q_oracle = torch.full(
+                    (B_cur, seq_length, N), 1.0 / N, device=dev
+                )
+
+            else:
+                raise ValueError(
+                    f"Unknown oracle_template: {template_mode!r}. "
+                    "Must be one of: oracle_true, oracle_wrong, oracle_random, oracle_uniform."
+                )
 
             # Expand to all timesteps: [B, S, N] → [B, T_total, N]
             oracle_q = q_oracle.unsqueeze(2).expand(

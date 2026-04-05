@@ -122,6 +122,12 @@ class TrainingConfig:
     # Freeze V2 / use oracle predictor
     freeze_v2: bool = False
     oracle_pi: float = 1.0          # pi value when using oracle mode
+    # Oracle template type (only used when freeze_v2=True):
+    #   oracle_true    — q_pred bumped at next orientation given TRUE state (normal oracle)
+    #   oracle_wrong   — q_pred bumped at next orientation given OPPOSITE state (CW<->CCW swap)
+    #   oracle_random  — q_pred bumped at a random orientation, independent of stimulus
+    #   oracle_uniform — q_pred is flat (uniform over orientations)
+    oracle_template: str = "oracle_true"
 
     # Freeze orientation decoder in Stage 2 (for clean representational claims)
     freeze_decoder: bool = False
@@ -199,6 +205,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),
         oracle_pi=train_raw.get("oracle_pi", 1.0),
+        oracle_template=train_raw.get("oracle_template", "oracle_true"),
         stimulus_noise=train_raw.get("stimulus_noise", 0.0),
         batch_size=train_raw.get("batch_size", 32),
         seq_length=train_raw.get("seq_length", 50),

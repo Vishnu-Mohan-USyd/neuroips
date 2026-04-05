@@ -31,7 +31,7 @@ Compared pre-fix vs post-fix for the three headline conditions:
 
 Tests whether the learned effects depend on:
 - **Adaptation** (`alpha_adaptation=0`): is the result an L4 adaptation artifact?
-- **Predictability** (`p_transition_cw=p_transition_ccw=0.5`): does it require informative predictions?
+- **Transition reliability** (`p_transition_cw=p_transition_ccw=0.5`): does it require informative predictions? At 50% reliability, CW and CCW are equally likely so the oracle prediction is at chance and the feedback template is effectively uncorrelated with the upcoming stimulus.
 
 ### Dampening controls
 
@@ -39,10 +39,10 @@ Tests whether the learned effects depend on:
 |---|---|---|---|---|
 | Original | 2.147 | +0.914 | +38.0% | +25.6% |
 | No adaptation | 2.148 | +0.914 | +37.7% | +25.4% |
-| No predictability | 2.178 | +0.914 | +38.6% | +26.0% |
+| 50%-reliability transitions | 2.178 | +0.914 | +38.6% | +26.0% |
 
 **Dampening is unaffected by either control.** Within numerical noise across all three conditions.
-Conclusion: dampening in this model is **not** driven by expectation. It is a generic energy-minimization effect that exploits whatever prediction template (real or random) is supplied, to suppress L2/3 activity at the q_pred peak where the SOM drive is most concentrated.
+Conclusion: dampening in this **minimal V1-V2 inhibitory feedback model with laminar populations** is **not** driven by expectation. It is a generic energy-minimization effect that exploits whatever prediction template (real or random) is supplied, to suppress L2/3 activity at the q_pred peak where the SOM drive is most concentrated.
 
 ### Sharpening (P4) controls
 
@@ -50,10 +50,10 @@ Conclusion: dampening in this model is **not** driven by expectation. It is a ge
 |---|---|---|---|---|
 | Original | 1.511 | +0.968 | 45° | +4.8% |
 | No adaptation | 1.569 | +0.970 | 45° | +4.8% |
-| No predictability | 1.617 | +0.773 | 30° | +5.4% |
+| 50%-reliability transitions | 1.617 | +0.773 | 30° | +5.4% |
 
 **Sharpening survives no-adaptation (identical to original).**
-**Under no-predictability, the kernel shifts:** R(sharpening) drops 0.97 -> 0.77, the peak moves from 45° to 30°, and the suppression at 45° drops from +4.8% to +1.7%. The profile is still sharpening-like but the shape changes. Part of the P4 sharpening depends on the prediction structure; part is driven purely by fine discrimination + noise pressure.
+**Under 50%-reliability transitions, the kernel shifts:** R(sharpening) drops 0.97 -> 0.77, the peak moves from 45° to 30°, and the suppression at 45° drops from +4.8% to +1.7%. The profile is still sharpening-like but the shape changes. Part of the P4 sharpening depends on the prediction structure; part is driven purely by fine discrimination + noise pressure.
 
 ## Phase D: End-to-end learned V2 (1 seed each)
 
@@ -76,7 +76,7 @@ Tests whether the effects survive when V2 learns its own predictions instead of 
    - Fixing the state alignment bug
    - Freezing the decoder
    - Removing adaptation
-   - Uninformative transitions
+   - 50%-reliability transitions
    - Learned V2 (even at near-chance)
    
    But it is **not** expectation-driven. It's an energy-minimization effect that uses any prediction template to concentrate SOM suppression on the most active channels.
@@ -93,6 +93,8 @@ Tests whether the effects survive when V2 learns its own predictions instead of 
 - `results/confounds/` — Phase C confound controls
 - `results/e2e/` — Phase D end-to-end runs
 
+Note on result directory names: earlier runs were saved under `results/confounds/damp_no_predict_s42/` and `results/confounds/p4_no_predict_s42/`. Those directories are kept as-is; the corresponding configs have been renamed from `confound_{damp,p4}_no_predict.yaml` to `confound_{damp,p4}_50reliable.yaml` to more accurately describe the manipulation (50%-reliability transitions, not "unpredictable").
+
 ## Configs
 
 - `config/exp_deviance.yaml` — dampening (sensory off, mismatch on L2/3)
@@ -100,8 +102,8 @@ Tests whether the effects survive when V2 learns its own predictions instead of 
 - `config/exp_sharp_p3.yaml` — high pi + no energy + sensory only
 - `config/exp_sharp_p4.yaml` — fine discrimination + noise
 - `config/confound_damp_no_adapt.yaml` — dampening with `alpha_adaptation=0`
-- `config/confound_damp_no_predict.yaml` — dampening with random transitions
+- `config/confound_damp_50reliable.yaml` — dampening with 50%-reliability transitions
 - `config/confound_p4_no_adapt.yaml` — P4 with `alpha_adaptation=0`
-- `config/confound_p4_no_predict.yaml` — P4 with random transitions
+- `config/confound_p4_50reliable.yaml` — P4 with 50%-reliability transitions
 - `config/e2e_deviance.yaml` — dampening with learned V2
 - `config/e2e_p4.yaml` — P4 with learned V2
