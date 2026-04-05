@@ -123,6 +123,9 @@ class TrainingConfig:
     freeze_v2: bool = False
     oracle_pi: float = 1.0          # pi value when using oracle mode
 
+    # Freeze orientation decoder in Stage 2 (for clean representational claims)
+    freeze_decoder: bool = False
+
     # Stimulus noise (std of Gaussian noise added to population-coded stimulus in Stage 2)
     stimulus_noise: float = 0.0
 
@@ -191,8 +194,10 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_detection=train_raw.get("lambda_detection", 0.0),
         lambda_l4_sensory=train_raw.get("lambda_l4_sensory", 0.0),
         lambda_mismatch=train_raw.get("lambda_mismatch", 0.0),
+        lambda_sharp=train_raw.get("lambda_sharp", 0.0),
         delta_som=train_raw.get("delta_som", False),
         freeze_v2=train_raw.get("freeze_v2", False),
+        freeze_decoder=train_raw.get("freeze_decoder", False),
         oracle_pi=train_raw.get("oracle_pi", 1.0),
         stimulus_noise=train_raw.get("stimulus_noise", 0.0),
         batch_size=train_raw.get("batch_size", 32),

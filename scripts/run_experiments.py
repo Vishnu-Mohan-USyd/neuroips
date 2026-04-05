@@ -48,10 +48,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    cfg = ModelConfig(mechanism=MechanismType(args.mechanism))
-    net = LaminarV1V2Network(cfg)
-
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+
+    # Reconstruct ModelConfig from checkpoint's saved config, not defaults
+    if "config" in ckpt and "model" in ckpt["config"]:
+        model_raw = ckpt["config"]["model"]
+        cfg = ModelConfig(**model_raw)
+        logger.info(f"Loaded config from checkpoint: mechanism={cfg.mechanism.value}")
+    else:
+        # Fallback for legacy checkpoints without saved config
+        cfg = ModelConfig(mechanism=MechanismType(args.mechanism))
+        logger.warning("No config in checkpoint, using --mechanism flag")
+
+    net = LaminarV1V2Network(cfg)
     net.load_state_dict(ckpt["model_state"])
     net.eval()
     logger.info(f"Loaded checkpoint: {args.checkpoint}")

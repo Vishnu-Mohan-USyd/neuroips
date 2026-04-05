@@ -1,14 +1,9 @@
 # ============================================================
-# Experiment: Deviance Objective
+# End-to-end: Deviance Objective (learned V2, no oracle)
 # ============================================================
-# Key changes:
-#   - lambda_sensory: 0.0 (DISABLE L2/3 sensory readout)
-#   - lambda_l4_sensory: 1.0 (ENABLE L4 sensory readout)
-#   - lambda_mismatch: 1.0 (ENABLE L2/3 mismatch detection)
-#   - delta_som: true (bias-corrected softplus)
-#   - freeze_v2: true (oracle predictor, isolates objective effect)
-#   - oracle_pi: 1.0
-# Hypothesis: L2/3 should now suppress expected (helps mismatch detection)
+# Parent: exp_deviance.yaml
+# Changes: freeze_v2: false, lambda_state: 0.25
+# Purpose: Full pipeline with learned V2 predictor (not oracle).
 
 model:
   n_orientations: 36
@@ -59,10 +54,10 @@ training:
   lambda_pred: 0.0
   lambda_energy: 0.01
   lambda_homeo: 1.0
-  lambda_state: 0.0                   # Disabled: p_cw is placeholder in oracle mode
+  lambda_state: 0.25                  # Restored: V2 learns p_cw
   lambda_fb: 0.0
   delta_som: true
-  freeze_v2: true
+  freeze_v2: false                    # Learned V2 (not oracle)
   oracle_pi: 1.0
   stimulus_noise: 0.1
 

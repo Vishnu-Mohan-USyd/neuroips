@@ -55,7 +55,7 @@ training:
   lambda_energy: 0.0                  # NO energy cost (removes dampening pressure)
   lambda_sharp: 0.5                   # Tuning sharpness: penalize flank activity
   lambda_homeo: 1.0
-  lambda_state: 0.25
+  lambda_state: 0.0                   # Disabled: p_cw is placeholder in oracle mode
   lambda_fb: 0.0                      # No L1 sparsity
   delta_som: true
   freeze_v2: true

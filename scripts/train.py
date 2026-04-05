@@ -63,6 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feedback-mode", type=str, default=None,
                         choices=['emergent', 'fixed'],
                         help="Override feedback mode")
+    parser.add_argument("--allow-gating-fail", action="store_true",
+                        help="Allow proceeding to Stage 2 even if Stage 1 gating fails")
     return parser.parse_args()
 
 
@@ -150,7 +152,14 @@ def main() -> None:
 
         all_passed = all(result1.gating_passed.values())
         if not all_passed:
-            logger.warning("Not all gating checks passed! Proceeding anyway.")
+            failed = [k for k, v in result1.gating_passed.items() if not v]
+            if args.allow_gating_fail:
+                logger.warning(f"Gating checks failed: {failed}. Proceeding (--allow-gating-fail).")
+            else:
+                raise RuntimeError(
+                    f"Stage 1 gating failed: {failed}. "
+                    "Use --allow-gating-fail to override."
+                )
 
     # Load Stage 1 checkpoint if doing Stage 2 only
     if args.stage == 2:

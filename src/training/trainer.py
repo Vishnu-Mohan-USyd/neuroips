@@ -88,8 +88,10 @@ def create_stage2_optimizer(
             param_groups.append(
                 {"params": list(getattr(loss_fn, head_name).parameters()), "lr": cfg.stage1_lr}
             )
-    # Filter empty groups
-    param_groups = [g for g in param_groups if len(list(g["params"])) > 0]
+    # Filter frozen params from each group, then remove empty groups
+    for g in param_groups:
+        g["params"] = [p for p in g["params"] if p.requires_grad]
+    param_groups = [g for g in param_groups if len(g["params"]) > 0]
     return AdamW(param_groups, weight_decay=cfg.stage2_weight_decay)
 
 

@@ -1,14 +1,9 @@
 # ============================================================
-# Experiment: Deviance Objective
+# End-to-end: Fine Discrimination P4 (learned V2, no oracle)
 # ============================================================
-# Key changes:
-#   - lambda_sensory: 0.0 (DISABLE L2/3 sensory readout)
-#   - lambda_l4_sensory: 1.0 (ENABLE L4 sensory readout)
-#   - lambda_mismatch: 1.0 (ENABLE L2/3 mismatch detection)
-#   - delta_som: true (bias-corrected softplus)
-#   - freeze_v2: true (oracle predictor, isolates objective effect)
-#   - oracle_pi: 1.0
-# Hypothesis: L2/3 should now suppress expected (helps mismatch detection)
+# Parent: exp_sharp_p4.yaml
+# Changes: freeze_v2: false, lambda_state: 0.25
+# Purpose: Full pipeline with learned V2 predictor (not oracle).
 
 model:
   n_orientations: 36
@@ -31,7 +26,7 @@ model:
   template_gain: 1.0
   mechanism: "center_surround"
   feedback_mode: "emergent"
-  transition_step: 15.0
+  transition_step: 5.0
   n_basis: 7
   dt: 1
 
@@ -53,22 +48,22 @@ training:
     contrast_range: [0.15, 1.0]
     ambiguous_fraction: 0.0
 
-  lambda_sensory: 0.0                 # DISABLE L2/3 sensory readout
-  lambda_l4_sensory: 1.0              # ENABLE L4 sensory readout
-  lambda_mismatch: 1.0                # ENABLE L2/3 mismatch detection
+  lambda_sensory: 1.0                 # Orientation decode from L2/3
+  lambda_l4_sensory: 0.0
+  lambda_mismatch: 0.0
   lambda_pred: 0.0
-  lambda_energy: 0.01
+  lambda_energy: 0.0                  # No energy cost
   lambda_homeo: 1.0
-  lambda_state: 0.0                   # Disabled: p_cw is placeholder in oracle mode
-  lambda_fb: 0.0
+  lambda_state: 0.25                  # Restored: V2 learns p_cw
+  lambda_fb: 0.0                      # No L1 sparsity
   delta_som: true
-  freeze_v2: true
-  oracle_pi: 1.0
-  stimulus_noise: 0.1
+  freeze_v2: false                    # Learned V2 (not oracle)
+  oracle_pi: 3.0
+  stimulus_noise: 0.25                # High noise
 
   batch_size: 32
   seq_length: 25
-  steps_on: 3
+  steps_on: 6
   steps_isi: 2
   n_seeds: 5
 
@@ -79,6 +74,6 @@ stimulus:
   p_self: 0.95
   n_anchors: 12
   jitter_range: 0.0
-  transition_step: 15.0
+  transition_step: 5.0
   cue_dim: 2
   task_state_dim: 2

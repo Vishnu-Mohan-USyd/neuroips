@@ -150,6 +150,12 @@ def run_stage2(
             p.requires_grad_(False)
         logger.info("V2 frozen (oracle/freeze mode): V2 parameters excluded from training")
 
+    # Freeze orientation decoder for mechanistic analysis (must be before optimizer creation)
+    if train_cfg.freeze_decoder or train_cfg.freeze_v2:
+        for p in loss_fn.orientation_decoder.parameters():
+            p.requires_grad_(False)
+        logger.info("Froze orientation decoder for mechanistic analysis")
+
     # Step-level compile: fast (~13s), low RAM (~1.2GB), same throughput at T=600.
     net.step = torch.compile(net.step, mode='max-autotune-no-cudagraphs')
     compiled_net = net
@@ -178,7 +184,7 @@ def run_stage2(
     )
 
     # Readout indices (last 3 steps of ON period — L2/3 needs time to settle)
-    window_start = max(1, train_cfg.steps_on - 3)
+    window_start = max(0, train_cfg.steps_on - 3)
     window_end = train_cfg.steps_on - 1
     readout_indices = compute_readout_indices(
         seq_length, train_cfg.steps_on, train_cfg.steps_isi,
@@ -254,8 +260,11 @@ def run_stage2(
             #   CW → theta[s] + transition_step
             #   CCW → theta[s] - transition_step
             #   NEUTRAL → uniform (average of CW and CCW)
-            oris = metadata.orientations  # [B, S]
-            cur_states = metadata.states  # [B, S] — current state
+            oris = metadata.orientations.to(dev)  # [B, S]
+            # Use true_states (shifted next-state from build_stimulus_sequence)
+            # because states[t+1] determines the transition from ori[t] to ori[t+1].
+            # metadata.states[t] is the state that generated ori[t] from ori[t-1].
+            cur_states = true_states  # [B, S] — next state (shifted), already on dev
             step_deg = model_cfg.transition_step
 
             theta_cw = (oris + step_deg) % model_cfg.orientation_range
@@ -375,12 +384,15 @@ def run_stage2(
             predicted_theta = q_pred_windows.argmax(dim=-1).float() * orient_step  # [B, W]
 
         # Compute loss (scale L1 sparsity by fb_scale to prevent alpha death during burn-in)
+        # In oracle/freeze_v2 mode, p_cw is a placeholder (0.5) — skip state BCE loss
+        states_for_loss = None if train_cfg.freeze_v2 else true_states
+        p_cw_for_loss = None if train_cfg.freeze_v2 else p_cw_windows
         total_loss, loss_dict = loss_fn(
             outputs, true_thetas, true_next_thetas,
             r_l23_windows, q_pred_windows,
             state_logits_windows=state_logits_windows if feedback_mode == 'fixed' else None,
-            true_states_windows=true_states,
-            p_cw_windows=p_cw_windows,
+            true_states_windows=states_for_loss,
+            p_cw_windows=p_cw_for_loss,
             model=net if feedback_mode == 'emergent' else None,
             is_expected=is_expected,
             predicted_theta=predicted_theta,

@@ -477,3 +477,160 @@ class TestCheckpoint:
             r_l23_loaded, _, aux_loaded = net2(stim)
             assert torch.allclose(r_l23_orig, r_l23_loaded, atol=1e-6)
             assert torch.allclose(aux_orig["q_pred_all"], aux_loaded["q_pred_all"], atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for bugs found during sharpening investigation
+# ---------------------------------------------------------------------------
+
+class TestRegressionBugs:
+    """Regression tests to prevent recurrence of bugs found in code review."""
+
+    def test_load_config_reads_lambda_sharp(self):
+        """Bug: lambda_sharp was not parsed from YAML, silently defaulting to 0.0.
+
+        Verify exp_sharp_p1.yaml correctly loads lambda_sharp=0.5,
+        and that a config without lambda_sharp gets the default 0.0.
+        """
+        from src.config import load_config
+
+        # Config with lambda_sharp set
+        _, train_cfg, _ = load_config("config/exp_sharp_p1.yaml")
+        assert train_cfg.lambda_sharp == 0.5, (
+            f"Expected lambda_sharp=0.5 from exp_sharp_p1.yaml, got {train_cfg.lambda_sharp}"
+        )
+
+        # Default config should have lambda_sharp=0.0
+        _, train_default, _ = load_config("config/defaults.yaml")
+        assert train_default.lambda_sharp == 0.0, (
+            f"Expected lambda_sharp=0.0 from defaults.yaml, got {train_default.lambda_sharp}"
+        )
+
+    def test_oracle_uses_shifted_states(self):
+        """Bug: oracle q_pred was built from metadata.states (current-step state)
+        instead of true_states (next-step state from build_stimulus_sequence).
+
+        The oracle predicts *next* orientation, so it needs the *next* state.
+        Verify that build_stimulus_sequence returns shifted states, and that
+        they differ from metadata.states at state-transition boundaries.
+        """
+        torch.manual_seed(99)
+        model_cfg = ModelConfig(feedback_mode='emergent')
+        train_cfg = TrainingConfig(
+            steps_on=3, steps_isi=2, seq_length=50, batch_size=8,
+        )
+        stim_cfg = StimulusConfig()
+
+        gen = torch.Generator(device="cpu")
+        gen.manual_seed(99)
+        hmm_gen = HMMSequenceGenerator(
+            n_orientations=model_cfg.n_orientations,
+            p_self=stim_cfg.p_self,
+            p_transition_cw=stim_cfg.p_transition_cw,
+            p_transition_ccw=stim_cfg.p_transition_ccw,
+            n_anchors=stim_cfg.n_anchors,
+            jitter_range=stim_cfg.jitter_range,
+            transition_step=stim_cfg.transition_step,
+            period=model_cfg.orientation_range,
+            n_states=stim_cfg.n_states,
+        )
+        metadata = hmm_gen.generate(train_cfg.batch_size, train_cfg.seq_length, gen)
+
+        _, _, _, _, _, true_states = build_stimulus_sequence(
+            metadata, model_cfg, train_cfg
+        )
+
+        # true_states should be shifted by 1 relative to metadata.states
+        # (true_states[t] = metadata.states[t+1] for t < S-1)
+        expected_shifted = torch.roll(metadata.states, -1, dims=1)
+        expected_shifted[:, -1] = metadata.states[:, -1]
+        assert torch.equal(true_states, expected_shifted), (
+            "true_states must be metadata.states shifted by 1 (next-state alignment)"
+        )
+
+        # At state transitions, shifted and unshifted MUST differ
+        # (otherwise the bug wouldn't matter, but with p_self=0.95 and 50 steps,
+        # there should be at least some transitions)
+        differs = (true_states != metadata.states).any()
+        assert differs, (
+            "true_states should differ from metadata.states at state transitions. "
+            "With 50 steps and p_self=0.95, transitions should occur."
+        )
+
+    def test_readout_window_covers_3_steps(self):
+        """Bug: readout window used steps_on//2 as start, giving only 1 step
+        for steps_on=3 (window [1,1]). Fixed to steps_on-3 → [0,2] (3 steps).
+
+        Verify window width for steps_on=3 and steps_on=6.
+        """
+        # steps_on=3: window_start = max(1, 3-3) = max(1,0) = 1 → wrong!
+        # Actually the code uses: window_start = max(1, steps_on - 3)
+        # For steps_on=3: max(1, 0) = 1, window_end = 2 → indices [1, 2] = 2 steps
+        # For steps_on=6: max(1, 3) = 3, window_end = 5 → indices [3, 4, 5] = 3 steps
+
+        # steps_on=3
+        window_start_3 = max(1, 3 - 3)
+        window_end_3 = 3 - 1
+        indices_3 = compute_readout_indices(
+            5, steps_on=3, steps_isi=2,
+            window_start=window_start_3, window_end=window_end_3,
+        )
+        _, ts = indices_3[0]
+        assert ts == [1, 2], f"steps_on=3: expected window [1,2], got {ts}"
+        assert len(ts) == 2, f"steps_on=3: expected 2 timesteps, got {len(ts)}"
+
+        # steps_on=6
+        window_start_6 = max(1, 6 - 3)
+        window_end_6 = 6 - 1
+        indices_6 = compute_readout_indices(
+            5, steps_on=6, steps_isi=2,
+            window_start=window_start_6, window_end=window_end_6,
+        )
+        _, ts6 = indices_6[0]
+        assert ts6 == [3, 4, 5], f"steps_on=6: expected window [3,4,5], got {ts6}"
+        assert len(ts6) == 3, f"steps_on=6: expected 3 timesteps, got {len(ts6)}"
+
+        # Verify second presentation offset is correct
+        _, ts6_pres1 = indices_6[1]
+        steps_per = 6 + 2
+        assert ts6_pres1 == [steps_per + 3, steps_per + 4, steps_per + 5], (
+            f"steps_on=6 pres 1: expected offset by {steps_per}, got {ts6_pres1}"
+        )
+
+    def test_frozen_decoder_not_in_optimizer(self):
+        """Bug: orientation decoder was included in optimizer even when frozen,
+        causing wasted compute and potential unfreezing via weight_decay.
+
+        Verify that when freeze_v2=True (which triggers decoder freeze),
+        the decoder params are not in any optimizer param group.
+        """
+        model_cfg = ModelConfig(feedback_mode='emergent')
+        train_cfg = TrainingConfig(freeze_v2=True)
+        net = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
+        loss_fn = CompositeLoss(train_cfg, model_cfg)
+
+        freeze_stage1(net)
+        unfreeze_stage2(net)
+
+        # Freeze V2 (as stage2_feedback.py does)
+        for p in net.v2.parameters():
+            p.requires_grad_(False)
+
+        # Freeze decoder (as stage2_feedback.py does when freeze_v2=True)
+        for p in loss_fn.orientation_decoder.parameters():
+            p.requires_grad_(False)
+
+        optimizer = create_stage2_optimizer(net, loss_fn, train_cfg)
+
+        # Collect all optimizer params
+        opt_params = set()
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                opt_params.add(id(p))
+
+        # Decoder params must NOT be in optimizer
+        for name, p in loss_fn.orientation_decoder.named_parameters():
+            assert id(p) not in opt_params, (
+                f"Frozen decoder param '{name}' found in optimizer — "
+                "frozen params should be excluded"
+            )

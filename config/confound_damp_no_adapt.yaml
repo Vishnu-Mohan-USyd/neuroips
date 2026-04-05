@@ -1,14 +1,10 @@
 # ============================================================
-# Experiment: Deviance Objective
+# Confound Control: Deviance Objective WITHOUT adaptation
 # ============================================================
-# Key changes:
-#   - lambda_sensory: 0.0 (DISABLE L2/3 sensory readout)
-#   - lambda_l4_sensory: 1.0 (ENABLE L4 sensory readout)
-#   - lambda_mismatch: 1.0 (ENABLE L2/3 mismatch detection)
-#   - delta_som: true (bias-corrected softplus)
-#   - freeze_v2: true (oracle predictor, isolates objective effect)
-#   - oracle_pi: 1.0
-# Hypothesis: L2/3 should now suppress expected (helps mismatch detection)
+# Parent: exp_deviance.yaml
+# Change: alpha_adaptation: 0.0 (disable spike-rate adaptation in L4)
+# Purpose: Test whether suppression emerges from feedback alone,
+#          not from adaptation doing the work.
 
 model:
   n_orientations: 36
@@ -16,7 +12,7 @@ model:
   sigma_ff: 12.0
   tau_l4: 5
   tau_adaptation: 200
-  alpha_adaptation: 0.3
+  alpha_adaptation: 0.0               # DISABLED — confound control
   adaptation_clamp: 10.0
   naka_rushton_n: 2.0
   naka_rushton_c50: 0.3

@@ -1,14 +1,11 @@
 # ============================================================
-# Experiment: Deviance Objective
+# Confound Control: Deviance Objective WITHOUT predictable transitions
 # ============================================================
-# Key changes:
-#   - lambda_sensory: 0.0 (DISABLE L2/3 sensory readout)
-#   - lambda_l4_sensory: 1.0 (ENABLE L4 sensory readout)
-#   - lambda_mismatch: 1.0 (ENABLE L2/3 mismatch detection)
-#   - delta_som: true (bias-corrected softplus)
-#   - freeze_v2: true (oracle predictor, isolates objective effect)
-#   - oracle_pi: 1.0
-# Hypothesis: L2/3 should now suppress expected (helps mismatch detection)
+# Parent: exp_deviance.yaml
+# Change: p_transition_cw/ccw: 0.5 (random/uninformative transitions)
+# Purpose: Test whether suppression requires predictability.
+#          With random transitions, oracle predictions are at chance,
+#          so feedback should be uninformative.
 
 model:
   n_orientations: 36
@@ -74,8 +71,8 @@ training:
 
 stimulus:
   n_states: 2
-  p_transition_cw: 0.80
-  p_transition_ccw: 0.80
+  p_transition_cw: 0.5               # UNINFORMATIVE — confound control
+  p_transition_ccw: 0.5              # UNINFORMATIVE — confound control
   p_self: 0.95
   n_anchors: 12
   jitter_range: 0.0
