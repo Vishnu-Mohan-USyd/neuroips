@@ -180,6 +180,7 @@ def run_stage2(
         period=model_cfg.orientation_range,
         contrast_range=train_cfg.stage2_contrast_range,
         ambiguous_fraction=train_cfg.ambiguous_fraction,
+        ambiguous_offset=stim_cfg.ambiguous_offset,
         n_states=stim_cfg.n_states,
     )
 
@@ -235,7 +236,7 @@ def run_stage2(
 
         # Build temporal stimulus sequence
         stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas, true_states = (
-            build_stimulus_sequence(metadata, model_cfg, train_cfg)
+            build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
         )
         # Add stimulus noise if configured (Stage 2 only)
         if train_cfg.stimulus_noise > 0.0:
@@ -271,8 +272,12 @@ def run_stage2(
                 #   NEUTRAL → uniform (average of CW and CCW)
                 theta_cw = (oris + step_deg) % model_cfg.orientation_range
                 theta_ccw = (oris - step_deg) % model_cfg.orientation_range
-                q_cw = net._make_bump(theta_cw.reshape(-1)).reshape(B_cur, seq_length, N)
-                q_ccw = net._make_bump(theta_ccw.reshape(-1)).reshape(B_cur, seq_length, N)
+                q_cw = net._make_bump(
+                    theta_cw.reshape(-1), sigma=train_cfg.oracle_sigma
+                ).reshape(B_cur, seq_length, N)
+                q_ccw = net._make_bump(
+                    theta_ccw.reshape(-1), sigma=train_cfg.oracle_sigma
+                ).reshape(B_cur, seq_length, N)
                 p_cw_oracle = (cur_states == 0).float().unsqueeze(-1)  # [B, S, 1]
                 p_ccw_oracle = (cur_states == 1).float().unsqueeze(-1)
                 p_neutral = (1.0 - p_cw_oracle - p_ccw_oracle).clamp(min=0)
@@ -286,8 +291,12 @@ def run_stage2(
                 # but the prediction is anti-correlated with the true next stimulus.
                 theta_cw = (oris + step_deg) % model_cfg.orientation_range
                 theta_ccw = (oris - step_deg) % model_cfg.orientation_range
-                q_cw = net._make_bump(theta_cw.reshape(-1)).reshape(B_cur, seq_length, N)
-                q_ccw = net._make_bump(theta_ccw.reshape(-1)).reshape(B_cur, seq_length, N)
+                q_cw = net._make_bump(
+                    theta_cw.reshape(-1), sigma=train_cfg.oracle_sigma
+                ).reshape(B_cur, seq_length, N)
+                q_ccw = net._make_bump(
+                    theta_ccw.reshape(-1), sigma=train_cfg.oracle_sigma
+                ).reshape(B_cur, seq_length, N)
                 # INVERTED: if state is CW use theta_ccw, if CCW use theta_cw
                 p_cw_oracle = (cur_states == 1).float().unsqueeze(-1)  # inverted
                 p_ccw_oracle = (cur_states == 0).float().unsqueeze(-1)  # inverted
@@ -308,9 +317,9 @@ def run_stage2(
                     torch.rand(B_cur, seq_length, device=dev, generator=None)
                     * model_cfg.orientation_range
                 )
-                q_rand = net._make_bump(random_thetas.reshape(-1)).reshape(
-                    B_cur, seq_length, N
-                )
+                q_rand = net._make_bump(
+                    random_thetas.reshape(-1), sigma=train_cfg.oracle_sigma,
+                ).reshape(B_cur, seq_length, N)
                 q_oracle = q_rand / (q_rand.sum(dim=-1, keepdim=True) + 1e-8)
 
             elif template_mode == "oracle_uniform":
@@ -327,6 +336,19 @@ def run_stage2(
                     f"Unknown oracle_template: {template_mode!r}. "
                     "Must be one of: oracle_true, oracle_wrong, oracle_random, oracle_uniform."
                 )
+
+            # Phase 3: shift q_oracle by +1 along presentation dim so that the
+            # oracle built from presentation s (which forecasts s+1) is applied
+            # during presentation s+1. This converts the template from a
+            # "same-step forecast" (redundant with the current stimulus) into
+            # a "prior about the current item" (held over from the previous
+            # step). The first presentation has no valid prior, so it receives
+            # a uniform distribution.
+            if train_cfg.oracle_shift_timing:
+                uniform_first = torch.full(
+                    (B_cur, 1, N), 1.0 / N, device=dev, dtype=q_oracle.dtype,
+                )
+                q_oracle = torch.cat([uniform_first, q_oracle[:, :-1, :]], dim=1)
 
             # Expand to all timesteps: [B, S, N] → [B, T_total, N]
             oracle_q = q_oracle.unsqueeze(2).expand(

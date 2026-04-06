@@ -115,6 +115,7 @@ class TrainingConfig:
     lambda_l4_sensory: float = 0.0  # L4 sensory readout weight (0 = disabled)
     lambda_mismatch: float = 0.0    # L2/3 mismatch detection weight (0 = disabled)
     lambda_sharp: float = 0.0       # Tuning sharpness: penalize L2/3 activity at flanks (0 = disabled)
+    lambda_local_disc: float = 0.0  # Phase 4: local 5-way discrimination (expected vs ±1, ±2 neighbors). 0 = disabled.
 
     # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
     delta_som: bool = False
@@ -129,8 +130,21 @@ class TrainingConfig:
     #   oracle_uniform — q_pred is flat (uniform over orientations)
     oracle_template: str = "oracle_true"
 
+    # Phase 5: width of the oracle prediction bump (degrees). Defaults to
+    # sigma_ff (12.0) so existing configs are bitwise-identical. Lowering
+    # this to e.g. 5.0 gives the feedback operator a NARROWER prior than
+    # the feedforward tuning, which is the engineering handle for
+    # expectation-driven sharpening.
+    oracle_sigma: float = 12.0
+
     # Freeze orientation decoder in Stage 2 (for clean representational claims)
     freeze_decoder: bool = False
+
+    # Phase 3: shift oracle q_pred by +1 presentation so that the template
+    # acts as a prior about the CURRENT stimulus rather than a forecast of the
+    # next one. Only used when freeze_v2=True. First presentation receives a
+    # uniform prior (no valid history).
+    oracle_shift_timing: bool = False
 
     # Stimulus noise (std of Gaussian noise added to population-coded stimulus in Stage 2)
     stimulus_noise: float = 0.0
@@ -157,6 +171,11 @@ class StimulusConfig:
     transition_step: float = 15.0
     cue_dim: int = 2
     task_state_dim: int = 2
+    # Angular offset (degrees) between the two orientations that make up an
+    # ambiguous mixture stimulus. Used by `build_stimulus_sequence` in
+    # `src/training/trainer.py` to construct the second orientation of each
+    # ambiguous presentation as `ori + ambiguous_offset`.
+    ambiguous_offset: float = 15.0
 
 
 def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig, TrainingConfig, StimulusConfig]:
@@ -201,11 +220,14 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_l4_sensory=train_raw.get("lambda_l4_sensory", 0.0),
         lambda_mismatch=train_raw.get("lambda_mismatch", 0.0),
         lambda_sharp=train_raw.get("lambda_sharp", 0.0),
+        lambda_local_disc=train_raw.get("lambda_local_disc", 0.0),
         delta_som=train_raw.get("delta_som", False),
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),
+        oracle_shift_timing=train_raw.get("oracle_shift_timing", False),
         oracle_pi=train_raw.get("oracle_pi", 1.0),
         oracle_template=train_raw.get("oracle_template", "oracle_true"),
+        oracle_sigma=train_raw.get("oracle_sigma", 12.0),
         stimulus_noise=train_raw.get("stimulus_noise", 0.0),
         batch_size=train_raw.get("batch_size", 32),
         seq_length=train_raw.get("seq_length", 50),

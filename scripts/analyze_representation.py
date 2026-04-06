@@ -255,6 +255,50 @@ def run_trials(
     return r_l23
 
 
+def run_full_trajectory(
+    net: LaminarV1V2Network,
+    stim_thetas: torch.Tensor,
+    oracle_thetas: torch.Tensor,
+    device: torch.device,
+    contrast: float = EVAL_CONTRAST,
+) -> torch.Tensor:
+    """Run the network and return the *full* L2/3 trajectory (all timesteps).
+
+    Same as run_trials but without the windowed mean — returns [B, T_STEPS, N].
+    Used by metric_time_resolved to analyze how L2/3 evolves step-by-step.
+    No noise is applied (this helper is only used for the deterministic
+    time-resolved metric).
+    """
+    B = stim_thetas.shape[0]
+    N = net.cfg.n_orientations
+
+    stim_frame = generate_grating(
+        stim_thetas.to(device),
+        torch.full((B,), contrast, device=device),
+        n_orientations=N,
+        sigma=net.cfg.sigma_ff,
+        n=net.cfg.naka_rushton_n,
+        c50=net.cfg.naka_rushton_c50,
+        period=net.cfg.orientation_range,
+    )  # [B, N]
+    stim_seq = stim_frame.unsqueeze(1).expand(B, T_STEPS, N).contiguous()
+    oracle_q, oracle_pi = _build_oracle(net, oracle_thetas.to(device))
+    cue_seq = torch.zeros(B, T_STEPS, N, device=device)
+    task_seq = torch.zeros(B, T_STEPS, 2, device=device)
+    packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
+    net.oracle_mode = True
+    net.oracle_q_pred = oracle_q
+    net.oracle_pi_pred = oracle_pi
+    try:
+        with torch.no_grad():
+            r_l23_all, _, _ = net(packed)
+    finally:
+        net.oracle_mode = False
+        net.oracle_q_pred = None
+        net.oracle_pi_pred = None
+    return r_l23_all  # [B, T_STEPS, N]
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -695,6 +739,479 @@ def metric5_energy_by_distance(
 
 
 # ---------------------------------------------------------------------------
+# Phase 1 sharpening-detection metrics (6-9)
+#
+# These metrics target the geometry of near-miss discrimination, which is
+# where sharpening (if real) would show up. The original 5 metrics were
+# blind to P4's flank-suppression effect because they measured global peak
+# gain, bump FWHM, and readout-noise discrimination that saturated. These
+# four are designed to distinguish real representational sharpening from
+# dampening artefacts.
+# ---------------------------------------------------------------------------
+
+
+def _circ_mean_and_std_deg(thetas_deg: np.ndarray, period: float) -> tuple[float, float]:
+    """Circular mean (degrees, in [0, period)) and circular std (degrees).
+
+    Uses the standard circular-statistics definitions on a circle of
+    circumference `period`:
+      R = |<exp(i · 2π·θ/period)>|
+      mean = angle(<·>) · period / (2π), wrapped to [0, period)
+      std  = sqrt(-2 ln R) · period / (2π)
+    """
+    if thetas_deg.size == 0:
+        return float("nan"), float("nan")
+    angles = 2.0 * math.pi * thetas_deg / period
+    c = float(np.mean(np.cos(angles)))
+    s = float(np.mean(np.sin(angles)))
+    R = math.sqrt(c * c + s * s)
+    mean_ang = math.atan2(s, c) % (2.0 * math.pi)
+    mean_deg = mean_ang * period / (2.0 * math.pi)
+    if R < 1e-12:
+        std_deg = period / 2.0
+    else:
+        std_deg = math.sqrt(-2.0 * math.log(R)) * period / (2.0 * math.pi)
+    return mean_deg, std_deg
+
+
+def _circ_signed_diff_deg(a_deg: float, b_deg: float, period: float) -> float:
+    """Signed minimum circular difference (a - b) in (-period/2, period/2]."""
+    return ((a_deg - b_deg + period / 2.0) % period) - period / 2.0
+
+
+def _population_vector_decode(r: torch.Tensor, prefs: torch.Tensor, period: float) -> torch.Tensor:
+    """Population-vector decode a batch of L2/3 responses to an orientation.
+
+    Args:
+        r: [B, N] — L2/3 activity per channel.
+        prefs: [N] — preferred orientations (degrees) of each channel, on device.
+        period: orientation period (degrees).
+
+    Returns:
+        theta: [B] — decoded orientation in [0, period).
+
+    The decoder uses `exp(i · 2π·pref/period)` (period-scaled circular
+    encoding). This is the standard circular population-vector decode for
+    an orientation space of period `period`.
+    """
+    angles = 2.0 * math.pi * prefs / period  # [N]
+    cos_p = torch.cos(angles)
+    sin_p = torch.sin(angles)
+    x = (r * cos_p).sum(dim=-1)  # [B]
+    y = (r * sin_p).sum(dim=-1)
+    ang = torch.atan2(y, x)  # [-pi, pi]
+    theta = (ang * period / (2.0 * math.pi)) % period
+    return theta
+
+
+def metric_local_dprime(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    n_trials: int = 200,
+    noise_std: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Metric 6: local d' of match vs near-miss, averaged across 8 anchors.
+
+    For each anchor θ ∈ {0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5}°:
+      - Set oracle = anchor.
+      - For each δ ∈ {5°, 10°, 15°}:
+        * Generate n_trials stim at anchor (match) and n_trials at anchor+δ
+          (near-miss). Stimulus noise std=noise_std applied to the
+          population-coded input.
+        * Run the network, extract readout L2/3 [B, N].
+        * Population-vector-decode each trial to a single orientation.
+        * Compute circular mean and circular std (in degrees) of the
+          decoded angles per condition.
+        * d' = |circ_diff(μ_match, μ_miss)| / sqrt(½·(σ_match² + σ_miss²))
+      - Repeat for feedback ON and OFF (same noise realization).
+    Average d' across the 8 anchors per (δ, condition).
+
+    Real representational sharpening should give delta_d > 0 at small δ
+    (feedback improves local d'). Dampening should give delta_d ≤ 0
+    (feedback kills signal → wider clusters or smaller separation).
+
+    Args:
+        net: loaded network.
+        device: torch device.
+        n_trials: trials per class (default 200).
+        noise_std: Gaussian noise added to the population-coded stimulus
+                   (same semantics as run_trials). Default 0.3.
+        seed: base seed for reproducible noise realizations.
+
+    Returns:
+        dict with per-delta summary and per-anchor breakdowns.
+    """
+    N = net.cfg.n_orientations
+    period = net.cfg.orientation_range
+    step = period / N
+    prefs = torch.arange(N, dtype=torch.float32, device=device) * step
+
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    deltas = [5.0, 10.0, 15.0]
+
+    per_anchor: list[dict] = []
+    agg: dict[float, dict[str, list[float]]] = {d: {"on": [], "off": []} for d in deltas}
+
+    for ai, anchor in enumerate(anchors):
+        anchor_rec: dict = {"anchor": anchor}
+        for delta in deltas:
+            thetas_match = torch.full((n_trials,), anchor, device=device)
+            thetas_miss = torch.full(
+                (n_trials,), (anchor + delta) % period, device=device
+            )
+            stim_all = torch.cat([thetas_match, thetas_miss], dim=0)
+            oracle_all = torch.full_like(stim_all, anchor)
+
+            # Same seed for on and off → same stimulus noise realization, so
+            # the only difference between conditions is the feedback pathway.
+            trial_seed = seed + ai * 1000 + int(delta * 10)
+            r_on = run_trials(
+                net, stim_all, oracle_all, device,
+                noise_std=noise_std, seed=trial_seed,
+            )
+            with feedback_disabled(net):
+                r_off = run_trials(
+                    net, stim_all, oracle_all, device,
+                    noise_std=noise_std, seed=trial_seed,
+                )
+
+            theta_on = _population_vector_decode(r_on, prefs, period).cpu().numpy()
+            theta_off = _population_vector_decode(r_off, prefs, period).cpu().numpy()
+
+            theta_on_m = theta_on[:n_trials]
+            theta_on_n = theta_on[n_trials:]
+            theta_off_m = theta_off[:n_trials]
+            theta_off_n = theta_off[n_trials:]
+
+            mu_on_m, sig_on_m = _circ_mean_and_std_deg(theta_on_m, period)
+            mu_on_n, sig_on_n = _circ_mean_and_std_deg(theta_on_n, period)
+            mu_off_m, sig_off_m = _circ_mean_and_std_deg(theta_off_m, period)
+            mu_off_n, sig_off_n = _circ_mean_and_std_deg(theta_off_n, period)
+
+            sep_on = abs(_circ_signed_diff_deg(mu_on_m, mu_on_n, period))
+            sep_off = abs(_circ_signed_diff_deg(mu_off_m, mu_off_n, period))
+            pooled_on = math.sqrt(0.5 * (sig_on_m ** 2 + sig_on_n ** 2) + 1e-12)
+            pooled_off = math.sqrt(0.5 * (sig_off_m ** 2 + sig_off_n ** 2) + 1e-12)
+            dp_on = sep_on / pooled_on
+            dp_off = sep_off / pooled_off
+
+            anchor_rec[f"delta_{int(delta)}"] = {
+                "on": dp_on,
+                "off": dp_off,
+                "delta_d": dp_on - dp_off,
+                "mu_match_off": mu_off_m,
+                "mu_miss_off": mu_off_n,
+                "sig_match_off": sig_off_m,
+                "sig_miss_off": sig_off_n,
+                "sep_off": sep_off,
+                "pooled_off": pooled_off,
+                "mu_match_on": mu_on_m,
+                "mu_miss_on": mu_on_n,
+                "sig_match_on": sig_on_m,
+                "sig_miss_on": sig_on_n,
+                "sep_on": sep_on,
+                "pooled_on": pooled_on,
+            }
+            agg[delta]["on"].append(dp_on)
+            agg[delta]["off"].append(dp_off)
+        per_anchor.append(anchor_rec)
+
+    summary: dict = {}
+    for delta in deltas:
+        m_on = float(np.mean(agg[delta]["on"]))
+        m_off = float(np.mean(agg[delta]["off"]))
+        summary[f"delta_{int(delta)}"] = {
+            "on": m_on,
+            "off": m_off,
+            "delta_d": m_on - m_off,
+        }
+    summary["per_anchor"] = per_anchor
+    summary["n_trials_per_class"] = n_trials
+    summary["noise_std"] = noise_std
+    return summary
+
+
+def metric_match_vs_near_miss_decoding(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    n_train: int = 800,
+    n_test: int = 200,
+    noise_std: float = 0.3,
+    readout_noise_std: float = 0.3,
+    seed: int = 42,
+    oracle_theta: float = 90.0,
+) -> dict:
+    """Metric 7: trained LogReg decoder of match vs near-miss at small deltas.
+
+    For each δ ∈ {3°, 5°, 10°}:
+      - Generate n_train+n_test trials with labels: half at oracle_theta
+        (match), half at oracle_theta+δ (near-miss).
+      - Stimulus noise std=noise_std is applied to the input.
+      - Extract L2/3 readout response, add readout noise std=readout_noise_std.
+      - Train sklearn LogisticRegression on first n_train trials using all
+        36 channels as features; test on remaining n_test.
+      - Report test accuracy for feedback ON and OFF (identical noise).
+
+    Differs from metric 4 in three ways: (a) it tests the specific
+    match-vs-near-miss discrimination at a single oracle (not general
+    orientation discrimination); (b) it applies noise on both input and
+    output; (c) it uses all 36 channels rather than a narrow subset.
+
+    If sharpening is real, feedback should improve classifier accuracy
+    at small δ. If dampening, feedback should flat-line or hurt accuracy.
+
+    Args:
+        net: loaded network.
+        device: torch device.
+        n_train, n_test: sample counts (default 800/200).
+        noise_std: stimulus input noise (default 0.3).
+        readout_noise_std: output-side L2/3 noise (default 0.3).
+        seed: reproducibility seed.
+        oracle_theta: expected orientation (default 90°).
+
+    Returns:
+        dict keyed by 'delta_{int}' with {on, off, delta_acc}.
+    """
+    period = net.cfg.orientation_range
+    deltas = [3.0, 5.0, 10.0]
+    n_total = n_train + n_test
+    # Balanced classes — must be even
+    if n_total % 2 != 0:
+        raise ValueError(f"n_train+n_test must be even, got {n_total}")
+    n_half = n_total // 2
+
+    results: dict = {}
+    for delta in deltas:
+        thetas_match = torch.full((n_half,), oracle_theta, device=device)
+        thetas_miss = torch.full(
+            (n_half,), (oracle_theta + delta) % period, device=device
+        )
+        stim = torch.cat([thetas_match, thetas_miss], dim=0)
+        oracle_arr = torch.full_like(stim, oracle_theta)
+        labels = np.concatenate([
+            np.zeros(n_half, dtype=np.int64),
+            np.ones(n_half, dtype=np.int64),
+        ])
+
+        trial_seed = seed + int(delta * 10)
+        r_on_clean = run_trials(
+            net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+        ).cpu().numpy()
+        with feedback_disabled(net):
+            r_off_clean = run_trials(
+                net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+            ).cpu().numpy()
+
+        # Readout noise — same realization for on and off so only the
+        # feedback pathway differs between the two runs.
+        rs = np.random.RandomState(trial_seed + 7)
+        readout_noise = (rs.randn(*r_on_clean.shape).astype(np.float32)
+                         * readout_noise_std)
+        X_on = r_on_clean + readout_noise
+        X_off = r_off_clean + readout_noise
+
+        perm = rs.permutation(n_total)
+        train_idx = perm[:n_train]
+        test_idx = perm[n_train:]
+
+        def _fit_and_score(X):
+            clf = LogisticRegression(max_iter=2000)
+            clf.fit(X[train_idx], labels[train_idx])
+            return float(clf.score(X[test_idx], labels[test_idx]))
+
+        acc_on = _fit_and_score(X_on)
+        acc_off = _fit_and_score(X_off)
+
+        results[f"delta_{int(delta)}"] = {
+            "on": acc_on,
+            "off": acc_off,
+            "delta_acc": acc_on - acc_off,
+        }
+    results["n_train"] = n_train
+    results["n_test"] = n_test
+    results["noise_std"] = noise_std
+    results["readout_noise_std"] = readout_noise_std
+    results["oracle_theta"] = oracle_theta
+    return results
+
+
+def metric_time_resolved(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    oracle_theta: float = 90.0,
+    stim_theta: float = 90.0,
+) -> dict:
+    """Metric 8: per-timestep L2/3 gain, bump FWHM, and flank (±30°) response.
+
+    Runs a single deterministic trial with stim=oracle=`stim_theta` and
+    records L2/3 at every one of the T_STEPS timesteps. Reports:
+
+      - peak gain (max response across the N channels)
+      - bump FWHM (across the 36 channels as a function of distance from
+        stim_theta)
+      - response at the ±30° flank channels
+
+    Returns full time series plus early (steps 0..3) and late (last 3)
+    summaries. The hypothesis is that an early "sharpening-like"
+    transient may exist that gets overwritten by dampening as the circuit
+    settles — if so, it should appear in the early summary but not the
+    late one.
+
+    Args:
+        net: loaded network.
+        device: torch device.
+        oracle_theta: expected orientation (default 90°).
+        stim_theta: presented orientation (default 90°, matches oracle).
+
+    Returns:
+        dict with timesteps list and per-step and early/late summaries.
+    """
+    N = net.cfg.n_orientations
+    period = net.cfg.orientation_range
+    step = period / N
+    prefs = torch.arange(N, dtype=torch.float32) * step
+
+    stim_arr = torch.tensor([stim_theta], device=device)
+    oracle_arr = torch.tensor([oracle_theta], device=device)
+
+    r_on_all = run_full_trajectory(net, stim_arr, oracle_arr, device)[0]  # [T, N]
+    with feedback_disabled(net):
+        r_off_all = run_full_trajectory(net, stim_arr, oracle_arr, device)[0]
+
+    # Flank channels (±30° from stim_theta)
+    flank_p30 = _closest_channel(prefs, (stim_theta + 30.0) % period, period)
+    flank_m30 = _closest_channel(prefs, (stim_theta - 30.0) % period, period)
+
+    # Sorted distance axis for FWHM calculation
+    dists = _dists_from(prefs, stim_theta, period).numpy()
+    order = np.argsort(dists)
+    dists_axis = dists[order] + period / 2.0  # monotonic thetas for fwhm_from_curve
+
+    T = int(r_on_all.shape[0])
+    peak_on, peak_off = [], []
+    fwhm_on, fwhm_off = [], []
+    fp30_on, fp30_off = [], []
+    fm30_on, fm30_off = [], []
+    for t in range(T):
+        ro = r_on_all[t].cpu().numpy()
+        re = r_off_all[t].cpu().numpy()
+        peak_on.append(float(ro.max()))
+        peak_off.append(float(re.max()))
+        fwhm_on.append(fwhm_from_curve(dists_axis, ro[order], period))
+        fwhm_off.append(fwhm_from_curve(dists_axis, re[order], period))
+        fp30_on.append(float(ro[flank_p30]))
+        fp30_off.append(float(re[flank_p30]))
+        fm30_on.append(float(ro[flank_m30]))
+        fm30_off.append(float(re[flank_m30]))
+
+    def _avg(lst: list[float], slc: slice) -> float:
+        vals = [v for v in lst[slc] if not (isinstance(v, float) and math.isnan(v))]
+        return float(np.mean(vals)) if vals else float("nan")
+
+    # "Early" = steps 0..3 inclusive (4 steps after the stimulus onset but
+    # before full settling); "late" = last 3 steps.
+    early = slice(0, 4)
+    late = slice(-3, None)
+
+    return {
+        "timesteps": list(range(T)),
+        "peak_gain_on": peak_on, "peak_gain_off": peak_off,
+        "fwhm_on": fwhm_on, "fwhm_off": fwhm_off,
+        "flank_p30_on": fp30_on, "flank_p30_off": fp30_off,
+        "flank_m30_on": fm30_on, "flank_m30_off": fm30_off,
+        "early_peak_on": _avg(peak_on, early),
+        "early_peak_off": _avg(peak_off, early),
+        "late_peak_on": _avg(peak_on, late),
+        "late_peak_off": _avg(peak_off, late),
+        "early_fwhm_on": _avg(fwhm_on, early),
+        "early_fwhm_off": _avg(fwhm_off, early),
+        "late_fwhm_on": _avg(fwhm_on, late),
+        "late_fwhm_off": _avg(fwhm_off, late),
+        "early_flank_p30_on": _avg(fp30_on, early),
+        "early_flank_p30_off": _avg(fp30_off, early),
+        "late_flank_p30_on": _avg(fp30_on, late),
+        "late_flank_p30_off": _avg(fp30_off, late),
+        "early_flank_m30_on": _avg(fm30_on, early),
+        "early_flank_m30_off": _avg(fm30_off, early),
+        "late_flank_m30_on": _avg(fm30_on, late),
+        "late_flank_m30_off": _avg(fm30_off, late),
+        "flank_p30_channel": flank_p30,
+        "flank_m30_channel": flank_m30,
+        "stim_theta": stim_theta,
+        "oracle_theta": oracle_theta,
+    }
+
+
+def metric_energy_by_relative_distance_normalized(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    oracle_theta: float = 90.0,
+    n_stim: int = 36,
+) -> dict:
+    """Metric 9: per-channel relative energy reduction, averaged within bins.
+
+    Reuses the distance-bin structure of metric5 (expected |d|≤10°,
+    surround 10<|d|≤45°, far |d|>45°) but computes the PER-CHANNEL
+    relative reduction (E_off[c] − E_on[c]) / |E_off[c]| first, then
+    averages across channels in each bin. This gives equal weight to each
+    channel and is not dominated by the high-energy channels near the
+    oracle peak.
+
+    Metric5 can mask a strong flank effect because the expected bin
+    carries most of the energy; metric9 normalizes that away.
+
+    Args:
+        net: loaded network.
+        device: torch device.
+        oracle_theta: expected orientation (default 90°).
+        n_stim: number of stimulus orientations to sweep (default 36).
+
+    Returns:
+        dict with per-bin channel counts and relative reductions, plus
+        the raw per-channel energy arrays for debugging.
+    """
+    N = net.cfg.n_orientations
+    period = net.cfg.orientation_range
+    step = period / N
+    orient_step = period / n_stim
+    stim_grid = (torch.arange(n_stim, dtype=torch.float32) * orient_step).to(device)
+    oracles = torch.full((n_stim,), oracle_theta, device=device)
+    prefs = torch.arange(N, dtype=torch.float32) * step
+
+    r_on = run_trials(net, stim_grid, oracles, device, noise_std=0.0).cpu().numpy()
+    with feedback_disabled(net):
+        r_off = run_trials(net, stim_grid, oracles, device, noise_std=0.0).cpu().numpy()
+
+    # Sum each channel's activity across stimuli → [N]
+    e_on_ch = r_on.sum(axis=0)
+    e_off_ch = r_off.sum(axis=0)
+
+    d = _dists_from(prefs, oracle_theta, period).abs().numpy()
+    expected_mask = d <= 10.0
+    surround_mask = (d > 10.0) & (d <= 45.0)
+    far_mask = d > 45.0
+
+    def _bin_rel(mask: np.ndarray) -> float:
+        if not mask.any():
+            return float("nan")
+        rel = (e_off_ch[mask] - e_on_ch[mask]) / (np.abs(e_off_ch[mask]) + 1e-12)
+        return float(np.mean(rel))
+
+    return {
+        "oracle_theta": oracle_theta,
+        "n_expected_channels": int(expected_mask.sum()),
+        "n_surround_channels": int(surround_mask.sum()),
+        "n_far_channels": int(far_mask.sum()),
+        "expected_rel_reduction": _bin_rel(expected_mask),
+        "surround_rel_reduction": _bin_rel(surround_mask),
+        "far_rel_reduction": _bin_rel(far_mask),
+        "e_on_ch": e_on_ch,
+        "e_off_ch": e_off_ch,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Sanity and artifact checks
 # ---------------------------------------------------------------------------
 
@@ -879,6 +1396,10 @@ def print_report(label: str, results: dict) -> None:
     m3 = results["metric3"]
     m4 = results["metric4"]
     m5 = results["metric5"]
+    m6 = results["metric6"]
+    m7 = results["metric7"]
+    m8 = results["metric8"]
+    m9 = results["metric9"]
     sanity = results["sanity"]
     artifact = results["artifact"]
 
@@ -962,6 +1483,87 @@ def print_report(label: str, results: dict) -> None:
     print(f"  Far       : OFF={m5['energy_off_far']:10.4f}  ON={m5['energy_on_far']:10.4f}  "
           f"reduction={m5['reduction_far_pct']:+6.1f}%")
 
+    # --- Metric 6: Local d' (Phase 1 sharpening detection) ----------------
+    print(f"\n[Metric 6] Local d' (match vs near-miss, population-vector decode)")
+    print(f"  n_trials={m6['n_trials_per_class']} per class, "
+          f"noise_std={m6['noise_std']}, 8 anchors averaged")
+    dprime_off_h = "d' OFF"
+    dprime_on_h = "d' ON"
+    dprime_delta_h = "delta_d'"
+    print(f"  {'delta':>8s}  {dprime_off_h:>10s}  {dprime_on_h:>10s}  {dprime_delta_h:>10s}")
+    for key in ["delta_5", "delta_10", "delta_15"]:
+        r = m6[key]
+        print(f"  {key:>8s}  {r['off']:10.4f}  {r['on']:10.4f}  {r['delta_d']:+10.4f}")
+    print(f"  Per-anchor breakdown (rows=anchors, cols=deltas 5/10/15°):")
+    print(f"    {'anchor':>8s}  "
+          f"{'d5 OFF':>10s} {'d5 ON':>10s}  "
+          f"{'d10 OFF':>10s} {'d10 ON':>10s}  "
+          f"{'d15 OFF':>10s} {'d15 ON':>10s}")
+    for a in m6['per_anchor']:
+        print(f"    {a['anchor']:8.1f}  "
+              f"{a['delta_5']['off']:10.4f} {a['delta_5']['on']:10.4f}  "
+              f"{a['delta_10']['off']:10.4f} {a['delta_10']['on']:10.4f}  "
+              f"{a['delta_15']['off']:10.4f} {a['delta_15']['on']:10.4f}")
+    # Show a sample of the raw decoded-angle statistics (for hand verification)
+    _anchor_dbg = next(
+        (a for a in m6['per_anchor'] if abs(a['anchor'] - 90.0) < 1e-6),
+        m6['per_anchor'][0],
+    )
+    print(f"  Raw decoded stats @ anchor={_anchor_dbg['anchor']}° "
+          f"delta=10° feedback OFF (for hand verification):")
+    d10 = _anchor_dbg['delta_10']
+    print(f"    mu_match_off={d10['mu_match_off']:.4f}°  "
+          f"sig_match_off={d10['sig_match_off']:.4f}°")
+    print(f"    mu_miss_off ={d10['mu_miss_off']:.4f}°  "
+          f"sig_miss_off ={d10['sig_miss_off']:.4f}°")
+    print(f"    sep_off    ={d10['sep_off']:.4f}°   "
+          f"pooled_sigma_off={d10['pooled_off']:.4f}°   "
+          f"d'_off={d10['off']:.4f}")
+
+    # --- Metric 7: Match vs near-miss trained-decoder accuracy ------------
+    print(f"\n[Metric 7] Match vs near-miss trained LogReg decoder (all 36 ch)")
+    print(f"  n_train={m7['n_train']}, n_test={m7['n_test']}, "
+          f"stim_noise={m7['noise_std']}, readout_noise={m7['readout_noise_std']}, "
+          f"oracle={m7['oracle_theta']}°")
+    print(f"  {'delta':>8s}  {'acc OFF':>10s}  {'acc ON':>10s}  {'delta_acc':>11s}")
+    for key in ["delta_3", "delta_5", "delta_10"]:
+        r = m7[key]
+        print(f"  {key:>8s}  {r['off']:10.4f}  {r['on']:10.4f}  {r['delta_acc']:+11.4f}")
+
+    # --- Metric 8: Time-resolved L2/3 dynamics ----------------------------
+    print(f"\n[Metric 8] Time-resolved L2/3 dynamics "
+          f"(stim={m8['stim_theta']}°, oracle={m8['oracle_theta']}°, no noise)")
+    print(f"  Per-timestep trajectory (T={len(m8['timesteps'])} steps):")
+    print(f"    {'t':>3s}  {'peak OFF':>10s} {'peak ON':>10s}  "
+          f"{'fwhm OFF':>10s} {'fwhm ON':>10s}  "
+          f"{'fp30 OFF':>10s} {'fp30 ON':>10s}  "
+          f"{'fm30 OFF':>10s} {'fm30 ON':>10s}")
+    for t in m8['timesteps']:
+        def _fmt(x):
+            return "   nan" if (isinstance(x, float) and math.isnan(x)) else f"{x:10.4f}"
+        print(f"    {t:3d}  "
+              f"{_fmt(m8['peak_gain_off'][t])} {_fmt(m8['peak_gain_on'][t])}  "
+              f"{_fmt(m8['fwhm_off'][t])} {_fmt(m8['fwhm_on'][t])}  "
+              f"{_fmt(m8['flank_p30_off'][t])} {_fmt(m8['flank_p30_on'][t])}  "
+              f"{_fmt(m8['flank_m30_off'][t])} {_fmt(m8['flank_m30_on'][t])}")
+    print(f"  Early (steps 0-3) vs Late (last 3):")
+    print(f"    peak  : early OFF={m8['early_peak_off']:.4f} ON={m8['early_peak_on']:.4f}  "
+          f"late OFF={m8['late_peak_off']:.4f} ON={m8['late_peak_on']:.4f}")
+    print(f"    fwhm  : early OFF={m8['early_fwhm_off']:.2f}  ON={m8['early_fwhm_on']:.2f}  "
+          f"late OFF={m8['late_fwhm_off']:.2f}  ON={m8['late_fwhm_on']:.2f}")
+    print(f"    fp30  : early OFF={m8['early_flank_p30_off']:.4f} ON={m8['early_flank_p30_on']:.4f}  "
+          f"late OFF={m8['late_flank_p30_off']:.4f} ON={m8['late_flank_p30_on']:.4f}")
+    print(f"    fm30  : early OFF={m8['early_flank_m30_off']:.4f} ON={m8['early_flank_m30_on']:.4f}  "
+          f"late OFF={m8['late_flank_m30_off']:.4f} ON={m8['late_flank_m30_on']:.4f}")
+
+    # --- Metric 9: Per-channel normalized energy reduction ----------------
+    print(f"\n[Metric 9] Per-channel relative energy reduction by distance bin")
+    print(f"  Channels — expected: {m9['n_expected_channels']}, "
+          f"surround: {m9['n_surround_channels']}, far: {m9['n_far_channels']}")
+    print(f"  Expected (|d|≤10°)  rel_red = {m9['expected_rel_reduction']:+.4f}")
+    print(f"  Surround (10<|d|≤45°) rel_red = {m9['surround_rel_reduction']:+.4f}")
+    print(f"  Far      (|d|>45°)  rel_red = {m9['far_rel_reduction']:+.4f}")
+
     # --- Artifact: pre-rectification drive FWHM --------------------------
     print(f"\n[Artifact] Pre-rectification L2/3 drive at stim={artifact['stim_theta']}°, "
           f"oracle={artifact['oracle_theta']}°")
@@ -1044,6 +1646,54 @@ def print_comparison_table(results_by_label: dict[str, dict]) -> None:
     row("Post-rect RATE FWHM delta",
         lambda r: f"{r['artifact']['fwhm_rate_on']-r['artifact']['fwhm_rate_off']:+.2f}")
 
+    # Metric 6: local d' — expect >0 delta_d for true sharpening, ≤0 for dampening
+    for dkey, dlabel in [("delta_5", "δ=5"), ("delta_10", "δ=10"), ("delta_15", "δ=15")]:
+        row(f"M6 local d' {dlabel}° OFF",
+            lambda r, k=dkey: f"{r['metric6'][k]['off']:.4f}")
+        row(f"M6 local d' {dlabel}° ON",
+            lambda r, k=dkey: f"{r['metric6'][k]['on']:.4f}")
+        row(f"M6 local d' {dlabel}° delta",
+            lambda r, k=dkey: f"{r['metric6'][k]['delta_d']:+.4f}")
+
+    # Metric 7: match-vs-near-miss LogReg accuracy
+    for dkey, dlabel in [("delta_3", "δ=3"), ("delta_5", "δ=5"), ("delta_10", "δ=10")]:
+        row(f"M7 acc {dlabel}° OFF",
+            lambda r, k=dkey: f"{r['metric7'][k]['off']:.4f}")
+        row(f"M7 acc {dlabel}° ON",
+            lambda r, k=dkey: f"{r['metric7'][k]['on']:.4f}")
+        row(f"M7 acc {dlabel}° delta",
+            lambda r, k=dkey: f"{r['metric7'][k]['delta_acc']:+.4f}")
+
+    # Metric 8: time-resolved early-vs-late summary
+    row("M8 early peak OFF",
+        lambda r: f"{r['metric8']['early_peak_off']:.4f}")
+    row("M8 early peak ON",
+        lambda r: f"{r['metric8']['early_peak_on']:.4f}")
+    row("M8 late peak OFF",
+        lambda r: f"{r['metric8']['late_peak_off']:.4f}")
+    row("M8 late peak ON",
+        lambda r: f"{r['metric8']['late_peak_on']:.4f}")
+    row("M8 early fwhm OFF",
+        lambda r: f"{r['metric8']['early_fwhm_off']:.2f}")
+    row("M8 early fwhm ON",
+        lambda r: f"{r['metric8']['early_fwhm_on']:.2f}")
+    row("M8 late fwhm OFF",
+        lambda r: f"{r['metric8']['late_fwhm_off']:.2f}")
+    row("M8 late fwhm ON",
+        lambda r: f"{r['metric8']['late_fwhm_on']:.2f}")
+    row("M8 late fp30 ratio ON/OFF",
+        lambda r: f"{r['metric8']['late_flank_p30_on']/(r['metric8']['late_flank_p30_off']+1e-12):.4f}")
+    row("M8 late fm30 ratio ON/OFF",
+        lambda r: f"{r['metric8']['late_flank_m30_on']/(r['metric8']['late_flank_m30_off']+1e-12):.4f}")
+
+    # Metric 9: per-channel normalized energy reductions
+    row("M9 expected rel_red",
+        lambda r: f"{r['metric9']['expected_rel_reduction']:+.4f}")
+    row("M9 surround rel_red",
+        lambda r: f"{r['metric9']['surround_rel_reduction']:+.4f}")
+    row("M9 far rel_red",
+        lambda r: f"{r['metric9']['far_rel_reduction']:+.4f}")
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -1097,6 +1747,16 @@ def analyze_one(
     )
     # Metric 5: energy split by distance from oracle
     m5 = metric5_energy_by_distance(net, device, oracle_theta=90.0)
+    # Phase 1 sharpening-detection metrics
+    m6 = metric_local_dprime(net, device, n_trials=200, noise_std=0.3, seed=42)
+    m7 = metric_match_vs_near_miss_decoding(
+        net, device, n_train=800, n_test=200,
+        noise_std=0.3, readout_noise_std=0.3, seed=42, oracle_theta=90.0,
+    )
+    m8 = metric_time_resolved(net, device, oracle_theta=90.0, stim_theta=90.0)
+    m9 = metric_energy_by_relative_distance_normalized(
+        net, device, oracle_theta=90.0,
+    )
     # Threshold artifact check at stim=ora=90°
     artifact = artifact_check_threshold(net, device, stim_theta=90.0, oracle_theta=90.0)
 
@@ -1105,6 +1765,7 @@ def analyze_one(
         "metric2": m2, "metric3": m3,
         "metric4": m4, "metric4_wide": m4_wide,
         "metric5": m5,
+        "metric6": m6, "metric7": m7, "metric8": m8, "metric9": m9,
         "sanity": sanity, "artifact": artifact,
         "train_cfg": train_cfg,
     }

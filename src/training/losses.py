@@ -50,6 +50,7 @@ class CompositeLoss(nn.Module):
         self.lambda_l4_sensory = cfg.lambda_l4_sensory  # 0.0 (disabled by default)
         self.lambda_mismatch = cfg.lambda_mismatch      # 0.0 (disabled by default)
         self.lambda_sharp = cfg.lambda_sharp            # 0.0 (disabled by default)
+        self.lambda_local_disc = cfg.lambda_local_disc  # 0.0 (disabled by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -80,6 +81,10 @@ class CompositeLoss(nn.Module):
         # Detection head: L2/3 -> binary "is expected orientation present?" (Experiment C)
         if self.lambda_detection > 0:
             self.detection_head = nn.Linear(N, 1)
+
+        # Local competitor discrimination head: 5 channels (center +- 1, +- 2) -> 5 classes (Phase 4)
+        if self.lambda_local_disc > 0:
+            self.local_disc_head = nn.Linear(5, 5)
 
         # Homeostasis target range
         self.target_min = 0.05
@@ -239,6 +244,49 @@ class CompositeLoss(nn.Module):
         # Weight: 0 at stimulus channel, 1 at antipode (90° away for 180° period)
         weight = dists / (self.period / 2)  # [0, 1]
         return (r_l23_windows * weight).mean()
+
+    def local_discrimination_loss(
+        self, r_l23_windows: Tensor, true_theta_windows: Tensor
+    ) -> Tensor:
+        """Local 5-way discrimination: expected channel vs +- 1, +- 2 neighbors.
+
+        For each readout window, extract a 5-channel slice centered at the
+        true orientation channel (with circular wrap for channels that fall
+        off the ends). A dedicated 5-input linear head (`local_disc_head`)
+        is trained to identify the center (true) class vs the four nearest
+        neighbors. This creates direct gradient pressure for L2/3 to
+        separate the expected channel from its +- 1 and +- 2 neighbors --
+        the signature of Kok-style sharpening that 36-way CE does not
+        penalise.
+
+        Args:
+            r_l23_windows: [B, W, N] L2/3 activity at readout timepoints.
+            true_theta_windows: [B, W] true orientation in degrees.
+
+        Returns:
+            Scalar cross-entropy loss over the 5 local classes.
+        """
+        B, W, N = r_l23_windows.shape
+        # Center channel for each (B, W) trial.
+        c = self._theta_to_channel(true_theta_windows)  # [B, W], long
+        # Offsets [-2, -1, 0, 1, 2] -- neighbours in orientation space.
+        offsets = torch.tensor(
+            [-2, -1, 0, 1, 2], device=r_l23_windows.device, dtype=torch.long,
+        )
+        # Broadcast to per-trial channel indices, wrapping circularly.
+        # channels: [B, W, 5] -- indices into the N-channel L2/3 axis.
+        channels = (c.unsqueeze(-1) + offsets.view(1, 1, 5)) % N
+        # Gather activities at those 5 channels for every trial.
+        r_flat = r_l23_windows.reshape(B * W, N)                 # [BW, N]
+        ch_flat = channels.reshape(B * W, 5)                     # [BW, 5]
+        local_r = torch.gather(r_flat, dim=1, index=ch_flat)     # [BW, 5]
+        # Logits over the 5 classes.
+        logits = self.local_disc_head(local_r)                   # [BW, 5]
+        # Target is class 2 (the center / true channel).
+        targets = torch.full(
+            (B * W,), 2, device=r_l23_windows.device, dtype=torch.long,
+        )
+        return F.cross_entropy(logits, targets)
 
     def energy_cost(self, outputs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Compute energy costs from network output trajectories.
@@ -508,6 +556,14 @@ class CompositeLoss(nn.Module):
             loss_dict["sharp"] = l_sharp.item()
         else:
             loss_dict["sharp"] = 0.0
+
+        # Phase 4: local competitor discrimination loss (expected vs +- 1, +- 2)
+        if self.lambda_local_disc > 0:
+            l_local = self.local_discrimination_loss(r_l23_windows, true_theta_windows)
+            total = total + self.lambda_local_disc * l_local
+            loss_dict["local_disc"] = l_local.item()
+        else:
+            loss_dict["local_disc"] = 0.0
 
         loss_dict["total"] = total.item()
 

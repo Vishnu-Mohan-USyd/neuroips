@@ -86,13 +86,19 @@ class LaminarV1V2Network(nn.Module):
         theta = torch.angle(z) * (self.cfg.orientation_range / (2.0 * math.pi))  # [B]
         return theta % self.cfg.orientation_range
 
-    def _make_bump(self, theta: Tensor) -> Tensor:
+    def _make_bump(self, theta: Tensor, sigma: float | None = None) -> Tensor:
         """Create a population-coded Gaussian bump at orientation theta.
 
-        Uses the same sigma_ff as the feedforward tuning curves for consistency.
+        By default uses the same sigma_ff as the feedforward tuning curves
+        for consistency. Callers (e.g. the Phase 5 oracle-template
+        construction) may pass a custom `sigma` to build a narrower or
+        wider prior without affecting the feedforward pathway.
 
         Args:
             theta: [B] -- target orientation in degrees.
+            sigma: width of the Gaussian (degrees). If None, defaults to
+                `self.cfg.sigma_ff` (backward-compatible with all existing
+                callers that pass only `theta`).
 
         Returns:
             bump: [B, N] -- circular Gaussian bump (unnormalized).
@@ -103,7 +109,8 @@ class LaminarV1V2Network(nn.Module):
         dists = circular_distance_abs(
             theta.unsqueeze(-1), prefs.unsqueeze(0), self.cfg.orientation_range
         )  # [B, N]
-        return torch.exp(-dists ** 2 / (2 * self.cfg.sigma_ff ** 2))
+        sigma_val = sigma if sigma is not None else self.cfg.sigma_ff
+        return torch.exp(-dists ** 2 / (2 * sigma_val ** 2))
 
     def _construct_q_pred(self, r_l4: Tensor, p_cw: Tensor) -> Tensor:
         """Construct q_pred analytically from L4 orientation + state belief.

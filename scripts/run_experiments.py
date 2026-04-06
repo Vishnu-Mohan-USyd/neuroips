@@ -18,7 +18,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import ModelConfig, MechanismType
+from src.config import ModelConfig, TrainingConfig, MechanismType
 from src.model.network import LaminarV1V2Network
 from src.experiments import ALL_PARADIGMS
 
@@ -50,20 +50,35 @@ def main() -> None:
 
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
 
-    # Reconstruct ModelConfig from checkpoint's saved config, not defaults
+    # Reconstruct ModelConfig + TrainingConfig from checkpoint's saved config.
+    # We need TrainingConfig so we can pass delta_som through to the network,
+    # matching how the checkpoint was trained. This mirrors the pattern used in
+    # scripts/analyze_representation.py (load_model).
     if "config" in ckpt and "model" in ckpt["config"]:
-        model_raw = ckpt["config"]["model"]
+        model_raw = dict(ckpt["config"]["model"])
         cfg = ModelConfig(**model_raw)
-        logger.info(f"Loaded config from checkpoint: mechanism={cfg.mechanism.value}")
+        train_raw = dict(ckpt["config"].get("training", {}))
+        # Filter keys down to valid TrainingConfig constructor args — the YAML
+        # has nested stage1/stage2 dicts that aren't valid field names.
+        train_fields = set(TrainingConfig.__dataclass_fields__.keys())
+        train_cfg = TrainingConfig(**{k: v for k, v in train_raw.items() if k in train_fields})
+        logger.info(
+            f"Loaded config from checkpoint: mechanism={cfg.mechanism.value}, "
+            f"feedback_mode={cfg.feedback_mode}, delta_som={train_cfg.delta_som}"
+        )
     else:
         # Fallback for legacy checkpoints without saved config
         cfg = ModelConfig(mechanism=MechanismType(args.mechanism))
-        logger.warning("No config in checkpoint, using --mechanism flag")
+        train_cfg = TrainingConfig()
+        logger.warning("No config in checkpoint, using --mechanism flag and default TrainingConfig")
 
-    net = LaminarV1V2Network(cfg)
+    net = LaminarV1V2Network(cfg, delta_som=train_cfg.delta_som)
     net.load_state_dict(ckpt["model_state"])
     net.eval()
-    logger.info(f"Loaded checkpoint: {args.checkpoint}")
+    logger.info(
+        f"Loaded checkpoint: {args.checkpoint}  "
+        f"(net.feedback.delta_som={net.feedback.delta_som})"
+    )
 
     paradigms = ALL_PARADIGMS
     if args.paradigm:

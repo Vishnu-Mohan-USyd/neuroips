@@ -83,7 +83,7 @@ def create_stage2_optimizer(
         {"params": list(loss_fn.orientation_decoder.parameters()), "lr": cfg.stage1_lr},
     ]
     # Add optional readout head params
-    for head_name in ('surprise_detector', 'error_decoder', 'detection_head', 'l4_decoder', 'mismatch_head'):
+    for head_name in ('surprise_detector', 'error_decoder', 'detection_head', 'l4_decoder', 'mismatch_head', 'local_disc_head'):
         if hasattr(loss_fn, head_name):
             param_groups.append(
                 {"params": list(getattr(loss_fn, head_name).parameters()), "lr": cfg.stage1_lr}
@@ -122,7 +122,8 @@ def build_stimulus_sequence(
     metadata,
     model_cfg: ModelConfig,
     train_cfg: TrainingConfig,
-) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    stim_cfg: StimulusConfig,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Convert HMM SequenceMetadata into temporal stimulus sequences.
 
     Each presentation occupies steps_on timesteps of grating + steps_isi
@@ -132,6 +133,8 @@ def build_stimulus_sequence(
         metadata: SequenceMetadata from HMMSequenceGenerator.
         model_cfg: ModelConfig for population coding params.
         train_cfg: TrainingConfig for temporal params.
+        stim_cfg: StimulusConfig. `stim_cfg.ambiguous_offset` controls the angular
+            offset between the two orientations of an ambiguous mixture stimulus.
 
     Returns:
         stimulus_seq: [B, T_total, N] — population-coded stimuli.
@@ -139,7 +142,7 @@ def build_stimulus_sequence(
         task_state_seq: [B, T_total, 2] — task states.
         true_thetas: [B, seq_length] — true orientations in degrees.
         true_next_thetas: [B, seq_length] — next orientations in degrees.
-        true_states: [B, seq_length] — HMM state indices (long).
+        true_next_states: [B, seq_length] — HMM state indices shifted by one (long).
     """
     B, S = metadata.orientations.shape
     N = model_cfg.n_orientations
@@ -163,7 +166,10 @@ def build_stimulus_sequence(
     # Handle ambiguous stimuli in batch
     is_amb_flat = metadata.is_ambiguous.reshape(-1)      # [B*S]
     if is_amb_flat.any():
-        oris2_flat = (oris_flat + 15.0) % model_cfg.orientation_range
+        # Second orientation of the mixture is offset by stim_cfg.ambiguous_offset
+        # (degrees). Previously hardcoded to 15.0, which silently ignored the
+        # StimulusConfig field of the same name.
+        oris2_flat = (oris_flat + stim_cfg.ambiguous_offset) % model_cfg.orientation_range
         stim_amb = make_ambiguous_stimulus(
             oris_flat[is_amb_flat], oris2_flat[is_amb_flat], contrasts_flat[is_amb_flat],
             n_orientations=N,
