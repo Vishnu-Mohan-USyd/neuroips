@@ -68,6 +68,9 @@ def create_stage2_optimizer(
     """
     # Feedback params: works for both FeedbackMechanism and EmergentFeedbackOperator
     feedback_params = [p for p in net.feedback.parameters() if p.requires_grad]
+    # Add VIP→SOM gain if it exists (it's on the network, not on feedback)
+    if hasattr(net, 'w_vip_som') and net.w_vip_som.requires_grad:
+        feedback_params.append(net.w_vip_som)
 
     param_groups = [
         {"params": list(net.v2.parameters()), "lr": cfg.stage2_lr_v2},

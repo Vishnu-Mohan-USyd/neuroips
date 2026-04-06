@@ -962,6 +962,32 @@ class TestLocalDiscriminationLoss:
             "local_disc_head params missing from optimizer"
         )
 
+    def test_w_vip_som_in_optimizer(self):
+        """w_vip_som (on the network, not on feedback) must be in the optimizer.
+
+        Regression test: w_vip_som was missing from all optimizer groups,
+        staying at init value 0.5 for all VIP experiments.
+        """
+        model_cfg = ModelConfig(feedback_mode='emergent')
+        tc = TrainingConfig()
+        net = LaminarV1V2Network(model_cfg, delta_som=tc.delta_som)
+        loss_fn = CompositeLoss(tc, model_cfg)
+        freeze_stage1(net)
+        unfreeze_stage2(net)
+
+        optimizer = create_stage2_optimizer(net, loss_fn, tc)
+
+        # Collect all optimizer param ids
+        opt_params = set()
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                opt_params.add(id(p))
+
+        assert hasattr(net, 'w_vip_som'), "network missing w_vip_som parameter"
+        assert id(net.w_vip_som) in opt_params, (
+            "w_vip_som missing from optimizer — VIP→SOM coupling will never learn"
+        )
+
     def test_lambda_disabled_loss_identical_to_pre_phase4(self):
         """With lambda_local_disc=0 (default), CompositeLoss behaviour is
         backward-compatible: the total loss does not depend on local_disc
