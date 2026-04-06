@@ -46,6 +46,23 @@ class ModelConfig:
 
     # SOM
     tau_som: int = 10
+    vip_enabled: bool = False
+    tau_vip: int = 10
+    vip_gain: float = 1.0
+    emergent_center_support_enabled: bool = False
+    emergent_center_support_gain: float = 0.1
+    emergent_center_support_sigma: float = 5.0
+    emergent_center_support_cue_gated: bool = True
+    emergent_recurrent_gain_enabled: bool = False
+    emergent_recurrent_gain_beta: float = 0.1
+    emergent_recurrent_gain_sigma: float = 5.0
+    emergent_recurrent_gain_cue_gated: bool = True
+    apical_gain_enabled: bool = False
+    apical_gain_beta: float = 0.08
+    apical_gain_tau: int = 10
+    apical_gain_sigma: float = 5.0
+    apical_gain_mode: str = "persistent_sum"
+    apical_gain_cue_gated: bool = True
 
     # V2 context
     v2_hidden_dim: int = 16
@@ -171,11 +188,14 @@ class StimulusConfig:
     transition_step: float = 15.0
     cue_dim: int = 2
     task_state_dim: int = 2
+    cue_mode: str = "none"
+    cue_contrast: float = 1.0
+    cue_prestimulus_steps: int = 0
     # Angular offset (degrees) between the two orientations that make up an
     # ambiguous mixture stimulus. Used by `build_stimulus_sequence` in
-    # `src/training/trainer.py` to construct the second orientation of each
-    # ambiguous presentation as `ori + ambiguous_offset`.
+    # `src/training/trainer.py`.
     ambiguous_offset: float = 15.0
+    ambiguous_mode: str = "one_sided"
 
 
 def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig, TrainingConfig, StimulusConfig]:

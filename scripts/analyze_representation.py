@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from dataclasses import dataclass
 import logging
 import math
 import sys
@@ -114,15 +115,16 @@ def load_model(
 def feedback_disabled(net: LaminarV1V2Network):
     """Temporarily zero the emergent feedback operator.
 
-    Saves and restores alpha_inh (and som_baseline if delta-SOM is enabled).
-    With alpha_inh == 0 the circulant kernel is zero, so inh_field == 0 and
-    the SOM drive becomes pi_eff * (softplus(baseline) - softplus(baseline)) == 0
-    in delta-SOM mode, or pi_eff * softplus(0) = pi_eff * log(2) without delta-SOM.
-    We therefore also zero som_baseline (delta-SOM) as a belt-and-braces guarantee
-    that the SOM ring receives no drive while feedback is "off".
+    Saves and restores all current top-down pathway gains so the OFF condition
+    truly disables the added feedback branches:
+    - inhibitory SOM pathway (alpha_inh, som_baseline)
+    - VIP->SOM gain (net.cfg.vip_gain)
+    - emergent center support
+    - emergent recurrent gain
+    - emergent apical/feedforward gain
 
-    Note: this only affects the feedback pathway. L4, PV, L2/3 recurrence, and
-    adaptation all remain active — exactly what we want for an "ablate feedback,
+    Note: this only affects the top-down pathway. L4, PV, base L2/3 recurrence,
+    and adaptation remain active — exactly what we want for an "ablate feedback,
     keep everything else" comparison.
     """
     fb = net.feedback
@@ -130,17 +132,44 @@ def feedback_disabled(net: LaminarV1V2Network):
     saved_baseline = None
     if hasattr(fb, "som_baseline"):
         saved_baseline = fb.som_baseline.detach().clone()
+    saved_vip_gain = getattr(net.cfg, "vip_gain", None)
+    saved_center_support_gain = getattr(fb, "center_support_gain", None)
+    saved_recurrent_gain_beta = getattr(fb, "recurrent_gain_beta", None)
+    saved_apical_gain_beta = getattr(fb, "apical_gain_beta", None)
+    saved_force_zero = getattr(fb, "_analysis_force_zero", False)
     try:
+        if hasattr(fb, "uncache_kernels"):
+            fb.uncache_kernels()
         with torch.no_grad():
+            fb._analysis_force_zero = True
             fb.alpha_inh.zero_()
             if saved_baseline is not None:
                 fb.som_baseline.zero_()
+            if saved_center_support_gain is not None:
+                fb.center_support_gain = 0.0
+            if saved_recurrent_gain_beta is not None:
+                fb.recurrent_gain_beta = 0.0
+            if saved_apical_gain_beta is not None:
+                fb.apical_gain_beta = 0.0
+            if saved_vip_gain is not None:
+                net.cfg.vip_gain = 0.0
         yield
     finally:
         with torch.no_grad():
             fb.alpha_inh.copy_(saved_alpha)
             if saved_baseline is not None:
                 fb.som_baseline.copy_(saved_baseline)
+            if saved_center_support_gain is not None:
+                fb.center_support_gain = saved_center_support_gain
+            if saved_recurrent_gain_beta is not None:
+                fb.recurrent_gain_beta = saved_recurrent_gain_beta
+            if saved_apical_gain_beta is not None:
+                fb.apical_gain_beta = saved_apical_gain_beta
+            if saved_vip_gain is not None:
+                net.cfg.vip_gain = saved_vip_gain
+            fb._analysis_force_zero = saved_force_zero
+            if hasattr(fb, "uncache_kernels"):
+                fb.uncache_kernels()
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +182,32 @@ EVAL_PI = 5.0           # oracle precision used during analysis (matches HARDENI
 EVAL_CONTRAST = 1.0     # stimulus contrast used during analysis
 
 
-def _build_oracle(net: LaminarV1V2Network, oracle_thetas: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+@dataclass(frozen=True)
+class CueConfig:
+    """Optional cue settings for analysis-time trials.
+
+    Defaults reproduce the historical zero-cue behavior exactly.
+    """
+
+    mode: str = "none"          # none | oracle | stimulus
+    contrast: float = EVAL_CONTRAST
+    prestimulus_steps: int = 0
+    offset: float = 0.0
+
+    @property
+    def total_steps(self) -> int:
+        return T_STEPS + self.prestimulus_steps
+
+
+def _canonical_cue_cfg(cue_cfg: CueConfig | None) -> CueConfig:
+    return cue_cfg if cue_cfg is not None else CueConfig()
+
+
+def _build_oracle(
+    net: LaminarV1V2Network,
+    oracle_thetas: torch.Tensor,
+    n_steps: int = T_STEPS,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Build oracle_q_pred and oracle_pi_pred tensors for a batch of trials.
 
     Args:
@@ -161,18 +215,123 @@ def _build_oracle(net: LaminarV1V2Network, oracle_thetas: torch.Tensor) -> tuple
         oracle_thetas: [B] — oracle target orientation (degrees) per trial.
 
     Returns:
-        oracle_q: [B, T_STEPS, N] — bump at oracle_theta, held constant over time,
+        oracle_q: [B, n_steps, N] — bump at oracle_theta, held constant over time,
                   row-normalised to sum to 1.
-        oracle_pi: [B, T_STEPS, 1] — constant EVAL_PI.
+        oracle_pi: [B, n_steps, 1] — constant EVAL_PI.
     """
     N = net.cfg.n_orientations
     B = oracle_thetas.shape[0]
     device = oracle_thetas.device
     q_single = net._make_bump(oracle_thetas)  # [B, N]
     q_single = q_single / (q_single.sum(dim=-1, keepdim=True) + 1e-8)
-    oracle_q = q_single.unsqueeze(1).expand(B, T_STEPS, N).contiguous()
-    oracle_pi = torch.full((B, T_STEPS, 1), EVAL_PI, device=device)
+    oracle_q = q_single.unsqueeze(1).expand(B, n_steps, N).contiguous()
+    oracle_pi = torch.full((B, n_steps, 1), EVAL_PI, device=device)
     return oracle_q, oracle_pi
+
+
+def _build_analysis_inputs(
+    net: LaminarV1V2Network,
+    stim_thetas: torch.Tensor,
+    oracle_thetas: torch.Tensor,
+    device: torch.device,
+    contrast: float,
+    noise_std: float,
+    seed: int | None,
+    cue_cfg: CueConfig | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build packed analysis inputs plus oracle tensors for a batch of trials."""
+    cue_cfg = _canonical_cue_cfg(cue_cfg)
+    B = stim_thetas.shape[0]
+    N = net.cfg.n_orientations
+    total_steps = cue_cfg.total_steps
+
+    # Build single-frame population-coded stimulus [B, N]
+    stim_frame = generate_grating(
+        stim_thetas.to(device),
+        torch.full((B,), contrast, device=device),
+        n_orientations=N,
+        sigma=net.cfg.sigma_ff,
+        n=net.cfg.naka_rushton_n,
+        c50=net.cfg.naka_rushton_c50,
+        period=net.cfg.orientation_range,
+    )  # [B, N]
+
+    # Optional prestimulus lead-in: stimulus is blank until cue period ends.
+    stim_seq = torch.zeros(B, total_steps, N, device=device)
+    stim_seq[:, cue_cfg.prestimulus_steps:] = stim_frame.unsqueeze(1).expand(B, T_STEPS, N)
+
+    if noise_std > 0:
+        noise_shape = stim_seq[:, cue_cfg.prestimulus_steps:].shape
+        if seed is not None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(seed)
+            noise = torch.randn(noise_shape, device=device, generator=gen) * noise_std
+        else:
+            noise = torch.randn(noise_shape, device=device) * noise_std
+        stim_seq[:, cue_cfg.prestimulus_steps:] = (
+            stim_seq[:, cue_cfg.prestimulus_steps:] + noise
+        ).clamp(min=0.0)
+
+    cue_seq = torch.zeros(B, total_steps, N, device=device)
+    if cue_cfg.mode != "none":
+        if cue_cfg.mode == "oracle":
+            cue_thetas = oracle_thetas.to(device)
+        elif cue_cfg.mode == "stimulus":
+            cue_thetas = stim_thetas.to(device)
+        else:
+            raise ValueError(f"Unknown cue mode: {cue_cfg.mode!r}")
+        cue_thetas = (cue_thetas + cue_cfg.offset) % net.cfg.orientation_range
+        cue_frame = generate_grating(
+            cue_thetas,
+            torch.full((B,), cue_cfg.contrast, device=device),
+            n_orientations=N,
+            sigma=net.cfg.sigma_ff,
+            n=net.cfg.naka_rushton_n,
+            c50=net.cfg.naka_rushton_c50,
+            period=net.cfg.orientation_range,
+        )  # [B, N]
+        cue_steps = cue_cfg.prestimulus_steps if cue_cfg.prestimulus_steps > 0 else total_steps
+        cue_seq[:, :cue_steps] = cue_frame.unsqueeze(1).expand(B, cue_steps, N)
+
+    task_seq = torch.zeros(B, total_steps, 2, device=device)
+    packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
+
+    # Oracle template held constant over time
+    oracle_q, oracle_pi = _build_oracle(
+        net, oracle_thetas.to(device), n_steps=total_steps,
+    )
+    return packed, oracle_q, oracle_pi
+
+
+def _run_trial_batch(
+    net: LaminarV1V2Network,
+    stim_thetas: torch.Tensor,
+    oracle_thetas: torch.Tensor,
+    device: torch.device,
+    contrast: float = EVAL_CONTRAST,
+    noise_std: float = 0.0,
+    seed: int | None = None,
+    cue_cfg: CueConfig | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Run the network on a batch of trials and return full L2/3 + aux trajectories."""
+    B = stim_thetas.shape[0]
+    assert oracle_thetas.shape == (B,), f"oracle shape {oracle_thetas.shape} != ({B},)"
+
+    packed, oracle_q, oracle_pi = _build_analysis_inputs(
+        net, stim_thetas, oracle_thetas, device,
+        contrast=contrast, noise_std=noise_std, seed=seed, cue_cfg=cue_cfg,
+    )
+    net.oracle_mode = True
+    net.oracle_q_pred = oracle_q
+    net.oracle_pi_pred = oracle_pi
+    try:
+        with torch.no_grad():
+            r_l23_all, _, aux = net(packed)
+    finally:
+        net.oracle_mode = False
+        net.oracle_q_pred = None
+        net.oracle_pi_pred = None
+    return r_l23_all, aux
 
 
 def run_trials(
@@ -183,6 +342,7 @@ def run_trials(
     contrast: float = EVAL_CONTRAST,
     noise_std: float = 0.0,
     seed: int | None = None,
+    cue_cfg: CueConfig | None = None,
 ) -> torch.Tensor:
     """Run the network on a batch of trials and return the readout L2/3 activity.
 
@@ -200,55 +360,16 @@ def run_trials(
         noise_std: Gaussian noise added to the population-coded stimulus
                    (matches train_cfg.stimulus_noise semantics). 0 disables.
         seed: optional seed for noise reproducibility.
+        cue_cfg: optional cue settings. Default reproduces the historical
+                 zero-cue analysis path exactly.
 
     Returns:
         r_l23: [B, N] — mean L2/3 activity over the read window.
     """
-    B = stim_thetas.shape[0]
-    N = net.cfg.n_orientations
-    assert oracle_thetas.shape == (B,), f"oracle shape {oracle_thetas.shape} != ({B},)"
-
-    # Build single-frame population-coded stimulus [B, N]
-    stim_frame = generate_grating(
-        stim_thetas.to(device),
-        torch.full((B,), contrast, device=device),
-        n_orientations=N,
-        sigma=net.cfg.sigma_ff,
-        n=net.cfg.naka_rushton_n,
-        c50=net.cfg.naka_rushton_c50,
-        period=net.cfg.orientation_range,
-    )  # [B, N]
-
-    # Expand to [B, T, N] with stimulus held on for the full duration (no ISI).
-    stim_seq = stim_frame.unsqueeze(1).expand(B, T_STEPS, N).contiguous()
-
-    if noise_std > 0:
-        if seed is not None:
-            gen = torch.Generator(device=device)
-            gen.manual_seed(seed)
-            noise = torch.randn(stim_seq.shape, device=device, generator=gen) * noise_std
-        else:
-            noise = torch.randn_like(stim_seq) * noise_std
-        stim_seq = (stim_seq + noise).clamp(min=0.0)
-
-    # Oracle template held constant over time
-    oracle_q, oracle_pi = _build_oracle(net, oracle_thetas.to(device))
-
-    cue_seq = torch.zeros(B, T_STEPS, N, device=device)
-    task_seq = torch.zeros(B, T_STEPS, 2, device=device)
-    packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
-
-    # Inject oracle
-    net.oracle_mode = True
-    net.oracle_q_pred = oracle_q
-    net.oracle_pi_pred = oracle_pi
-    try:
-        with torch.no_grad():
-            r_l23_all, _, _ = net(packed)
-    finally:
-        net.oracle_mode = False
-        net.oracle_q_pred = None
-        net.oracle_pi_pred = None
+    r_l23_all, _ = _run_trial_batch(
+        net, stim_thetas, oracle_thetas, device,
+        contrast=contrast, noise_std=noise_std, seed=seed, cue_cfg=cue_cfg,
+    )
 
     # r_l23_all: [B, T, N]. Average the last READ_WINDOW steps.
     r_l23 = r_l23_all[:, -READ_WINDOW:].mean(dim=1)  # [B, N]
@@ -261,42 +382,23 @@ def run_full_trajectory(
     oracle_thetas: torch.Tensor,
     device: torch.device,
     contrast: float = EVAL_CONTRAST,
-) -> torch.Tensor:
+    cue_cfg: CueConfig | None = None,
+    return_aux: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Run the network and return the *full* L2/3 trajectory (all timesteps).
 
-    Same as run_trials but without the windowed mean — returns [B, T_STEPS, N].
+    Same as run_trials but without the windowed mean. Returns [B, T, N] where
+    T is `T_STEPS + cue_cfg.prestimulus_steps`.
     Used by metric_time_resolved to analyze how L2/3 evolves step-by-step.
     No noise is applied (this helper is only used for the deterministic
     time-resolved metric).
     """
-    B = stim_thetas.shape[0]
-    N = net.cfg.n_orientations
-
-    stim_frame = generate_grating(
-        stim_thetas.to(device),
-        torch.full((B,), contrast, device=device),
-        n_orientations=N,
-        sigma=net.cfg.sigma_ff,
-        n=net.cfg.naka_rushton_n,
-        c50=net.cfg.naka_rushton_c50,
-        period=net.cfg.orientation_range,
-    )  # [B, N]
-    stim_seq = stim_frame.unsqueeze(1).expand(B, T_STEPS, N).contiguous()
-    oracle_q, oracle_pi = _build_oracle(net, oracle_thetas.to(device))
-    cue_seq = torch.zeros(B, T_STEPS, N, device=device)
-    task_seq = torch.zeros(B, T_STEPS, 2, device=device)
-    packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
-    net.oracle_mode = True
-    net.oracle_q_pred = oracle_q
-    net.oracle_pi_pred = oracle_pi
-    try:
-        with torch.no_grad():
-            r_l23_all, _, _ = net(packed)
-    finally:
-        net.oracle_mode = False
-        net.oracle_q_pred = None
-        net.oracle_pi_pred = None
-    return r_l23_all  # [B, T_STEPS, N]
+    r_l23_all, aux = _run_trial_batch(
+        net, stim_thetas, oracle_thetas, device, contrast=contrast, cue_cfg=cue_cfg,
+    )
+    if return_aux:
+        return r_l23_all, aux
+    return r_l23_all
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +474,7 @@ def metric1_population_bump(
     net: LaminarV1V2Network,
     device: torch.device,
     conditions: list[tuple[float, float]],
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 1: FWHM of the *population* bump at a fixed stimulus.
 
@@ -405,9 +508,9 @@ def metric1_population_bump(
         stim = torch.tensor([stim_theta], device=device)
         oracle = torch.tensor([oracle_theta], device=device)
 
-        r_on = run_trials(net, stim, oracle, device, noise_std=0.0)[0].cpu().numpy()  # [N]
+        r_on = run_trials(net, stim, oracle, device, noise_std=0.0, cue_cfg=cue_cfg)[0].cpu().numpy()  # [N]
         with feedback_disabled(net):
-            r_off = run_trials(net, stim, oracle, device, noise_std=0.0)[0].cpu().numpy()
+            r_off = run_trials(net, stim, oracle, device, noise_std=0.0, cue_cfg=cue_cfg)[0].cpu().numpy()
 
         # Sort by signed distance from stim_theta so the population bump is centered.
         dists = _dists_from(prefs, stim_theta, period).numpy()  # [N]
@@ -446,6 +549,7 @@ def metric1b_flanking_tuning(
     oracle_theta: float = 90.0,
     flanking_offsets: list[float] = None,
     n_stim: int = 36,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 1b: tuning curves of FLANKING channels (at fixed distance from oracle).
 
@@ -472,9 +576,9 @@ def metric1b_flanking_tuning(
 
     oracle_thetas = torch.full((n_stim,), oracle_theta, device=device)
 
-    r_on = run_trials(net, stim_grid, oracle_thetas, device, noise_std=0.0).cpu().numpy()  # [n_stim, N]
+    r_on = run_trials(net, stim_grid, oracle_thetas, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()  # [n_stim, N]
     with feedback_disabled(net):
-        r_off = run_trials(net, stim_grid, oracle_thetas, device, noise_std=0.0).cpu().numpy()
+        r_off = run_trials(net, stim_grid, oracle_thetas, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()
 
     stim_grid_np = stim_grid.cpu().numpy()
     results: dict[float, dict] = {}
@@ -504,7 +608,11 @@ def metric1b_flanking_tuning(
     return results
 
 
-def metric2_peak_gain(net: LaminarV1V2Network, device: torch.device) -> dict:
+def metric2_peak_gain(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    cue_cfg: CueConfig | None = None,
+) -> dict:
     """Metric 2: peak-response gain across all 36 channels.
 
     For each preferred channel i, present stim at pref_i, oracle also at pref_i,
@@ -516,9 +624,9 @@ def metric2_peak_gain(net: LaminarV1V2Network, device: torch.device) -> dict:
     prefs = torch.arange(N, dtype=torch.float32, device=device) * step
 
     # Batch: B = N, stim_theta = pref_i, oracle = pref_i
-    r_on = run_trials(net, prefs, prefs, device, noise_std=0.0)       # [N, N]
+    r_on = run_trials(net, prefs, prefs, device, noise_std=0.0, cue_cfg=cue_cfg)       # [N, N]
     with feedback_disabled(net):
-        r_off = run_trials(net, prefs, prefs, device, noise_std=0.0)
+        r_off = run_trials(net, prefs, prefs, device, noise_std=0.0, cue_cfg=cue_cfg)
 
     # For each trial i, read channel i (the channel tuned to the stim/oracle).
     idx = torch.arange(N, device=device)
@@ -538,6 +646,7 @@ def metric3_channel_profile(
     net: LaminarV1V2Network,
     device: torch.device,
     stim_theta: float = 90.0,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 3: full population profile at a single stim/oracle orientation.
 
@@ -552,9 +661,9 @@ def metric3_channel_profile(
     stim = torch.tensor([stim_theta], device=device)
     oracle = torch.tensor([stim_theta], device=device)
 
-    r_on = run_trials(net, stim, oracle, device, noise_std=0.0)[0]    # [N]
+    r_on = run_trials(net, stim, oracle, device, noise_std=0.0, cue_cfg=cue_cfg)[0]    # [N]
     with feedback_disabled(net):
-        r_off = run_trials(net, stim, oracle, device, noise_std=0.0)[0]
+        r_off = run_trials(net, stim, oracle, device, noise_std=0.0, cue_cfg=cue_cfg)[0]
 
     dists = (((prefs - stim_theta) + period / 2) % period) - period / 2  # [N], signed
     # Sort by distance
@@ -586,6 +695,7 @@ def metric4_fine_discrimination(
     subset_channels: list[int] = None,
     base_theta: float = 90.0,
     seed: int = 12345,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 4: linear-decoder discrimination with READOUT noise on a subset of channels.
 
@@ -635,9 +745,9 @@ def metric4_fine_discrimination(
             np.zeros(n_trials_per_class, dtype=np.int64),
             np.ones(n_trials_per_class, dtype=np.int64),
         ])
-        r_on = run_trials(net, stim, oracle, device, noise_std=0.0).cpu().numpy()   # [2K, N]
+        r_on = run_trials(net, stim, oracle, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()   # [2K, N]
         with feedback_disabled(net):
-            r_off = run_trials(net, stim, oracle, device, noise_std=0.0).cpu().numpy()
+            r_off = run_trials(net, stim, oracle, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()
         clean_by_delta[delta] = {"r_on": r_on, "r_off": r_off, "labels": labels}
 
     for noise_std in readout_noise_stds:
@@ -683,6 +793,7 @@ def metric5_energy_by_distance(
     device: torch.device,
     oracle_theta: float = 90.0,
     n_stim: int = 36,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 5: L2/3 energy split by angular distance from oracle.
 
@@ -704,9 +815,9 @@ def metric5_energy_by_distance(
     oracles = torch.full((n_stim,), oracle_theta, device=device)
     prefs = torch.arange(N, dtype=torch.float32) * step
 
-    r_on = run_trials(net, stim_grid, oracles, device, noise_std=0.0).cpu().numpy()   # [n_stim, N]
+    r_on = run_trials(net, stim_grid, oracles, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()   # [n_stim, N]
     with feedback_disabled(net):
-        r_off = run_trials(net, stim_grid, oracles, device, noise_std=0.0).cpu().numpy()
+        r_off = run_trials(net, stim_grid, oracles, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()
 
     d = _dists_from(prefs, oracle_theta, period).abs().numpy()
     expected_mask = d <= 10.0
@@ -765,6 +876,8 @@ def _circ_mean_and_std_deg(thetas_deg: np.ndarray, period: float) -> tuple[float
     c = float(np.mean(np.cos(angles)))
     s = float(np.mean(np.sin(angles)))
     R = math.sqrt(c * c + s * s)
+    # Numerical guard: floating-point roundoff can push R slightly outside [0, 1].
+    R = min(1.0, max(0.0, R))
     mean_ang = math.atan2(s, c) % (2.0 * math.pi)
     mean_deg = mean_ang * period / (2.0 * math.pi)
     if R < 1e-12:
@@ -810,6 +923,7 @@ def metric_local_dprime(
     n_trials: int = 200,
     noise_std: float = 0.3,
     seed: int = 42,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 6: local d' of match vs near-miss, averaged across 8 anchors.
 
@@ -868,12 +982,12 @@ def metric_local_dprime(
             trial_seed = seed + ai * 1000 + int(delta * 10)
             r_on = run_trials(
                 net, stim_all, oracle_all, device,
-                noise_std=noise_std, seed=trial_seed,
+                noise_std=noise_std, seed=trial_seed, cue_cfg=cue_cfg,
             )
             with feedback_disabled(net):
                 r_off = run_trials(
                     net, stim_all, oracle_all, device,
-                    noise_std=noise_std, seed=trial_seed,
+                    noise_std=noise_std, seed=trial_seed, cue_cfg=cue_cfg,
                 )
 
             theta_on = _population_vector_decode(r_on, prefs, period).cpu().numpy()
@@ -941,6 +1055,7 @@ def metric_match_vs_near_miss_decoding(
     readout_noise_std: float = 0.3,
     seed: int = 42,
     oracle_theta: float = 90.0,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 7: trained LogReg decoder of match vs near-miss at small deltas.
 
@@ -996,11 +1111,11 @@ def metric_match_vs_near_miss_decoding(
 
         trial_seed = seed + int(delta * 10)
         r_on_clean = run_trials(
-            net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+            net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed, cue_cfg=cue_cfg,
         ).cpu().numpy()
         with feedback_disabled(net):
             r_off_clean = run_trials(
-                net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+                net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed, cue_cfg=cue_cfg,
             ).cpu().numpy()
 
         # Readout noise — same realization for on and off so only the
@@ -1041,6 +1156,7 @@ def metric_time_resolved(
     device: torch.device,
     oracle_theta: float = 90.0,
     stim_theta: float = 90.0,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 8: per-timestep L2/3 gain, bump FWHM, and flank (±30°) response.
 
@@ -1075,9 +1191,15 @@ def metric_time_resolved(
     stim_arr = torch.tensor([stim_theta], device=device)
     oracle_arr = torch.tensor([oracle_theta], device=device)
 
-    r_on_all = run_full_trajectory(net, stim_arr, oracle_arr, device)[0]  # [T, N]
+    r_on_all, aux_on = run_full_trajectory(
+        net, stim_arr, oracle_arr, device, cue_cfg=cue_cfg, return_aux=True,
+    )
+    r_on_all = r_on_all[0]  # [T, N]
     with feedback_disabled(net):
-        r_off_all = run_full_trajectory(net, stim_arr, oracle_arr, device)[0]
+        r_off_all, aux_off = run_full_trajectory(
+            net, stim_arr, oracle_arr, device, cue_cfg=cue_cfg, return_aux=True,
+        )
+        r_off_all = r_off_all[0]
 
     # Flank channels (±30° from stim_theta)
     flank_p30 = _closest_channel(prefs, (stim_theta + 30.0) % period, period)
@@ -1093,6 +1215,8 @@ def metric_time_resolved(
     fwhm_on, fwhm_off = [], []
     fp30_on, fp30_off = [], []
     fm30_on, fm30_off = [], []
+    vip_on = aux_on["r_vip_all"][0].mean(dim=-1).cpu().numpy().tolist()
+    vip_off = aux_off["r_vip_all"][0].mean(dim=-1).cpu().numpy().tolist()
     for t in range(T):
         ro = r_on_all[t].cpu().numpy()
         re = r_off_all[t].cpu().numpy()
@@ -1120,6 +1244,7 @@ def metric_time_resolved(
         "fwhm_on": fwhm_on, "fwhm_off": fwhm_off,
         "flank_p30_on": fp30_on, "flank_p30_off": fp30_off,
         "flank_m30_on": fm30_on, "flank_m30_off": fm30_off,
+        "vip_mean_on": vip_on, "vip_mean_off": vip_off,
         "early_peak_on": _avg(peak_on, early),
         "early_peak_off": _avg(peak_off, early),
         "late_peak_on": _avg(peak_on, late),
@@ -1136,6 +1261,10 @@ def metric_time_resolved(
         "early_flank_m30_off": _avg(fm30_off, early),
         "late_flank_m30_on": _avg(fm30_on, late),
         "late_flank_m30_off": _avg(fm30_off, late),
+        "early_vip_on": _avg(vip_on, early),
+        "early_vip_off": _avg(vip_off, early),
+        "late_vip_on": _avg(vip_on, late),
+        "late_vip_off": _avg(vip_off, late),
         "flank_p30_channel": flank_p30,
         "flank_m30_channel": flank_m30,
         "stim_theta": stim_theta,
@@ -1148,6 +1277,7 @@ def metric_energy_by_relative_distance_normalized(
     device: torch.device,
     oracle_theta: float = 90.0,
     n_stim: int = 36,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 9: per-channel relative energy reduction, averaged within bins.
 
@@ -1179,9 +1309,9 @@ def metric_energy_by_relative_distance_normalized(
     oracles = torch.full((n_stim,), oracle_theta, device=device)
     prefs = torch.arange(N, dtype=torch.float32) * step
 
-    r_on = run_trials(net, stim_grid, oracles, device, noise_std=0.0).cpu().numpy()
+    r_on = run_trials(net, stim_grid, oracles, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()
     with feedback_disabled(net):
-        r_off = run_trials(net, stim_grid, oracles, device, noise_std=0.0).cpu().numpy()
+        r_off = run_trials(net, stim_grid, oracles, device, noise_std=0.0, cue_cfg=cue_cfg).cpu().numpy()
 
     # Sum each channel's activity across stimuli → [N]
     e_on_ch = r_on.sum(axis=0)
@@ -1216,23 +1346,21 @@ def metric_energy_by_relative_distance_normalized(
 # ---------------------------------------------------------------------------
 
 def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict:
-    """Confirm that inside feedback_disabled(), the feedback operator's output is exactly zero.
-
-    Builds a peaked q_pred (bump at 90°) and a unit pi_pred, then calls
-    `net.feedback(q, pi)` both with and without the ablation context manager.
-    Returns the max-abs of both outputs; the ablated output must be 0 (or within
-    float epsilon).
-    """
+    """Confirm that all top-down added branches are exactly zero in OFF mode."""
     N = net.cfg.n_orientations
     theta = torch.tensor([90.0], device=device)
     q = net._make_bump(theta)
     q = q / (q.sum(dim=-1, keepdim=True) + 1e-8)  # [1, N], normalised
     pi = torch.tensor([[EVAL_PI]], device=device)
+    gate = q.clone()
 
     net.feedback.cache_kernels()
     try:
         with torch.no_grad():
             drive_on = net.feedback(q, pi)
+            center_on = net.feedback.compute_center_excitation(q, pi, gate_signal=gate)
+            recurrent_on = net.feedback.compute_recurrent_gain(q, pi, gate_signal=gate)
+            apical_on = net.feedback.compute_apical_gain(q, pi, gate_signal=gate)
     finally:
         net.feedback.uncache_kernels()
     with feedback_disabled(net):
@@ -1240,15 +1368,32 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
         try:
             with torch.no_grad():
                 drive_off = net.feedback(q, pi)
+                center_off = net.feedback.compute_center_excitation(q, pi, gate_signal=gate)
+                recurrent_off = net.feedback.compute_recurrent_gain(q, pi, gate_signal=gate)
+                apical_off = net.feedback.compute_apical_gain(q, pi, gate_signal=gate)
+                vip_gain_off = net.cfg.vip_gain
         finally:
             net.feedback.uncache_kernels()
 
     return {
         "drive_on_max_abs": float(drive_on.abs().max().item()),
         "drive_off_max_abs": float(drive_off.abs().max().item()),
+        "center_on_max_abs": float(center_on.abs().max().item()),
+        "center_off_max_abs": float(center_off.abs().max().item()),
+        "recurrent_on_max_abs": float(recurrent_on.abs().max().item()),
+        "recurrent_off_max_abs": float(recurrent_off.abs().max().item()),
+        "apical_on_max_abs": float(apical_on.abs().max().item()),
+        "apical_off_max_abs": float(apical_off.abs().max().item()),
         "drive_on_sum": float(drive_on.sum().item()),
         "drive_off_sum": float(drive_off.sum().item()),
-        "ablation_zero": bool(drive_off.abs().max().item() < 1e-7),
+        "vip_gain_off": float(vip_gain_off),
+        "ablation_zero": bool(
+            drive_off.abs().max().item() < 1e-7
+            and center_off.abs().max().item() < 1e-7
+            and recurrent_off.abs().max().item() < 1e-7
+            and apical_off.abs().max().item() < 1e-7
+            and abs(vip_gain_off) < 1e-12
+        ),
     }
 
 
@@ -1257,6 +1402,7 @@ def artifact_check_threshold(
     device: torch.device,
     stim_theta: float = 90.0,
     oracle_theta: float = 90.0,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Threshold/rectification artifact check.
 
@@ -1295,28 +1441,9 @@ def artifact_check_threshold(
     def _run(stim_theta_: float, oracle_theta_: float):
         stim = torch.tensor([stim_theta_], device=device)
         oracle = torch.tensor([oracle_theta_], device=device)
-
-        stim_frame = generate_grating(
-            stim, torch.ones(1, device=device),
-            n_orientations=N, sigma=net.cfg.sigma_ff,
-            n=net.cfg.naka_rushton_n, c50=net.cfg.naka_rushton_c50,
-            period=net.cfg.orientation_range,
+        r_l23_all, aux = _run_trial_batch(
+            net, stim, oracle, device, contrast=1.0, cue_cfg=cue_cfg,
         )
-        stim_seq = stim_frame.unsqueeze(1).expand(1, T_STEPS, N).contiguous()
-        oracle_q, oracle_pi = _build_oracle(net, oracle)
-        packed = net.pack_inputs(stim_seq,
-                                 torch.zeros(1, T_STEPS, N, device=device),
-                                 torch.zeros(1, T_STEPS, 2, device=device))
-        net.oracle_mode = True
-        net.oracle_q_pred = oracle_q
-        net.oracle_pi_pred = oracle_pi
-        try:
-            with torch.no_grad():
-                r_l23_all, _, aux = net(packed)
-        finally:
-            net.oracle_mode = False
-            net.oracle_q_pred = None
-            net.oracle_pi_pred = None
         return r_l23_all, aux
 
     from src.utils import rectified_softplus
@@ -1390,6 +1517,7 @@ def _fmt_curve(xs: np.ndarray, ys: np.ndarray, n: int = 8) -> str:
 
 
 def print_report(label: str, results: dict) -> None:
+    cue_cfg = results.get("cue_cfg", CueConfig())
     m1 = results["metric1"]
     m1b = results["metric1b"]
     m2 = results["metric2"]
@@ -1406,11 +1534,20 @@ def print_report(label: str, results: dict) -> None:
     print(f"\n{'=' * 72}")
     print(f"REPRESENTATION ANALYSIS — {label}")
     print(f"{'=' * 72}")
+    if cue_cfg.mode != "none":
+        print(
+            f"  Cue mode={cue_cfg.mode}, contrast={cue_cfg.contrast}, "
+            f"prestimulus_steps={cue_cfg.prestimulus_steps}, offset={cue_cfg.offset}"
+        )
 
     # --- Sanity: ablation zeroes the operator ----------------------------
     print("\n[Sanity] feedback_disabled() actually zeroes the operator output")
     print(f"  ON  drive max-abs: {sanity['drive_on_max_abs']:.6e}  (sum={sanity['drive_on_sum']:.4f})")
     print(f"  OFF drive max-abs: {sanity['drive_off_max_abs']:.6e}  (sum={sanity['drive_off_sum']:.4f})")
+    print(f"  OFF center-support max-abs: {sanity['center_off_max_abs']:.6e}")
+    print(f"  OFF recurrent-gain max-abs: {sanity['recurrent_off_max_abs']:.6e}")
+    print(f"  OFF apical-gain max-abs:    {sanity['apical_off_max_abs']:.6e}")
+    print(f"  OFF vip_gain: {sanity['vip_gain_off']:.6e}")
     print(f"  Ablation produces zero drive: {sanity['ablation_zero']}")
 
     # --- Metric 1: Population bump FWHM ----------------------------------
@@ -1555,6 +1692,9 @@ def print_report(label: str, results: dict) -> None:
           f"late OFF={m8['late_flank_p30_off']:.4f} ON={m8['late_flank_p30_on']:.4f}")
     print(f"    fm30  : early OFF={m8['early_flank_m30_off']:.4f} ON={m8['early_flank_m30_on']:.4f}  "
           f"late OFF={m8['late_flank_m30_off']:.4f} ON={m8['late_flank_m30_on']:.4f}")
+    if max(max(m8['vip_mean_on']), max(m8['vip_mean_off'])) > 1e-8:
+        print(f"    vip   : early OFF={m8['early_vip_off']:.4f} ON={m8['early_vip_on']:.4f}  "
+              f"late OFF={m8['late_vip_off']:.4f} ON={m8['late_vip_on']:.4f}")
 
     # --- Metric 9: Per-channel normalized energy reduction ----------------
     print(f"\n[Metric 9] Per-channel relative energy reduction by distance bin")
@@ -1703,22 +1843,26 @@ def analyze_one(
     checkpoint: str,
     config: str,
     device: torch.device,
+    cue_cfg: CueConfig | None = None,
 ) -> dict:
     net, model_cfg, train_cfg = load_model(checkpoint, config, device)
+    cue_cfg = _canonical_cue_cfg(cue_cfg)
 
     sanity = sanity_check_ablation(net, device)
     # Metric 1: population bump at matched and mismatched stim/oracle
     m1 = metric1_population_bump(
         net, device,
         conditions=[(90.0, 90.0), (120.0, 90.0), (90.0, 120.0)],
+        cue_cfg=cue_cfg,
     )
     # Metric 1b: tuning curves at channels at various offsets from oracle
     m1b = metric1b_flanking_tuning(
         net, device, oracle_theta=90.0,
         flanking_offsets=[-30.0, -25.0, -20.0, -10.0, 0.0, 10.0, 20.0, 25.0, 30.0],
+        cue_cfg=cue_cfg,
     )
-    m2 = metric2_peak_gain(net, device)
-    m3 = metric3_channel_profile(net, device, stim_theta=90.0)
+    m2 = metric2_peak_gain(net, device, cue_cfg=cue_cfg)
+    m3 = metric3_channel_profile(net, device, stim_theta=90.0, cue_cfg=cue_cfg)
     # Metric 4: readout noise with noise levels scanned.
     # Run twice: narrow subset (central ±15°, captures peak-gain effects like
     # dampening) and wide subset (±30°, captures flank effects like P4 sharpening).
@@ -1736,6 +1880,7 @@ def analyze_one(
         readout_noise_stds=[0.01, 0.03, 0.10, 0.30],
         base_theta=base_theta_,
         subset_channels=narrow_subset,
+        cue_cfg=cue_cfg,
     )
     m4_wide = metric4_fine_discrimination(
         net, device,
@@ -1744,21 +1889,22 @@ def analyze_one(
         readout_noise_stds=[0.01, 0.03, 0.10, 0.30],
         base_theta=base_theta_,
         subset_channels=wide_subset,
+        cue_cfg=cue_cfg,
     )
     # Metric 5: energy split by distance from oracle
-    m5 = metric5_energy_by_distance(net, device, oracle_theta=90.0)
+    m5 = metric5_energy_by_distance(net, device, oracle_theta=90.0, cue_cfg=cue_cfg)
     # Phase 1 sharpening-detection metrics
-    m6 = metric_local_dprime(net, device, n_trials=200, noise_std=0.3, seed=42)
+    m6 = metric_local_dprime(net, device, n_trials=200, noise_std=0.3, seed=42, cue_cfg=cue_cfg)
     m7 = metric_match_vs_near_miss_decoding(
         net, device, n_train=800, n_test=200,
-        noise_std=0.3, readout_noise_std=0.3, seed=42, oracle_theta=90.0,
+        noise_std=0.3, readout_noise_std=0.3, seed=42, oracle_theta=90.0, cue_cfg=cue_cfg,
     )
-    m8 = metric_time_resolved(net, device, oracle_theta=90.0, stim_theta=90.0)
+    m8 = metric_time_resolved(net, device, oracle_theta=90.0, stim_theta=90.0, cue_cfg=cue_cfg)
     m9 = metric_energy_by_relative_distance_normalized(
-        net, device, oracle_theta=90.0,
+        net, device, oracle_theta=90.0, cue_cfg=cue_cfg,
     )
     # Threshold artifact check at stim=ora=90°
-    artifact = artifact_check_threshold(net, device, stim_theta=90.0, oracle_theta=90.0)
+    artifact = artifact_check_threshold(net, device, stim_theta=90.0, oracle_theta=90.0, cue_cfg=cue_cfg)
 
     return {
         "metric1": m1, "metric1b": m1b,
@@ -1768,6 +1914,7 @@ def analyze_one(
         "metric6": m6, "metric7": m7, "metric8": m8, "metric9": m9,
         "sanity": sanity, "artifact": artifact,
         "train_cfg": train_cfg,
+        "cue_cfg": cue_cfg,
     }
 
 
@@ -1780,6 +1927,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--label", type=str, action="append", default=None,
                    help="Optional label per checkpoint (defaults to checkpoint basename).")
     p.add_argument("--device", type=str, default=None, help="cpu / cuda / cuda:0")
+    p.add_argument("--cue-mode", type=str, default="none", choices=["none", "oracle", "stimulus"],
+                   help="Optional analysis-time cue source. Default preserves the zero-cue path.")
+    p.add_argument("--cue-contrast", type=float, default=EVAL_CONTRAST,
+                   help="Cue contrast when --cue-mode is active.")
+    p.add_argument("--cue-prestimulus-steps", type=int, default=0,
+                   help="Number of cue-only steps before stimulus onset. Default 0 preserves the current path.")
+    p.add_argument("--cue-offset", type=float, default=0.0,
+                   help="Angular offset in degrees applied to the cue orientation.")
     return p.parse_args()
 
 
@@ -1794,11 +1949,17 @@ def main() -> None:
     device = torch.device(args.device) if args.device else torch.device(
         "cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Device: {device}")
+    cue_cfg = CueConfig(
+        mode=args.cue_mode,
+        contrast=args.cue_contrast,
+        prestimulus_steps=args.cue_prestimulus_steps,
+        offset=args.cue_offset,
+    )
 
     results_by_label: dict[str, dict] = {}
     for ckpt, cfg, label in zip(args.checkpoint, args.config, labels):
         logger.info(f"--- analyzing {label} ---")
-        results = analyze_one(ckpt, cfg, device)
+        results = analyze_one(ckpt, cfg, device, cue_cfg=cue_cfg)
         print_report(label, results)
         results_by_label[label] = results
 

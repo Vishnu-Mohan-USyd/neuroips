@@ -179,7 +179,12 @@ class FeedbackMechanism(nn.Module):
             center = self.center_gain * (K_center @ q_centered.unsqueeze(-1)).squeeze(-1) * pi_pred
             return surround - center
 
-    def compute_center_excitation(self, q_pred: Tensor, pi_pred: Tensor) -> Tensor:
+    def compute_center_excitation(
+        self,
+        q_pred: Tensor,
+        pi_pred: Tensor,
+        gate_signal: Tensor | None = None,
+    ) -> Tensor:
         """Compute center excitation for L2/3 (only nonzero for Model C).
 
         Uses centered q_pred and clamps non-negative (excitation only).
@@ -245,6 +250,19 @@ class EmergentFeedbackOperator(nn.Module):
         self.n_orient = N
         self.period = cfg.orientation_range
         self.delta_som = delta_som
+        self.center_support_enabled = cfg.emergent_center_support_enabled
+        self.center_support_gain = cfg.emergent_center_support_gain
+        self.center_support_sigma = cfg.emergent_center_support_sigma
+        self.center_support_cue_gated = cfg.emergent_center_support_cue_gated
+        self.recurrent_gain_enabled = cfg.emergent_recurrent_gain_enabled
+        self.recurrent_gain_beta = cfg.emergent_recurrent_gain_beta
+        self.recurrent_gain_sigma = cfg.emergent_recurrent_gain_sigma
+        self.recurrent_gain_cue_gated = cfg.emergent_recurrent_gain_cue_gated
+        self.apical_gain_enabled = cfg.apical_gain_enabled
+        self.apical_gain_beta = cfg.apical_gain_beta
+        self.apical_gain_sigma = cfg.apical_gain_sigma
+        self.apical_gain_cue_gated = cfg.apical_gain_cue_gated
+        self.pi_max = cfg.pi_max
 
         # Build fixed circular basis functions
         basis = self._build_basis(N, cfg.orientation_range)  # [K, N]
@@ -264,6 +282,18 @@ class EmergentFeedbackOperator(nn.Module):
 
         # Cache for circulant matrix (populated by cache_kernels)
         self._cached_inh_circulant: Tensor | None = None
+        self._cached_center_support_circulant: Tensor | None = None
+        self._cached_recurrent_gain_circulant: Tensor | None = None
+        self._cached_apical_gain_circulant: Tensor | None = None
+
+        step = cfg.orientation_range / N
+        thetas = torch.arange(N, dtype=torch.float32) * step
+        center_dists = circular_distance_abs(
+            thetas.unsqueeze(0), thetas[0:1].unsqueeze(1), cfg.orientation_range
+        ).squeeze(0)
+        self.register_buffer(
+            "center_support_dists_sq", center_dists ** 2, persistent=False
+        )
 
     def _build_basis(self, N: int, period: float) -> Tensor:
         """Build circular basis functions over orientation space.
@@ -339,10 +369,58 @@ class EmergentFeedbackOperator(nn.Module):
         """Build and cache circulant matrix for reuse across timesteps."""
         K_inh = self.get_profiles()
         self._cached_inh_circulant = self._to_circulant(K_inh)
+        if self.center_support_enabled and self.center_support_gain > 0.0:
+            center_profile = self._make_center_support_profile()
+            self._cached_center_support_circulant = self._to_circulant(center_profile)
+        if self.recurrent_gain_enabled and self.recurrent_gain_beta > 0.0:
+            recurrent_profile = self._make_recurrent_gain_profile()
+            self._cached_recurrent_gain_circulant = self._to_circulant(recurrent_profile)
+        if self.apical_gain_enabled and self.apical_gain_beta > 0.0:
+            apical_profile = self._make_apical_gain_profile()
+            self._cached_apical_gain_circulant = self._to_circulant(apical_profile)
 
     def uncache_kernels(self) -> None:
         """Clear cached circulant matrix after the forward pass."""
         self._cached_inh_circulant = None
+        self._cached_center_support_circulant = None
+        self._cached_recurrent_gain_circulant = None
+        self._cached_apical_gain_circulant = None
+
+    def _make_center_support_profile(self) -> Tensor:
+        """Build a narrow non-negative Gaussian profile centered at channel 0."""
+        sigma = max(self.center_support_sigma, 1e-6)
+        profile = torch.exp(-self.center_support_dists_sq / (2.0 * sigma ** 2))
+        return profile / profile.sum()
+
+    def _get_center_support_circulant(self) -> Tensor:
+        """Return cached or on-the-fly center-support circulant matrix."""
+        if self._cached_center_support_circulant is not None:
+            return self._cached_center_support_circulant
+        return self._to_circulant(self._make_center_support_profile())
+
+    def _make_recurrent_gain_profile(self) -> Tensor:
+        """Build a narrow non-negative gain profile centered at channel 0."""
+        sigma = max(self.recurrent_gain_sigma, 1e-6)
+        profile = torch.exp(-self.center_support_dists_sq / (2.0 * sigma ** 2))
+        return profile / profile.sum()
+
+    def _get_recurrent_gain_circulant(self) -> Tensor:
+        """Return cached or on-the-fly recurrent-gain circulant matrix."""
+        if self._cached_recurrent_gain_circulant is not None:
+            return self._cached_recurrent_gain_circulant
+        return self._to_circulant(self._make_recurrent_gain_profile())
+
+    def _make_apical_gain_profile(self) -> Tensor:
+        """Build a narrow non-negative apical gain profile centered at channel 0."""
+        sigma = max(self.apical_gain_sigma, 1e-6)
+        profile = torch.exp(-self.center_support_dists_sq / (2.0 * sigma ** 2))
+        return profile / profile.sum()
+
+    def _get_apical_gain_circulant(self) -> Tensor:
+        """Return cached or on-the-fly apical-gain circulant matrix."""
+        if self._cached_apical_gain_circulant is not None:
+            return self._cached_apical_gain_circulant
+        return self._to_circulant(self._make_apical_gain_profile())
 
     def forward(self, q_pred: Tensor, pi_eff: Tensor) -> Tensor:
         """Compute SOM drive from learned inhibitory profile.
@@ -354,6 +432,9 @@ class EmergentFeedbackOperator(nn.Module):
         Returns:
             som_drive: [B, N] -- non-negative drive for SOM ring.
         """
+        if getattr(self, "_analysis_force_zero", False):
+            return torch.zeros_like(q_pred)
+
         N = q_pred.shape[-1]
         q_centered = q_pred - 1.0 / N  # zero-mean so feedback=0 when uninformative
 
@@ -378,3 +459,129 @@ class EmergentFeedbackOperator(nn.Module):
             som_drive = pi_eff * F.softplus(inh_field)
 
         return som_drive
+
+    def compute_center_excitation(
+        self,
+        q_pred: Tensor,
+        pi_eff: Tensor,
+        gate_signal: Tensor | None = None,
+    ) -> Tensor:
+        """Compute optional narrow center support for L2/3 in emergent mode.
+
+        The support term is derived from the predicted orientation distribution
+        rather than the raw sensory input. It stays non-negative, spatially
+        narrow, and weak by construction. When cue gating is enabled, the
+        branch uses a carried cue trace (for example VIP state) so support can
+        persist into the probe window after the raw cue disappears.
+
+        Args:
+            q_pred: [B, N] predicted orientation distribution.
+            pi_eff: [B, 1] effective precision after warmup scaling.
+            gate_signal: Optional [B, N] persistent cue trace used only as a
+                multiplicative gate.
+
+        Returns:
+            center_excitation: [B, N] excitatory input to L2/3 drive (>= 0).
+        """
+        if getattr(self, "_analysis_force_zero", False):
+            return torch.zeros_like(q_pred)
+
+        if not self.center_support_enabled or self.center_support_gain <= 0.0:
+            return torch.zeros_like(q_pred)
+
+        if gate_signal is not None:
+            assert gate_signal.shape == q_pred.shape, (
+                f"gate_signal shape {gate_signal.shape} must match q_pred shape {q_pred.shape}"
+            )
+
+        N = q_pred.shape[-1]
+        q_centered = q_pred - 1.0 / N
+        support_circulant = self._get_center_support_circulant()
+        support_field = (support_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+        center_exc = self.center_support_gain * pi_eff * F.relu(support_field)
+
+        if self.center_support_cue_gated:
+            if gate_signal is None:
+                return torch.zeros_like(center_exc)
+            support_gate = gate_signal.clamp_min(0.0).amax(dim=-1, keepdim=True)
+            center_exc = center_exc * support_gate
+
+        return center_exc
+
+    def compute_recurrent_gain(
+        self,
+        q_pred: Tensor,
+        pi_eff: Tensor,
+        gate_signal: Tensor | None = None,
+    ) -> Tensor:
+        """Compute a bounded multiplicative gain on the L2/3 recurrent term.
+
+        The gain is prediction-driven, spatially narrow, non-negative, and
+        optionally gated by a persistent cue trace (for example VIP state).
+        It is bounded in [0, beta] and additionally scaled by the current
+        prediction precision to preserve recurrence stability during training.
+        """
+        if getattr(self, "_analysis_force_zero", False):
+            return torch.zeros_like(q_pred)
+
+        if not self.recurrent_gain_enabled or self.recurrent_gain_beta <= 0.0:
+            return torch.zeros_like(q_pred)
+
+        if gate_signal is not None:
+            assert gate_signal.shape == q_pred.shape, (
+                f"gate_signal shape {gate_signal.shape} must match q_pred shape {q_pred.shape}"
+            )
+
+        q_centered = q_pred - 1.0 / q_pred.shape[-1]
+        gain_circulant = self._get_recurrent_gain_circulant()
+        gain_field = (gain_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+        gain_field = F.relu(gain_field)
+        gain_field = gain_field / (gain_field.amax(dim=-1, keepdim=True) + 1e-8)
+
+        if self.recurrent_gain_cue_gated:
+            if gate_signal is None:
+                return torch.zeros_like(gain_field)
+            gate_profile = gate_signal.clamp_min(0.0)
+            gate_profile = gate_profile / (gate_profile.amax(dim=-1, keepdim=True) + 1e-8)
+            gain_field = gain_field * gate_profile
+
+        precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
+        return self.recurrent_gain_beta * precision_scale * gain_field
+
+    def compute_apical_gain(
+        self,
+        q_pred: Tensor,
+        pi_eff: Tensor,
+        gate_signal: Tensor | None = None,
+    ) -> Tensor:
+        """Compute a bounded multiplicative gain on the feedforward excitatory term.
+
+        This is a prediction-coupled apical-style gain branch: narrow,
+        non-negative, optionally persistent-cue gated, and bounded in [0, beta].
+        """
+        if getattr(self, "_analysis_force_zero", False):
+            return torch.zeros_like(q_pred)
+
+        if not self.apical_gain_enabled or self.apical_gain_beta <= 0.0:
+            return torch.zeros_like(q_pred)
+
+        if gate_signal is not None:
+            assert gate_signal.shape == q_pred.shape, (
+                f"gate_signal shape {gate_signal.shape} must match q_pred shape {q_pred.shape}"
+            )
+
+        q_centered = q_pred - 1.0 / q_pred.shape[-1]
+        gain_circulant = self._get_apical_gain_circulant()
+        gain_field = (gain_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+        gain_field = F.relu(gain_field)
+        gain_field = gain_field / (gain_field.amax(dim=-1, keepdim=True) + 1e-8)
+
+        if self.apical_gain_cue_gated:
+            if gate_signal is None:
+                return torch.zeros_like(gain_field)
+            gate_profile = gate_signal.clamp_min(0.0)
+            gate_profile = gate_profile / (gate_profile.amax(dim=-1, keepdim=True) + 1e-8)
+            gain_field = gain_field * gate_profile
+
+        precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
+        return self.apical_gain_beta * precision_scale * gain_field

@@ -1,4 +1,4 @@
-"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing."""
+"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, DeepTemplate, VIPRing, SOMRing."""
 
 from __future__ import annotations
 
@@ -252,6 +252,8 @@ class V1L23Ring(nn.Module):
         template_modulation: Tensor,
         r_som: Tensor,
         r_pv: Tensor,
+        recurrent_gain_modulation: Tensor | None = None,
+        excitatory_gain_modulation: Tensor | None = None,
     ) -> Tensor:
         """One Euler step for L2/3.
 
@@ -262,6 +264,12 @@ class V1L23Ring(nn.Module):
                 Zeros for models A, B, D. Center excitation for model C.
             r_som: [B, N] — current SOM rates.
             r_pv: [B, 1] — current PV rate.
+            recurrent_gain_modulation: Optional [B, N] bounded multiplicative
+                gain on the recurrent contribution only. When None, the
+                recurrent pathway is unchanged.
+            excitatory_gain_modulation: Optional [B, N] bounded multiplicative
+                gain on the combined excitatory drive (ff + rec) only. When
+                None, the baseline excitatory pathway is unchanged.
 
         Returns:
             r_l23: Updated L2/3 rates [B, N].
@@ -272,9 +280,23 @@ class V1L23Ring(nn.Module):
         # Structured recurrence (kernel rebuilt from 2 params)
         W_rec = self.W_rec  # [N, N]
         rec = F.linear(r_l23_prev, W_rec)  # [B, N]
+        if recurrent_gain_modulation is not None:
+            assert recurrent_gain_modulation.shape == rec.shape, (
+                f"recurrent_gain_modulation shape {recurrent_gain_modulation.shape} "
+                f"must match recurrent term shape {rec.shape}"
+            )
+            rec = rec * (1.0 + recurrent_gain_modulation.clamp_min(0.0))
+
+        exc_drive = ff + rec
+        if excitatory_gain_modulation is not None:
+            assert excitatory_gain_modulation.shape == exc_drive.shape, (
+                f"excitatory_gain_modulation shape {excitatory_gain_modulation.shape} "
+                f"must match excitatory drive shape {exc_drive.shape}"
+            )
+            exc_drive = exc_drive * (1.0 + excitatory_gain_modulation.clamp_min(0.0))
 
         # L2/3 drive
-        l23_drive = (ff + rec + template_modulation
+        l23_drive = (exc_drive + template_modulation
                      - self.w_som(r_som) - self.w_pv_l23(r_pv))
 
         # Euler update
@@ -317,6 +339,35 @@ class DeepTemplate(nn.Module):
             deep_template: [B, N] — expectation template.
         """
         return self.gain * q_pred * pi_pred
+
+
+class VIPRing(nn.Module):
+    """VIP disinhibitory ring population driven by the cue tensor.
+
+    This is intentionally minimal: cue channels are low-pass filtered into a
+    feature-specific VIP state, and the top-level network applies VIP as a
+    subtractive term on SOM drive. With zero cue, rates remain exactly zero.
+    """
+
+    def __init__(self, cfg: ModelConfig):
+        super().__init__()
+        self.dt = cfg.dt
+        self.tau_vip = cfg.tau_vip
+
+    def forward(self, cue_input: Tensor, r_vip_prev: Tensor) -> Tensor:
+        """One Euler step for VIP ring.
+
+        Args:
+            cue_input: [B, N] -- orientation-channel cue input.
+            r_vip_prev: [B, N] -- previous VIP rates.
+
+        Returns:
+            r_vip: Updated VIP rates [B, N].
+        """
+        r_vip = r_vip_prev + (self.dt / self.tau_vip) * (
+            -r_vip_prev + rectified_softplus(cue_input)
+        )
+        return r_vip
 
 
 class SOMRing(nn.Module):

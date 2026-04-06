@@ -11,7 +11,7 @@ from torch import Tensor
 
 from src.config import ModelConfig
 from src.state import NetworkState, StepAux, initial_state
-from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
+from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, VIPRing, SOMRing
 from src.model.v2_context import V2ContextModule
 from src.model.feedback import FeedbackMechanism, EmergentFeedbackOperator
 from src.utils import circular_distance_abs, circular_gaussian
@@ -40,6 +40,7 @@ class LaminarV1V2Network(nn.Module):
         self.l23 = V1L23Ring(cfg)
         self.deep_template = DeepTemplate(cfg)
         self.som = SOMRing(cfg)
+        self.vip = VIPRing(cfg) if cfg.vip_enabled else None
         self.v2 = V2ContextModule(cfg)
 
         # Feedback: emergent (learned) or fixed (hardcoded mechanism)
@@ -193,18 +194,53 @@ class LaminarV1V2Network(nn.Module):
 
         # 4. Deep template (uses effective precision)
         deep_tmpl = self.deep_template(q_pred, pi_pred_eff)
+        if self.vip is None:
+            r_vip = torch.zeros_like(state.r_som)
+        else:
+            r_vip = self.vip(cue, state.r_vip)
 
         # 5-6. Feedback pathway (branched by mode)
         if self.cfg.feedback_mode == 'emergent':
-            # Emergent: learned operator outputs SOM drive only
+            # Emergent: learned operator outputs SOM drive plus optional narrow
+            # prediction-driven center support and recurrent gain for L2/3.
             som_drive = self.feedback(q_pred, pi_pred_eff)
-            center_exc = torch.zeros_like(som_drive)
+            center_exc = self.feedback.compute_center_excitation(
+                q_pred, pi_pred_eff, gate_signal=r_vip
+            )
+            recurrent_gain_mod = self.feedback.compute_recurrent_gain(
+                q_pred, pi_pred_eff, gate_signal=r_vip
+            )
+            apical_target = self.feedback.compute_apical_gain(
+                q_pred, pi_pred_eff, gate_signal=r_vip
+            )
+            if self.cfg.apical_gain_mode == "persistent_sum":
+                a_apical = state.a_apical + (self.cfg.dt / self.cfg.apical_gain_tau) * (
+                    -state.a_apical + apical_target
+                )
+            elif self.cfg.apical_gain_mode == "instantaneous_sum":
+                a_apical = apical_target
+            else:
+                raise ValueError(
+                    f"Unsupported apical_gain_mode={self.cfg.apical_gain_mode!r}. "
+                    "Expected 'persistent_sum' or 'instantaneous_sum'."
+                )
+            som_drive = som_drive - self.cfg.vip_gain * r_vip
             r_som = self.som(som_drive, state.r_som)
             l4_to_l23 = r_l4  # No error signal in emergent mode
-            r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
+            r_l23 = self.l23(
+                l4_to_l23,
+                state.r_l23,
+                center_exc,
+                r_som,
+                r_pv,
+                recurrent_gain_modulation=recurrent_gain_mod,
+                excitatory_gain_modulation=a_apical,
+            )
         else:
             # Fixed: mechanism-specific computation
+            a_apical = torch.zeros_like(state.a_apical)
             som_drive = self.feedback.compute_som_drive(q_pred, pi_pred_eff)
+            som_drive = som_drive - self.cfg.vip_gain * r_vip
             r_som = self.som(som_drive, state.r_som)
             template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
             l4_to_l23 = self.feedback.compute_error_signal(r_l4, deep_tmpl)
@@ -215,6 +251,8 @@ class LaminarV1V2Network(nn.Module):
             r_l23=r_l23,
             r_pv=r_pv,
             r_som=r_som,
+            r_vip=r_vip,
+            a_apical=a_apical,
             adaptation=adaptation,
             h_v2=h_v2,
             deep_template=deep_tmpl,
@@ -274,6 +312,7 @@ class LaminarV1V2Network(nn.Module):
                  q_pred_all [B, T, N], pi_pred_all [B, T, 1],
                  state_logits_all [B, T, 3], deep_template_all [B, T, N],
                  r_l4_all [B, T, N], r_pv_all [B, T, 1], r_som_all [B, T, N],
+                 r_vip_all [B, T, N],
                  p_cw_all [B, T, 1].
         """
         N = self.cfg.n_orientations
@@ -303,6 +342,7 @@ class LaminarV1V2Network(nn.Module):
         r_l4_all = torch.empty(B, T, N, device=device)
         r_pv_all = torch.empty(B, T, 1, device=device)
         r_som_all = torch.empty(B, T, N, device=device)
+        r_vip_all = torch.empty(B, T, N, device=device)
         q_pred_all = torch.empty(B, T, N, device=device)
         pi_pred_all = torch.empty(B, T, 1, device=device)
         pi_pred_eff_all = torch.empty(B, T, 1, device=device)
@@ -333,6 +373,7 @@ class LaminarV1V2Network(nn.Module):
                 r_l4_all[:, t] = state.r_l4
                 r_pv_all[:, t] = state.r_pv
                 r_som_all[:, t] = state.r_som
+                r_vip_all[:, t] = state.r_vip
                 q_pred_all[:, t] = aux_t.q_pred
                 pi_pred_all[:, t] = aux_t.pi_pred
                 pi_pred_eff_all[:, t] = aux_t.pi_pred_eff
@@ -353,6 +394,7 @@ class LaminarV1V2Network(nn.Module):
             "r_l4_all": r_l4_all,                 # [B, T, N]
             "r_pv_all": r_pv_all,                 # [B, T, 1]
             "r_som_all": r_som_all,               # [B, T, N]
+            "r_vip_all": r_vip_all,               # [B, T, N]
             "p_cw_all": p_cw_all,                 # [B, T, 1]
         }
 

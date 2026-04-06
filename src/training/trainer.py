@@ -118,6 +118,77 @@ def make_warmup_cosine_scheduler(
 # Stimulus sequence building
 # ---------------------------------------------------------------------------
 
+def _build_training_cues(
+    metadata,
+    model_cfg: ModelConfig,
+    stim_cfg: StimulusConfig,
+) -> Tensor:
+    """Return per-presentation Stage 2 cue tensors with backward-compatible defaults."""
+    cues = metadata.cues.clone()
+    if stim_cfg.cue_mode == "none":
+        return cues
+    if stim_cfg.cue_mode != "current":
+        raise ValueError(
+            f"Unsupported cue_mode={stim_cfg.cue_mode!r}. "
+            "Expected 'none' or 'current'."
+        )
+
+    B, S = metadata.orientations.shape
+    N = model_cfg.n_orientations
+    cue_flat = generate_grating(
+        metadata.orientations.reshape(-1),
+        torch.full((B * S,), stim_cfg.cue_contrast, dtype=metadata.orientations.dtype),
+        n_orientations=N,
+        sigma=model_cfg.sigma_ff,
+        n=model_cfg.naka_rushton_n,
+        c50=model_cfg.naka_rushton_c50,
+        period=model_cfg.orientation_range,
+    )
+    return cues + cue_flat.reshape(B, S, N)
+
+
+def _expand_cues(
+    cue_presentations: Tensor,
+    train_cfg: TrainingConfig,
+    stim_cfg: StimulusConfig,
+) -> Tensor:
+    """Expand per-presentation cues to the full training timeline."""
+    B, S, N = cue_presentations.shape
+    steps_on = train_cfg.steps_on
+    steps_isi = train_cfg.steps_isi
+    steps_per = steps_on + steps_isi
+    if stim_cfg.cue_prestimulus_steps <= 0:
+        return cue_presentations.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, S * steps_per, N)
+
+    cue_steps = min(stim_cfg.cue_prestimulus_steps, steps_isi)
+    cue_temporal = torch.zeros(B, S, steps_per, N, dtype=cue_presentations.dtype)
+    if cue_steps > 0 and S > 1:
+        cue_temporal[:, :-1, -cue_steps:, :] = (
+            cue_presentations[:, 1:].unsqueeze(2).expand(-1, -1, cue_steps, -1)
+        )
+    return cue_temporal.reshape(B, S * steps_per, N)
+
+
+def _ambiguous_components(
+    orientations: Tensor,
+    model_cfg: ModelConfig,
+    stim_cfg: StimulusConfig,
+) -> tuple[Tensor, Tensor]:
+    """Return the two mixture components used for ambiguous presentations."""
+    if stim_cfg.ambiguous_mode == "one_sided":
+        return orientations, (orientations + stim_cfg.ambiguous_offset) % model_cfg.orientation_range
+    if stim_cfg.ambiguous_mode == "symmetric_local_competitor":
+        half_offset = 0.5 * stim_cfg.ambiguous_offset
+        return (
+            (orientations - half_offset) % model_cfg.orientation_range,
+            (orientations + half_offset) % model_cfg.orientation_range,
+        )
+    raise ValueError(
+        f"Unsupported ambiguous_mode={stim_cfg.ambiguous_mode!r}. "
+        "Expected 'one_sided' or 'symmetric_local_competitor'."
+    )
+
+
 def build_stimulus_sequence(
     metadata,
     model_cfg: ModelConfig,
@@ -133,8 +204,10 @@ def build_stimulus_sequence(
         metadata: SequenceMetadata from HMMSequenceGenerator.
         model_cfg: ModelConfig for population coding params.
         train_cfg: TrainingConfig for temporal params.
-        stim_cfg: StimulusConfig. `stim_cfg.ambiguous_offset` controls the angular
-            offset between the two orientations of an ambiguous mixture stimulus.
+        stim_cfg: StimulusConfig. `stim_cfg.ambiguous_mode` and
+            `stim_cfg.ambiguous_offset` control ambiguous-mixture construction.
+            `stim_cfg.cue_mode` and `stim_cfg.cue_prestimulus_steps` control
+            cue generation and timing.
 
     Returns:
         stimulus_seq: [B, T_total, N] — population-coded stimuli.
@@ -166,12 +239,9 @@ def build_stimulus_sequence(
     # Handle ambiguous stimuli in batch
     is_amb_flat = metadata.is_ambiguous.reshape(-1)      # [B*S]
     if is_amb_flat.any():
-        # Second orientation of the mixture is offset by stim_cfg.ambiguous_offset
-        # (degrees). Previously hardcoded to 15.0, which silently ignored the
-        # StimulusConfig field of the same name.
-        oris2_flat = (oris_flat + stim_cfg.ambiguous_offset) % model_cfg.orientation_range
+        amb_theta1_flat, amb_theta2_flat = _ambiguous_components(oris_flat, model_cfg, stim_cfg)
         stim_amb = make_ambiguous_stimulus(
-            oris_flat[is_amb_flat], oris2_flat[is_amb_flat], contrasts_flat[is_amb_flat],
+            amb_theta1_flat[is_amb_flat], amb_theta2_flat[is_amb_flat], contrasts_flat[is_amb_flat],
             n_orientations=N,
             sigma=model_cfg.sigma_ff,
             n=model_cfg.naka_rushton_n,
@@ -186,8 +256,8 @@ def build_stimulus_sequence(
     temporal[:, :, :steps_on, :] = stim_all.unsqueeze(2).expand(-1, -1, steps_on, -1)
     stimulus_seq = temporal.reshape(B, T_total, N)
 
-    # Cue: [B, S, N] → expand to all timesteps per presentation
-    cue_seq = metadata.cues.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, T_total, N)
+    cue_presentations = _build_training_cues(metadata, model_cfg, stim_cfg)
+    cue_seq = _expand_cues(cue_presentations, train_cfg, stim_cfg)
 
     # Task state: [B, S, 2] → expand to all timesteps per presentation
     task_state_seq = metadata.task_states.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, T_total, 2)

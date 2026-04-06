@@ -55,6 +55,7 @@ class ConditionData:
     pi_pred: Tensor        # [n_trials, T, 1]
     state_logits: Tensor   # [n_trials, T, 3]
     deep_template: Tensor  # [n_trials, T, N]
+    r_vip: Tensor | None = None  # [n_trials, T, N] when VIP scaffold is present
 
 
 @dataclass
@@ -194,7 +195,7 @@ class ParadigmBase:
         n = ts.stimulus.shape[0]
         chunks: dict[str, list[Tensor]] = {
             k: [] for k in ["r_l4", "r_l23", "r_pv", "r_som",
-                            "q_pred", "pi_pred", "state_logits", "deep_template"]
+                            "q_pred", "pi_pred", "state_logits", "deep_template", "r_vip"]
         }
 
         for i in range(0, n, batch_size):
@@ -215,5 +216,6 @@ class ParadigmBase:
             chunks["pi_pred"].append(aux["pi_pred_all"])
             chunks["state_logits"].append(aux["state_logits_all"])
             chunks["deep_template"].append(aux["deep_template_all"])
+            chunks["r_vip"].append(aux["r_vip_all"])
 
         return ConditionData(**{k: torch.cat(v) for k, v in chunks.items()})

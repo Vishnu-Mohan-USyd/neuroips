@@ -176,6 +176,21 @@ class TestConfig:
         assert train_cfg.batch_size == 32
         assert stim_cfg.n_states == 3
 
+    def test_stimulus_defaults_preserve_legacy_path(self):
+        stim_cfg = StimulusConfig()
+        assert stim_cfg.cue_mode == "none"
+        assert stim_cfg.cue_prestimulus_steps == 0
+        assert stim_cfg.ambiguous_mode == "one_sided"
+
+    def test_option_b_prototype_config_loads(self):
+        model_cfg, train_cfg, stim_cfg = load_config("config/cue_local_competitor_oracle.yaml")
+        assert model_cfg.vip_enabled is True
+        assert train_cfg.freeze_v2 is True
+        assert train_cfg.oracle_shift_timing is True
+        assert stim_cfg.cue_mode == "current"
+        assert stim_cfg.cue_prestimulus_steps == 2
+        assert stim_cfg.ambiguous_mode == "symmetric_local_competitor"
+
 
 # ===================================================================
 # NetworkState
@@ -187,14 +202,19 @@ class TestNetworkState:
         state = initial_state(batch_size=4)
         assert state.r_l4.shape == (4, 36)
         assert state.r_pv.shape == (4, 1)
+        assert state.a_apical.shape == (4, 36)
         assert state.h_v2.shape == (4, 16)
         assert (state.r_l4 == 0).all()
 
     def test_named_tuple_fields(self):
         state = initial_state(batch_size=1)
         assert hasattr(state, "r_l4")
+        assert hasattr(state, "r_vip")
+        assert hasattr(state, "a_apical")
         assert hasattr(state, "deep_template")
-        assert len(state) == 7
+        assert state._fields == (
+            "r_l4", "r_l23", "r_pv", "r_som", "r_vip", "a_apical", "adaptation", "h_v2", "deep_template"
+        )
 
 
 # ===================================================================

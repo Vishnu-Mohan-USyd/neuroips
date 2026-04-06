@@ -357,6 +357,54 @@ class TestBuildStimulusSequence:
         _, _, _, thetas, next_thetas, _ = build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
         assert torch.equal(next_thetas[:, :-1], thetas[:, 1:])
 
+    def test_explicit_metadata_cues_keep_legacy_full_block_expansion(self, model_cfg, train_cfg, stim_cfg):
+        from src.stimulus.sequences import SequenceMetadata
+
+        N = model_cfg.n_orientations
+        cue = torch.linspace(0.0, 1.0, N).reshape(1, 1, N)
+        metadata = SequenceMetadata(
+            orientations=torch.tensor([[30.0]]),
+            states=torch.tensor([[0]], dtype=torch.long),
+            contrasts=torch.tensor([[0.8]]),
+            is_ambiguous=torch.tensor([[False]]),
+            task_states=torch.tensor([[[1.0, 0.0]]]),
+            cues=cue,
+        )
+
+        _, cue_seq, _, _, _, _ = build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
+        expected = cue.expand(1, train_cfg.steps_on + train_cfg.steps_isi, N)
+        assert torch.allclose(cue_seq, expected)
+
+    def test_current_cue_mode_places_cue_in_prestimulus_isi(self, model_cfg):
+        from src.stimulus.gratings import generate_grating
+        from src.stimulus.sequences import SequenceMetadata
+
+        train_cfg = TrainingConfig(steps_on=3, steps_isi=2)
+        stim_cfg = StimulusConfig(cue_mode="current", cue_prestimulus_steps=2)
+        metadata = SequenceMetadata(
+            orientations=torch.tensor([[30.0, 45.0]]),
+            states=torch.tensor([[0, 0]], dtype=torch.long),
+            contrasts=torch.tensor([[0.8, 0.8]]),
+            is_ambiguous=torch.tensor([[False, False]]),
+            task_states=torch.tensor([[[1.0, 0.0], [1.0, 0.0]]]),
+            cues=torch.zeros(1, 2, model_cfg.n_orientations),
+        )
+
+        _, cue_seq, _, _, _, _ = build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
+        expected_cue = generate_grating(
+            torch.tensor([45.0]),
+            torch.tensor([stim_cfg.cue_contrast]),
+            n_orientations=model_cfg.n_orientations,
+            sigma=model_cfg.sigma_ff,
+            n=model_cfg.naka_rushton_n,
+            c50=model_cfg.naka_rushton_c50,
+            period=model_cfg.orientation_range,
+        )[0]
+
+        assert torch.allclose(cue_seq[0, :3], torch.zeros_like(cue_seq[0, :3]))
+        assert torch.allclose(cue_seq[0, 3:5], expected_cue.unsqueeze(0).expand(2, -1))
+        assert torch.allclose(cue_seq[0, 5:], torch.zeros_like(cue_seq[0, 5:]))
+
     def test_ambiguous_offset_flows_through(self, model_cfg, train_cfg):
         """Regression: stim_cfg.ambiguous_offset must control the second
         orientation of ambiguous mixtures in build_stimulus_sequence.
@@ -433,6 +481,37 @@ class TestBuildStimulusSequence:
             f"pop15[10]={pop15[ch_second_20].item():.4f} "
             f"pop20[10]={pop20[ch_second_20].item():.4f}"
         )
+
+    def test_symmetric_local_competitor_centers_on_true_orientation(self, model_cfg, train_cfg):
+        from src.stimulus.gratings import make_ambiguous_stimulus
+        from src.stimulus.sequences import SequenceMetadata
+
+        N = model_cfg.n_orientations
+        metadata = SequenceMetadata(
+            orientations=torch.tensor([[30.0]]),
+            states=torch.tensor([[0]], dtype=torch.long),
+            contrasts=torch.tensor([[0.8]]),
+            is_ambiguous=torch.tensor([[True]]),
+            task_states=torch.tensor([[[1.0, 0.0]]]),
+            cues=torch.zeros(1, 1, N),
+        )
+        stim_cfg = StimulusConfig(
+            ambiguous_offset=20.0,
+            ambiguous_mode="symmetric_local_competitor",
+        )
+
+        stim_sym, *_ = build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
+        expected = make_ambiguous_stimulus(
+            torch.tensor([20.0]),
+            torch.tensor([40.0]),
+            torch.tensor([0.8]),
+            n_orientations=N,
+            sigma=model_cfg.sigma_ff,
+            n=model_cfg.naka_rushton_n,
+            c50=model_cfg.naka_rushton_c50,
+            period=model_cfg.orientation_range,
+        )
+        assert torch.allclose(stim_sym[0, 0], expected[0], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +594,41 @@ class TestStage2Smoke:
             from src.training.stage2_feedback import run_stage2
             result = run_stage2(net, loss_fn, cfg, train, stim, seed=42)
             assert not math.isnan(result.final_loss), f"NaN loss for {mech.value}"
+
+    def test_stage2_runs_with_cued_local_competitor_settings(self):
+        """Cue/VIP/local-competitor prototype settings should run end-to-end."""
+        cfg = ModelConfig(
+            mechanism=MechanismType.CENTER_SURROUND,
+            feedback_mode='emergent',
+            vip_enabled=True,
+        )
+        train = TrainingConfig(
+            stage2_n_steps=1,
+            batch_size=2,
+            seq_length=4,
+            steps_on=3,
+            steps_isi=2,
+            ambiguous_fraction=0.5,
+            freeze_v2=True,
+            oracle_shift_timing=True,
+        )
+        stim = StimulusConfig(
+            n_states=2,
+            jitter_range=0.0,
+            transition_step=5.0,
+            ambiguous_offset=10.0,
+            ambiguous_mode="symmetric_local_competitor",
+            cue_mode="current",
+            cue_prestimulus_steps=2,
+        )
+        net = LaminarV1V2Network(cfg)
+        loss_fn = CompositeLoss(train, cfg)
+
+        from src.training.stage2_feedback import run_stage2
+        result = run_stage2(net, loss_fn, cfg, train, stim, seed=42)
+
+        assert result.n_steps_trained == 1
+        assert not math.isnan(result.final_loss)
 
 
 # ---------------------------------------------------------------------------

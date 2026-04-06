@@ -23,6 +23,7 @@ from src.experiments.paradigm_base import (
 from src.experiments.hidden_state import HiddenStateParadigm
 from src.experiments.omission import OmissionParadigm
 from src.experiments.ambiguous import AmbiguousParadigm
+from src.experiments.cue_local_competitor import CueLocalCompetitorParadigm
 from src.experiments.task_relevance import TaskRelevanceParadigm
 from src.experiments.surprise_dissociation import SurpriseDissociationParadigm
 
@@ -327,7 +328,77 @@ class TestTaskRelevance:
 
 
 # ---------------------------------------------------------------------------
-# P5: Surprise Dissociation
+# P5: Cue Local Competitor
+# ---------------------------------------------------------------------------
+
+class TestCueLocalCompetitor:
+    def test_condition_count(self, net_and_cfg):
+        net, cfg = net_and_cfg
+        p = CueLocalCompetitorParadigm(net, cfg)
+        trials = p.generate_trials(n_trials=2, seed=42)
+        assert len(trials) == 12
+        assert "cw_valid_match" in trials
+        assert "cw_neutral_competitor" in trials
+        assert "ccw_invalid_match" in trials
+
+    def test_valid_cue_present_only_prestimulus(self, net_and_cfg):
+        net, cfg = net_and_cfg
+        p = CueLocalCompetitorParadigm(net, cfg)
+        trials = p.generate_trials(n_trials=1, seed=42)
+        cue = trials["cw_valid_match"].cue
+        assert cue is not None
+        cue_start, cue_end = p.temporal_windows["prestimulus"]
+        assert cue[0, cue_start:cue_end].abs().sum() > 0
+        assert cue[0, :cue_start].abs().sum() == 0
+        assert cue[0, cue_end:].abs().sum() == 0
+
+    def test_neutral_cue_is_zero(self, net_and_cfg):
+        net, cfg = net_and_cfg
+        p = CueLocalCompetitorParadigm(net, cfg)
+        trials = p.generate_trials(n_trials=1, seed=42)
+        cue = trials["cw_neutral_match"].cue
+        assert cue is not None
+        assert torch.allclose(cue, torch.zeros_like(cue))
+
+    def test_competitor_probe_differs_from_match(self, net_and_cfg):
+        net, cfg = net_and_cfg
+        p = CueLocalCompetitorParadigm(net, cfg)
+        trials = p.generate_trials(n_trials=1, seed=42)
+        po = p.probe_onset
+        tc = p.trial_cfg
+        match_probe = trials["cw_valid_match"].stimulus[:, po:po + tc.steps_on]
+        competitor_probe = trials["cw_valid_competitor"].stimulus[:, po:po + tc.steps_on]
+        assert not torch.allclose(match_probe, competitor_probe, atol=1e-6)
+
+    def test_run_exposes_vip_trajectory(self):
+        torch.manual_seed(0)
+        cfg = ModelConfig(
+            mechanism=MechanismType.DAMPENING,
+            n_orientations=36,
+            feedback_mode='fixed',
+            vip_enabled=True,
+            vip_gain=2.0,
+        )
+        net = LaminarV1V2Network(cfg)
+        net.eval()
+        p = CueLocalCompetitorParadigm(net, cfg)
+        result = p.run(n_trials=2, seed=42, batch_size=4)
+        cd = result.conditions["cw_valid_match"]
+        assert cd.r_vip is not None
+        assert cd.r_vip.shape == (2, 112, 36)
+        cue_start, cue_end = result.trial_info["cue_window"]
+        assert cd.r_vip[:, cue_start:cue_end].mean().item() > 0.0
+
+    def test_trial_info(self, net_and_cfg):
+        net, cfg = net_and_cfg
+        p = CueLocalCompetitorParadigm(net, cfg)
+        result = p.run(n_trials=1, seed=42, batch_size=2)
+        assert "competitor_offset" in result.trial_info
+        assert "cue_window" in result.trial_info
+
+
+# ---------------------------------------------------------------------------
+# P6: Surprise Dissociation
 # ---------------------------------------------------------------------------
 
 class TestSurpriseDissociation:
@@ -389,14 +460,15 @@ class TestSurpriseDissociation:
 # ---------------------------------------------------------------------------
 
 class TestAllParadigmsSmoke:
-    """End-to-end smoke tests for all 5 paradigms."""
+    """End-to-end smoke tests for all paradigms."""
 
     @pytest.fixture(scope="class")
     def all_results(self, net_and_cfg):
         net, cfg = net_and_cfg
         results = {}
         for ParadigmClass in [HiddenStateParadigm, OmissionParadigm,
-                               AmbiguousParadigm, TaskRelevanceParadigm,
+                               AmbiguousParadigm, CueLocalCompetitorParadigm,
+                               TaskRelevanceParadigm,
                                SurpriseDissociationParadigm]:
             if ParadigmClass == HiddenStateParadigm:
                 p = ParadigmClass(net, cfg, probe_deviations=[0.0, 45.0])
@@ -407,8 +479,8 @@ class TestAllParadigmsSmoke:
         return results
 
     def test_all_five_present(self, all_results):
-        assert len(all_results) == 5
-        expected = {"hidden_state", "omission", "ambiguous",
+        assert len(all_results) == 6
+        expected = {"hidden_state", "omission", "ambiguous", "cue_local_competitor",
                     "task_relevance", "surprise_dissociation"}
         assert set(all_results.keys()) == expected
 
@@ -439,3 +511,5 @@ class TestAllParadigmsSmoke:
                 assert cd.pi_pred.shape[:2] == (n, T)
                 assert cd.state_logits.shape[:2] == (n, T)
                 assert cd.deep_template.shape[:2] == (n, T)
+                assert cd.r_vip is not None
+                assert cd.r_vip.shape[:2] == (n, T)

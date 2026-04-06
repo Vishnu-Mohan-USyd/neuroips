@@ -12,7 +12,7 @@ from src.config import ModelConfig
 from src.utils import circular_gaussian_fwhm, shifted_softplus, rectified_softplus
 from src.state import initial_state
 from src.stimulus.gratings import population_code, naka_rushton, generate_grating
-from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
+from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, VIPRing, SOMRing
 
 
 @pytest.fixture
@@ -644,6 +644,59 @@ class TestV1L23Basics:
 
         assert out_td.mean().item() >= out_zero.mean().item() - 0.01
 
+    def test_recurrent_gain_modulation_amplifies_local_recurrence(self, l23, cfg):
+        """Local recurrent gain should amplify only the targeted recurrent channel."""
+        B = 1
+        r_l4 = torch.zeros(B, cfg.n_orientations)
+        r_l23_prev = torch.zeros(B, cfg.n_orientations)
+        r_l23_prev[0, 9] = 1.0
+        template_modulation = torch.zeros(B, cfg.n_orientations)
+        r_som = torch.zeros(B, cfg.n_orientations)
+        r_pv = torch.zeros(B, 1)
+
+        out_base = l23(r_l4, r_l23_prev, template_modulation, r_som, r_pv)
+
+        recurrent_gain = torch.zeros(B, cfg.n_orientations)
+        recurrent_gain[0, 9] = 0.5
+        out_gain = l23(
+            r_l4,
+            r_l23_prev,
+            template_modulation,
+            r_som,
+            r_pv,
+            recurrent_gain_modulation=recurrent_gain,
+        )
+
+        assert out_gain[0, 9].item() > out_base[0, 9].item()
+        assert torch.allclose(out_gain[0, 0], out_base[0, 0], atol=1e-7)
+
+    def test_excitatory_gain_modulation_affects_ff_plus_rec(self, l23, cfg):
+        """Apical gain should amplify the combined excitatory drive ff + rec."""
+        B = 1
+        r_l4 = torch.zeros(B, cfg.n_orientations)
+        r_l4[0, 9] = 1.0
+        r_l23_prev = torch.zeros(B, cfg.n_orientations)
+        r_l23_prev[0, 9] = 1.0
+        template_modulation = torch.zeros(B, cfg.n_orientations)
+        r_som = torch.zeros(B, cfg.n_orientations)
+        r_pv = torch.zeros(B, 1)
+
+        out_base = l23(r_l4, r_l23_prev, template_modulation, r_som, r_pv)
+
+        exc_gain = torch.zeros(B, cfg.n_orientations)
+        exc_gain[0, 9] = 0.5
+        out_gain = l23(
+            r_l4,
+            r_l23_prev,
+            template_modulation,
+            r_som,
+            r_pv,
+            excitatory_gain_modulation=exc_gain,
+        )
+
+        assert out_gain[0, 9].item() > out_base[0, 9].item()
+        assert torch.allclose(out_gain[0, 0], out_base[0, 0], atol=1e-7)
+
 
 class TestV1L23Stability:
 
@@ -768,6 +821,40 @@ class TestDeepTemplate:
         gain = dt.gain.item()
         assert out[0, 9].item() == pytest.approx(gain * 3.0, rel=0.05)
         assert out[0, 0].item() == pytest.approx(0.0, abs=1e-6)
+
+
+# ===================================================================
+# Phase 3: VIPRing
+# ===================================================================
+
+class TestVIPRing:
+
+    def test_output_shape(self, cfg):
+        vip = VIPRing(cfg)
+        B = 4
+        r_vip = torch.zeros(B, cfg.n_orientations)
+        cue = torch.randn(B, cfg.n_orientations)
+        out = vip(cue, r_vip)
+        assert out.shape == (B, cfg.n_orientations)
+
+    def test_zero_cue_stays_zero(self, cfg):
+        vip = VIPRing(cfg)
+        r_vip = torch.zeros(2, cfg.n_orientations)
+        cue = torch.zeros(2, cfg.n_orientations)
+        for _ in range(20):
+            r_vip = vip(cue, r_vip)
+        assert torch.allclose(r_vip, torch.zeros_like(r_vip), atol=1e-7)
+
+    def test_positive_cue_produces_positive_rates(self, cfg):
+        vip = VIPRing(cfg)
+        r_vip = torch.zeros(1, cfg.n_orientations)
+        cue = torch.zeros(1, cfg.n_orientations)
+        cue[0, 9] = 2.0
+        for _ in range(30):
+            r_vip = vip(cue, r_vip)
+        assert torch.isfinite(r_vip).all()
+        assert r_vip[0, 9].item() > 0.0
+        assert r_vip[0, 9].item() > r_vip[0, 0].item()
 
 
 # ===================================================================

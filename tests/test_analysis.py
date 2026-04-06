@@ -6,6 +6,10 @@ Uses a shared fixture with a small network and minimal experiment runs.
 
 from __future__ import annotations
 
+import importlib.util
+import sys
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -48,6 +52,17 @@ from src.analysis.v2_probes import (
 from src.analysis.ablations import run_ablation, AblationResult
 
 
+def _load_analyze_representation():
+    """Load the analysis script as a module for helper-level testing."""
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "analyze_representation.py"
+    spec = importlib.util.spec_from_file_location("analyze_representation_script", script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -80,6 +95,26 @@ def p3_result(net_and_cfg):
     net, cfg = net_and_cfg
     p = AmbiguousParadigm(net, cfg)
     return p.run(n_trials=3, seed=42, batch_size=4)
+
+
+@pytest.fixture(scope="module")
+def analyze_script():
+    return _load_analyze_representation()
+
+
+@pytest.fixture(scope="module")
+def emergent_vip_net():
+    torch.manual_seed(0)
+    cfg = ModelConfig(
+        mechanism=MechanismType.CENTER_SURROUND,
+        n_orientations=36,
+        feedback_mode='emergent',
+        vip_enabled=True,
+        vip_gain=2.0,
+    )
+    net = LaminarV1V2Network(cfg)
+    net.eval()
+    return net
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +391,127 @@ class TestAblations:
         result = run_ablation(net, cfg, "clamp_pi", n_trials=2,
                               probe_deviations=[0.0])
         assert result.ablation_name == "clamp_pi"
+
+
+# ---------------------------------------------------------------------------
+# Script-level analysis helpers: cue-aware Option B support
+# ---------------------------------------------------------------------------
+
+class TestAnalyzeRepresentationCueSupport:
+    def test_feedback_disabled_zeroes_all_top_down_branch_gains(self, analyze_script):
+        cfg = ModelConfig(
+            mechanism=MechanismType.CENTER_SURROUND,
+            n_orientations=36,
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_center_support_enabled=True,
+            emergent_center_support_gain=0.12,
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_beta=0.15,
+            apical_gain_enabled=True,
+            apical_gain_beta=0.08,
+        )
+        net = LaminarV1V2Network(cfg)
+        fb = net.feedback
+
+        saved = (
+            fb.alpha_inh.detach().clone(),
+            fb.som_baseline.detach().clone() if hasattr(fb, "som_baseline") else None,
+            fb.center_support_gain,
+            fb.recurrent_gain_beta,
+            fb.apical_gain_beta,
+            net.cfg.vip_gain,
+        )
+        with analyze_script.feedback_disabled(net):
+            assert torch.allclose(fb.alpha_inh, torch.zeros_like(fb.alpha_inh))
+            if hasattr(fb, "som_baseline"):
+                assert torch.allclose(fb.som_baseline, torch.zeros_like(fb.som_baseline))
+            assert fb.center_support_gain == 0.0
+            assert fb.recurrent_gain_beta == 0.0
+            assert fb.apical_gain_beta == 0.0
+            assert net.cfg.vip_gain == 0.0
+
+        assert torch.allclose(fb.alpha_inh, saved[0])
+        if saved[1] is not None:
+            assert torch.allclose(fb.som_baseline, saved[1])
+        assert fb.center_support_gain == saved[2]
+        assert fb.recurrent_gain_beta == saved[3]
+        assert fb.apical_gain_beta == saved[4]
+        assert net.cfg.vip_gain == saved[5]
+
+    def test_sanity_check_ablation_reports_all_zeroed_branches(self, analyze_script):
+        cfg = ModelConfig(
+            mechanism=MechanismType.CENTER_SURROUND,
+            n_orientations=36,
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_center_support_enabled=True,
+            emergent_center_support_gain=0.12,
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_beta=0.15,
+            apical_gain_enabled=True,
+            apical_gain_beta=0.08,
+        )
+        net = LaminarV1V2Network(cfg)
+        sanity = analyze_script.sanity_check_ablation(net, torch.device("cpu"))
+
+        assert sanity["center_off_max_abs"] < 1e-7
+        assert sanity["recurrent_off_max_abs"] < 1e-7
+        assert sanity["apical_off_max_abs"] < 1e-7
+        assert sanity["vip_gain_off"] == 0.0
+        assert sanity["ablation_zero"] is True
+
+    def test_parse_args_zero_cue_defaults(self, analyze_script, monkeypatch):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["analyze_representation.py", "--checkpoint", "a.pt", "--config", "b.yaml"],
+        )
+        args = analyze_script.parse_args()
+        assert args.cue_mode == "none"
+        assert args.cue_contrast == pytest.approx(analyze_script.EVAL_CONTRAST)
+        assert args.cue_prestimulus_steps == 0
+        assert args.cue_offset == 0.0
+
+    def test_run_trials_default_matches_explicit_zero_cue(self, analyze_script, emergent_vip_net):
+        device = torch.device("cpu")
+        stim = torch.tensor([90.0, 95.0], device=device)
+        oracle = torch.tensor([90.0, 90.0], device=device)
+
+        out_default = analyze_script.run_trials(emergent_vip_net, stim, oracle, device)
+        out_explicit = analyze_script.run_trials(
+            emergent_vip_net, stim, oracle, device,
+            cue_cfg=analyze_script.CueConfig(),
+        )
+        assert torch.allclose(out_default, out_explicit, atol=1e-6)
+
+    def test_metric_time_resolved_exposes_vip_when_cued(self, analyze_script, emergent_vip_net):
+        device = torch.device("cpu")
+        cue_cfg = analyze_script.CueConfig(mode="oracle", prestimulus_steps=4, contrast=1.0)
+
+        uncued = analyze_script.metric_time_resolved(
+            emergent_vip_net, device, oracle_theta=90.0, stim_theta=90.0,
+        )
+        cued = analyze_script.metric_time_resolved(
+            emergent_vip_net, device, oracle_theta=90.0, stim_theta=90.0,
+            cue_cfg=cue_cfg,
+        )
+
+        assert len(cued["timesteps"]) == analyze_script.T_STEPS + cue_cfg.prestimulus_steps
+        assert max(uncued["vip_mean_on"]) < 1e-8
+        assert max(cued["vip_mean_on"][:cue_cfg.prestimulus_steps]) > 0.0
+
+    def test_metric_local_dprime_accepts_cue_cfg(self, analyze_script, emergent_vip_net):
+        device = torch.device("cpu")
+        cue_cfg = analyze_script.CueConfig(mode="oracle", prestimulus_steps=4, contrast=1.0)
+        result = analyze_script.metric_local_dprime(
+            emergent_vip_net, device, n_trials=2, noise_std=0.0, seed=7, cue_cfg=cue_cfg,
+        )
+        assert "delta_5" in result
+        assert "delta_10" in result
+        assert result["n_trials_per_class"] == 2
 
 
 # ---------------------------------------------------------------------------

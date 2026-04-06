@@ -439,6 +439,344 @@ class TestEmergentFeedbackOperator:
         # K_inh should peak at channel 0 (the center)
         assert K_inh.argmax().item() == 0
 
+    def test_center_support_disabled_is_exact_zero(self, cfg_emergent):
+        """The new excitatory branch must be a strict no-op by default."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        q_pred = _one_hot_q(9, cfg_emergent.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg_emergent.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        center_exc = fb.compute_center_excitation(q_pred, pi_eff, gate_signal=gate_signal)
+
+        assert torch.allclose(center_exc, torch.zeros_like(center_exc))
+
+    def test_center_support_is_local_positive_when_cued(self):
+        """Enabled center support should add a narrow positive bump at prediction."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_center_support_enabled=True,
+            emergent_center_support_gain=0.12,
+            emergent_center_support_sigma=5.0,
+            emergent_center_support_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        center_exc = fb.compute_center_excitation(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert (center_exc >= 0).all()
+        assert center_exc.argmax(dim=-1).item() == 9
+        assert center_exc[0, 9].item() > 0.0
+        assert center_exc[0, 9].item() > center_exc[0, 0].item()
+
+    def test_center_support_buffer_not_serialized_in_state_dict(self):
+        """Derived center-support buffers should not break strict legacy loads."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_center_support_enabled=True,
+        )
+        net = LaminarV1V2Network(cfg)
+        state_dict = net.state_dict()
+
+        assert "feedback.center_support_dists_sq" not in state_dict
+
+        reloaded = LaminarV1V2Network(cfg)
+        reloaded.load_state_dict(state_dict, strict=True)
+
+    def test_center_support_persists_into_early_probe_window(self):
+        """VIP-gated center support should survive a few probe steps after cue offset."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_center_support_enabled=True,
+            emergent_center_support_gain=0.12,
+            emergent_center_support_sigma=5.0,
+            emergent_center_support_cue_gated=True,
+        )
+        net = LaminarV1V2Network(cfg)
+        B, N = 1, cfg.n_orientations
+        state = initial_state(B, N, cfg.v2_hidden_dim)
+        stim = torch.zeros(B, N)
+        task = torch.zeros(B, 2)
+        cue_on = torch.zeros(B, N)
+        cue_on[0, 9] = 1.0
+        cue_off = torch.zeros(B, N)
+
+        oracle_q = _one_hot_q(9, N)
+        net.oracle_mode = True
+        net.oracle_q_pred = oracle_q
+        net.oracle_pi_pred = torch.tensor([[3.0]])
+
+        try:
+            for _ in range(4):
+                state, _ = net.step(stim, cue_on, task, state)
+
+            probe_center_exc = []
+            for _ in range(3):
+                state, aux = net.step(stim, cue_off, task, state)
+                center_exc = net.feedback.compute_center_excitation(
+                    aux.q_pred, aux.pi_pred_eff, gate_signal=state.r_vip
+                )
+                probe_center_exc.append(center_exc)
+        finally:
+            net.oracle_mode = False
+            net.oracle_q_pred = None
+            net.oracle_pi_pred = None
+
+        for center_exc in probe_center_exc:
+            assert center_exc[0, 9].item() > 0.0
+            assert center_exc.argmax(dim=-1).item() == 9
+
+    def test_uncued_support_gate_stays_zero_when_branch_enabled(self):
+        """Without cue history, VIP-gated center support should remain exactly zero."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            emergent_center_support_enabled=True,
+            emergent_center_support_gain=0.12,
+            emergent_center_support_sigma=5.0,
+            emergent_center_support_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+
+        center_exc = fb.compute_center_excitation(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert torch.allclose(center_exc, torch.zeros_like(center_exc))
+
+    def test_recurrent_gain_disabled_is_exact_zero(self, cfg_emergent):
+        """The recurrent-gain branch must be a strict no-op by default."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        q_pred = _one_hot_q(9, cfg_emergent.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg_emergent.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        recurrent_gain = fb.compute_recurrent_gain(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert torch.allclose(recurrent_gain, torch.zeros_like(recurrent_gain))
+
+    def test_recurrent_gain_is_local_positive_when_cued(self):
+        """Enabled recurrent gain should create a narrow positive gain bump."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_sigma=5.0,
+            emergent_recurrent_gain_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        recurrent_gain = fb.compute_recurrent_gain(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert (recurrent_gain >= 0).all()
+        assert recurrent_gain.argmax(dim=-1).item() == 9
+        assert recurrent_gain[0, 9].item() > 0.0
+        assert recurrent_gain[0, 9].item() > recurrent_gain[0, 0].item()
+
+    def test_recurrent_gain_persists_into_early_probe_window(self):
+        """VIP-gated recurrent gain should survive a few probe steps after cue offset."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_sigma=5.0,
+            emergent_recurrent_gain_cue_gated=True,
+        )
+        net = LaminarV1V2Network(cfg)
+        B, N = 1, cfg.n_orientations
+        state = initial_state(B, N, cfg.v2_hidden_dim)
+        stim = torch.zeros(B, N)
+        task = torch.zeros(B, 2)
+        cue_on = torch.zeros(B, N)
+        cue_on[0, 9] = 1.0
+        cue_off = torch.zeros(B, N)
+
+        oracle_q = _one_hot_q(9, N)
+        net.oracle_mode = True
+        net.oracle_q_pred = oracle_q
+        net.oracle_pi_pred = torch.tensor([[3.0]])
+
+        try:
+            for _ in range(4):
+                state, _ = net.step(stim, cue_on, task, state)
+
+            probe_gains = []
+            for _ in range(3):
+                state, aux = net.step(stim, cue_off, task, state)
+                recurrent_gain = net.feedback.compute_recurrent_gain(
+                    aux.q_pred, aux.pi_pred_eff, gate_signal=state.r_vip
+                )
+                probe_gains.append(recurrent_gain)
+        finally:
+            net.oracle_mode = False
+            net.oracle_q_pred = None
+            net.oracle_pi_pred = None
+
+        for recurrent_gain in probe_gains:
+            assert recurrent_gain[0, 9].item() > 0.0
+            assert recurrent_gain.argmax(dim=-1).item() == 9
+
+    def test_uncued_recurrent_gain_stays_zero_when_branch_enabled(self):
+        """Without cue history, recurrent gain should remain exactly zero."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_sigma=5.0,
+            emergent_recurrent_gain_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+
+        recurrent_gain = fb.compute_recurrent_gain(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert torch.allclose(recurrent_gain, torch.zeros_like(recurrent_gain))
+
+    def test_apical_gain_disabled_is_exact_zero(self, cfg_emergent):
+        """The apical/feedforward gain branch must be a strict no-op by default."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        q_pred = _one_hot_q(9, cfg_emergent.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg_emergent.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        apical_gain = fb.compute_apical_gain(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert torch.allclose(apical_gain, torch.zeros_like(apical_gain))
+
+    def test_apical_gain_is_local_positive_when_cued(self):
+        """Enabled apical gain should create a narrow positive gain bump."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            apical_gain_enabled=True,
+            apical_gain_beta=0.08,
+            apical_gain_sigma=5.0,
+            apical_gain_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        apical_gain = fb.compute_apical_gain(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert (apical_gain >= 0).all()
+        assert apical_gain.argmax(dim=-1).item() == 9
+        assert apical_gain[0, 9].item() > 0.0
+        assert apical_gain[0, 9].item() > apical_gain[0, 0].item()
+
+    def test_apical_gain_persists_into_late_probe_window(self):
+        """VIP-gated apical gain should survive into the late probe read window."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            apical_gain_enabled=True,
+            apical_gain_beta=0.08,
+            apical_gain_tau=10,
+            apical_gain_sigma=5.0,
+            apical_gain_mode="persistent_sum",
+            apical_gain_cue_gated=True,
+        )
+        net = LaminarV1V2Network(cfg)
+        B, N = 1, cfg.n_orientations
+        state = initial_state(B, N, cfg.v2_hidden_dim)
+        stim = torch.zeros(B, N)
+        task = torch.zeros(B, 2)
+        cue_on = torch.zeros(B, N)
+        cue_on[0, 9] = 1.0
+        cue_off = torch.zeros(B, N)
+
+        oracle_q = _one_hot_q(9, N)
+        net.oracle_mode = True
+        net.oracle_q_pred = oracle_q
+        net.oracle_pi_pred = torch.tensor([[3.0]])
+
+        try:
+            for _ in range(4):
+                state, _ = net.step(stim, cue_on, task, state)
+
+            late_states = []
+            for _ in range(6):
+                state, aux = net.step(stim, cue_off, task, state)
+                late_states.append(state.a_apical.clone())
+        finally:
+            net.oracle_mode = False
+            net.oracle_q_pred = None
+            net.oracle_pi_pred = None
+
+        assert late_states[-1][0, 9].item() > 0.0
+        assert late_states[-1].argmax(dim=-1).item() == 9
+
+    def test_zero_cue_keeps_apical_gain_path_identical(self):
+        """The apical gain path must be a strict no-op when cue input is zero."""
+        torch.manual_seed(432)
+        cfg_base = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            apical_gain_enabled=False,
+        )
+        net_base = LaminarV1V2Network(cfg_base)
+
+        torch.manual_seed(432)
+        cfg_gain = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            apical_gain_enabled=True,
+            apical_gain_beta=0.08,
+            apical_gain_tau=10,
+            apical_gain_sigma=5.0,
+            apical_gain_mode="persistent_sum",
+            apical_gain_cue_gated=True,
+        )
+        net_gain = LaminarV1V2Network(cfg_gain)
+
+        B, T, N = 2, 6, cfg_base.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        cue = torch.zeros(B, T, N)
+        task = torch.zeros(B, T, 2)
+
+        packed = LaminarV1V2Network.pack_inputs(stim, cue, task)
+        r_base, state_base, aux_base = net_base(packed)
+        r_gain, state_gain, aux_gain = net_gain(packed)
+
+        assert torch.allclose(r_base, r_gain, atol=1e-6)
+        assert torch.allclose(state_base.r_l23, state_gain.r_l23, atol=1e-6)
+        assert torch.allclose(aux_base["r_som_all"], aux_gain["r_som_all"], atol=1e-6)
+        assert torch.allclose(state_gain.a_apical, torch.zeros_like(state_gain.a_apical), atol=1e-7)
+
 
 # ── Full Network Tests (fixed mode) ─────────────────────────────────────
 
@@ -510,6 +848,65 @@ class TestNetworkForward:
         r_l23_all, _, _ = net(stim)
         assert r_l23_all.shape == (B, T, N)
 
+    def test_vip_disabled_matches_zero_cue_path(self):
+        """Enabling VIP should be a strict no-op when the cue tensor is zero."""
+        torch.manual_seed(123)
+        cfg_base = ModelConfig(feedback_mode='emergent', vip_enabled=False)
+        net_base = LaminarV1V2Network(cfg_base)
+
+        torch.manual_seed(123)
+        cfg_vip = ModelConfig(feedback_mode='emergent', vip_enabled=True, vip_gain=1.0)
+        net_vip = LaminarV1V2Network(cfg_vip)
+
+        B, T, N = 2, 6, cfg_base.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        cue = torch.zeros(B, T, N)
+        task = torch.zeros(B, T, 2)
+
+        packed = LaminarV1V2Network.pack_inputs(stim, cue, task)
+        r_base, state_base, aux_base = net_base(packed)
+        r_vip, state_vip, aux_vip = net_vip(packed)
+
+        assert torch.allclose(r_base, r_vip, atol=1e-6)
+        assert torch.allclose(state_base.r_som, state_vip.r_som, atol=1e-6)
+        assert torch.allclose(state_vip.r_vip, torch.zeros_like(state_vip.r_vip), atol=1e-7)
+        assert torch.allclose(aux_base["r_som_all"], aux_vip["r_som_all"], atol=1e-6)
+        assert torch.allclose(aux_vip["r_vip_all"], torch.zeros_like(aux_vip["r_vip_all"]), atol=1e-7)
+
+    def test_zero_cue_keeps_recurrent_gain_path_identical(self):
+        """The recurrent-gain path must be a strict no-op when cue input is zero."""
+        torch.manual_seed(321)
+        cfg_base = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            emergent_recurrent_gain_enabled=False,
+        )
+        net_base = LaminarV1V2Network(cfg_base)
+
+        torch.manual_seed(321)
+        cfg_gain = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_sigma=5.0,
+            emergent_recurrent_gain_cue_gated=True,
+        )
+        net_gain = LaminarV1V2Network(cfg_gain)
+
+        B, T, N = 2, 6, cfg_base.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        cue = torch.zeros(B, T, N)
+        task = torch.zeros(B, T, 2)
+
+        packed = LaminarV1V2Network.pack_inputs(stim, cue, task)
+        r_base, state_base, aux_base = net_base(packed)
+        r_gain, state_gain, aux_gain = net_gain(packed)
+
+        assert torch.allclose(r_base, r_gain, atol=1e-6)
+        assert torch.allclose(state_base.r_l23, state_gain.r_l23, atol=1e-6)
+        assert torch.allclose(aux_base["r_som_all"], aux_gain["r_som_all"], atol=1e-6)
+
 
 # ── Full Network Tests (emergent mode) ──────────────────────────────────
 
@@ -525,6 +922,7 @@ class TestNetworkEmergent:
         assert r_l23_all.shape == (B, T, N)
         assert aux["q_pred_all"].shape == (B, T, N)
         assert aux["pi_pred_all"].shape == (B, T, 1)
+        assert aux["r_vip_all"].shape == (B, T, N)
         assert aux["p_cw_all"].shape == (B, T, 1)
 
     def test_forward_emergent_no_nan(self, cfg_emergent):
@@ -608,6 +1006,77 @@ class TestNetworkEmergent:
 
         # SOM should be very small since alpha is only 0.01
         assert aux["r_som_all"].abs().max() < 0.5
+
+    def test_cue_driven_vip_reduces_som_locally(self):
+        """With oracle feedback, cue-driven VIP should suppress SOM locally."""
+        cfg = ModelConfig(
+            mechanism=MechanismType.DAMPENING,
+            feedback_mode='fixed',
+            vip_enabled=True,
+            vip_gain=2.0,
+        )
+        net = LaminarV1V2Network(cfg)
+        B, N = 1, cfg.n_orientations
+        state = initial_state(B, N, cfg.v2_hidden_dim)
+        stim = torch.zeros(B, N)
+        task = torch.zeros(B, 2)
+        cue_off = torch.zeros(B, N)
+        cue_on = torch.zeros(B, N)
+        cue_on[0, 9] = 2.0
+
+        oracle_q = torch.zeros(B, N)
+        oracle_q[0, 9] = 1.0
+        net.oracle_mode = True
+        net.oracle_q_pred = oracle_q
+        net.oracle_pi_pred = torch.tensor([[3.0]])
+        try:
+            state_off, _ = net.step(stim, cue_off, task, state)
+            state_on, _ = net.step(stim, cue_on, task, state)
+        finally:
+            net.oracle_mode = False
+            net.oracle_q_pred = None
+            net.oracle_pi_pred = None
+
+        assert state_on.r_vip[0, 9].item() > 0.0
+        assert state_on.r_som[0, 9].item() < state_off.r_som[0, 9].item()
+
+    def test_zero_cue_keeps_center_support_path_identical(self):
+        """Cue-gated center support should be a strict no-op when cue is absent."""
+        torch.manual_seed(321)
+        cfg_base = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_center_support_enabled=False,
+        )
+        net_base = LaminarV1V2Network(cfg_base)
+
+        torch.manual_seed(321)
+        cfg_support = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_center_support_enabled=True,
+            emergent_center_support_gain=0.12,
+            emergent_center_support_sigma=5.0,
+            emergent_center_support_cue_gated=True,
+        )
+        net_support = LaminarV1V2Network(cfg_support)
+
+        B, T, N = 2, 6, cfg_base.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        cue = torch.zeros(B, T, N)
+        task = torch.zeros(B, T, 2)
+
+        packed = LaminarV1V2Network.pack_inputs(stim, cue, task)
+        r_base, state_base, aux_base = net_base(packed)
+        r_support, state_support, aux_support = net_support(packed)
+
+        assert torch.allclose(r_base, r_support, atol=1e-6)
+        assert torch.allclose(state_base.r_l23, state_support.r_l23, atol=1e-6)
+        assert torch.allclose(state_base.r_som, state_support.r_som, atol=1e-6)
+        assert torch.allclose(aux_base["r_som_all"], aux_support["r_som_all"], atol=1e-6)
+        assert torch.allclose(aux_base["q_pred_all"], aux_support["q_pred_all"], atol=1e-6)
 
 
 # ── Gradient Flow Tests ──────────────────────────────────────────────────
