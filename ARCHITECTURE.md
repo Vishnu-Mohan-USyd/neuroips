@@ -40,6 +40,17 @@ what feedback regimes emerge under different computational objectives.
 - Activation: rectified_softplus (same as SOM)
 - Biologically motivated: VIP→SOM connection probability 62.5% (Pfeffer et al. 2013)
 
+### Apical Gain (Multiplicative Top-Down Modulation)
+- Receives `apical_gain` from the feedback operator (separate alpha_apical [7] weights)
+- Multiplies ONLY excitatory L2/3 drive: `excitatory_drive = apical_gain * (ff + rec + template)`
+- Does NOT affect inhibitory terms (SOM, PV)
+- Constrained: `apical_gain = 1.0 + 0.2 * tanh(pi_eff * K_apical ⊛ q_centered)`
+- Range: [0.8, 1.2] (±20% modulation maximum)
+- Biologically motivated: active apical dendrites in L2/3 pyramidal cells receive
+  top-down feedback in layer 1, modulating the gain of feedforward drive
+  (multiplicative interaction, not additive excitation)
+- No separate population — computed directly from the prediction template
+
 ### Deep Template
 - Slow integrator tracking recent stimulus history
 - Modulated by V2 precision: deep_template = gain × q_pred × pi_eff
@@ -82,11 +93,16 @@ GRU with 16 hidden units. Two output modes:
 - `alpha_vip` [7]: one weight per basis function (VIP pathway, init 0.01)
 - `vip_baseline` [scalar]: VIP operating point (delta-style)
 - `w_vip_som` [scalar, on network]: VIP→SOM coupling gain (softplus)
+- `alpha_apical` [7]: one weight per basis function (apical gain pathway, init 0.01)
+- `max_apical_gain` [attribute, 0.2]: ±20% maximum gain modulation (not learned)
 
 ### Kernel Computation
 - K_inh = Σ(alpha_inh_k × basis_k) — weighted sum → 36-channel profile
+- K_apical = Σ(alpha_apical_k × basis_k) — apical gain kernel
 - Circular convolution: inh_field = K_inh ⊛ q_centered
   where q_centered = q_pred − 1/36
+- Apical gain: `1.0 + 0.2 * tanh(pi_eff * K_apical ⊛ q_centered)`
+- Returns 3-tuple: (som_drive, vip_drive, apical_gain)
 
 ### Delta-SOM (Bias-Corrected Softplus)
 - `som_drive = pi × (softplus(baseline + inh_field) − softplus(baseline))`
@@ -102,6 +118,7 @@ Stimulus → L4 → PV (normalization)
                           p_cw + L4 → q_pred (analytical)
                           q_pred → K_inh ⊛ q_centered → inh_field → delta-SOM → som_drive
                           q_pred → K_vip ⊛ q_centered → vip_field → vip_drive
+                          q_pred → K_apical ⊛ q_centered → apical_field → apical_gain
                                                                         ↓
                                                     VIP (tau=10, rectified_softplus)
                                                         ↓
@@ -110,6 +127,7 @@ Stimulus → L4 → PV (normalization)
                 L4 ──────→ L2/3 ← PV (subtractive)
                            L2/3 ← SOM (subtractive) ← effective_som
                            L2/3 ← W_rec (recurrence)
+                           L2/3 ×= apical_gain (multiplicative, excitatory drive only)
                            L2/3 → readout decoder
 ```
 
@@ -151,7 +169,7 @@ Stimulus → L4 → PV (normalization)
 | `lambda_state` | BCE on p_cw vs true CW/CCW | V2 output |
 | `lambda_energy` | L1 on all population rates | All |
 | `lambda_homeo` | Homeostasis (L2/3 mean in [0.05, 0.5]) | L2/3 |
-| `lambda_fb` | L1 sparsity on alpha_inh | Feedback operator |
+| `lambda_fb` | L1 sparsity on alpha_inh + alpha_vip + alpha_apical | Feedback operator |
 
 ## Key Config Options
 
@@ -189,6 +207,6 @@ Stimulus → L4 → PV (normalization)
 
 ## Tests
 
-357+ tests covering V1 circuit, V2 factorization, feedback operator (including
-VIP pathway), training pipeline, config parsing, and regression tests for all
-bugs discovered during the project. Run with `python -m pytest tests/ -v`.
+366+ tests covering V1 circuit, V2 factorization, feedback operator (including
+VIP and apical gain pathways), training pipeline, config parsing, and regression
+tests for all bugs discovered during the project. Run with `python -m pytest tests/ -v`.
