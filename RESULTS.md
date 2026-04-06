@@ -309,6 +309,49 @@ information gain. Apical gain provides the missing ingredient: a
 multiplicative boost that creates new signal above the feedforward level,
 which a trained decoder can exploit.
 
+### Template Manipulation (apical sharpening IS content-dependent)
+
+Unlike dampening (where true/wrong/random all gave identical results),
+apical sharpening discriminates between prediction quality:
+
+| Template | Peak gain | M7 δ=10° | M7 δ=15° | Global amp | Pattern |
+|---|---|---|---|---|---|
+| TRUE (correct) | 1.142 | +0.014 | +0.011 | 1.030 (boosted) | Sharpening |
+| WRONG (CW↔CCW) | 1.038 | +0.015 | +0.007 | 0.919 (reduced) | Sharpening |
+| RANDOM (uncorrelated) | 0.873 | −0.009 | −0.016 | 0.754 (reduced) | Dampening |
+| UNIFORM (no peak) | 0.813 | −0.013 | −0.019 | 0.693 (reduced) | Nothing learned |
+
+**Key insight:** TRUE and WRONG both produce positive M7 because WRONG still
+predicts a real HMM transition orientation (only 30° away from true, within
+L2/3 tuning width). RANDOM predicts an orientation uncorrelated with the
+stimulus → dampening, not sharpening. This means sharpening requires
+predictions aligned with the stimulus space, not just peakedness.
+
+### Confound Controls
+
+| Condition | Peak gain | M7 δ=10° | Global amp | Survives? |
+|---|---|---|---|---|
+| Original | 1.142 | +0.014 | 1.030 | — |
+| No adaptation | 1.142 | +0.013 | 1.029 | YES (identical) |
+| 50%-reliability | 1.049 | +0.005 | 0.891 | YES (weakened) |
+
+Sharpening is not an adaptation artifact. Under reduced prediction
+reliability, it weakens but persists. The global amplitude flips from
+Huang-like (boosted, 1.03) to Kok-like (reduced, 0.89) — showing the
+SAME circuit produces different amplitude signatures depending on
+prediction quality.
+
+### Global Amplitude Signature
+
+The apical model explains why different experiments report different
+amplitude effects:
+
+- **Accurate predictions (TRUE):** center boost > flank suppression →
+  net activity INCREASE (Huang-like)
+- **Inaccurate predictions (WRONG, 50%-reliable):** flank suppression >
+  center boost → net activity DECREASE (Kok-like)
+- **Random predictions:** pure dampening (no center boost)
+
 ---
 
 ## 5. Other Findings
@@ -353,13 +396,15 @@ when predictions are imprecise.
 | M7: Match-vs-near-miss (LogReg) | Trained linear decoder, δ∈{3,5,10,15}°, 8-anchor averaged | True sharpening |
 | M8: Time-resolved | Per-timestep peak/FWHM/flank response | Temporal dynamics |
 | M9: Normalized energy by distance | Per-channel suppression in expected/surround/far bins | Suppression geometry |
+| M10: Global amplitude | Mean L2/3 activity ON/OFF ratio, 8-anchor avg | Kok vs Huang signature |
 | Pre-rect drive FWHM | Drive width before rectified softplus | Artifact check |
 | SI curve | Suppression at stimulus channel across offsets | Profile shape |
 | Template manipulation | True/wrong/random/uniform templates | Peakedness vs correctness |
 
 Note: M7 was updated to include δ=15° and average across 8 anchor
 orientations {0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5} for rotational
-invariance, matching M6's multi-anchor protocol.
+invariance, matching M6's multi-anchor protocol. M7 now includes bootstrap
+95% CI (100 resamples) and permutation p-value (500 shuffles).
 
 ---
 
@@ -378,9 +423,12 @@ invariance, matching M6's multi-anchor protocol.
 | `exp_vip_tension.yaml` | VIP Exp 2: tension (sensory + energy + ambiguous) |
 | `exp_vip_hardened.yaml` | VIP Exp 3: hardened (energy incl. VIP, 7-way disc, cues, shifted timing) |
 | `exp_apical.yaml` | Apical gain: VIP + SOM + multiplicative apical modulation |
-| `template_{true,wrong,random,uniform}.yaml` | Template manipulation experiment |
-| `confound_damp_no_adapt.yaml` | No-adaptation control |
-| `confound_damp_50reliable.yaml` | 50%-reliability control |
+| `apical_template_{true,wrong,random,uniform}.yaml` | Apical template manipulation (4 modes) |
+| `apical_no_adapt.yaml` | Apical: no adaptation control |
+| `apical_50reliable.yaml` | Apical: 50%-reliability control |
+| `template_{true,wrong,random,uniform}.yaml` | Dampening template manipulation experiment |
+| `confound_damp_no_adapt.yaml` | Dampening: no-adaptation control |
+| `confound_damp_50reliable.yaml` | Dampening: 50%-reliability control |
 | `e2e_deviance.yaml` | End-to-end learned V2, dampening |
 
 ### Results directories
@@ -398,6 +446,7 @@ invariance, matching M6's multi-anchor protocol.
 | `results/phase4_localdisc/` | Phase 4: local discrimination loss |
 | `results/phase5_sigma/` | Phase 5: oracle sigma sweep |
 | `results/vip_tension/` | VIP Exp 2: tension condition |
+| `results/apical/` | Apical gain experiments (3+ seeds) |
 
 ---
 
@@ -432,7 +481,7 @@ The model supports four defensible claims arranged as a progression:
 > VIP disinhibition + apical multiplicative gain) is the minimum architecture
 > for representational sharpening.
 
-### Scientific implication: circuit motif matters, not just objective
+### Scientific implication: circuit motif determines what is POSSIBLE; prediction quality determines what EMERGES
 
 The four regimes demonstrate that the feedback regime is determined by
 circuit architecture, not by training objective:
@@ -450,3 +499,27 @@ Adding apical multiplicative gain completes the circuit: a constrained (±20%)
 boost at the predicted channel creates new signal above the feedforward level
 that a trained decoder can exploit. Each architectural step unlocks a
 qualitatively new feedback regime — the objective alone is insufficient.
+
+### The apical hardening pass: prediction quality modulates the regime
+
+The template manipulation and confound control results reveal a deeper
+principle. Unlike dampening (which is invariant to prediction correctness),
+the apical sharpening circuit is **content-dependent**: the SAME three-arm
+circuit (SOM + VIP + apical gain) produces qualitatively different outcomes
+depending on prediction quality:
+
+- **Accurate predictions (TRUE):** full sharpening — center boost > flank
+  suppression → net activity INCREASE (Huang & Rao 2011)
+- **Partially accurate (WRONG, 50%-reliable):** weakened sharpening — flank
+  suppression > center boost → net activity DECREASE (Kok et al. 2012)
+- **Random predictions:** the circuit reverts to pure dampening
+- **No prediction (UNIFORM):** nothing is learned
+
+This directly explains mixed empirical findings in the expectation
+suppression literature: paradigms with accurate, task-relevant predictions
+may show Huang-like enhancement, while paradigms with weak or
+partially-relevant predictions may show Kok-like suppression. The circuit
+motif is the same — the prediction quality determines the sign of the net
+amplitude effect. This is a testable prediction: manipulating prediction
+reliability within a single paradigm should shift the amplitude signature
+from enhancement to suppression.
