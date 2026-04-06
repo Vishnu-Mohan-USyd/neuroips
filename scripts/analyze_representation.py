@@ -1043,16 +1043,64 @@ def metric_match_vs_near_miss_decoding(
 
             acc_on = _fit_and_score(X_on)
             acc_off = _fit_and_score(X_off)
+
+            # --- Bootstrap 95% CI on delta_acc ---
+            n_bootstrap = 100
+            boot_deltas = []
+            for b in range(n_bootstrap):
+                boot_rs = np.random.RandomState(trial_seed + 1000 + b)
+                boot_perm = boot_rs.permutation(n_total)
+                b_train = boot_perm[:n_train]
+                b_test = boot_perm[n_train:]
+                b_acc_on = _fit_and_score(X_on, _train=b_train, _test=b_test,
+                                          _labels=labels)
+                b_acc_off = _fit_and_score(X_off, _train=b_train, _test=b_test,
+                                           _labels=labels)
+                boot_deltas.append(b_acc_on - b_acc_off)
+            boot_deltas = np.array(boot_deltas)
+            ci_low = float(np.percentile(boot_deltas, 2.5))
+            ci_high = float(np.percentile(boot_deltas, 97.5))
+
+            # --- Permutation test on delta_acc ---
+            observed_delta = acc_on - acc_off
+            n_permutations = 500
+            perm_deltas = []
+            # Stack on/off responses; shuffle condition labels
+            X_stacked = np.concatenate([X_on, X_off], axis=0)  # [2*n_total, C]
+            labels_stacked = np.concatenate([labels, labels], axis=0)
+            for p in range(n_permutations):
+                perm_rs = np.random.RandomState(trial_seed + 2000 + p)
+                # Shuffle which half is "on" vs "off"
+                shuf_idx = perm_rs.permutation(2 * n_total)
+                X_shuf_on = X_stacked[shuf_idx[:n_total]]
+                X_shuf_off = X_stacked[shuf_idx[n_total:]]
+                p_acc_on = _fit_and_score(X_shuf_on)
+                p_acc_off = _fit_and_score(X_shuf_off)
+                perm_deltas.append(p_acc_on - p_acc_off)
+            perm_deltas = np.array(perm_deltas)
+            p_value = float((perm_deltas >= observed_delta).mean())
+
             anchor_accs_on.append(acc_on)
             anchor_accs_off.append(acc_off)
-            per_anchor[anchor] = {"on": acc_on, "off": acc_off}
+            per_anchor[anchor] = {
+                "on": acc_on, "off": acc_off,
+                "ci_low": ci_low, "ci_high": ci_high,
+                "p_value": p_value,
+            }
 
         mean_on = float(np.mean(anchor_accs_on))
         mean_off = float(np.mean(anchor_accs_off))
+        # Average bootstrap CIs and p-values across anchors
+        anchor_ci_lows = [per_anchor[a]["ci_low"] for a in anchors]
+        anchor_ci_highs = [per_anchor[a]["ci_high"] for a in anchors]
+        anchor_p_values = [per_anchor[a]["p_value"] for a in anchors]
         results[f"delta_{int(delta)}"] = {
             "on": mean_on,
             "off": mean_off,
             "delta_acc": mean_on - mean_off,
+            "ci_low": float(np.mean(anchor_ci_lows)),
+            "ci_high": float(np.mean(anchor_ci_highs)),
+            "p_value": float(np.mean(anchor_p_values)),
             "per_anchor": per_anchor,
         }
     results["n_train"] = n_train
@@ -1235,6 +1283,75 @@ def metric_energy_by_relative_distance_normalized(
         "far_rel_reduction": _bin_rel(far_mask),
         "e_on_ch": e_on_ch,
         "e_off_ch": e_off_ch,
+    }
+
+
+def metric_global_amplitude(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    oracle_theta: float = 90.0,
+) -> dict:
+    """Metric 10: global amplitude ratio (feedback ON / OFF), averaged across 8 anchors.
+
+    For each anchor θ ∈ {0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5}°:
+      - Present stim=anchor, oracle=anchor (matched condition).
+      - Read all 36 L2/3 channels, feedback ON and OFF.
+      - Compute mean_on, mean_off (mean across 36 channels), sum_on, sum_off.
+    Average all quantities across the 8 anchors. Report ratios:
+      mean_ratio = mean_on / mean_off  (<1 = Kok-like reduced, >1 = Huang-like boosted)
+      sum_ratio  = sum_on / sum_off
+
+    Args:
+        net: trained network.
+        device: torch device.
+        oracle_theta: ignored (uses 8 anchors for averaging).
+
+    Returns:
+        dict with per-anchor breakdowns and averaged ratios.
+    """
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    per_anchor: list[dict] = []
+    all_mean_on, all_mean_off = [], []
+    all_sum_on, all_sum_off = [], []
+
+    for anchor in anchors:
+        stim = torch.tensor([anchor], device=device)
+        oracle = torch.tensor([anchor], device=device)
+
+        r_on = run_trials(net, stim, oracle, device, noise_std=0.0)[0].cpu().numpy()  # [N]
+        with feedback_disabled(net):
+            r_off = run_trials(net, stim, oracle, device, noise_std=0.0)[0].cpu().numpy()
+
+        mean_on = float(r_on.mean())
+        mean_off = float(r_off.mean())
+        sum_on = float(r_on.sum())
+        sum_off = float(r_off.sum())
+
+        per_anchor.append({
+            "anchor": anchor,
+            "mean_on": mean_on,
+            "mean_off": mean_off,
+            "sum_on": sum_on,
+            "sum_off": sum_off,
+        })
+        all_mean_on.append(mean_on)
+        all_mean_off.append(mean_off)
+        all_sum_on.append(sum_on)
+        all_sum_off.append(sum_off)
+
+    avg_mean_on = float(np.mean(all_mean_on))
+    avg_mean_off = float(np.mean(all_mean_off))
+    avg_sum_on = float(np.mean(all_sum_on))
+    avg_sum_off = float(np.mean(all_sum_off))
+
+    return {
+        "mean_on": avg_mean_on,
+        "mean_off": avg_mean_off,
+        "mean_ratio": avg_mean_on / (avg_mean_off + 1e-12),
+        "sum_on": avg_sum_on,
+        "sum_off": avg_sum_off,
+        "sum_ratio": avg_sum_on / (avg_sum_off + 1e-12),
+        "per_anchor": per_anchor,
     }
 
 
@@ -1446,6 +1563,7 @@ def print_report(label: str, results: dict) -> None:
     m7 = results["metric7"]
     m8 = results["metric8"]
     m9 = results["metric9"]
+    m10 = results.get("metric10")
     sanity = results["sanity"]
     artifact = results["artifact"]
 
@@ -1571,12 +1689,20 @@ def print_report(label: str, results: dict) -> None:
     print(f"  n_train={m7['n_train']}, n_test={m7['n_test']}, "
           f"stim_noise={m7['noise_std']}, readout_noise={m7['readout_noise_std']}, "
           f"anchors={m7.get('anchors', 'single')}")
-    print(f"  {'delta':>8s}  {'acc OFF':>10s}  {'acc ON':>10s}  {'delta_acc':>11s}")
+    has_ci = "ci_low" in m7.get("delta_3", {})
+    if has_ci:
+        print(f"  {'delta':>8s}  {'acc OFF':>10s}  {'acc ON':>10s}  {'delta_acc':>11s}  {'CI_low':>8s}  {'CI_high':>8s}  {'p_value':>8s}")
+    else:
+        print(f"  {'delta':>8s}  {'acc OFF':>10s}  {'acc ON':>10s}  {'delta_acc':>11s}")
     for key in ["delta_3", "delta_5", "delta_10", "delta_15"]:
         if key not in m7:
             continue
         r = m7[key]
-        print(f"  {key:>8s}  {r['off']:10.4f}  {r['on']:10.4f}  {r['delta_acc']:+11.4f}")
+        if has_ci:
+            print(f"  {key:>8s}  {r['off']:10.4f}  {r['on']:10.4f}  {r['delta_acc']:+11.4f}"
+                  f"  {r['ci_low']:+8.4f}  {r['ci_high']:+8.4f}  {r['p_value']:8.4f}")
+        else:
+            print(f"  {key:>8s}  {r['off']:10.4f}  {r['on']:10.4f}  {r['delta_acc']:+11.4f}")
 
     # --- Metric 8: Time-resolved L2/3 dynamics ----------------------------
     print(f"\n[Metric 8] Time-resolved L2/3 dynamics "
@@ -1611,6 +1737,22 @@ def print_report(label: str, results: dict) -> None:
     print(f"  Expected (|d|≤10°)  rel_red = {m9['expected_rel_reduction']:+.4f}")
     print(f"  Surround (10<|d|≤45°) rel_red = {m9['surround_rel_reduction']:+.4f}")
     print(f"  Far      (|d|>45°)  rel_red = {m9['far_rel_reduction']:+.4f}")
+
+    # --- Metric 10: Global amplitude ratio --------------------------------
+    if m10 is not None:
+        print(f"\n[Metric 10] Global amplitude ratio (feedback ON/OFF), averaged across 8 anchors")
+        print(f"  Mean activity ON : {m10['mean_on']:.6f}")
+        print(f"  Mean activity OFF: {m10['mean_off']:.6f}")
+        print(f"  Mean ratio (ON/OFF): {m10['mean_ratio']:.4f}"
+              f"  {'(reduced)' if m10['mean_ratio'] < 1.0 else '(boosted)'}")
+        print(f"  Sum activity ON : {m10['sum_on']:.4f}")
+        print(f"  Sum activity OFF: {m10['sum_off']:.4f}")
+        print(f"  Sum ratio  (ON/OFF): {m10['sum_ratio']:.4f}")
+        print(f"  Per-anchor breakdown:")
+        print(f"    {'anchor':>8s}  {'mean ON':>10s}  {'mean OFF':>10s}  {'sum ON':>10s}  {'sum OFF':>10s}")
+        for a in m10['per_anchor']:
+            print(f"    {a['anchor']:8.1f}  {a['mean_on']:10.6f}  {a['mean_off']:10.6f}"
+                  f"  {a['sum_on']:10.4f}  {a['sum_off']:10.4f}")
 
     # --- Artifact: pre-rectification drive FWHM --------------------------
     print(f"\n[Artifact] Pre-rectification L2/3 drive at stim={artifact['stim_theta']}°, "
@@ -1704,6 +1846,8 @@ def print_comparison_table(results_by_label: dict[str, dict]) -> None:
             lambda r, k=dkey: f"{r['metric6'][k]['delta_d']:+.4f}")
 
     # Metric 7: match-vs-near-miss LogReg accuracy (8-anchor averaged)
+    first_m7 = next(iter(results_by_label.values()))['metric7']
+    has_m7_ci = "ci_low" in first_m7.get("delta_3", {})
     for dkey, dlabel in [("delta_3", "δ=3"), ("delta_5", "δ=5"), ("delta_10", "δ=10"), ("delta_15", "δ=15")]:
         row(f"M7 acc {dlabel}° OFF",
             lambda r, k=dkey: f"{r['metric7'][k]['off']:.4f}")
@@ -1711,6 +1855,11 @@ def print_comparison_table(results_by_label: dict[str, dict]) -> None:
             lambda r, k=dkey: f"{r['metric7'][k]['on']:.4f}")
         row(f"M7 acc {dlabel}° delta",
             lambda r, k=dkey: f"{r['metric7'][k]['delta_acc']:+.4f}")
+        if has_m7_ci:
+            row(f"M7 {dlabel}° CI",
+                lambda r, k=dkey: f"[{r['metric7'][k]['ci_low']:+.3f},{r['metric7'][k]['ci_high']:+.3f}]")
+            row(f"M7 {dlabel}° p-val",
+                lambda r, k=dkey: f"{r['metric7'][k]['p_value']:.4f}")
 
     # Metric 8: time-resolved early-vs-late summary
     row("M8 early peak OFF",
@@ -1741,6 +1890,13 @@ def print_comparison_table(results_by_label: dict[str, dict]) -> None:
         lambda r: f"{r['metric9']['surround_rel_reduction']:+.4f}")
     row("M9 far rel_red",
         lambda r: f"{r['metric9']['far_rel_reduction']:+.4f}")
+
+    # Metric 10: global amplitude ratio
+    if "metric10" in next(iter(results_by_label.values())):
+        row("M10 global mean ratio (ON/OFF)",
+            lambda r: f"{r['metric10']['mean_ratio']:.4f}")
+        row("M10 global sum ratio (ON/OFF)",
+            lambda r: f"{r['metric10']['sum_ratio']:.4f}")
 
 
 # ---------------------------------------------------------------------------
@@ -1807,6 +1963,8 @@ def analyze_one(
     )
     # Threshold artifact check at stim=ora=90°
     artifact = artifact_check_threshold(net, device, stim_theta=90.0, oracle_theta=90.0)
+    # Metric 10: global amplitude ratio
+    m10 = metric_global_amplitude(net, device)
 
     return {
         "metric1": m1, "metric1b": m1b,
@@ -1814,6 +1972,7 @@ def analyze_one(
         "metric4": m4, "metric4_wide": m4_wide,
         "metric5": m5,
         "metric6": m6, "metric7": m7, "metric8": m8, "metric9": m9,
+        "metric10": m10,
         "sanity": sanity, "artifact": artifact,
         "train_cfg": train_cfg,
     }
