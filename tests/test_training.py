@@ -842,9 +842,9 @@ class TestLocalDiscriminationLoss:
         tc = TrainingConfig(lambda_local_disc=1.0)
         loss_fn = CompositeLoss(tc, model_cfg)
         assert hasattr(loss_fn, "local_disc_head")
-        # 5-input -> 5-output linear head.
-        assert loss_fn.local_disc_head.in_features == 5
-        assert loss_fn.local_disc_head.out_features == 5
+        # 7-input -> 7-output linear head (±3 channels = ±15°).
+        assert loss_fn.local_disc_head.in_features == 7
+        assert loss_fn.local_disc_head.out_features == 7
 
     def test_local_disc_head_absent_when_disabled(self):
         """CompositeLoss does NOT create local_disc_head when lambda=0."""
@@ -881,28 +881,25 @@ class TestLocalDiscriminationLoss:
         assert torch.isfinite(loss_fn.local_disc_head.weight.grad).all()
 
     def test_local_disc_channel_wrap(self):
-        """Channels outside [0, N) must wrap circularly (e.g. c=0 -> [-2..2] = [N-2, N-1, 0, 1, 2])."""
+        """Channels outside [0, N) must wrap circularly (e.g. c=0 -> [-3..3] = [N-3, N-2, N-1, 0, 1, 2, 3])."""
         torch.manual_seed(1)
         model_cfg = ModelConfig(feedback_mode='emergent')
         tc = TrainingConfig(lambda_local_disc=1.0)
         loss_fn = CompositeLoss(tc, model_cfg)
         N = model_cfg.n_orientations
 
-        # Build a single-trial r_l23 where only channel 0's neighbourhood is
-        # non-trivial to inspect what gets sampled. We'll patch the head with
-        # an identity so we can see the raw gather result through the loss
-        # shape. Simpler: exercise the underlying gather logic directly.
+        # Exercise the underlying gather logic directly.
         c = torch.tensor([[0]])  # [B=1, W=1], center channel 0
-        offsets = torch.tensor([-2, -1, 0, 1, 2], dtype=torch.long)
-        channels = (c.unsqueeze(-1) + offsets.view(1, 1, 5)) % N
-        expected = torch.tensor([[[N - 2, N - 1, 0, 1, 2]]])
+        offsets = torch.tensor([-3, -2, -1, 0, 1, 2, 3], dtype=torch.long)
+        channels = (c.unsqueeze(-1) + offsets.view(1, 1, 7)) % N
+        expected = torch.tensor([[[N - 3, N - 2, N - 1, 0, 1, 2, 3]]])
         assert torch.equal(channels, expected)
 
         # And a center in the middle (no wrap).
         c_mid = torch.tensor([[N // 2]])
-        channels_mid = (c_mid.unsqueeze(-1) + offsets.view(1, 1, 5)) % N
+        channels_mid = (c_mid.unsqueeze(-1) + offsets.view(1, 1, 7)) % N
         expected_mid = torch.tensor(
-            [[[N // 2 - 2, N // 2 - 1, N // 2, N // 2 + 1, N // 2 + 2]]]
+            [[[N // 2 - 3, N // 2 - 2, N // 2 - 1, N // 2, N // 2 + 1, N // 2 + 2, N // 2 + 3]]]
         )
         assert torch.equal(channels_mid, expected_mid)
 

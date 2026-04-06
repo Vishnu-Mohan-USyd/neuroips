@@ -962,22 +962,21 @@ def metric_match_vs_near_miss_decoding(
 ) -> dict:
     """Metric 7: trained LogReg decoder of match vs near-miss at small deltas.
 
-    For each δ ∈ {3°, 5°, 10°}:
-      - Generate n_train+n_test trials with labels: half at oracle_theta
-        (match), half at oracle_theta+δ (near-miss).
+    For each δ ∈ {3°, 5°, 10°, 15°}, averaged across 8 anchor orientations
+    {0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5}:
+      - Generate n_train+n_test trials with labels: half at anchor
+        (match), half at anchor+δ (near-miss).
       - Stimulus noise std=noise_std is applied to the input.
       - Extract L2/3 readout response, add readout noise std=readout_noise_std.
       - Train sklearn LogisticRegression on first n_train trials using all
         36 channels as features; test on remaining n_test.
-      - Report test accuracy for feedback ON and OFF (identical noise).
+      - Report test accuracy for feedback ON and OFF (identical noise),
+        averaged across all 8 anchors.
 
     Differs from metric 4 in three ways: (a) it tests the specific
-    match-vs-near-miss discrimination at a single oracle (not general
-    orientation discrimination); (b) it applies noise on both input and
-    output; (c) it uses all 36 channels rather than a narrow subset.
-
-    If sharpening is real, feedback should improve classifier accuracy
-    at small δ. If dampening, feedback should flat-line or hurt accuracy.
+    match-vs-near-miss discrimination (not general orientation
+    discrimination); (b) it applies noise on both input and output;
+    (c) it uses all 36 channels rather than a narrow subset.
 
     Args:
         net: loaded network.
@@ -986,13 +985,14 @@ def metric_match_vs_near_miss_decoding(
         noise_std: stimulus input noise (default 0.3).
         readout_noise_std: output-side L2/3 noise (default 0.3).
         seed: reproducibility seed.
-        oracle_theta: expected orientation (default 90°).
+        oracle_theta: legacy param (ignored — now uses 8 anchors).
 
     Returns:
-        dict keyed by 'delta_{int}' with {on, off, delta_acc}.
+        dict keyed by 'delta_{int}' with {on, off, delta_acc, per_anchor}.
     """
     period = net.cfg.orientation_range
-    deltas = [3.0, 5.0, 10.0]
+    deltas = [3.0, 5.0, 10.0, 15.0]
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
     n_total = n_train + n_test
     # Balanced classes — must be even
     if n_total % 2 != 0:
@@ -1001,56 +1001,64 @@ def metric_match_vs_near_miss_decoding(
 
     results: dict = {}
     for delta in deltas:
-        thetas_match = torch.full((n_half,), oracle_theta, device=device)
-        thetas_miss = torch.full(
-            (n_half,), (oracle_theta + delta) % period, device=device
-        )
-        stim = torch.cat([thetas_match, thetas_miss], dim=0)
-        oracle_arr = torch.full_like(stim, oracle_theta)
-        labels = np.concatenate([
-            np.zeros(n_half, dtype=np.int64),
-            np.ones(n_half, dtype=np.int64),
-        ])
+        anchor_accs_on = []
+        anchor_accs_off = []
+        per_anchor = {}
+        for anchor in anchors:
+            thetas_match = torch.full((n_half,), anchor, device=device)
+            thetas_miss = torch.full(
+                (n_half,), (anchor + delta) % period, device=device
+            )
+            stim = torch.cat([thetas_match, thetas_miss], dim=0)
+            oracle_arr = torch.full_like(stim, anchor)
+            labels = np.concatenate([
+                np.zeros(n_half, dtype=np.int64),
+                np.ones(n_half, dtype=np.int64),
+            ])
 
-        trial_seed = seed + int(delta * 10)
-        r_on_clean = run_trials(
-            net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
-        ).cpu().numpy()
-        with feedback_disabled(net):
-            r_off_clean = run_trials(
+            trial_seed = seed + int(delta * 10) + int(anchor * 100)
+            r_on_clean = run_trials(
                 net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
             ).cpu().numpy()
+            with feedback_disabled(net):
+                r_off_clean = run_trials(
+                    net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+                ).cpu().numpy()
 
-        # Readout noise — same realization for on and off so only the
-        # feedback pathway differs between the two runs.
-        rs = np.random.RandomState(trial_seed + 7)
-        readout_noise = (rs.randn(*r_on_clean.shape).astype(np.float32)
-                         * readout_noise_std)
-        X_on = r_on_clean + readout_noise
-        X_off = r_off_clean + readout_noise
+            rs = np.random.RandomState(trial_seed + 7)
+            readout_noise = (rs.randn(*r_on_clean.shape).astype(np.float32)
+                             * readout_noise_std)
+            X_on = r_on_clean + readout_noise
+            X_off = r_off_clean + readout_noise
 
-        perm = rs.permutation(n_total)
-        train_idx = perm[:n_train]
-        test_idx = perm[n_train:]
+            perm = rs.permutation(n_total)
+            train_idx = perm[:n_train]
+            test_idx = perm[n_train:]
 
-        def _fit_and_score(X):
-            clf = LogisticRegression(max_iter=2000)
-            clf.fit(X[train_idx], labels[train_idx])
-            return float(clf.score(X[test_idx], labels[test_idx]))
+            def _fit_and_score(X, _train=train_idx, _test=test_idx, _labels=labels):
+                clf = LogisticRegression(max_iter=2000)
+                clf.fit(X[_train], _labels[_train])
+                return float(clf.score(X[_test], _labels[_test]))
 
-        acc_on = _fit_and_score(X_on)
-        acc_off = _fit_and_score(X_off)
+            acc_on = _fit_and_score(X_on)
+            acc_off = _fit_and_score(X_off)
+            anchor_accs_on.append(acc_on)
+            anchor_accs_off.append(acc_off)
+            per_anchor[anchor] = {"on": acc_on, "off": acc_off}
 
+        mean_on = float(np.mean(anchor_accs_on))
+        mean_off = float(np.mean(anchor_accs_off))
         results[f"delta_{int(delta)}"] = {
-            "on": acc_on,
-            "off": acc_off,
-            "delta_acc": acc_on - acc_off,
+            "on": mean_on,
+            "off": mean_off,
+            "delta_acc": mean_on - mean_off,
+            "per_anchor": per_anchor,
         }
     results["n_train"] = n_train
     results["n_test"] = n_test
     results["noise_std"] = noise_std
     results["readout_noise_std"] = readout_noise_std
-    results["oracle_theta"] = oracle_theta
+    results["anchors"] = anchors
     return results
 
 
@@ -1555,9 +1563,11 @@ def print_report(label: str, results: dict) -> None:
     print(f"\n[Metric 7] Match vs near-miss trained LogReg decoder (all 36 ch)")
     print(f"  n_train={m7['n_train']}, n_test={m7['n_test']}, "
           f"stim_noise={m7['noise_std']}, readout_noise={m7['readout_noise_std']}, "
-          f"oracle={m7['oracle_theta']}°")
+          f"anchors={m7.get('anchors', 'single')}")
     print(f"  {'delta':>8s}  {'acc OFF':>10s}  {'acc ON':>10s}  {'delta_acc':>11s}")
-    for key in ["delta_3", "delta_5", "delta_10"]:
+    for key in ["delta_3", "delta_5", "delta_10", "delta_15"]:
+        if key not in m7:
+            continue
         r = m7[key]
         print(f"  {key:>8s}  {r['off']:10.4f}  {r['on']:10.4f}  {r['delta_acc']:+11.4f}")
 
@@ -1686,8 +1696,8 @@ def print_comparison_table(results_by_label: dict[str, dict]) -> None:
         row(f"M6 local d' {dlabel}° delta",
             lambda r, k=dkey: f"{r['metric6'][k]['delta_d']:+.4f}")
 
-    # Metric 7: match-vs-near-miss LogReg accuracy
-    for dkey, dlabel in [("delta_3", "δ=3"), ("delta_5", "δ=5"), ("delta_10", "δ=10")]:
+    # Metric 7: match-vs-near-miss LogReg accuracy (8-anchor averaged)
+    for dkey, dlabel in [("delta_3", "δ=3"), ("delta_5", "δ=5"), ("delta_10", "δ=10"), ("delta_15", "δ=15")]:
         row(f"M7 acc {dlabel}° OFF",
             lambda r, k=dkey: f"{r['metric7'][k]['off']:.4f}")
         row(f"M7 acc {dlabel}° ON",

@@ -433,3 +433,64 @@ class TestHMMSequenceGenerator:
         assert MechanismType.DAMPENING == "dampening"
         assert str(MechanismType.SHARPENING) == "MechanismType.SHARPENING"
         assert MechanismType.CENTER_SURROUND.value == "center_surround"
+
+    def test_cues_populated_when_cue_valid_fraction_positive(self):
+        """When cue_valid_fraction > 0, cues should be non-zero for s > 0."""
+        gen_rng = torch.Generator().manual_seed(42)
+        hmm = HMMSequenceGenerator(cue_valid_fraction=0.75)
+        meta = hmm.generate(batch_size=8, seq_length=20, generator=gen_rng)
+        # First position should always be zero (no prior to cue from)
+        assert (meta.cues[:, 0] == 0).all()
+        # Remaining positions should have non-zero cues
+        nonzero_count = (meta.cues[:, 1:].abs().sum(dim=-1) > 0).float().sum()
+        total_positions = 8 * 19  # batch * (seq - 1)
+        # All positions s>0 should have cues (both valid and invalid produce bumps)
+        assert nonzero_count == total_positions, (
+            f"Expected {total_positions} non-zero cues, got {int(nonzero_count.item())}"
+        )
+        # Cues should be normalized (sum ≈ 1 for each non-zero cue)
+        cue_sums = meta.cues[:, 1:].sum(dim=-1)
+        assert torch.allclose(cue_sums, torch.ones_like(cue_sums), atol=0.01)
+
+    def test_cues_approximately_valid_fraction(self):
+        """Approximately cue_valid_fraction of cues should match predicted orientation."""
+        gen_rng = torch.Generator().manual_seed(42)
+        hmm = HMMSequenceGenerator(
+            cue_valid_fraction=0.75,
+            n_orientations=36,
+            transition_step=15.0,
+        )
+        meta = hmm.generate(batch_size=50, seq_length=30, generator=gen_rng)
+        # Check cue peak matches predicted-next for valid cues
+        valid_count = 0
+        total_count = 0
+        period = 180.0
+        n_ori = 36
+        for b in range(50):
+            for s in range(1, 30):
+                total_count += 1
+                cue_peak_ch = meta.cues[b, s].argmax().item()
+                cue_peak_deg = cue_peak_ch * (period / n_ori)
+                prev_ori = meta.orientations[b, s - 1].item()
+                state = meta.states[b, s].item()
+                if state == 0:  # CW
+                    expected_ori = (prev_ori + 15.0) % period
+                elif state == 1:  # CCW
+                    expected_ori = (prev_ori - 15.0) % period
+                else:
+                    expected_ori = prev_ori
+                # Circular distance
+                diff = abs(cue_peak_deg - expected_ori)
+                diff = min(diff, period - diff)
+                if diff < 5.0:  # within 1 channel
+                    valid_count += 1
+        frac = valid_count / total_count
+        # Should be ~75% valid
+        assert 0.65 < frac < 0.85, f"Valid fraction {frac:.3f} outside expected range"
+
+    def test_cues_zero_when_cue_valid_fraction_zero(self):
+        """When cue_valid_fraction=0 (default), cues should remain all zeros."""
+        gen_rng = torch.Generator().manual_seed(42)
+        hmm = HMMSequenceGenerator(cue_valid_fraction=0.0)
+        meta = hmm.generate(batch_size=4, seq_length=20, generator=gen_rng)
+        assert (meta.cues == 0).all()

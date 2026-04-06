@@ -182,6 +182,7 @@ def run_stage2(
         ambiguous_fraction=train_cfg.ambiguous_fraction,
         ambiguous_offset=stim_cfg.ambiguous_offset,
         n_states=stim_cfg.n_states,
+        cue_valid_fraction=stim_cfg.cue_valid_fraction,
     )
 
     # Readout indices (last 3 steps of ON period — L2/3 needs time to settle)
@@ -377,6 +378,7 @@ def run_stage2(
             "r_l4": aux["r_l4_all"],
             "r_pv": aux["r_pv_all"],
             "r_som": aux["r_som_all"],
+            "r_vip": aux["r_vip_all"],
             "deep_template": aux["deep_template_all"],
             "state_logits": aux["state_logits_all"],
             "p_cw": aux["p_cw_all"],

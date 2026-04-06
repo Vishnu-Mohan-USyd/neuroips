@@ -82,9 +82,9 @@ class CompositeLoss(nn.Module):
         if self.lambda_detection > 0:
             self.detection_head = nn.Linear(N, 1)
 
-        # Local competitor discrimination head: 5 channels (center +- 1, +- 2) -> 5 classes (Phase 4)
+        # Local competitor discrimination head: 7 channels (center ±3 = ±15°) -> 7 classes (Phase 4)
         if self.lambda_local_disc > 0:
-            self.local_disc_head = nn.Linear(5, 5)
+            self.local_disc_head = nn.Linear(7, 7)
 
         # Homeostasis target range
         self.target_min = 0.05
@@ -248,43 +248,42 @@ class CompositeLoss(nn.Module):
     def local_discrimination_loss(
         self, r_l23_windows: Tensor, true_theta_windows: Tensor
     ) -> Tensor:
-        """Local 5-way discrimination: expected channel vs +- 1, +- 2 neighbors.
+        """Local 7-way discrimination: expected channel vs ±1, ±2, ±3 neighbors.
 
-        For each readout window, extract a 5-channel slice centered at the
+        For each readout window, extract a 7-channel slice centered at the
         true orientation channel (with circular wrap for channels that fall
-        off the ends). A dedicated 5-input linear head (`local_disc_head`)
-        is trained to identify the center (true) class vs the four nearest
-        neighbors. This creates direct gradient pressure for L2/3 to
-        separate the expected channel from its +- 1 and +- 2 neighbors --
-        the signature of Kok-style sharpening that 36-way CE does not
-        penalise.
+        off the ends). A dedicated 7-input linear head (`local_disc_head`)
+        is trained to identify the center (true) class vs the six nearest
+        neighbors (±3 channels = ±15°). This creates direct gradient
+        pressure for L2/3 to separate the expected channel from its
+        neighbors — aligned with the ambiguous_offset=15° used in training.
 
         Args:
             r_l23_windows: [B, W, N] L2/3 activity at readout timepoints.
             true_theta_windows: [B, W] true orientation in degrees.
 
         Returns:
-            Scalar cross-entropy loss over the 5 local classes.
+            Scalar cross-entropy loss over the 7 local classes.
         """
         B, W, N = r_l23_windows.shape
         # Center channel for each (B, W) trial.
         c = self._theta_to_channel(true_theta_windows)  # [B, W], long
-        # Offsets [-2, -1, 0, 1, 2] -- neighbours in orientation space.
+        # Offsets [-3, -2, -1, 0, 1, 2, 3] -- neighbours in orientation space.
         offsets = torch.tensor(
-            [-2, -1, 0, 1, 2], device=r_l23_windows.device, dtype=torch.long,
+            [-3, -2, -1, 0, 1, 2, 3], device=r_l23_windows.device, dtype=torch.long,
         )
         # Broadcast to per-trial channel indices, wrapping circularly.
-        # channels: [B, W, 5] -- indices into the N-channel L2/3 axis.
-        channels = (c.unsqueeze(-1) + offsets.view(1, 1, 5)) % N
-        # Gather activities at those 5 channels for every trial.
+        # channels: [B, W, 7] -- indices into the N-channel L2/3 axis.
+        channels = (c.unsqueeze(-1) + offsets.view(1, 1, 7)) % N
+        # Gather activities at those 7 channels for every trial.
         r_flat = r_l23_windows.reshape(B * W, N)                 # [BW, N]
-        ch_flat = channels.reshape(B * W, 5)                     # [BW, 5]
-        local_r = torch.gather(r_flat, dim=1, index=ch_flat)     # [BW, 5]
-        # Logits over the 5 classes.
-        logits = self.local_disc_head(local_r)                   # [BW, 5]
-        # Target is class 2 (the center / true channel).
+        ch_flat = channels.reshape(B * W, 7)                     # [BW, 7]
+        local_r = torch.gather(r_flat, dim=1, index=ch_flat)     # [BW, 7]
+        # Logits over the 7 classes.
+        logits = self.local_disc_head(local_r)                   # [BW, 7]
+        # Target is class 3 (the center / true channel).
         targets = torch.full(
-            (B * W,), 2, device=r_l23_windows.device, dtype=torch.long,
+            (B * W,), 3, device=r_l23_windows.device, dtype=torch.long,
         )
         return F.cross_entropy(logits, targets)
 
@@ -293,7 +292,8 @@ class CompositeLoss(nn.Module):
 
         Args:
             outputs: dict with 'r_l4' [B,T,N], 'r_l23' [B,T,N],
-                     'r_pv' [B,T,1], 'r_som' [B,T,N], 'deep_template' [B,T,N].
+                     'r_pv' [B,T,1], 'r_som' [B,T,N], 'deep_template' [B,T,N],
+                     and optionally 'r_vip' [B,T,N].
 
         Returns:
             (E_excitatory, E_total)
@@ -307,6 +307,8 @@ class CompositeLoss(nn.Module):
             outputs["r_pv"].abs().mean()
             + outputs["r_som"].abs().mean()
         )
+        if "r_vip" in outputs:
+            e_inh = e_inh + outputs["r_vip"].abs().mean()
         return e_exc, e_exc + e_inh
 
     def homeostasis_penalty(self, r_l23: Tensor) -> Tensor:

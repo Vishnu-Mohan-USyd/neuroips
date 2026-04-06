@@ -179,6 +179,7 @@ class StimulusConfig:
     # `src/training/trainer.py` to construct the second orientation of each
     # ambiguous presentation as `ori + ambiguous_offset`.
     ambiguous_offset: float = 15.0
+    cue_valid_fraction: float = 0.75
 
 
 def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig, TrainingConfig, StimulusConfig]:

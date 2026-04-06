@@ -304,6 +304,7 @@ class HMMSequenceGenerator:
         reliability_drop_value: float = 0.50,
         cue_dim: int = 2,
         n_states: int = 3,
+        cue_valid_fraction: float = 0.0,
     ):
         self.n_orientations = n_orientations
         self.p_self = p_self
@@ -320,6 +321,7 @@ class HMMSequenceGenerator:
         self.reliability_drop_value = reliability_drop_value
         self.cue_dim = cue_dim
         self.n_states = n_states
+        self.cue_valid_fraction = cue_valid_fraction
 
     def generate(
         self,
@@ -380,8 +382,33 @@ class HMMSequenceGenerator:
         task_states[task_relevant, :, 0] = 1.0
         task_states[~task_relevant, :, 1] = 1.0
 
-        # Cue input: zeros by default
+        # Cue input: population-coded orientation bumps if cue_valid_fraction > 0
         cues = torch.zeros(B, seq_length, self.n_orientations)
+        if self.cue_valid_fraction > 0:
+            N = self.n_orientations
+            prefs = torch.arange(N, dtype=torch.float32) * (self.period / N)
+            cue_sigma = 10.0  # narrower than stimulus sigma_ff=12°
+            for b in range(B):
+                for s in range(1, seq_length):  # no cue at first presentation
+                    if torch.rand(1, generator=generator).item() < self.cue_valid_fraction:
+                        # Valid cue: bump at predicted next orientation
+                        state = states[b, s].item()
+                        prev_ori = orientations[b, s - 1].item()
+                        if state == HMMState.CW:
+                            cue_ori = (prev_ori + self.transition_step) % self.period
+                        elif state == HMMState.CCW:
+                            cue_ori = (prev_ori - self.transition_step) % self.period
+                        else:
+                            cue_ori = prev_ori  # neutral: same as previous
+                    else:
+                        # Invalid cue: random orientation
+                        cue_ori = torch.rand(1, generator=generator).item() * self.period
+                    # Population-coded bump at cue_ori
+                    dists = torch.abs(prefs - cue_ori)
+                    dists = torch.min(dists, self.period - dists)
+                    cue_bump = torch.exp(-dists ** 2 / (2 * cue_sigma ** 2))
+                    cue_bump = cue_bump / (cue_bump.sum() + 1e-8)
+                    cues[b, s] = cue_bump
 
         return SequenceMetadata(
             orientations=orientations,

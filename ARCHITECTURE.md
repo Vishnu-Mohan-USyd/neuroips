@@ -32,6 +32,14 @@ what feedback regimes emerge under different computational objectives.
 - Inhibits L2/3 (subtractive)
 - Time constant: tau_som=10
 
+### VIP (Vasoactive Intestinal Peptide Interneurons — Disinhibition)
+- Receives `vip_drive` from the feedback operator (separate alpha_vip weights)
+- Inhibits SOM: `effective_som_drive = relu(som_drive - softplus(w_vip_som) * r_vip)`
+- Disinhibits L2/3 at the predicted orientation by reducing SOM suppression there
+- Time constant: tau_vip=10 (same as SOM)
+- Activation: rectified_softplus (same as SOM)
+- Biologically motivated: VIP→SOM connection probability 62.5% (Pfeffer et al. 2013)
+
 ### Deep Template
 - Slow integrator tracking recent stimulus history
 - Modulated by V2 precision: deep_template = gain × q_pred × pi_eff
@@ -68,8 +76,12 @@ GRU with 16 hidden units. Two output modes:
 7. Odd/sine — sin(θ · π/90°), for tuning shift detection
 
 ### Learnable Parameters
-- `alpha_inh` [7]: one weight per basis function
+- `alpha_inh` [7]: one weight per basis function (SOM pathway)
 - `som_baseline` [scalar]: learned operating point for delta-SOM
+- `som_tonic` [scalar]: learned positive SOM floor (init -3.0 → softplus≈0.049)
+- `alpha_vip` [7]: one weight per basis function (VIP pathway, init 0.01)
+- `vip_baseline` [scalar]: VIP operating point (delta-style)
+- `w_vip_som` [scalar, on network]: VIP→SOM coupling gain (softplus)
 
 ### Kernel Computation
 - K_inh = Σ(alpha_inh_k × basis_k) — weighted sum → 36-channel profile
@@ -88,11 +100,15 @@ GRU with 16 hidden units. Two output modes:
 Stimulus → L4 → PV (normalization)
                 L4 → V2 → p_cw, pi_pred
                           p_cw + L4 → q_pred (analytical)
-                          q_pred → K_inh ⊛ q_centered → inh_field
-                          inh_field → delta-SOM → som_drive
-                                                    ↓
+                          q_pred → K_inh ⊛ q_centered → inh_field → delta-SOM → som_drive
+                          q_pred → K_vip ⊛ q_centered → vip_field → vip_drive
+                                                                        ↓
+                                                    VIP (tau=10, rectified_softplus)
+                                                        ↓
+                                   effective_som = relu(som_drive - softplus(w_vip_som) × r_vip)
+                                                        ↓
                 L4 ──────→ L2/3 ← PV (subtractive)
-                           L2/3 ← SOM (subtractive) ← som_drive
+                           L2/3 ← SOM (subtractive) ← effective_som
                            L2/3 ← W_rec (recurrence)
                            L2/3 → readout decoder
 ```
@@ -130,7 +146,7 @@ Stimulus → L4 → PV (normalization)
 | `lambda_sensory` | 36-way CE orientation decode | L2/3 readout |
 | `lambda_l4_sensory` | 36-way CE orientation decode | L4 readout |
 | `lambda_mismatch` | Binary BCE mismatch detection (ground-truth) | L2/3 readout |
-| `lambda_local_disc` | 5-way CE local competitor discrimination | L2/3 readout (±2 channels) |
+| `lambda_local_disc` | 7-way CE local competitor discrimination | L2/3 readout (±3 channels = ±15°) |
 | `lambda_sharp` | Distance-weighted activity penalty | L2/3 (penalize flanks) |
 | `lambda_state` | BCE on p_cw vs true CW/CCW | V2 output |
 | `lambda_energy` | L1 on all population rates | All |
@@ -158,7 +174,7 @@ Stimulus → L4 → PV (normalization)
 
 | File | Contents |
 |---|---|
-| `src/model/populations.py` | V1L4Ring, PVPool, V1L23Ring, SOMRing, DeepTemplate |
+| `src/model/populations.py` | V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing, DeepTemplate |
 | `src/model/v2_context.py` | V2ContextModule (GRU + heads) |
 | `src/model/feedback.py` | EmergentFeedbackOperator + legacy FeedbackMechanism |
 | `src/model/network.py` | LaminarV1V2Network (composes all modules) |
@@ -173,6 +189,6 @@ Stimulus → L4 → PV (normalization)
 
 ## Tests
 
-345 tests covering V1 circuit, V2 factorization, feedback operator, training
-pipeline, config parsing, and regression tests for all bugs discovered during
-the project. Run with `python -m pytest tests/ -v`.
+357+ tests covering V1 circuit, V2 factorization, feedback operator (including
+VIP pathway), training pipeline, config parsing, and regression tests for all
+bugs discovered during the project. Run with `python -m pytest tests/ -v`.

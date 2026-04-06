@@ -1,11 +1,12 @@
 # ============================================================
-# VIP Experiment 2: Tension condition (sensory + energy + ambiguous)
+# VIP Experiment 3: Hardened condition
 # ============================================================
-# Key insight: VIP needs competing pressures to engage.
-# Energy cost forces SOM to suppress broadly (including center).
-# Sensory loss wants to preserve the center.
-# VIP resolves this by selectively disinhibiting the center
-# while leaving flank suppression for energy savings.
+# Builds on exp_vip_tension.yaml with fixes:
+# - Energy cost now includes r_vip
+# - 7-way local discrimination (±3 channels = ±15°, aligned with ambiguous_offset)
+# - Small nonzero lambda_fb to charge VIP sparsity
+# - oracle_shift_timing: prior about current stimulus
+# - 75% valid orientation cues during ISI
 
 model:
   n_orientations: 36
@@ -55,15 +56,16 @@ training:
   lambda_l4_sensory: 0.0
   lambda_mismatch: 0.0
   lambda_pred: 0.0
-  lambda_energy: 0.01                 # Activity cost (wants SOM to suppress broadly)
+  lambda_energy: 0.01                 # Activity cost (now includes VIP)
   lambda_homeo: 1.0
   lambda_state: 0.0
-  lambda_fb: 0.0                      # No L1 — let VIP grow freely
+  lambda_fb: 0.001                    # Small nonzero — charges VIP sparsity
+  lambda_local_disc: 1.0              # 7-way (aligned with ambiguous_offset=15°)
   delta_som: true
   freeze_v2: true
   oracle_pi: 3.0
   oracle_template: "oracle_true"
-  oracle_shift_timing: true
+  oracle_shift_timing: true           # Prior about current stimulus
   stimulus_noise: 0.25
 
   batch_size: 32
@@ -81,5 +83,6 @@ stimulus:
   jitter_range: 0.0
   transition_step: 5.0
   ambiguous_offset: 15.0
+  cue_valid_fraction: 0.75            # 75% valid orientation cues
   cue_dim: 2
   task_state_dim: 2
