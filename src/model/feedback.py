@@ -257,13 +257,33 @@ class EmergentFeedbackOperator(nn.Module):
         # can flow. During burn-in (feedback_scale=0), this is fully zeroed out.
         self.alpha_inh = nn.Parameter(torch.full((K,), 0.01))
 
+        # VIP pathway: separate learnable weights, same basis functions.
+        # Init at 0.01 (same as alpha_inh) — NOT zero, because
+        # rectified_softplus has zero gradient at 0, which would permanently
+        # kill the VIP pathway. The L1 penalty will push alpha_vip back to
+        # zero if the task doesn't need disinhibition.
+        self.alpha_vip = nn.Parameter(torch.full((K,), 0.01))
+
         # Delta-SOM baseline: softplus(baseline + field) - softplus(baseline)
         # removes the constant bias from softplus, so zero field → zero drive.
         if self.delta_som:
             self.som_baseline = nn.Parameter(torch.tensor(0.0))
+            # SOM tonic baseline: a small positive floor that ensures SOM always
+            # provides SOME inhibition at every channel. This is critical for VIP
+            # disinhibition to work — without it, the SOM kernel learns to spare
+            # the predicted channel (negative center), leaving r_som = 0 there,
+            # so VIP has nothing to disinhibit. The tonic floor creates a positive
+            # SOM drive everywhere, and VIP can selectively reduce it at center.
+            # Init at -3.0 → softplus(-3) ≈ 0.049 (very small positive floor).
+            # Must be small enough not to kill L2/3, but large enough to give
+            # VIP something to disinhibit. The optimizer adjusts it during training.
+            self.som_tonic = nn.Parameter(torch.tensor(-3.0))
+        # VIP always uses delta-style (bias-corrected)
+        self.vip_baseline = nn.Parameter(torch.tensor(0.0))
 
-        # Cache for circulant matrix (populated by cache_kernels)
+        # Cache for circulant matrices (populated by cache_kernels)
         self._cached_inh_circulant: Tensor | None = None
+        self._cached_vip_circulant: Tensor | None = None
 
     def _build_basis(self, N: int, period: float) -> Tensor:
         """Build circular basis functions over orientation space.
@@ -319,6 +339,15 @@ class EmergentFeedbackOperator(nn.Module):
         K_inh = (self.alpha_inh.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
         return K_inh
 
+    def get_vip_profile(self) -> Tensor:
+        """Return the current VIP (disinhibitory) kernel profile.
+
+        Returns:
+            K_vip: [N] VIP kernel profile.
+        """
+        K_vip = (self.alpha_vip.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
+        return K_vip
+
     def _to_circulant(self, profile: Tensor) -> Tensor:
         """Convert a 1D profile [N] to a circulant matrix [N, N].
 
@@ -336,45 +365,59 @@ class EmergentFeedbackOperator(nn.Module):
         return profile[(indices.unsqueeze(0) - indices.unsqueeze(1)) % N]
 
     def cache_kernels(self) -> None:
-        """Build and cache circulant matrix for reuse across timesteps."""
+        """Build and cache circulant matrices for reuse across timesteps."""
         K_inh = self.get_profiles()
         self._cached_inh_circulant = self._to_circulant(K_inh)
+        K_vip = self.get_vip_profile()
+        self._cached_vip_circulant = self._to_circulant(K_vip)
 
     def uncache_kernels(self) -> None:
-        """Clear cached circulant matrix after the forward pass."""
+        """Clear cached circulant matrices after the forward pass."""
         self._cached_inh_circulant = None
+        self._cached_vip_circulant = None
 
-    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> Tensor:
-        """Compute SOM drive from learned inhibitory profile.
+    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> tuple[Tensor, Tensor]:
+        """Compute SOM and VIP drives from learned profiles.
 
         Args:
             q_pred: [B, N] -- predicted orientation distribution.
             pi_eff: [B, 1] -- effective precision (after warmup scaling).
 
         Returns:
-            som_drive: [B, N] -- non-negative drive for SOM ring.
+            (som_drive, vip_drive): each [B, N] -- non-negative drives for
+                SOM and VIP rings respectively.
         """
         N = q_pred.shape[-1]
         q_centered = q_pred - 1.0 / N  # zero-mean so feedback=0 when uninformative
 
-        # Use cached or compute circulant matrix
+        # --- SOM pathway (existing) ---
         if self._cached_inh_circulant is not None:
             inh_circulant = self._cached_inh_circulant
         else:
             K_inh = self.get_profiles()
             inh_circulant = self._to_circulant(K_inh)
 
-        # Circular convolution: circulant @ q_centered
         inh_field = (inh_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
 
-        # Scale by precision. Use softplus (not relu) to keep output non-negative
-        # while preserving gradient flow at zero (relu has zero gradient at 0,
-        # which causes dead weights when alpha is pushed to zero by L1 sparsity).
         if self.delta_som:
-            # Delta-SOM: softplus(baseline + field) - softplus(baseline)
-            # Removes constant bias so zero field → zero drive.
-            som_drive = pi_eff * (F.softplus(self.som_baseline + inh_field) - F.softplus(self.som_baseline))
+            # Delta modulation (can be positive or negative)
+            delta = F.softplus(self.som_baseline + inh_field) - F.softplus(self.som_baseline)
+            # Tonic positive floor: ensures SOM always has some drive at every
+            # channel, so VIP disinhibition has something to act on.
+            tonic = F.softplus(self.som_tonic)  # guaranteed positive
+            som_drive = pi_eff * (tonic + delta)
         else:
             som_drive = pi_eff * F.softplus(inh_field)
 
-        return som_drive
+        # --- VIP pathway (new, mirrors SOM) ---
+        if self._cached_vip_circulant is not None:
+            vip_circulant = self._cached_vip_circulant
+        else:
+            K_vip = self.get_vip_profile()
+            vip_circulant = self._to_circulant(K_vip)
+
+        vip_field = (vip_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
+        # Always delta-style for VIP (bias-corrected)
+        vip_drive = pi_eff * (F.softplus(self.vip_baseline + vip_field) - F.softplus(self.vip_baseline))
+
+        return som_drive, vip_drive

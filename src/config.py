@@ -47,6 +47,9 @@ class ModelConfig:
     # SOM
     tau_som: int = 10
 
+    # VIP interneurons (disinhibitory: VIP→SOM→L2/3)
+    tau_vip: int = 10
+
     # V2 context
     v2_hidden_dim: int = 16
     pi_max: float = 5.0

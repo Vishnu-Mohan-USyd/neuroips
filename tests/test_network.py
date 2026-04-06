@@ -345,9 +345,10 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
-        som_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive = fb(q_pred, pi_eff)
 
         assert som_drive.shape == (B, N)
+        assert vip_drive.shape == (B, N)
 
     def test_small_init_mostly_uniform(self, cfg_emergent):
         """Default init (alpha=0.01) should produce nearly uniform output.
@@ -360,7 +361,7 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
 
-        som_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive = fb(q_pred, pi_eff)
 
         # Spatial variation should be very small (< 1% of mean)
         assert som_drive.std(dim=-1).max() < 0.1 * som_drive.mean()
@@ -374,26 +375,33 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
 
-        som_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive = fb(q_pred, pi_eff)
 
         # With alpha=0, field=0, softplus(0)=ln(2)≈0.693 → uniform
         # Output should be constant across orientations (no spatial structure)
         assert som_drive.std(dim=-1).max() < 1e-5, "Should be spatially uniform"
 
     def test_non_negative_outputs(self, cfg_emergent):
-        """SOM drive should always be >= 0 (softplus)."""
+        """SOM drive should always be >= 0 (softplus, no delta_som).
+        VIP drive uses delta-style so it can go negative before VIPRing
+        rectification — that's expected behavior.
+        """
         fb = EmergentFeedbackOperator(cfg_emergent)
         # Set random weights
         with torch.no_grad():
             fb.alpha_inh.normal_()
+            fb.alpha_vip.normal_()
 
         B, N = 8, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
-        som_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive = fb(q_pred, pi_eff)
 
+        # SOM uses plain softplus (no delta) by default → non-negative
         assert (som_drive >= -1e-6).all()
+        # VIP uses delta-style (signed) — just check finite
+        assert torch.isfinite(vip_drive).all()
 
     def test_basis_shape(self, cfg_emergent):
         """Basis should be [K, N] with K ~ 7."""
@@ -412,20 +420,22 @@ class TestEmergentFeedbackOperator:
         fb = EmergentFeedbackOperator(cfg_emergent)
         with torch.no_grad():
             fb.alpha_inh.normal_(std=0.5)
+            fb.alpha_vip.normal_(std=0.5)
 
         B, N = 4, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
         # Without cache
-        som1 = fb(q_pred, pi_eff)
+        som1, vip1 = fb(q_pred, pi_eff)
 
         # With cache
         fb.cache_kernels()
-        som2 = fb(q_pred, pi_eff)
+        som2, vip2 = fb(q_pred, pi_eff)
         fb.uncache_kernels()
 
         assert torch.allclose(som1, som2, atol=1e-6)
+        assert torch.allclose(vip1, vip2, atol=1e-6)
 
     def test_manual_dampening_profile(self, cfg_emergent):
         """Setting alpha_inh to mimic narrow Gaussian should produce dampening-like profile."""
@@ -438,6 +448,166 @@ class TestEmergentFeedbackOperator:
         K_inh = fb.get_profiles()
         # K_inh should peak at channel 0 (the center)
         assert K_inh.argmax().item() == 0
+
+
+# ── VIP Disinhibitory Pathway Tests ───────────────────────────────────
+
+class TestVIPPathway:
+    """Tests for VIPRing dynamics, VIP→SOM disinhibition, and alpha_vip ablation."""
+
+    def test_vip_ring_dynamics(self, cfg_emergent):
+        """VIPRing Euler update: drive=0 → decay toward zero."""
+        from src.model.populations import VIPRing
+        vip = VIPRing(cfg_emergent)
+        B, N = 2, cfg_emergent.n_orientations
+        r_vip_prev = torch.ones(B, N) * 0.5
+        vip_drive = torch.zeros(B, N)
+        r_vip = vip(vip_drive, r_vip_prev)
+        # With zero drive and rectified_softplus(0)≈0.693, the rate should change
+        # but remain finite and non-negative
+        assert r_vip.shape == (B, N)
+        assert torch.isfinite(r_vip).all()
+        assert (r_vip >= 0).all()
+
+    def test_vip_ring_positive_drive(self, cfg_emergent):
+        """VIPRing with positive drive should increase rates."""
+        from src.model.populations import VIPRing
+        vip = VIPRing(cfg_emergent)
+        B, N = 2, cfg_emergent.n_orientations
+        r_vip_prev = torch.zeros(B, N)
+        vip_drive = torch.ones(B, N) * 2.0
+        r_vip = vip(vip_drive, r_vip_prev)
+        assert (r_vip > 0).all(), "Positive drive should produce positive rates"
+
+    def test_network_has_vip_params(self, cfg_emergent):
+        """Network should have VIP ring and w_vip_som parameter."""
+        net = LaminarV1V2Network(cfg_emergent)
+        assert hasattr(net, 'vip'), "Missing VIPRing module"
+        assert hasattr(net, 'w_vip_som'), "Missing w_vip_som parameter"
+        assert net.w_vip_som.requires_grad
+
+    def test_feedback_has_alpha_vip(self, cfg_emergent):
+        """EmergentFeedbackOperator should have alpha_vip (zero init)."""
+        net = LaminarV1V2Network(cfg_emergent)
+        fb = net.feedback
+        assert hasattr(fb, 'alpha_vip'), "Missing alpha_vip"
+        assert fb.alpha_vip.shape == fb.alpha_inh.shape
+        # alpha_vip inits at 0.01 (same as alpha_inh) — NOT zero,
+        # because rectified_softplus has zero gradient at 0 which would
+        # permanently kill the VIP pathway.
+        assert torch.allclose(fb.alpha_vip, torch.full_like(fb.alpha_vip, 0.01))
+
+    def test_forward_with_vip(self, cfg_emergent):
+        """Full forward pass with VIP active — no NaN, no crash."""
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        B, T, N = 2, 10, cfg_emergent.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        r_l23_all, final_state, aux = net(stim)
+        assert r_l23_all.shape == (B, T, N)
+        assert not torch.isnan(r_l23_all).any()
+        assert "r_vip_all" in aux
+        assert aux["r_vip_all"].shape == (B, T, N)
+        assert not torch.isnan(aux["r_vip_all"]).any()
+        # r_vip in final state
+        assert final_state.r_vip.shape == (B, N)
+
+    def test_alpha_vip_zero_som_unchanged(self, cfg_emergent):
+        """When alpha_vip=0, SOM drive is unchanged from SOM-only behavior.
+
+        With alpha_vip=0, VIP field=0, delta-VIP output=0. After VIPRing
+        with zero drive, r_vip is near-zero. So effective_som_drive ≈ som_drive.
+        """
+        torch.manual_seed(42)
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        # Ensure alpha_vip is zero
+        with torch.no_grad():
+            net.feedback.alpha_vip.zero_()
+
+        B, T, N = 2, 5, cfg_emergent.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        r_l23_all, state, aux = net(stim)
+
+        # r_vip should be near-zero throughout (zero drive + zero init)
+        assert aux["r_vip_all"].abs().max() < 0.1, (
+            f"VIP should be near-zero with alpha_vip=0, max={aux['r_vip_all'].abs().max():.4f}"
+        )
+
+    def test_gradient_flow_alpha_vip(self, cfg_emergent):
+        """Gradient flows through alpha_vip after forward + backward."""
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        # Give alpha_vip nonzero values so gradient is nonzero
+        with torch.no_grad():
+            net.feedback.alpha_vip.fill_(0.1)
+
+        B, T, N = 2, 5, cfg_emergent.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        r_l23_all, _, aux = net(stim)
+
+        loss = r_l23_all.sum() + aux["r_vip_all"].sum()
+        loss.backward()
+
+        assert net.feedback.alpha_vip.grad is not None, "alpha_vip has no gradient"
+        assert net.feedback.alpha_vip.grad.abs().sum() > 0, "alpha_vip gradient is all zeros"
+        assert net.w_vip_som.grad is not None, "w_vip_som has no gradient"
+
+    def test_vip_profile_shape(self, cfg_emergent):
+        """get_vip_profile returns [N] tensor."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        K_vip = fb.get_vip_profile()
+        assert K_vip.shape == (cfg_emergent.n_orientations,)
+
+    def test_vip_config_loads(self):
+        """VIP config YAML loads with tau_vip=10."""
+        from src.config import load_config
+        mc, tc, sc = load_config("config/exp_vip_ambig.yaml")
+        assert mc.tau_vip == 10
+        assert tc.delta_som is True
+        assert tc.freeze_v2 is True
+        assert tc.ambiguous_fraction == 0.3
+
+    def test_network_state_has_r_vip(self):
+        """NetworkState has r_vip field."""
+        state = initial_state(batch_size=2)
+        assert hasattr(state, 'r_vip')
+        assert state.r_vip.shape == (2, 36)
+        assert (state.r_vip == 0).all()
+
+    def test_sparsity_loss_includes_vip(self, cfg_emergent):
+        """feedback_sparsity_loss penalizes alpha_inh + alpha_vip + vip_excess."""
+        from src.training.losses import CompositeLoss
+        from src.config import TrainingConfig
+        tc = TrainingConfig(lambda_fb=0.01)
+        loss_fn = CompositeLoss(tc, cfg_emergent)
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        # Set nonzero weights
+        with torch.no_grad():
+            net.feedback.alpha_inh.fill_(0.5)
+            net.feedback.alpha_vip.fill_(0.3)
+        l_fb = loss_fn.feedback_sparsity_loss(net)
+        # L1(alpha_inh) + L1(alpha_vip) + relu(L1_vip - L1_inh)
+        expected_inh = 0.5 * 7  # 7 basis
+        expected_vip = 0.3 * 7
+        # vip < inh so vip_excess = 0
+        expected = expected_inh + expected_vip
+        assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
+
+    def test_sparsity_loss_vip_excess_penalty(self, cfg_emergent):
+        """When VIP exceeds SOM, the excess penalty kicks in."""
+        from src.training.losses import CompositeLoss
+        from src.config import TrainingConfig
+        tc = TrainingConfig(lambda_fb=0.01)
+        loss_fn = CompositeLoss(tc, cfg_emergent)
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        # VIP > SOM
+        with torch.no_grad():
+            net.feedback.alpha_inh.fill_(0.1)
+            net.feedback.alpha_vip.fill_(0.5)
+        l_fb = loss_fn.feedback_sparsity_loss(net)
+        l1_inh = 0.1 * 7
+        l1_vip = 0.5 * 7
+        vip_excess = l1_vip - l1_inh  # positive
+        expected = l1_inh + l1_vip + vip_excess
+        assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
 
 
 # ── Full Network Tests (fixed mode) ─────────────────────────────────────
@@ -630,7 +800,14 @@ class TestGradientFlowNetwork:
                 + aux["pi_pred_all"].sum())
         loss.backward()
 
-        unused_params = {"l4.pv_gain.gain_raw"}
+        # VIP params don't get gradients in fixed mode (VIP is pass-through)
+        unused_params = {
+            "l4.pv_gain.gain_raw",
+            "w_vip_som",
+            "vip.tau_vip",  # not a param, but guard
+            "feedback.alpha_vip",
+            "feedback.vip_baseline",
+        }
         for name, param in net.named_parameters():
             if param.requires_grad and name not in unused_params:
                 assert param.grad is not None, f"No gradient for {name}"
@@ -672,7 +849,7 @@ class TestStateDetachment:
         stim1 = torch.randn(B, T, N).abs() * 0.5
         _, state1, _ = net(stim1)
 
-        state_detached = NetworkState(*[s.detach() for s in state1])
+        state_detached = NetworkState(**{k: v.detach() for k, v in state1._asdict().items()})
 
         stim2 = torch.randn(B, T, N).abs() * 0.5
         r_l23_2, _, _ = net(stim2, state=state_detached)

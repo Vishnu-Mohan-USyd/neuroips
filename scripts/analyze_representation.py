@@ -114,33 +114,51 @@ def load_model(
 def feedback_disabled(net: LaminarV1V2Network):
     """Temporarily zero the emergent feedback operator.
 
-    Saves and restores alpha_inh (and som_baseline if delta-SOM is enabled).
-    With alpha_inh == 0 the circulant kernel is zero, so inh_field == 0 and
-    the SOM drive becomes pi_eff * (softplus(baseline) - softplus(baseline)) == 0
-    in delta-SOM mode, or pi_eff * softplus(0) = pi_eff * log(2) without delta-SOM.
-    We therefore also zero som_baseline (delta-SOM) as a belt-and-braces guarantee
-    that the SOM ring receives no drive while feedback is "off".
+    Saves and restores all feedback pathway parameters:
+    - alpha_inh, som_baseline, som_tonic (SOM pathway)
+    - alpha_vip, vip_baseline (VIP pathway)
+    - w_vip_som (network-level VIP→SOM gain)
+
+    With all these zeroed:
+    - SOM drive = 0 (alpha_inh=0 → field=0, som_tonic → -inf → softplus ≈ 0)
+    - VIP drive = 0 (alpha_vip=0 → field=0, delta-style → 0)
+    - VIP→SOM interaction = 0
 
     Note: this only affects the feedback pathway. L4, PV, L2/3 recurrence, and
     adaptation all remain active — exactly what we want for an "ablate feedback,
     keep everything else" comparison.
     """
     fb = net.feedback
-    saved_alpha = fb.alpha_inh.detach().clone()
-    saved_baseline = None
-    if hasattr(fb, "som_baseline"):
-        saved_baseline = fb.som_baseline.detach().clone()
+
+    # Save all feedback-related params that need zeroing
+    saved = {}
+    for attr in ("alpha_inh", "som_baseline", "som_tonic", "alpha_vip", "vip_baseline"):
+        if hasattr(fb, attr):
+            saved[attr] = getattr(fb, attr).detach().clone()
+
+    # Also save w_vip_som from the network level
+    saved_w_vip_som = None
+    if hasattr(net, "w_vip_som"):
+        saved_w_vip_som = net.w_vip_som.detach().clone()
+
     try:
         with torch.no_grad():
-            fb.alpha_inh.zero_()
-            if saved_baseline is not None:
-                fb.som_baseline.zero_()
+            for attr in saved:
+                param = getattr(fb, attr)
+                if attr == "som_tonic":
+                    # Push tonic to -inf so softplus(som_tonic) ≈ 0
+                    param.fill_(-20.0)
+                else:
+                    param.zero_()
+            if saved_w_vip_som is not None:
+                net.w_vip_som.zero_()
         yield
     finally:
         with torch.no_grad():
-            fb.alpha_inh.copy_(saved_alpha)
-            if saved_baseline is not None:
-                fb.som_baseline.copy_(saved_baseline)
+            for attr, val in saved.items():
+                getattr(fb, attr).copy_(val)
+            if saved_w_vip_som is not None:
+                net.w_vip_som.copy_(saved_w_vip_som)
 
 
 # ---------------------------------------------------------------------------
@@ -1215,6 +1233,14 @@ def metric_energy_by_relative_distance_normalized(
 # Sanity and artifact checks
 # ---------------------------------------------------------------------------
 
+def _unpack_feedback(result):
+    """Unpack feedback operator output, handling both old (Tensor) and new (tuple) API."""
+    if isinstance(result, tuple):
+        som_drive, vip_drive = result
+        return som_drive, vip_drive
+    return result, None  # old checkpoint: no VIP
+
+
 def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict:
     """Confirm that inside feedback_disabled(), the feedback operator's output is exactly zero.
 
@@ -1232,24 +1258,29 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
     net.feedback.cache_kernels()
     try:
         with torch.no_grad():
-            drive_on = net.feedback(q, pi)
+            som_on, vip_on = _unpack_feedback(net.feedback(q, pi))
     finally:
         net.feedback.uncache_kernels()
     with feedback_disabled(net):
         net.feedback.cache_kernels()
         try:
             with torch.no_grad():
-                drive_off = net.feedback(q, pi)
+                som_off, vip_off = _unpack_feedback(net.feedback(q, pi))
         finally:
             net.feedback.uncache_kernels()
 
-    return {
-        "drive_on_max_abs": float(drive_on.abs().max().item()),
-        "drive_off_max_abs": float(drive_off.abs().max().item()),
-        "drive_on_sum": float(drive_on.sum().item()),
-        "drive_off_sum": float(drive_off.sum().item()),
-        "ablation_zero": bool(drive_off.abs().max().item() < 1e-7),
+    result = {
+        "drive_on_max_abs": float(som_on.abs().max().item()),
+        "drive_off_max_abs": float(som_off.abs().max().item()),
+        "drive_on_sum": float(som_on.sum().item()),
+        "drive_off_sum": float(som_off.sum().item()),
+        "ablation_zero": bool(som_off.abs().max().item() < 1e-7),
     }
+    if vip_on is not None:
+        result["vip_on_max_abs"] = float(vip_on.abs().max().item())
+        result["vip_off_max_abs"] = float(vip_off.abs().max().item())
+        result["vip_ablation_zero"] = bool(vip_off.abs().max().item() < 1e-7)
+    return result
 
 
 def artifact_check_threshold(

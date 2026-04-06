@@ -11,7 +11,7 @@ from torch import Tensor
 
 from src.config import ModelConfig
 from src.state import NetworkState, StepAux, initial_state
-from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
+from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing, VIPRing
 from src.model.v2_context import V2ContextModule
 from src.model.feedback import FeedbackMechanism, EmergentFeedbackOperator
 from src.utils import circular_distance_abs, circular_gaussian
@@ -41,6 +41,11 @@ class LaminarV1V2Network(nn.Module):
         self.deep_template = DeepTemplate(cfg)
         self.som = SOMRing(cfg)
         self.v2 = V2ContextModule(cfg)
+
+        # VIP interneurons (disinhibitory: VIP→SOM→L2/3)
+        self.vip = VIPRing(cfg)
+        # Learnable VIP→SOM gain (softplus-constrained to stay positive)
+        self.w_vip_som = nn.Parameter(torch.tensor(0.5))
 
         # Feedback: emergent (learned) or fixed (hardcoded mechanism)
         if cfg.feedback_mode == 'emergent':
@@ -196,14 +201,18 @@ class LaminarV1V2Network(nn.Module):
 
         # 5-6. Feedback pathway (branched by mode)
         if self.cfg.feedback_mode == 'emergent':
-            # Emergent: learned operator outputs SOM drive only
-            som_drive = self.feedback(q_pred, pi_pred_eff)
+            # Emergent: learned operator outputs SOM + VIP drives
+            som_drive, vip_drive = self.feedback(q_pred, pi_pred_eff)
+            r_vip = self.vip(vip_drive, state.r_vip)
+            # VIP inhibits SOM: reduce SOM drive where VIP is active
+            effective_som_drive = F.relu(som_drive - F.softplus(self.w_vip_som) * r_vip)
             center_exc = torch.zeros_like(som_drive)
-            r_som = self.som(som_drive, state.r_som)
+            r_som = self.som(effective_som_drive, state.r_som)
             l4_to_l23 = r_l4  # No error signal in emergent mode
             r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
         else:
-            # Fixed: mechanism-specific computation
+            # Fixed: mechanism-specific computation (VIP not active)
+            r_vip = state.r_vip  # pass through unchanged
             som_drive = self.feedback.compute_som_drive(q_pred, pi_pred_eff)
             r_som = self.som(som_drive, state.r_som)
             template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
@@ -215,6 +224,7 @@ class LaminarV1V2Network(nn.Module):
             r_l23=r_l23,
             r_pv=r_pv,
             r_som=r_som,
+            r_vip=r_vip,
             adaptation=adaptation,
             h_v2=h_v2,
             deep_template=deep_tmpl,
@@ -303,6 +313,7 @@ class LaminarV1V2Network(nn.Module):
         r_l4_all = torch.empty(B, T, N, device=device)
         r_pv_all = torch.empty(B, T, 1, device=device)
         r_som_all = torch.empty(B, T, N, device=device)
+        r_vip_all = torch.empty(B, T, N, device=device)
         q_pred_all = torch.empty(B, T, N, device=device)
         pi_pred_all = torch.empty(B, T, 1, device=device)
         pi_pred_eff_all = torch.empty(B, T, 1, device=device)
@@ -333,6 +344,7 @@ class LaminarV1V2Network(nn.Module):
                 r_l4_all[:, t] = state.r_l4
                 r_pv_all[:, t] = state.r_pv
                 r_som_all[:, t] = state.r_som
+                r_vip_all[:, t] = state.r_vip
                 q_pred_all[:, t] = aux_t.q_pred
                 pi_pred_all[:, t] = aux_t.pi_pred
                 pi_pred_eff_all[:, t] = aux_t.pi_pred_eff
@@ -353,6 +365,7 @@ class LaminarV1V2Network(nn.Module):
             "r_l4_all": r_l4_all,                 # [B, T, N]
             "r_pv_all": r_pv_all,                 # [B, T, 1]
             "r_som_all": r_som_all,               # [B, T, N]
+            "r_vip_all": r_vip_all,               # [B, T, N]
             "p_cw_all": p_cw_all,                 # [B, T, 1]
         }
 

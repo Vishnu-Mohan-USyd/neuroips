@@ -17,6 +17,7 @@ class NetworkState(NamedTuple):
     r_l23: Tensor         # [B, 36] — V1 Layer 2/3 excitatory rates
     r_pv: Tensor          # [B, 1]  — PV pool rate
     r_som: Tensor         # [B, 36] — SOM ring rates
+    r_vip: Tensor         # [B, 36] — VIP ring rates (disinhibitory)
     adaptation: Tensor    # [B, 36] — L4 adaptation state
     h_v2: Tensor          # [B, 16] — V2 GRU hidden state
     deep_template: Tensor # [B, 36] — Deep-V1 expectation template
@@ -43,6 +44,7 @@ def initial_state(batch_size: int, n_orientations: int = 36,
         r_l23=torch.zeros(batch_size, n_orientations, device=dev),
         r_pv=torch.zeros(batch_size, 1, device=dev),
         r_som=torch.zeros(batch_size, n_orientations, device=dev),
+        r_vip=torch.zeros(batch_size, n_orientations, device=dev),
         adaptation=torch.zeros(batch_size, n_orientations, device=dev),
         h_v2=torch.zeros(batch_size, v2_hidden_dim, device=dev),
         deep_template=torch.zeros(batch_size, n_orientations, device=dev),

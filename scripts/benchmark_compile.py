@@ -55,8 +55,8 @@ readout_indices = compute_readout_indices(
 
 def make_batch():
     metadata = hmm_gen.generate(B, seq_length, gen)
-    stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas = (
-        build_stimulus_sequence(metadata, model_cfg, train_cfg)
+    stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas, _ = (
+        build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
     )
     return (stim_seq.to(device), cue_seq.to(device), task_seq.to(device),
             true_thetas.to(device), true_next_thetas.to(device))

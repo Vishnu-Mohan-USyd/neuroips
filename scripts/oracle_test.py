@@ -159,7 +159,7 @@ def run_oracle_test(
 
         metadata = hmm_gen.generate(batch_size, seq_length, gen)
         stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas, true_states = (
-            build_stimulus_sequence(metadata, model_cfg, train_cfg)
+            build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
         )
         stim_seq = stim_seq.to(dev, non_blocking=True)
         cue_seq = cue_seq.to(dev, non_blocking=True)

@@ -529,6 +529,13 @@ def run_stage2(
                     if hasattr(net.feedback, 'alpha_inh'):
                         a_inh_norm = net.feedback.alpha_inh.abs().sum().item()
                         fb_info = f"a_inh={a_inh_norm:.3f}, "
+                    if hasattr(net.feedback, 'alpha_vip'):
+                        a_vip_norm = net.feedback.alpha_vip.abs().sum().item()
+                        fb_info += f"a_vip={a_vip_norm:.3f}, "
+                    if hasattr(net.feedback, 'som_tonic'):
+                        import torch.nn.functional as _F
+                        tonic_val = _F.softplus(net.feedback.som_tonic).item()
+                        fb_info += f"tonic={tonic_val:.4f}, "
 
                     # L4 sensory accuracy (when enabled)
                     l4_info = ""
@@ -640,6 +647,10 @@ def run_stage2(
                     if feedback_mode == 'emergent' and hasattr(net.feedback, 'alpha_inh'):
                         metrics['a_inh_norm'] = round(net.feedback.alpha_inh.abs().sum().item(), 4)
                         metrics['fb_sparsity'] = round(loss_dict.get('fb_sparsity', 0.0), 4)
+                        if hasattr(net.feedback, 'alpha_vip'):
+                            metrics['a_vip_norm'] = round(net.feedback.alpha_vip.abs().sum().item(), 4)
+                        if hasattr(net.feedback, 'som_tonic'):
+                            metrics['som_tonic'] = round(torch.nn.functional.softplus(net.feedback.som_tonic).item(), 6)
                     if feedback_mode == 'fixed':
                         metrics['top3'] = round(top3_acc, 3)
                         metrics['anchor'] = round(anchor_acc, 3)

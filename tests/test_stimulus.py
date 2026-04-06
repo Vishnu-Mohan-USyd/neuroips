@@ -194,7 +194,7 @@ class TestNetworkState:
         state = initial_state(batch_size=1)
         assert hasattr(state, "r_l4")
         assert hasattr(state, "deep_template")
-        assert len(state) == 7
+        assert len(state) == 8
 
 
 # ===================================================================

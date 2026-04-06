@@ -348,3 +348,35 @@ class SOMRing(nn.Module):
             -r_som_prev + rectified_softplus(som_drive)
         )
         return r_som
+
+
+class VIPRing(nn.Module):
+    """VIP interneuron ring — disinhibits L2/3 by inhibiting SOM.
+
+    VIP neurons inhibit SOM interneurons, thereby releasing L2/3 pyramidal
+    cells from SOM-mediated suppression.  This implements the VIP→SOM→L2/3
+    disinhibitory circuit (Pfeffer et al. 2013, Furutachi et al. 2024).
+
+    Equation:
+        r_vip += dt/τ_vip * (-r_vip + rectified_softplus(vip_drive))
+    """
+
+    def __init__(self, cfg: ModelConfig):
+        super().__init__()
+        self.dt = cfg.dt
+        self.tau_vip = cfg.tau_vip
+
+    def forward(self, vip_drive: Tensor, r_vip_prev: Tensor) -> Tensor:
+        """One Euler step for VIP ring.
+
+        Args:
+            vip_drive: [B, N] — drive from feedback mechanism.
+            r_vip_prev: [B, N] — previous VIP rates.
+
+        Returns:
+            r_vip: Updated VIP rates [B, N].
+        """
+        r_vip = r_vip_prev + (self.dt / self.tau_vip) * (
+            -r_vip_prev + rectified_softplus(vip_drive)
+        )
+        return r_vip

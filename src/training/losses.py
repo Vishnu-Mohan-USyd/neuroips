@@ -407,15 +407,26 @@ class CompositeLoss(nn.Module):
     def feedback_sparsity_loss(self, model: nn.Module) -> Tensor:
         """L1 sparsity penalty on emergent feedback operator weights.
 
+        Penalizes both SOM (alpha_inh) and VIP (alpha_vip) pathways.
+        Additionally penalizes VIP magnitude exceeding SOM magnitude
+        (norm-matching) to prevent runaway disinhibition.
+
         Args:
-            model: The network (must have feedback.alpha_inh).
+            model: The network (must have feedback.alpha_inh / alpha_vip).
 
         Returns:
             Scalar L1 penalty.
         """
         if not hasattr(model, 'feedback') or not hasattr(model.feedback, 'alpha_inh'):
             return torch.tensor(0.0)
-        return model.feedback.alpha_inh.abs().sum()
+        fb = model.feedback
+        l1_inh = fb.alpha_inh.abs().sum()
+        if hasattr(fb, 'alpha_vip'):
+            l1_vip = fb.alpha_vip.abs().sum()
+            # Norm-matching: penalize VIP exceeding SOM magnitude
+            vip_excess = F.relu(l1_vip - l1_inh)
+            return l1_inh + l1_vip + vip_excess
+        return l1_inh
 
     def forward(
         self,
