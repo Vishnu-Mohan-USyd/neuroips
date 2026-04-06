@@ -252,6 +252,7 @@ class V1L23Ring(nn.Module):
         template_modulation: Tensor,
         r_som: Tensor,
         r_pv: Tensor,
+        apical_gain: Tensor | None = None,
     ) -> Tensor:
         """One Euler step for L2/3.
 
@@ -262,6 +263,9 @@ class V1L23Ring(nn.Module):
                 Zeros for models A, B, D. Center excitation for model C.
             r_som: [B, N] — current SOM rates.
             r_pv: [B, 1] — current PV rate.
+            apical_gain: [B, N] or None — multiplicative gain for excitatory
+                drive from apical dendrite feedback. Values centered at 1.0.
+                None means no apical modulation (backward compat).
 
         Returns:
             r_l23: Updated L2/3 rates [B, N].
@@ -273,9 +277,15 @@ class V1L23Ring(nn.Module):
         W_rec = self.W_rec  # [N, N]
         rec = F.linear(r_l23_prev, W_rec)  # [B, N]
 
+        # Excitatory drive (apical gain modulates only excitatory components,
+        # not inhibitory — biologically, apical gain modulates dendritic
+        # integration of excitatory inputs in layer 1)
+        excitatory_drive = ff + rec + template_modulation
+        if apical_gain is not None:
+            excitatory_drive = apical_gain * excitatory_drive
+
         # L2/3 drive
-        l23_drive = (ff + rec + template_modulation
-                     - self.w_som(r_som) - self.w_pv_l23(r_pv))
+        l23_drive = excitatory_drive - self.w_som(r_som) - self.w_pv_l23(r_pv)
 
         # Euler update
         r_l23 = r_l23_prev + (self.dt / self.tau_l23) * (

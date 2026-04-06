@@ -423,12 +423,15 @@ class CompositeLoss(nn.Module):
             return torch.tensor(0.0)
         fb = model.feedback
         l1_inh = fb.alpha_inh.abs().sum()
+        total = l1_inh
         if hasattr(fb, 'alpha_vip'):
             l1_vip = fb.alpha_vip.abs().sum()
             # Norm-matching: penalize VIP exceeding SOM magnitude
             vip_excess = F.relu(l1_vip - l1_inh)
-            return l1_inh + l1_vip + vip_excess
-        return l1_inh
+            total = total + l1_vip + vip_excess
+        if hasattr(fb, 'alpha_apical'):
+            total = total + fb.alpha_apical.abs().sum()
+        return total
 
     def forward(
         self,

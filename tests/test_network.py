@@ -345,10 +345,11 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
-        som_drive, vip_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
 
         assert som_drive.shape == (B, N)
         assert vip_drive.shape == (B, N)
+        assert apical_gain.shape == (B, N)
 
     def test_small_init_mostly_uniform(self, cfg_emergent):
         """Default init (alpha=0.01) should produce nearly uniform output.
@@ -361,7 +362,7 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
 
-        som_drive, vip_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
 
         # Spatial variation should be very small (< 1% of mean)
         assert som_drive.std(dim=-1).max() < 0.1 * som_drive.mean()
@@ -375,7 +376,7 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
 
-        som_drive, vip_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
 
         # With alpha=0, field=0, softplus(0)=ln(2)≈0.693 → uniform
         # Output should be constant across orientations (no spatial structure)
@@ -396,7 +397,7 @@ class TestEmergentFeedbackOperator:
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
-        som_drive, vip_drive = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
 
         # SOM uses plain softplus (no delta) by default → non-negative
         assert (som_drive >= -1e-6).all()
@@ -421,21 +422,23 @@ class TestEmergentFeedbackOperator:
         with torch.no_grad():
             fb.alpha_inh.normal_(std=0.5)
             fb.alpha_vip.normal_(std=0.5)
+            fb.alpha_apical.normal_(std=0.5)
 
         B, N = 4, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
 
         # Without cache
-        som1, vip1 = fb(q_pred, pi_eff)
+        som1, vip1, apical1 = fb(q_pred, pi_eff)
 
         # With cache
         fb.cache_kernels()
-        som2, vip2 = fb(q_pred, pi_eff)
+        som2, vip2, apical2 = fb(q_pred, pi_eff)
         fb.uncache_kernels()
 
         assert torch.allclose(som1, som2, atol=1e-6)
         assert torch.allclose(vip1, vip2, atol=1e-6)
+        assert torch.allclose(apical1, apical2, atol=1e-6)
 
     def test_manual_dampening_profile(self, cfg_emergent):
         """Setting alpha_inh to mimic narrow Gaussian should produce dampening-like profile."""
@@ -556,6 +559,69 @@ class TestVIPPathway:
         K_vip = fb.get_vip_profile()
         assert K_vip.shape == (cfg_emergent.n_orientations,)
 
+    def test_apical_gain_shape_and_range(self, cfg_emergent):
+        """Apical gain is [B, N] with values in [1-max, 1+max]."""
+        fb = EmergentFeedbackOperator(cfg_emergent, delta_som=True)
+        B, N = 8, cfg_emergent.n_orientations
+        # Random alpha_apical to get nontrivial gain
+        with torch.no_grad():
+            fb.alpha_apical.normal_(0, 1.0)
+        q_pred = torch.softmax(torch.randn(B, N), dim=-1)
+        pi_eff = torch.ones(B, 1) * 3.0
+
+        _, _, apical_gain = fb(q_pred, pi_eff)
+
+        assert apical_gain.shape == (B, N)
+        max_g = fb.max_apical_gain
+        assert (apical_gain >= 1.0 - max_g - 1e-6).all(), (
+            f"apical_gain below lower bound: min={apical_gain.min():.4f}"
+        )
+        assert (apical_gain <= 1.0 + max_g + 1e-6).all(), (
+            f"apical_gain above upper bound: max={apical_gain.max():.4f}"
+        )
+
+    def test_apical_gain_unity_when_alpha_zero(self, cfg_emergent):
+        """When alpha_apical=0, apical_gain = 1.0 everywhere (no modulation)."""
+        fb = EmergentFeedbackOperator(cfg_emergent, delta_som=True)
+        with torch.no_grad():
+            fb.alpha_apical.zero_()
+        B, N = 4, cfg_emergent.n_orientations
+        q_pred = torch.softmax(torch.randn(B, N), dim=-1)
+        pi_eff = torch.ones(B, 1) * 3.0
+
+        _, _, apical_gain = fb(q_pred, pi_eff)
+
+        assert torch.allclose(apical_gain, torch.ones_like(apical_gain), atol=1e-6), (
+            f"apical_gain should be 1.0 with alpha_apical=0, got range [{apical_gain.min():.6f}, {apical_gain.max():.6f}]"
+        )
+
+    def test_apical_profile_shape(self, cfg_emergent):
+        """get_apical_profile returns [N] tensor."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        K_apical = fb.get_apical_profile()
+        assert K_apical.shape == (cfg_emergent.n_orientations,)
+
+    def test_gradient_flow_alpha_apical(self, cfg_emergent):
+        """Gradient flows through alpha_apical after forward + backward.
+
+        Uses T=15 (not T=5) because apical gain affects L2/3 multiplicatively
+        — gradient only flows when L2/3 is nonzero, which requires enough
+        timesteps for the network to warm up from zero initial state.
+        """
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        with torch.no_grad():
+            net.feedback.alpha_apical.fill_(0.5)
+
+        B, T, N = 2, 15, cfg_emergent.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        r_l23_all, _, aux = net(stim)
+
+        loss = r_l23_all.sum()
+        loss.backward()
+
+        assert net.feedback.alpha_apical.grad is not None, "alpha_apical has no gradient"
+        assert net.feedback.alpha_apical.grad.abs().sum() > 0, "alpha_apical gradient is all zeros"
+
     def test_vip_config_loads(self):
         """VIP config YAML loads with tau_vip=10."""
         from src.config import load_config
@@ -573,18 +639,19 @@ class TestVIPPathway:
         assert (state.r_vip == 0).all()
 
     def test_sparsity_loss_includes_vip(self, cfg_emergent):
-        """feedback_sparsity_loss penalizes alpha_inh + alpha_vip + vip_excess."""
+        """feedback_sparsity_loss penalizes alpha_inh + alpha_vip + vip_excess + alpha_apical."""
         from src.training.losses import CompositeLoss
         from src.config import TrainingConfig
         tc = TrainingConfig(lambda_fb=0.01)
         loss_fn = CompositeLoss(tc, cfg_emergent)
         net = LaminarV1V2Network(cfg_emergent, delta_som=True)
-        # Set nonzero weights
+        # Set nonzero weights, zero apical to isolate VIP test
         with torch.no_grad():
             net.feedback.alpha_inh.fill_(0.5)
             net.feedback.alpha_vip.fill_(0.3)
+            net.feedback.alpha_apical.zero_()
         l_fb = loss_fn.feedback_sparsity_loss(net)
-        # L1(alpha_inh) + L1(alpha_vip) + relu(L1_vip - L1_inh)
+        # L1(alpha_inh) + L1(alpha_vip) + relu(L1_vip - L1_inh) + L1(alpha_apical=0)
         expected_inh = 0.5 * 7  # 7 basis
         expected_vip = 0.3 * 7
         # vip < inh so vip_excess = 0
@@ -598,15 +665,31 @@ class TestVIPPathway:
         tc = TrainingConfig(lambda_fb=0.01)
         loss_fn = CompositeLoss(tc, cfg_emergent)
         net = LaminarV1V2Network(cfg_emergent, delta_som=True)
-        # VIP > SOM
+        # VIP > SOM, zero apical to isolate VIP test
         with torch.no_grad():
             net.feedback.alpha_inh.fill_(0.1)
             net.feedback.alpha_vip.fill_(0.5)
+            net.feedback.alpha_apical.zero_()
         l_fb = loss_fn.feedback_sparsity_loss(net)
         l1_inh = 0.1 * 7
         l1_vip = 0.5 * 7
         vip_excess = l1_vip - l1_inh  # positive
         expected = l1_inh + l1_vip + vip_excess
+        assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
+
+    def test_sparsity_loss_includes_apical(self, cfg_emergent):
+        """feedback_sparsity_loss includes alpha_apical L1 term."""
+        from src.training.losses import CompositeLoss
+        from src.config import TrainingConfig
+        tc = TrainingConfig(lambda_fb=0.01)
+        loss_fn = CompositeLoss(tc, cfg_emergent)
+        net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        with torch.no_grad():
+            net.feedback.alpha_inh.zero_()
+            net.feedback.alpha_vip.zero_()
+            net.feedback.alpha_apical.fill_(0.2)
+        l_fb = loss_fn.feedback_sparsity_loss(net)
+        expected = 0.2 * 7  # L1(alpha_apical)
         assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
 
 

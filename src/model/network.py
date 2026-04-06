@@ -201,15 +201,16 @@ class LaminarV1V2Network(nn.Module):
 
         # 5-6. Feedback pathway (branched by mode)
         if self.cfg.feedback_mode == 'emergent':
-            # Emergent: learned operator outputs SOM + VIP drives
-            som_drive, vip_drive = self.feedback(q_pred, pi_pred_eff)
+            # Emergent: learned operator outputs SOM + VIP drives + apical gain
+            som_drive, vip_drive, apical_gain = self.feedback(q_pred, pi_pred_eff)
             r_vip = self.vip(vip_drive, state.r_vip)
             # VIP inhibits SOM: reduce SOM drive where VIP is active
             effective_som_drive = F.relu(som_drive - F.softplus(self.w_vip_som) * r_vip)
             center_exc = torch.zeros_like(som_drive)
             r_som = self.som(effective_som_drive, state.r_som)
             l4_to_l23 = r_l4  # No error signal in emergent mode
-            r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
+            r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv,
+                             apical_gain=apical_gain)
         else:
             # Fixed: mechanism-specific computation (VIP not active)
             r_vip = state.r_vip  # pass through unchanged

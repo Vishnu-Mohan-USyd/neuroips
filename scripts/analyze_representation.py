@@ -117,6 +117,7 @@ def feedback_disabled(net: LaminarV1V2Network):
     Saves and restores all feedback pathway parameters:
     - alpha_inh, som_baseline, som_tonic (SOM pathway)
     - alpha_vip, vip_baseline (VIP pathway)
+    - alpha_apical (apical gain pathway)
     - w_vip_som (network-level VIP→SOM gain)
 
     With all these zeroed:
@@ -132,7 +133,7 @@ def feedback_disabled(net: LaminarV1V2Network):
 
     # Save all feedback-related params that need zeroing
     saved = {}
-    for attr in ("alpha_inh", "som_baseline", "som_tonic", "alpha_vip", "vip_baseline"):
+    for attr in ("alpha_inh", "som_baseline", "som_tonic", "alpha_vip", "vip_baseline", "alpha_apical"):
         if hasattr(fb, attr):
             saved[attr] = getattr(fb, attr).detach().clone()
 
@@ -1242,11 +1243,17 @@ def metric_energy_by_relative_distance_normalized(
 # ---------------------------------------------------------------------------
 
 def _unpack_feedback(result):
-    """Unpack feedback operator output, handling both old (Tensor) and new (tuple) API."""
+    """Unpack feedback operator output, handling old and new APIs.
+
+    Returns:
+        (som_drive, vip_drive, apical_gain) — any missing element is None.
+    """
     if isinstance(result, tuple):
-        som_drive, vip_drive = result
-        return som_drive, vip_drive
-    return result, None  # old checkpoint: no VIP
+        if len(result) == 3:
+            return result[0], result[1], result[2]  # som, vip, apical
+        if len(result) == 2:
+            return result[0], result[1], None  # som, vip (pre-apical)
+    return result, None, None  # som only (very old)
 
 
 def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict:
@@ -1266,14 +1273,14 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
     net.feedback.cache_kernels()
     try:
         with torch.no_grad():
-            som_on, vip_on = _unpack_feedback(net.feedback(q, pi))
+            som_on, vip_on, apical_on = _unpack_feedback(net.feedback(q, pi))
     finally:
         net.feedback.uncache_kernels()
     with feedback_disabled(net):
         net.feedback.cache_kernels()
         try:
             with torch.no_grad():
-                som_off, vip_off = _unpack_feedback(net.feedback(q, pi))
+                som_off, vip_off, apical_off = _unpack_feedback(net.feedback(q, pi))
         finally:
             net.feedback.uncache_kernels()
 

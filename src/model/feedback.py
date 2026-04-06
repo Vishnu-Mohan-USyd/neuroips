@@ -264,6 +264,14 @@ class EmergentFeedbackOperator(nn.Module):
         # zero if the task doesn't need disinhibition.
         self.alpha_vip = nn.Parameter(torch.full((K,), 0.01))
 
+        # Apical gain pathway: multiplicative modulation of L2/3 excitatory
+        # drive at the predicted channel. Constrained to [1-max, 1+max] via
+        # tanh. Biologically: active apical dendrites in L2/3 pyramidal cells
+        # receive top-down feedback in layer 1, modulating gain of feedforward
+        # drive (multiplicative, not additive).
+        self.alpha_apical = nn.Parameter(torch.full((K,), 0.01))
+        self.max_apical_gain = 0.2  # ±20% maximum modulation
+
         # Delta-SOM baseline: softplus(baseline + field) - softplus(baseline)
         # removes the constant bias from softplus, so zero field → zero drive.
         if self.delta_som:
@@ -284,6 +292,7 @@ class EmergentFeedbackOperator(nn.Module):
         # Cache for circulant matrices (populated by cache_kernels)
         self._cached_inh_circulant: Tensor | None = None
         self._cached_vip_circulant: Tensor | None = None
+        self._cached_apical_circulant: Tensor | None = None
 
     def _build_basis(self, N: int, period: float) -> Tensor:
         """Build circular basis functions over orientation space.
@@ -348,6 +357,15 @@ class EmergentFeedbackOperator(nn.Module):
         K_vip = (self.alpha_vip.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
         return K_vip
 
+    def get_apical_profile(self) -> Tensor:
+        """Return the current apical gain kernel profile.
+
+        Returns:
+            K_apical: [N] apical gain kernel profile.
+        """
+        K_apical = (self.alpha_apical.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
+        return K_apical
+
     def _to_circulant(self, profile: Tensor) -> Tensor:
         """Convert a 1D profile [N] to a circulant matrix [N, N].
 
@@ -370,27 +388,33 @@ class EmergentFeedbackOperator(nn.Module):
         self._cached_inh_circulant = self._to_circulant(K_inh)
         K_vip = self.get_vip_profile()
         self._cached_vip_circulant = self._to_circulant(K_vip)
+        K_apical = self.get_apical_profile()
+        self._cached_apical_circulant = self._to_circulant(K_apical)
 
     def uncache_kernels(self) -> None:
         """Clear cached circulant matrices after the forward pass."""
         self._cached_inh_circulant = None
         self._cached_vip_circulant = None
+        self._cached_apical_circulant = None
 
-    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> tuple[Tensor, Tensor]:
-        """Compute SOM and VIP drives from learned profiles.
+    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        """Compute SOM drive, VIP drive, and apical gain from learned profiles.
 
         Args:
             q_pred: [B, N] -- predicted orientation distribution.
             pi_eff: [B, 1] -- effective precision (after warmup scaling).
 
         Returns:
-            (som_drive, vip_drive): each [B, N] -- non-negative drives for
-                SOM and VIP rings respectively.
+            (som_drive, vip_drive, apical_gain): each [B, N].
+                som_drive: non-negative drive for SOM ring.
+                vip_drive: drive for VIP ring (delta-style, can be negative).
+                apical_gain: multiplicative gain for L2/3 excitatory drive,
+                    centered at 1.0, range [1-max_apical_gain, 1+max_apical_gain].
         """
         N = q_pred.shape[-1]
         q_centered = q_pred - 1.0 / N  # zero-mean so feedback=0 when uninformative
 
-        # --- SOM pathway (existing) ---
+        # --- SOM pathway ---
         if self._cached_inh_circulant is not None:
             inh_circulant = self._cached_inh_circulant
         else:
@@ -409,7 +433,7 @@ class EmergentFeedbackOperator(nn.Module):
         else:
             som_drive = pi_eff * F.softplus(inh_field)
 
-        # --- VIP pathway (new, mirrors SOM) ---
+        # --- VIP pathway ---
         if self._cached_vip_circulant is not None:
             vip_circulant = self._cached_vip_circulant
         else:
@@ -420,4 +444,16 @@ class EmergentFeedbackOperator(nn.Module):
         # Always delta-style for VIP (bias-corrected)
         vip_drive = pi_eff * (F.softplus(self.vip_baseline + vip_field) - F.softplus(self.vip_baseline))
 
-        return som_drive, vip_drive
+        # --- Apical gain pathway ---
+        if self._cached_apical_circulant is not None:
+            apical_circulant = self._cached_apical_circulant
+        else:
+            K_apical = self.get_apical_profile()
+            apical_circulant = self._to_circulant(K_apical)
+
+        apical_field = (apical_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
+        # Constrained multiplicative gain: centered at 1.0, range [1-max, 1+max].
+        # pi_eff scales the MODULATION DEPTH, not the base gain.
+        apical_gain = 1.0 + self.max_apical_gain * torch.tanh(pi_eff * apical_field)
+
+        return som_drive, vip_drive, apical_gain
