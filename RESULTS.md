@@ -2,11 +2,20 @@
 
 ## Summary
 
-This model produces one robust, well-characterized feedback regime:
-**template-conditioned dampening**. Representational sharpening does not
-emerge from any tested combination of task, loss, timing, or template-width
-modifications. The SOM-only inhibitory architecture appears to be a
-fundamental constraint.
+This branch now supports **two distinct regimes**, depending on which
+top-down pathway family is enabled:
+
+1. **Template-conditioned dampening** in the original SOM-dominated
+   inhibitory architecture.
+2. **Cue-dependent representational sharpening** after adding a persistent,
+   prediction-coupled **apical multiplicative gain** path.
+
+The key negative result still holds for the earlier mechanism family:
+**VIP-only disinhibition, additive center-support, and recurrent-gain
+variants did not produce canonical sharpening on M6/M7.** The first
+claim-grade sharpening result on the canonical readouts appears only after
+the apical multiplicative branch is enabled and evaluated against a
+corrected OFF baseline that zeros all added top-down branches.
 
 ---
 
@@ -68,13 +77,12 @@ top-down template suffices — correctness is irrelevant.
 
 ---
 
-## 2. Sharpening: Not Observed in This Architecture
+## 2. Mechanism Progression Toward Sharpening
 
-### The systematic investigation (Phases 2–5)
+### Earlier sharpening attempts that failed on canonical metrics
 
-Five ingredients were tested, individually and in combination, to produce
-Kok-style representational sharpening (narrower tuning + improved
-fine discrimination):
+The original P2–P5 line of work improved population-vector readouts (M6) but
+never produced a positive trained-decoder effect (M7):
 
 | Phase | Ingredient | M6 Δd' (δ=10°) | M7 ΔAcc (δ=10°) | Pop FWHM Δ |
 |---|---|---|---|---|
@@ -88,60 +96,171 @@ fine discrimination):
 **M7** = accuracy of a trained LogReg decoder on all 36 channels.
 **Pop FWHM** = width of the population response bump.
 
-### What the metrics show
+Those runs established an important constraint: **flank suppression alone is
+not enough**. M6 can look better because far-flank noise is reduced, while M7
+remains flat or negative because no new locally separable information is
+created for a flexible decoder.
 
-**M6 (popvec d'):** Positive delta in all conditions except dampening.
-Feedback tightens population-vector orientation estimates by suppressing
-noisy far-flank channels. This is a form of representational noise
-reduction, but it is specific to the popvec decoder geometry.
+### Post-P5 mechanism progression on this branch
 
-**M7 (trained LogReg):** Flat or slightly negative across ALL conditions.
-A trained linear decoder, which can learn to optimally weight channels,
-sees NO improvement from feedback. Whatever the operator is doing, it
-does not create new information that a flexible downstream decoder can
-exploit. This is the key negative result.
+After that negative result, the branch added progressively more local and
+prediction-coupled mechanisms:
 
-**Population FWHM:** Unchanged (within 0.03°) in all non-dampening
-conditions. The feedback does not narrow the population response bump.
+| Revision | High-level mechanism | Canonical outcome |
+|---|---|---|
+| VIP-only | Cue-driven VIP→SOM subtraction | Cue trace works, but late M6/M7 remain flat or negative; effect looks like broad suppression |
+| Center-support | Weak additive center excitation from prediction | Mechanistically active, but negligible causal gain over ablation on M6/M7 |
+| Recurrent-gain | Narrow gain on the recurrent L2/3 term | Small cue-local-competitor boost, still no convincing canonical sharpening |
+| **Apical multiplicative gain** | Persistent, prediction-coupled multiplicative gain on **ff + rec** | **First clear positive M6/M7 result on canonical cued readouts** |
 
-**Peak gain:** Unchanged (ratio = 1.000) in all non-dampening conditions.
-No channel is boosted.
+### Why the earlier mechanisms failed
 
-### Why sharpening fails in this architecture
+The failed mechanisms all shared the same core weakness: they mostly
+reweighted suppression or added weak local support without creating a
+persistent multiplicative advantage at the expected feature during the late
+read window. In practice, they produced one of two outcomes:
 
-Representational sharpening requires at least one of:
+- **Broad suppressive / dampening-like profiles** that lowered energy and peak
+  gain but did not improve trained decoding.
+- **Tiny local-support effects** that were visible in cue-local-competitor
+  summaries but too weak to move canonical M6/M7.
 
-1. **An excitatory mechanism** to boost the expected channel above its
-   feedforward-driven level (e.g., disinhibition via VIP→SOM, or apical
-   excitatory input)
-2. **A multiplicative gain mechanism** that narrows the effective tuning
-   curve width, not just suppresses additive activity
+The apical branch succeeds because it is both:
 
-The SOM-only inhibitory pathway provides neither. SOM can only SUBTRACT
-from L2/3 drive. Subtracting more at flanks than at the center pushes
-flank responses below the rectifier threshold (killing already-weak
-responses) but cannot CREATE sharper responses at the center. The
-population code at the center is unchanged — same peak, same width —
-regardless of what happens at the flanks.
+1. **Prediction-coupled**: built from `q_pred` and bounded by `pi_pred_eff`
+2. **Persistent into the probe window**: gated by the carried cue trace via
+   VIP state rather than the instantaneous raw cue tensor
 
-### What the feedback operator DOES learn
-
-Under fine-discrimination conditions (P4 and derivatives), the operator
-learns a DoG-like kernel (negative center, positive surround) that
-suppresses L2/3 channels at ±25–30° from the predicted orientation.
-This produces:
-
-- ~3–7% energy reduction in surround/far channels
-- ~1–3 d' improvement in popvec estimation (M6)
-- Zero improvement in trained-decoder accuracy (M7)
-- Zero change in peak gain or population FWHM
-
-This is best described as **weak competitor noise suppression**, not
-representational sharpening.
+That combination is the first one in this repo that changes the late
+population code in a way a trained linear decoder can exploit.
 
 ---
 
-## 3. Other Findings
+## 3. Apical Multiplicative Gain: Positive Sharpening Result
+
+### Mechanism
+
+The winning revision keeps the existing inhibitory SOM pathway and cue-driven
+VIP→SOM subtraction, but adds a new **persistent apical multiplicative gain**
+path:
+
+- narrow predicted-feature profile from `q_pred`
+- bounded by `pi_pred_eff`
+- persisted through a slow `a_apical` state
+- cue-gated via the carried VIP trace
+- applied multiplicatively to the combined excitatory drive `ff + rec`
+
+The additive center-support branch is turned off in the main winning screen
+so the apical effect is cleanly interpretable.
+
+### Corrected OFF baseline
+
+The standard analysis ON/OFF comparison was tightened before calling this
+result:
+
+- OFF now zeros **all** added top-down branches, not just inhibitory SOM
+  feedback.
+- Specifically, OFF ablates:
+  - SOM / inhibitory feedback
+  - VIP→SOM gain
+  - additive center-support
+  - recurrent-gain
+  - apical multiplicative gain
+- `sanity_check_ablation(...)` verifies that every branch output is zero in
+  the OFF condition before trusting the readout.
+
+### Seed-42 main result (`beta=0.16`)
+
+Main screen config:
+- `config/option_b_apical_gain_screen_beta016.yaml`
+
+Primary artifacts:
+- `results/option_b_apical_gain_beta016/screen_on/center_surround_seed42/checkpoint.pt`
+- `results/option_b_apical_gain_beta016/screen_on/analyze_seed42_uncued.log`
+- `results/option_b_apical_gain_beta016/screen_on/analyze_seed42_cued.log`
+- `results/option_b_apical_gain_beta016/m7_resolution_pass.json`
+
+Canonical readouts:
+
+| Metric | Uncued | Cued |
+|---|---|---|
+| Peak ratio (ON/OFF) | 0.9386 | **1.1657** |
+| Population FWHM Δ | −0.18° | **−2.15°** |
+| M6 Δd' (δ=5°) | −0.0383 | **+0.1749** |
+| M6 Δd' (δ=10°) | −0.0500 | **+0.3272** |
+| M7 ΔAcc coarse (δ=10°) | −0.0050 | **+0.0150** |
+
+High-resolution M7 on the saved checkpoint (`n_train=n_test=4000`,
+32 resample seeds):
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| M7 ΔAcc δ=5° | **+0.00743** | **[+0.00690, +0.00798]** |
+| M7 ΔAcc δ=10° | **+0.01299** | **[+0.01215, +0.01386]** |
+
+Cue-local-competitor:
+- valid-neutral competitor-gap delta: **+0.000855**
+
+### Seed-42 matched OFF ablation
+
+Matched comparator:
+- `config/option_b_apical_gain_ablation.yaml`
+- `results/option_b_apical_gain/screen_off/center_surround_seed42/checkpoint.pt`
+
+High-resolution M7, cued:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| OFF ΔAcc δ=5° | −0.00063 | [−0.00084, −0.00044] |
+| OFF ΔAcc δ=10° | −0.00117 | [−0.00134, −0.00100] |
+
+Paired seed-42 main-minus-OFF:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| ΔAcc difference δ=5° | **+0.00806** | **[+0.00752, +0.00863]** |
+| ΔAcc difference δ=10° | **+0.01416** | **[+0.01330, +0.01505]** |
+
+This is the causal contrast that matters most: the sharpening signal is
+present in the main apical run and absent in the OFF ablation under the same
+evaluation protocol.
+
+### Seed-43 replication
+
+Replication artifacts:
+- `results/option_b_apical_gain_beta016/screen_on_seed43/center_surround_seed43/checkpoint.pt`
+- `results/option_b_apical_gain_beta016/m7_resolution_pass_with_seed43.json`
+
+High-resolution M7:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| M7 ΔAcc δ=5° | **+0.00744** | **[+0.00691, +0.00798]** |
+| M7 ΔAcc δ=10° | **+0.01298** | **[+0.01213, +0.01383]** |
+
+### Multi-seed strengthened evidence
+
+Combined seed-42 + seed-43 cued M7:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| M7 ΔAcc δ=5° | **+0.00743** | **[+0.00705, +0.00782]** |
+| M7 ΔAcc δ=10° | **+0.01299** | **[+0.01239, +0.01359]** |
+
+Combined uncued control:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| Uncued ΔAcc δ=5° | −0.00092 | [−0.00106, −0.00077] |
+| Uncued ΔAcc δ=10° | −0.00170 | [−0.00185, −0.00156] |
+
+This satisfies the branch’s claim-grade decision rule: positive cued M7 at
+both deltas, mean size above threshold, uncued control remaining non-positive,
+and positive paired seed-42 main-minus-OFF contrasts.
+
+---
+
+## 4. Other Findings
 
 ### Sensory loss on L2/3 blocks dampening
 
@@ -173,7 +292,7 @@ when predictions are imprecise.
 
 ---
 
-## 4. Representational Metrics Used
+## 5. Representational Metrics Used
 
 | Metric | What it measures | Key for |
 |---|---|---|
@@ -189,7 +308,7 @@ when predictions are imprecise.
 
 ---
 
-## 5. Configs and Results Location
+## 6. Configs and Results Location
 
 ### Key configs
 
@@ -220,26 +339,33 @@ when predictions are imprecise.
 | `results/phase3_shifted/` | Phase 3: shifted timing |
 | `results/phase4_localdisc/` | Phase 4: local discrimination loss |
 | `results/phase5_sigma/` | Phase 5: oracle sigma sweep |
+| `results/option_b_screen/` | VIP-only / cue-first sharpening screens |
+| `results/option_b_center_support/` | Additive center-support screens |
+| `results/option_b_recurrent_gain/` | Recurrent-gain screens |
+| `results/option_b_apical_gain/` | Initial apical gain screen + OFF ablation + seed-43 replication |
+| `results/option_b_apical_gain_beta012/` | Tuned `beta=0.12` apical run + high-resolution M7 |
+| `results/option_b_apical_gain_beta016/` | Final `beta=0.16` run + claim-grade M7 resolution pass |
 
 ---
 
-## 6. What This Means
+## 7. What This Means
 
-The model supports a single defensible claim:
+The codebase now supports a narrower, more specific claim than the earlier
+SOM-only version:
 
-> In a minimal V1–V2 inhibitory feedback model with laminar populations,
-> dampening (suppression at the predicted orientation) is the default and
-> only robust regime. It emerges from global activity minimization using
-> any peaked top-down template — not from prediction error cancellation.
-> Representational sharpening does not emerge from any tested combination
-> of task modifications, loss functions, prediction timing, or template
-> width changes. The SOM-only inhibitory architecture is insufficient for
-> sharpening; it would require additional excitatory or multiplicative
-> gain mechanisms.
+> In the original SOM-dominated feedback architecture, dampening is the
+> default robust regime and earlier local-sparing variants are not sufficient
+> for canonical sharpening. However, once a persistent prediction-coupled
+> apical multiplicative gain path is added, the model shows reproducible,
+> cue-dependent representational sharpening on the canonical M6/M7 readouts,
+> with a matched OFF ablation and a second seed supporting the effect.
 
-This is a **negative-constraint result**: it tells us what dampening IS NOT
-(not diagnostic of predictive coding) and what this architecture CANNOT DO
-(cannot produce sharpening). Both findings are scientifically informative,
-because the field currently treats dampening as evidence for prediction
-error and debates whether sharpening or dampening is the "true" mechanism
-— this model suggests the answer depends on the circuit architecture.
+Current caveats:
+
+- The strongest positive result is **cue-dependent**; uncued behavior remains
+  suppressive.
+- The positive claim is validated with the current canonical analysis stack
+  and high-resolution saved-checkpoint M7 evaluation, not with a new learned-V2
+  rescue.
+- The winning mechanism is no longer SOM-only; it explicitly depends on an
+  added multiplicative apical branch.

@@ -3,6 +3,36 @@
 
 ---
 
+## Status Note For `codex-apical-sharpening`
+
+This file is still useful as a broad design-history document, but it is no
+longer the authoritative summary of the current implemented sharpening path.
+The live branch now contains a later mechanism progression and corrected
+analysis baseline:
+
+- VIP-only cue-driven disinhibition
+- additive center-support
+- recurrent-gain
+- persistent apical multiplicative gain
+
+Only the final **apical multiplicative gain** branch produced positive
+canonical M6/M7 sharpening with:
+
+- a corrected OFF baseline that zeros all added top-down branches
+- a matched seed-42 OFF ablation contrast
+- seed-43 replication
+- high-resolution saved-checkpoint M7 evaluation
+
+For the implemented branch state and final metrics, see:
+
+- `RESULTS.md`
+- `ARCHITECTURE.md`
+- `results/option_b_apical_gain/`
+- `results/option_b_apical_gain_beta012/`
+- `results/option_b_apical_gain_beta016/`
+
+---
+
 ## Table of Contents
 1. [Training Pipeline](#1-training-pipeline)
 2. [Experimental Paradigms](#2-experimental-paradigms)
