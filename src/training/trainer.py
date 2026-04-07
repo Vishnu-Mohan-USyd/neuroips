@@ -169,10 +169,10 @@ def build_stimulus_sequence(
     # Handle ambiguous stimuli in batch
     is_amb_flat = metadata.is_ambiguous.reshape(-1)      # [B*S]
     if is_amb_flat.any():
-        # Second orientation of the mixture is offset by stim_cfg.ambiguous_offset
-        # (degrees). Previously hardcoded to 15.0, which silently ignored the
-        # StimulusConfig field of the same name.
-        oris2_flat = (oris_flat + stim_cfg.ambiguous_offset) % model_cfg.orientation_range
+        # Symmetric competitors: for each ambiguous trial, randomly choose
+        # +offset or -offset so the competitor is equally likely on either side.
+        signs = (torch.randint(0, 2, (oris_flat.shape[0],)) * 2 - 1).float()
+        oris2_flat = (oris_flat + signs * stim_cfg.ambiguous_offset) % model_cfg.orientation_range
         stim_amb = make_ambiguous_stimulus(
             oris_flat[is_amb_flat], oris2_flat[is_amb_flat], contrasts_flat[is_amb_flat],
             n_orientations=N,
@@ -189,8 +189,12 @@ def build_stimulus_sequence(
     temporal[:, :, :steps_on, :] = stim_all.unsqueeze(2).expand(-1, -1, steps_on, -1)
     stimulus_seq = temporal.reshape(B, T_total, N)
 
-    # Cue: [B, S, N] → expand to all timesteps per presentation
-    cue_seq = metadata.cues.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, T_total, N)
+    # Cue temporal expansion: present ONLY during ISI, zero during stimulus ON.
+    # This makes the cue a true pre-stimulus prior — only visible before the
+    # next stimulus appears.
+    temporal_cue = torch.zeros(B, S, steps_per, N)
+    temporal_cue[:, :, steps_on:, :] = metadata.cues.unsqueeze(2).expand(-1, -1, steps_isi, -1)
+    cue_seq = temporal_cue.reshape(B, T_total, N)
 
     # Task state: [B, S, 2] → expand to all timesteps per presentation
     task_state_seq = metadata.task_states.unsqueeze(2).expand(-1, -1, steps_per, -1).reshape(B, T_total, 2)

@@ -318,6 +318,56 @@ def run_full_trajectory(
     return r_l23_all  # [B, T_STEPS, N]
 
 
+def run_full_trajectory_noisy(
+    net: LaminarV1V2Network,
+    stim_thetas: torch.Tensor,
+    oracle_thetas: torch.Tensor,
+    device: torch.device,
+    contrast: float = EVAL_CONTRAST,
+    noise_std: float = 0.0,
+    seed: int | None = None,
+) -> torch.Tensor:
+    """Like run_full_trajectory but with optional stimulus noise. Returns [B, T_STEPS, N]."""
+    B = stim_thetas.shape[0]
+    N = net.cfg.n_orientations
+
+    stim_frame = generate_grating(
+        stim_thetas.to(device),
+        torch.full((B,), contrast, device=device),
+        n_orientations=N,
+        sigma=net.cfg.sigma_ff,
+        n=net.cfg.naka_rushton_n,
+        c50=net.cfg.naka_rushton_c50,
+        period=net.cfg.orientation_range,
+    )
+    stim_seq = stim_frame.unsqueeze(1).expand(B, T_STEPS, N).contiguous()
+
+    if noise_std > 0:
+        if seed is not None:
+            gen = torch.Generator(device=device)
+            gen.manual_seed(seed)
+            noise = torch.randn(stim_seq.shape, device=device, generator=gen) * noise_std
+        else:
+            noise = torch.randn_like(stim_seq) * noise_std
+        stim_seq = (stim_seq + noise).clamp(min=0.0)
+
+    oracle_q, oracle_pi = _build_oracle(net, oracle_thetas.to(device))
+    cue_seq = torch.zeros(B, T_STEPS, N, device=device)
+    task_seq = torch.zeros(B, T_STEPS, 2, device=device)
+    packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
+    net.oracle_mode = True
+    net.oracle_q_pred = oracle_q
+    net.oracle_pi_pred = oracle_pi
+    try:
+        with torch.no_grad():
+            r_l23_all, _, _ = net(packed)
+    finally:
+        net.oracle_mode = False
+        net.oracle_q_pred = None
+        net.oracle_pi_pred = None
+    return r_l23_all  # [B, T_STEPS, N]
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
@@ -1356,6 +1406,532 @@ def metric_global_amplitude(
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 metrics: stronger effect-size measures (11-14)
+#
+# These metrics measure sharpening in the regime where priors matter most:
+# high noise (below ceiling), fixed downstream readouts, and the temporal
+# structure matching training.
+# ---------------------------------------------------------------------------
+
+
+def metric_threshold_benefit(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    deltas: list[float] | None = None,
+    target_acc: float = 0.70,
+    seed: int = 42,
+) -> dict:
+    """Metric 11: find noise threshold where OFF ≈ target_acc, measure ON benefit.
+
+    Sweeps stimulus noise to find the noise level where the no-feedback network
+    is at ~70% accuracy (threshold). At that noise, feedback benefit is largest
+    because the input is genuinely ambiguous. Also computes the threshold_shift:
+    how much more noise ON can tolerate before reaching the same target accuracy.
+
+    Args:
+        net: trained network.
+        device: torch device.
+        deltas: orientation differences to test (default [10, 15] degrees).
+        target_acc: target OFF accuracy for threshold (default 0.70).
+        seed: base seed for reproducibility.
+
+    Returns:
+        dict keyed by 'delta_{int}' with threshold noise, accuracies, and shift.
+    """
+    if deltas is None:
+        deltas = [10.0, 15.0]
+    period = net.cfg.orientation_range
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    noise_levels = [0.1, 0.3, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0]
+    n_per_class = 500
+    n_total = n_per_class * 2
+    n_train = 800
+    n_test = 200
+
+    def _find_threshold(accs: list[float], noises: list[float], target: float) -> float:
+        """Interpolate to find noise where acc crosses target (descending)."""
+        for i in range(len(noises) - 1):
+            if (accs[i] >= target >= accs[i + 1]) or (accs[i] <= target <= accs[i + 1]):
+                frac = (target - accs[i]) / (accs[i + 1] - accs[i] + 1e-12)
+                return noises[i] + frac * (noises[i + 1] - noises[i])
+        # Fallback: closest measured point
+        return noises[int(np.argmin(np.abs(np.array(accs) - target)))]
+
+    results: dict = {}
+    for delta in deltas:
+        anchor_results = []
+        for ai, anchor in enumerate(anchors):
+            on_accs: list[float] = []
+            off_accs: list[float] = []
+            for ni, noise_std in enumerate(noise_levels):
+                trial_seed = seed + ai * 1000 + int(delta * 10) + ni * 100
+                thetas_match = torch.full((n_per_class,), anchor, device=device)
+                thetas_miss = torch.full(
+                    (n_per_class,), (anchor + delta) % period, device=device
+                )
+                stim = torch.cat([thetas_match, thetas_miss], dim=0)
+                oracle = torch.full_like(stim, anchor)
+                labels = np.concatenate([
+                    np.zeros(n_per_class, dtype=np.int64),
+                    np.ones(n_per_class, dtype=np.int64),
+                ])
+
+                r_on = run_trials(
+                    net, stim, oracle, device, noise_std=noise_std, seed=trial_seed,
+                ).cpu().numpy()
+                with feedback_disabled(net):
+                    r_off = run_trials(
+                        net, stim, oracle, device, noise_std=noise_std, seed=trial_seed,
+                    ).cpu().numpy()
+
+                rs = np.random.RandomState(trial_seed + 7)
+                perm = rs.permutation(n_total)
+                train_idx, test_idx = perm[:n_train], perm[n_train:]
+
+                clf_on = LogisticRegression(max_iter=2000)
+                clf_on.fit(r_on[train_idx], labels[train_idx])
+                acc_on = float(clf_on.score(r_on[test_idx], labels[test_idx]))
+
+                clf_off = LogisticRegression(max_iter=2000)
+                clf_off.fit(r_off[train_idx], labels[train_idx])
+                acc_off = float(clf_off.score(r_off[test_idx], labels[test_idx]))
+
+                on_accs.append(acc_on)
+                off_accs.append(acc_off)
+
+            threshold_off = _find_threshold(off_accs, noise_levels, target_acc)
+            threshold_on = _find_threshold(on_accs, noise_levels, target_acc)
+            threshold_shift = threshold_on - threshold_off
+
+            # delta_acc at the OFF threshold (use nearest measured noise)
+            idx_nearest = int(np.argmin(np.abs(np.array(noise_levels) - threshold_off)))
+            delta_acc_at_threshold = on_accs[idx_nearest] - off_accs[idx_nearest]
+
+            anchor_results.append({
+                "anchor": anchor,
+                "threshold_noise_off": threshold_off,
+                "threshold_noise_on": threshold_on,
+                "threshold_shift": threshold_shift,
+                "delta_acc_at_threshold": delta_acc_at_threshold,
+                "on_accs": on_accs,
+                "off_accs": off_accs,
+            })
+
+        avg_threshold_off = float(np.mean([a["threshold_noise_off"] for a in anchor_results]))
+        avg_threshold_on = float(np.mean([a["threshold_noise_on"] for a in anchor_results]))
+        avg_shift = float(np.mean([a["threshold_shift"] for a in anchor_results]))
+        avg_delta = float(np.mean([a["delta_acc_at_threshold"] for a in anchor_results]))
+
+        results[f"delta_{int(delta)}"] = {
+            "threshold_noise_off": avg_threshold_off,
+            "threshold_noise_on": avg_threshold_on,
+            "threshold_shift": avg_shift,
+            "delta_acc_at_threshold": avg_delta,
+            "per_anchor": anchor_results,
+        }
+
+    results["target_acc"] = target_acc
+    results["noise_levels"] = noise_levels
+    return results
+
+
+def metric_fixed_readout(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    deltas: list[float] | None = None,
+    noise_std: float = 0.5,
+    readout_noise_std: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Metric 12: fixed downstream readout — train on neutral, test on valid/invalid.
+
+    Trains a LogReg decoder ONCE on neutral (feedback OFF, noisy) responses,
+    then freezes it and tests on:
+      - valid: feedback ON, true oracle (expectation matches stimulus class)
+      - invalid: feedback ON, wrong oracle (opposite class)
+
+    This is the biologically relevant measure: does the expectation help a
+    fixed downstream reader that was calibrated without feedback?
+
+    Args:
+        net: trained network.
+        device: torch device.
+        deltas: orientation differences (default [10, 15] degrees).
+        noise_std: stimulus noise (default 0.5).
+        seed: reproducibility seed.
+
+    Returns:
+        dict keyed by 'delta_{int}' with acc_neutral, acc_valid, acc_invalid, benefit, cost.
+    """
+    if deltas is None:
+        deltas = [10.0, 15.0]
+    period = net.cfg.orientation_range
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    n_per_class = 500
+    n_total = n_per_class * 2
+    n_train = 800
+    n_test = 200
+
+    results: dict = {}
+    for delta in deltas:
+        anchor_results = []
+        for ai, anchor in enumerate(anchors):
+            trial_seed = seed + ai * 1000 + int(delta * 10)
+
+            thetas_match = torch.full((n_per_class,), anchor, device=device)
+            thetas_miss = torch.full(
+                (n_per_class,), (anchor + delta) % period, device=device
+            )
+            stim = torch.cat([thetas_match, thetas_miss], dim=0)
+            labels = np.concatenate([
+                np.zeros(n_per_class, dtype=np.int64),
+                np.ones(n_per_class, dtype=np.int64),
+            ])
+
+            # 1. Neutral: feedback OFF
+            oracle_neutral = torch.full_like(stim, anchor)
+            with feedback_disabled(net):
+                r_neutral = run_trials(
+                    net, stim, oracle_neutral, device,
+                    noise_std=noise_std, seed=trial_seed,
+                ).cpu().numpy()
+
+            # Add readout noise (same realization for all conditions for fair comparison)
+            rs_readout = np.random.RandomState(trial_seed + 42)
+            readout_noise = (rs_readout.randn(*r_neutral.shape).astype(np.float32)
+                             * readout_noise_std)
+            r_neutral = r_neutral + readout_noise
+
+            # Train decoder on neutral, freeze it
+            rs = np.random.RandomState(trial_seed + 7)
+            perm = rs.permutation(n_total)
+            train_idx, test_idx = perm[:n_train], perm[n_train:]
+
+            clf = LogisticRegression(max_iter=2000)
+            clf.fit(r_neutral[train_idx], labels[train_idx])
+            acc_neutral = float(clf.score(r_neutral[test_idx], labels[test_idx]))
+
+            # 2. Valid: feedback ON, true oracle at anchor
+            oracle_valid = torch.full_like(stim, anchor)
+            r_valid = run_trials(
+                net, stim, oracle_valid, device,
+                noise_std=noise_std, seed=trial_seed + 100,
+            ).cpu().numpy()
+            r_valid = r_valid + readout_noise  # same noise for fair comparison
+            acc_valid = float(clf.score(r_valid[test_idx], labels[test_idx]))
+
+            # 3. Invalid: feedback ON, wrong oracle (opposite class)
+            oracle_invalid = torch.full_like(stim, (anchor + delta) % period)
+            r_invalid = run_trials(
+                net, stim, oracle_invalid, device,
+                noise_std=noise_std, seed=trial_seed + 200,
+            ).cpu().numpy()
+            r_invalid = r_invalid + readout_noise  # same noise
+            acc_invalid = float(clf.score(r_invalid[test_idx], labels[test_idx]))
+
+            anchor_results.append({
+                "anchor": anchor,
+                "acc_neutral": acc_neutral,
+                "acc_valid": acc_valid,
+                "acc_invalid": acc_invalid,
+                "benefit": acc_valid - acc_neutral,
+                "cost": acc_neutral - acc_invalid,
+            })
+
+        avg_neutral = float(np.mean([a["acc_neutral"] for a in anchor_results]))
+        avg_valid = float(np.mean([a["acc_valid"] for a in anchor_results]))
+        avg_invalid = float(np.mean([a["acc_invalid"] for a in anchor_results]))
+
+        results[f"delta_{int(delta)}"] = {
+            "acc_neutral": avg_neutral,
+            "acc_valid": avg_valid,
+            "acc_invalid": avg_invalid,
+            "benefit": avg_valid - avg_neutral,
+            "cost": avg_neutral - avg_invalid,
+            "per_anchor": anchor_results,
+        }
+
+    results["noise_std"] = noise_std
+    results["readout_noise_std"] = readout_noise_std
+    return results
+
+
+def metric_time_resolved_decoding(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    deltas: list[float] | None = None,
+    noise_std: float = 0.5,
+    readout_noise_std: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Metric 13: time-resolved decoding — at which timestep is sharpening strongest?
+
+    For each timestep t, trains a LogReg decoder on neutral (OFF) L2/3 at time t,
+    tests on valid (ON) L2/3 at time t. Reports per-timestep delta_acc and
+    early/mid/late summaries.
+
+    Hypothesis: sharpening benefit peaks early (before SOM normalization settles).
+
+    Args:
+        net: trained network.
+        device: torch device.
+        deltas: orientation differences (default [10, 15] degrees).
+        noise_std: stimulus noise (default 0.5).
+        seed: reproducibility seed.
+
+    Returns:
+        dict keyed by 'delta_{int}' with per-timestep curves and summaries.
+    """
+    if deltas is None:
+        deltas = [10.0, 15.0]
+    period = net.cfg.orientation_range
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    n_per_class = 500
+    n_total = n_per_class * 2
+    n_train = 800
+    n_test = 200
+
+    results: dict = {}
+    for delta in deltas:
+        t_delta_accs: list[list[float]] = [[] for _ in range(T_STEPS)]
+        anchor_results = []
+
+        for ai, anchor in enumerate(anchors):
+            trial_seed = seed + ai * 1000 + int(delta * 10)
+
+            thetas_match = torch.full((n_per_class,), anchor, device=device)
+            thetas_miss = torch.full(
+                (n_per_class,), (anchor + delta) % period, device=device
+            )
+            stim = torch.cat([thetas_match, thetas_miss], dim=0)
+            oracle = torch.full_like(stim, anchor)
+            labels = np.concatenate([
+                np.zeros(n_per_class, dtype=np.int64),
+                np.ones(n_per_class, dtype=np.int64),
+            ])
+
+            # Full trajectory with noise — ON and OFF
+            traj_on = run_full_trajectory_noisy(
+                net, stim, oracle, device, noise_std=noise_std, seed=trial_seed,
+            ).cpu().numpy()  # [B, T, N]
+            with feedback_disabled(net):
+                traj_off = run_full_trajectory_noisy(
+                    net, stim, oracle, device, noise_std=noise_std, seed=trial_seed,
+                ).cpu().numpy()
+
+            # Add readout noise (same realization for ON and OFF)
+            if readout_noise_std > 0:
+                rs_readout = np.random.RandomState(trial_seed + 42)
+                r_noise = (rs_readout.randn(*traj_off.shape).astype(np.float32)
+                           * readout_noise_std)
+                traj_off = traj_off + r_noise
+                traj_on = traj_on + r_noise
+
+            rs = np.random.RandomState(trial_seed + 7)
+            perm = rs.permutation(n_total)
+            train_idx, test_idx = perm[:n_train], perm[n_train:]
+
+            t_deltas: list[float] = []
+            for t in range(T_STEPS):
+                X_off_t = traj_off[:, t, :]
+                X_on_t = traj_on[:, t, :]
+
+                clf = LogisticRegression(max_iter=2000)
+                clf.fit(X_off_t[train_idx], labels[train_idx])
+                acc_off_t = float(clf.score(X_off_t[test_idx], labels[test_idx]))
+                acc_on_t = float(clf.score(X_on_t[test_idx], labels[test_idx]))
+                delta_acc_t = acc_on_t - acc_off_t
+                t_deltas.append(delta_acc_t)
+                t_delta_accs[t].append(delta_acc_t)
+
+            anchor_results.append({
+                "anchor": anchor,
+                "delta_acc_per_t": t_deltas,
+            })
+
+        avg_per_t = [float(np.mean(t_delta_accs[t])) for t in range(T_STEPS)]
+        early_avg = float(np.mean(avg_per_t[:8]))     # steps 0-7
+        mid_avg = float(np.mean(avg_per_t[8:18]))     # steps 8-17
+        late_avg = float(np.mean(avg_per_t[18:]))      # steps 18-24
+        peak_t = int(np.argmax(avg_per_t))
+        peak_delta = float(avg_per_t[peak_t])
+
+        results[f"delta_{int(delta)}"] = {
+            "delta_acc_per_t": avg_per_t,
+            "early_avg": early_avg,
+            "mid_avg": mid_avg,
+            "late_avg": late_avg,
+            "peak_t": peak_t,
+            "peak_delta": peak_delta,
+            "per_anchor": anchor_results,
+        }
+
+    results["noise_std"] = noise_std
+    results["readout_noise_std"] = readout_noise_std
+    return results
+
+
+def metric_temporal_evaluation(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    deltas: list[float] | None = None,
+    noise_std: float = 0.3,
+    readout_noise_std: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Metric 14: cue→ISI→stimulus temporal structure matching training.
+
+    Evaluates with the temporal pattern the model was trained on:
+      - ISI (t=0,1): cue (population bump at oracle theta), no stimulus
+      - ON (t=2-7): stimulus (with noise), no cue
+      - Readout: average L2/3 at last 3 ON steps (t=5,6,7)
+    Compares feedback ON (with cue+oracle) vs OFF (no cue, no oracle).
+    Train decoder on OFF, test on ON.
+
+    Args:
+        net: trained network.
+        device: torch device.
+        deltas: orientation differences (default [10, 15] degrees).
+        noise_std: stimulus noise (default 0.3).
+        seed: reproducibility seed.
+
+    Returns:
+        dict keyed by 'delta_{int}' with acc_off, acc_on, delta_acc.
+    """
+    if deltas is None:
+        deltas = [10.0, 15.0]
+    period = net.cfg.orientation_range
+    N = net.cfg.n_orientations
+    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    steps_isi = 2
+    steps_on = 6
+    T = steps_isi + steps_on  # 8
+    read_last = 3  # last 3 ON steps
+    n_per_class = 500
+    n_total = n_per_class * 2
+    n_train = 800
+    n_test = 200
+
+    results: dict = {}
+    for delta in deltas:
+        anchor_results = []
+        for ai, anchor in enumerate(anchors):
+            trial_seed = seed + ai * 1000 + int(delta * 10)
+            B = n_total
+
+            thetas_match = torch.full((n_per_class,), anchor, device=device)
+            thetas_miss = torch.full(
+                (n_per_class,), (anchor + delta) % period, device=device
+            )
+            stim_all = torch.cat([thetas_match, thetas_miss], dim=0)
+            labels = np.concatenate([
+                np.zeros(n_per_class, dtype=np.int64),
+                np.ones(n_per_class, dtype=np.int64),
+            ])
+
+            # Build stimulus grating [B, N]
+            stim_frame = generate_grating(
+                stim_all.to(device),
+                torch.full((B,), EVAL_CONTRAST, device=device),
+                n_orientations=N,
+                sigma=net.cfg.sigma_ff,
+                n=net.cfg.naka_rushton_n,
+                c50=net.cfg.naka_rushton_c50,
+                period=period,
+            )
+
+            # Build cue bump [B, N]
+            oracle_arr = torch.full((B,), anchor, device=device)
+            cue_bump = net._make_bump(oracle_arr)
+            cue_bump = cue_bump / (cue_bump.sum(dim=-1, keepdim=True) + 1e-8)
+
+            # Noisy stimulus for ON period
+            stim_on_block = stim_frame.unsqueeze(1).expand(B, steps_on, N).contiguous().clone()
+            if noise_std > 0:
+                gen = torch.Generator(device=device)
+                gen.manual_seed(trial_seed)
+                noise = torch.randn(stim_on_block.shape, device=device, generator=gen) * noise_std
+                stim_on_block = (stim_on_block + noise).clamp(min=0.0)
+
+            task_seq = torch.zeros(B, T, 2, device=device)
+
+            # --- ON condition: cue during ISI, stim during ON, oracle active ---
+            stim_seq_on = torch.zeros(B, T, N, device=device)
+            stim_seq_on[:, steps_isi:, :] = stim_on_block
+            cue_seq_on = torch.zeros(B, T, N, device=device)
+            cue_seq_on[:, :steps_isi, :] = cue_bump.unsqueeze(1).expand(B, steps_isi, N)
+
+            oracle_q = cue_bump.unsqueeze(1).expand(B, T, N).contiguous()
+            oracle_pi = torch.full((B, T, 1), EVAL_PI, device=device)
+
+            packed_on = net.pack_inputs(stim_seq_on, cue_seq_on, task_seq)
+            net.oracle_mode = True
+            net.oracle_q_pred = oracle_q
+            net.oracle_pi_pred = oracle_pi
+            try:
+                with torch.no_grad():
+                    r_on_all, _, _ = net(packed_on)
+            finally:
+                net.oracle_mode = False
+                net.oracle_q_pred = None
+                net.oracle_pi_pred = None
+            r_on = r_on_all[:, -read_last:].mean(dim=1).cpu().numpy()  # [B, N]
+
+            # --- OFF condition: no cue, no oracle, feedback disabled ---
+            stim_seq_off = torch.zeros(B, T, N, device=device)
+            stim_seq_off[:, steps_isi:, :] = stim_on_block  # same noise
+            cue_seq_off = torch.zeros(B, T, N, device=device)  # no cue
+
+            packed_off = net.pack_inputs(stim_seq_off, cue_seq_off, task_seq)
+            with feedback_disabled(net):
+                net.oracle_mode = False
+                with torch.no_grad():
+                    r_off_all, _, _ = net(packed_off)
+            r_off = r_off_all[:, -read_last:].mean(dim=1).cpu().numpy()  # [B, N]
+
+            # Add readout noise (same realization for ON and OFF)
+            if readout_noise_std > 0:
+                rs_readout = np.random.RandomState(trial_seed + 42)
+                r_noise = (rs_readout.randn(*r_off.shape).astype(np.float32)
+                           * readout_noise_std)
+                r_off = r_off + r_noise
+                r_on = r_on + r_noise
+
+            # Train decoder on OFF, test on both
+            rs = np.random.RandomState(trial_seed + 7)
+            perm = rs.permutation(n_total)
+            train_idx, test_idx = perm[:n_train], perm[n_train:]
+
+            clf = LogisticRegression(max_iter=2000)
+            clf.fit(r_off[train_idx], labels[train_idx])
+            acc_off = float(clf.score(r_off[test_idx], labels[test_idx]))
+            acc_on = float(clf.score(r_on[test_idx], labels[test_idx]))
+
+            anchor_results.append({
+                "anchor": anchor,
+                "acc_off": acc_off,
+                "acc_on": acc_on,
+                "delta_acc": acc_on - acc_off,
+            })
+
+        avg_off = float(np.mean([a["acc_off"] for a in anchor_results]))
+        avg_on = float(np.mean([a["acc_on"] for a in anchor_results]))
+
+        results[f"delta_{int(delta)}"] = {
+            "acc_off": avg_off,
+            "acc_on": avg_on,
+            "delta_acc": avg_on - avg_off,
+            "per_anchor": anchor_results,
+        }
+
+    results["noise_std"] = noise_std
+    results["readout_noise_std"] = readout_noise_std
+    results["steps_isi"] = steps_isi
+    results["steps_on"] = steps_on
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Sanity and artifact checks
 # ---------------------------------------------------------------------------
 
@@ -1564,6 +2140,10 @@ def print_report(label: str, results: dict) -> None:
     m8 = results["metric8"]
     m9 = results["metric9"]
     m10 = results.get("metric10")
+    m11 = results.get("metric11")
+    m12 = results.get("metric12")
+    m13 = results.get("metric13")
+    m14 = results.get("metric14")
     sanity = results["sanity"]
     artifact = results["artifact"]
 
@@ -1754,6 +2334,71 @@ def print_report(label: str, results: dict) -> None:
             print(f"    {a['anchor']:8.1f}  {a['mean_on']:10.6f}  {a['mean_off']:10.6f}"
                   f"  {a['sum_on']:10.4f}  {a['sum_off']:10.4f}")
 
+    # --- Metric 11: Threshold benefit ------------------------------------
+    if m11 is not None:
+        print(f"\n[Metric 11] Threshold benefit (noise where OFF ≈ {m11['target_acc']:.0%})")
+        for dkey in sorted(k for k in m11 if k.startswith("delta_")):
+            r = m11[dkey]
+            print(f"  {dkey}: threshold_noise_off={r['threshold_noise_off']:.3f}, "
+                  f"threshold_noise_on={r['threshold_noise_on']:.3f}")
+            print(f"    delta_acc at threshold: {r['delta_acc_at_threshold']:+.4f}")
+            print(f"    threshold_shift (ON-OFF): {r['threshold_shift']:+.3f}")
+        print(f"  Noise sweep per anchor (delta_10):")
+        if "delta_10" in m11:
+            for a in m11["delta_10"]["per_anchor"]:
+                print(f"    anchor={a['anchor']:5.1f}°  "
+                      f"noise_off={a['threshold_noise_off']:.3f}  "
+                      f"noise_on={a['threshold_noise_on']:.3f}  "
+                      f"shift={a['threshold_shift']:+.3f}  "
+                      f"Δacc={a['delta_acc_at_threshold']:+.4f}")
+
+    # --- Metric 12: Fixed readout ----------------------------------------
+    if m12 is not None:
+        print(f"\n[Metric 12] Fixed readout (train on neutral, test on valid/invalid)")
+        print(f"  stimulus_noise={m12['noise_std']}, readout_noise={m12.get('readout_noise_std', 0)}")
+        for dkey in sorted(k for k in m12 if k.startswith("delta_")):
+            r = m12[dkey]
+            print(f"  {dkey}: neutral={r['acc_neutral']:.4f}  valid={r['acc_valid']:.4f}  "
+                  f"invalid={r['acc_invalid']:.4f}")
+            print(f"    benefit (valid-neutral): {r['benefit']:+.4f}   "
+                  f"cost (neutral-invalid): {r['cost']:+.4f}")
+        if "delta_10" in m12:
+            print(f"  Per-anchor (delta_10):")
+            for a in m12["delta_10"]["per_anchor"]:
+                print(f"    anchor={a['anchor']:5.1f}°  "
+                      f"neutral={a['acc_neutral']:.4f}  valid={a['acc_valid']:.4f}  "
+                      f"invalid={a['acc_invalid']:.4f}  benefit={a['benefit']:+.4f}")
+
+    # --- Metric 13: Time-resolved decoding --------------------------------
+    if m13 is not None:
+        print(f"\n[Metric 13] Time-resolved decoding (stim_noise={m13['noise_std']}, "
+              f"readout_noise={m13.get('readout_noise_std', 0)})")
+        for dkey in sorted(k for k in m13 if k.startswith("delta_")):
+            r = m13[dkey]
+            print(f"  {dkey}: peak_t={r['peak_t']}, peak_delta={r['peak_delta']:+.4f}")
+            print(f"    early(0-7)={r['early_avg']:+.4f}  mid(8-17)={r['mid_avg']:+.4f}  "
+                  f"late(18-24)={r['late_avg']:+.4f}")
+            print(f"    per-timestep: ", end="")
+            for t, d in enumerate(r["delta_acc_per_t"]):
+                print(f"t{t}={d:+.3f}", end=" ")
+            print()
+
+    # --- Metric 14: Temporal evaluation -----------------------------------
+    if m14 is not None:
+        print(f"\n[Metric 14] Temporal evaluation (cue→ISI→stim, "
+              f"ISI={m14['steps_isi']}, ON={m14['steps_on']}, "
+              f"stim_noise={m14['noise_std']}, readout_noise={m14.get('readout_noise_std', 0)})")
+        for dkey in sorted(k for k in m14 if k.startswith("delta_")):
+            r = m14[dkey]
+            print(f"  {dkey}: acc_off={r['acc_off']:.4f}  acc_on={r['acc_on']:.4f}  "
+                  f"delta_acc={r['delta_acc']:+.4f}")
+        if "delta_10" in m14:
+            print(f"  Per-anchor (delta_10):")
+            for a in m14["delta_10"]["per_anchor"]:
+                print(f"    anchor={a['anchor']:5.1f}°  "
+                      f"off={a['acc_off']:.4f}  on={a['acc_on']:.4f}  "
+                      f"Δ={a['delta_acc']:+.4f}")
+
     # --- Artifact: pre-rectification drive FWHM --------------------------
     print(f"\n[Artifact] Pre-rectification L2/3 drive at stim={artifact['stim_theta']}°, "
           f"oracle={artifact['oracle_theta']}°")
@@ -1898,6 +2543,47 @@ def print_comparison_table(results_by_label: dict[str, dict]) -> None:
         row("M10 global sum ratio (ON/OFF)",
             lambda r: f"{r['metric10']['sum_ratio']:.4f}")
 
+    # Metric 11: threshold benefit
+    first = next(iter(results_by_label.values()))
+    if "metric11" in first:
+        for dkey, dlabel in [("delta_10", "δ=10"), ("delta_15", "δ=15")]:
+            row(f"M11 {dlabel}° threshold_noise_off",
+                lambda r, k=dkey: f"{r['metric11'][k]['threshold_noise_off']:.3f}")
+            row(f"M11 {dlabel}° Δacc@threshold",
+                lambda r, k=dkey: f"{r['metric11'][k]['delta_acc_at_threshold']:+.4f}")
+            row(f"M11 {dlabel}° threshold_shift",
+                lambda r, k=dkey: f"{r['metric11'][k]['threshold_shift']:+.3f}")
+
+    # Metric 12: fixed readout
+    if "metric12" in first:
+        for dkey, dlabel in [("delta_10", "δ=10"), ("delta_15", "δ=15")]:
+            row(f"M12 {dlabel}° neutral",
+                lambda r, k=dkey: f"{r['metric12'][k]['acc_neutral']:.4f}")
+            row(f"M12 {dlabel}° valid",
+                lambda r, k=dkey: f"{r['metric12'][k]['acc_valid']:.4f}")
+            row(f"M12 {dlabel}° invalid",
+                lambda r, k=dkey: f"{r['metric12'][k]['acc_invalid']:.4f}")
+            row(f"M12 {dlabel}° benefit",
+                lambda r, k=dkey: f"{r['metric12'][k]['benefit']:+.4f}")
+
+    # Metric 13: time-resolved decoding
+    if "metric13" in first:
+        for dkey, dlabel in [("delta_10", "δ=10"), ("delta_15", "δ=15")]:
+            row(f"M13 {dlabel}° peak_t",
+                lambda r, k=dkey: f"{r['metric13'][k]['peak_t']}")
+            row(f"M13 {dlabel}° peak_delta",
+                lambda r, k=dkey: f"{r['metric13'][k]['peak_delta']:+.4f}")
+            row(f"M13 {dlabel}° early(0-7)",
+                lambda r, k=dkey: f"{r['metric13'][k]['early_avg']:+.4f}")
+            row(f"M13 {dlabel}° late(18-24)",
+                lambda r, k=dkey: f"{r['metric13'][k]['late_avg']:+.4f}")
+
+    # Metric 14: temporal evaluation
+    if "metric14" in first:
+        for dkey, dlabel in [("delta_10", "δ=10"), ("delta_15", "δ=15")]:
+            row(f"M14 {dlabel}° Δacc (temporal)",
+                lambda r, k=dkey: f"{r['metric14'][k]['delta_acc']:+.4f}")
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -1965,6 +2651,11 @@ def analyze_one(
     artifact = artifact_check_threshold(net, device, stim_theta=90.0, oracle_theta=90.0)
     # Metric 10: global amplitude ratio
     m10 = metric_global_amplitude(net, device)
+    # Phase 2 metrics (11-14): stronger effect-size measures
+    m11 = metric_threshold_benefit(net, device, deltas=[10.0, 15.0], seed=42)
+    m12 = metric_fixed_readout(net, device, deltas=[10.0, 15.0], noise_std=0.5, seed=42)
+    m13 = metric_time_resolved_decoding(net, device, deltas=[10.0, 15.0], noise_std=0.5, seed=42)
+    m14 = metric_temporal_evaluation(net, device, deltas=[10.0, 15.0], noise_std=0.3, seed=42)
 
     return {
         "metric1": m1, "metric1b": m1b,
@@ -1973,6 +2664,7 @@ def analyze_one(
         "metric5": m5,
         "metric6": m6, "metric7": m7, "metric8": m8, "metric9": m9,
         "metric10": m10,
+        "metric11": m11, "metric12": m12, "metric13": m13, "metric14": m14,
         "sanity": sanity, "artifact": artifact,
         "train_cfg": train_cfg,
     }
