@@ -51,6 +51,12 @@ class CompositeLoss(nn.Module):
         self.lambda_mismatch = cfg.lambda_mismatch      # 0.0 (disabled by default)
         self.lambda_sharp = cfg.lambda_sharp            # 0.0 (disabled by default)
         self.lambda_local_disc = cfg.lambda_local_disc  # 0.0 (disabled by default)
+        self.lambda_local_rank = cfg.lambda_local_rank  # 0.0 (disabled by default)
+        self.local_rank_offsets_deg = tuple(cfg.local_rank_offsets_deg)
+        self.local_rank_margins = tuple(cfg.local_rank_margins)
+        self.local_rank_weights = tuple(cfg.local_rank_weights)
+        self.local_rank_late_weights = tuple(cfg.local_rank_late_weights)
+        self.local_rank_ambiguous_only = cfg.local_rank_ambiguous_only
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -288,6 +294,87 @@ class CompositeLoss(nn.Module):
         )
         return F.cross_entropy(logits, targets)
 
+    def _local_rank_channel_offsets(self) -> tuple[int, ...]:
+        """Convert configured local ranking offsets from degrees to channel units."""
+        channel_offsets: list[int] = []
+        for offset_deg in self.local_rank_offsets_deg:
+            channel = int(round(offset_deg / self.orient_step))
+            assert channel > 0, (
+                f"local_rank_offsets_deg must map to positive channel offsets; got {offset_deg}"
+            )
+            assert abs(channel * self.orient_step - offset_deg) < 1e-6, (
+                f"local_rank offset {offset_deg} deg is not aligned to the orientation grid "
+                f"(step={self.orient_step} deg)"
+            )
+            channel_offsets.append(channel)
+        return tuple(channel_offsets)
+
+    def local_ranking_loss(
+        self,
+        r_l23_late_windows: Tensor,
+        true_theta_windows: Tensor,
+        ambiguous_windows: Tensor | None = None,
+    ) -> Tensor:
+        """Margin ranking on raw late L2/3 activity for target > local competitors.
+
+        Args:
+            r_l23_late_windows: [B, W, T_late, N] raw late-window L2/3 activity.
+            true_theta_windows: [B, W] true target orientation in degrees.
+            ambiguous_windows: Optional [B, W] boolean/float mask. When provided
+                and `local_rank_ambiguous_only` is True, the ranking loss applies
+                only to ambiguous presentations.
+
+        Returns:
+            Scalar hinge-style ranking loss.
+        """
+        B, W, T_late, N = r_l23_late_windows.shape
+        assert N == self.n_orient
+        assert len(self.local_rank_offsets_deg) == len(self.local_rank_margins) == len(self.local_rank_weights), (
+            "local ranking offsets, margins, and weights must have the same length"
+        )
+        assert len(self.local_rank_late_weights) == T_late, (
+            f"local_rank_late_weights length {len(self.local_rank_late_weights)} "
+            f"must match late window length {T_late}"
+        )
+
+        center = self._theta_to_channel(true_theta_windows)  # [B, W]
+        center_idx = center.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T_late, 1)
+        target_act = torch.gather(r_l23_late_windows, dim=-1, index=center_idx).squeeze(-1)  # [B, W, T]
+
+        late_weights = torch.as_tensor(
+            self.local_rank_late_weights,
+            dtype=r_l23_late_windows.dtype,
+            device=r_l23_late_windows.device,
+        ).view(1, 1, T_late)
+
+        if ambiguous_windows is not None and self.local_rank_ambiguous_only:
+            valid_mask = ambiguous_windows.to(dtype=r_l23_late_windows.dtype).unsqueeze(-1)
+        else:
+            valid_mask = torch.ones(B, W, 1, dtype=r_l23_late_windows.dtype, device=r_l23_late_windows.device)
+
+        numerator = torch.zeros((), dtype=r_l23_late_windows.dtype, device=r_l23_late_windows.device)
+        denominator = torch.zeros((), dtype=r_l23_late_windows.dtype, device=r_l23_late_windows.device)
+        for offset_ch, margin, weight in zip(
+            self._local_rank_channel_offsets(),
+            self.local_rank_margins,
+            self.local_rank_weights,
+        ):
+            plus_idx = ((center + offset_ch) % N).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T_late, 1)
+            minus_idx = ((center - offset_ch) % N).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, T_late, 1)
+            plus_act = torch.gather(r_l23_late_windows, dim=-1, index=plus_idx).squeeze(-1)
+            minus_act = torch.gather(r_l23_late_windows, dim=-1, index=minus_idx).squeeze(-1)
+
+            hinge_plus = F.relu(margin - (target_act - plus_act))
+            hinge_minus = F.relu(margin - (target_act - minus_act))
+            pair_loss = 0.5 * (hinge_plus + hinge_minus)
+            weighted_loss = pair_loss * late_weights * valid_mask
+            numerator = numerator + float(weight) * weighted_loss.sum()
+            denominator = denominator + float(weight) * (late_weights * valid_mask).sum()
+
+        if denominator.item() == 0.0:
+            return torch.zeros((), dtype=r_l23_late_windows.dtype, device=r_l23_late_windows.device)
+        return numerator / denominator
+
     def energy_cost(self, outputs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Compute energy costs from network output trajectories.
 
@@ -435,6 +522,8 @@ class CompositeLoss(nn.Module):
         r_l4_windows: Tensor | None = None,
         mismatch_labels: Tensor | None = None,
         mismatch_mask: Tensor | None = None,
+        r_l23_late_windows: Tensor | None = None,
+        ambiguous_windows: Tensor | None = None,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -564,6 +653,17 @@ class CompositeLoss(nn.Module):
             loss_dict["local_disc"] = l_local.item()
         else:
             loss_dict["local_disc"] = 0.0
+
+        if self.lambda_local_rank > 0 and r_l23_late_windows is not None:
+            l_local_rank = self.local_ranking_loss(
+                r_l23_late_windows,
+                true_theta_windows,
+                ambiguous_windows=ambiguous_windows,
+            )
+            total = total + self.lambda_local_rank * l_local_rank
+            loss_dict["local_rank"] = l_local_rank.item()
+        else:
+            loss_dict["local_rank"] = 0.0
 
         loss_dict["total"] = total.item()
 

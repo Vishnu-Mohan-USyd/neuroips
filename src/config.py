@@ -56,7 +56,25 @@ class ModelConfig:
     emergent_recurrent_gain_enabled: bool = False
     emergent_recurrent_gain_beta: float = 0.1
     emergent_recurrent_gain_sigma: float = 5.0
+    emergent_recurrent_gain_mode: str = "positive"
+    emergent_recurrent_gain_flank_beta: float = 0.0
+    emergent_recurrent_gain_sigma_surround: float = 20.0
     emergent_recurrent_gain_cue_gated: bool = True
+    emergent_flank_som_enabled: bool = False
+    emergent_flank_som_gain: float = 0.0
+    emergent_flank_som_sigma_center: float = 5.0
+    emergent_flank_som_sigma_surround: float = 20.0
+    emergent_flank_som_cue_gated: bool = True
+    emergent_flank_shunt_enabled: bool = False
+    emergent_flank_shunt_gain: float = 0.0
+    emergent_flank_shunt_sigma_center: float = 5.0
+    emergent_flank_shunt_sigma_surround: float = 20.0
+    emergent_flank_shunt_cue_gated: bool = True
+    emergent_flank_shunt_source: str = "prediction_direct"
+    som_regime_gate_enabled: bool = False
+    som_regime_gate_target: str = "alpha_inh"
+    som_regime_gate_beta: float = 0.10
+    som_regime_gate_init_bias: float = -2.0
     apical_gain_enabled: bool = False
     apical_gain_beta: float = 0.08
     apical_gain_tau: int = 10
@@ -133,6 +151,12 @@ class TrainingConfig:
     lambda_mismatch: float = 0.0    # L2/3 mismatch detection weight (0 = disabled)
     lambda_sharp: float = 0.0       # Tuning sharpness: penalize L2/3 activity at flanks (0 = disabled)
     lambda_local_disc: float = 0.0  # Phase 4: local 5-way discrimination (expected vs ±1, ±2 neighbors). 0 = disabled.
+    lambda_local_rank: float = 0.0  # Raw late-window ranking loss on target > local competitors.
+    local_rank_offsets_deg: Tuple[float, ...] = (5.0, 10.0, 15.0)
+    local_rank_margins: Tuple[float, ...] = (0.0, 0.0, 0.0)
+    local_rank_weights: Tuple[float, ...] = (1.0, 1.0, 1.0)
+    local_rank_late_weights: Tuple[float, ...] = (1.0, 1.0, 1.0)
+    local_rank_ambiguous_only: bool = True
 
     # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
     delta_som: bool = False
@@ -195,11 +219,18 @@ class StimulusConfig:
     # ambiguous mixture stimulus. Used by `build_stimulus_sequence` in
     # `src/training/trainer.py`.
     ambiguous_offset: float = 15.0
+    ambiguous_offsets: Tuple[float, ...] = (5.0, 10.0, 15.0)
     ambiguous_mode: str = "one_sided"
 
 
 def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig, TrainingConfig, StimulusConfig]:
     """Load configuration from a YAML file and return typed config objects."""
+    path = Path(path)
+    if not path.is_absolute() and not path.exists():
+        repo_relative = Path(__file__).resolve().parents[1] / path
+        if repo_relative.exists():
+            path = repo_relative
+
     with open(path) as f:
         raw = yaml.safe_load(f)
 
@@ -241,6 +272,12 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_mismatch=train_raw.get("lambda_mismatch", 0.0),
         lambda_sharp=train_raw.get("lambda_sharp", 0.0),
         lambda_local_disc=train_raw.get("lambda_local_disc", 0.0),
+        lambda_local_rank=train_raw.get("lambda_local_rank", 0.0),
+        local_rank_offsets_deg=tuple(train_raw.get("local_rank_offsets_deg", [5.0, 10.0, 15.0])),
+        local_rank_margins=tuple(train_raw.get("local_rank_margins", [0.0, 0.0, 0.0])),
+        local_rank_weights=tuple(train_raw.get("local_rank_weights", [1.0, 1.0, 1.0])),
+        local_rank_late_weights=tuple(train_raw.get("local_rank_late_weights", [1.0, 1.0, 1.0])),
+        local_rank_ambiguous_only=train_raw.get("local_rank_ambiguous_only", True),
         delta_som=train_raw.get("delta_som", False),
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),

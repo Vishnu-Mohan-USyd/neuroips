@@ -181,6 +181,41 @@ class TestV2ContextEmergent:
         # sigmoid(0) = 0.5, but GRU output may shift this slightly
         assert abs(p_cw.item() - 0.5) < 0.2
 
+    def test_som_regime_gate_defaults_to_identity_when_disabled(self, cfg_emergent):
+        """The SOM regime gate must be an exact identity map when disabled."""
+        v2 = V2ContextModule(cfg_emergent)
+        h_v2 = torch.randn(4, cfg_emergent.v2_hidden_dim)
+
+        gate = v2.compute_som_regime_gate(h_v2)
+
+        assert torch.allclose(gate, torch.ones_like(gate))
+
+    def test_som_regime_gate_is_condition_dependent_when_enabled(self):
+        """The scalar SOM regime gate should vary with h_v2 when enabled."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            som_regime_gate_enabled=True,
+            som_regime_gate_beta=0.10,
+            som_regime_gate_init_bias=-2.0,
+        )
+        v2 = V2ContextModule(cfg)
+        with torch.no_grad():
+            v2.head_som_regime.weight.zero_()
+            v2.head_som_regime.weight[0, 0] = 1.0
+            v2.head_som_regime.bias.zero_()
+
+        h_low = torch.zeros(1, cfg.v2_hidden_dim)
+        h_high = torch.zeros(1, cfg.v2_hidden_dim)
+        h_high[0, 0] = 2.0
+
+        gate_low = v2.compute_som_regime_gate(h_low)
+        gate_high = v2.compute_som_regime_gate(h_high)
+
+        assert gate_low.shape == (1, 1)
+        assert gate_high.shape == (1, 1)
+        assert gate_low.item() >= 1.0
+        assert gate_high.item() > gate_low.item()
+
 
 # ── FeedbackMechanism Tests (fixed mode, unchanged) ─────────────────────
 
@@ -427,6 +462,50 @@ class TestEmergentFeedbackOperator:
 
         assert torch.allclose(som1, som2, atol=1e-6)
 
+    def test_som_regime_gate_disabled_keeps_som_path_identical(self, cfg_emergent):
+        """Passing a gate tensor must be a no-op when the branch is disabled."""
+        fb = EmergentFeedbackOperator(cfg_emergent, delta_som=True)
+        B, N = 2, cfg_emergent.n_orientations
+        q_pred = torch.softmax(torch.randn(B, N), dim=-1)
+        pi_eff = torch.ones(B, 1) * 3.0
+        gate = torch.full((B, 1), 1.05)
+
+        som_no_gate = fb(q_pred, pi_eff)
+        som_with_gate = fb(q_pred, pi_eff, som_regime_gate=gate)
+
+        assert torch.allclose(som_no_gate, som_with_gate, atol=1e-6)
+
+    def test_som_regime_gate_modulates_alpha_inh_field_before_delta_som(self):
+        """A larger SOM regime gate should increase learned inhibitory drive only."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            som_regime_gate_enabled=True,
+            som_regime_gate_beta=0.10,
+        )
+        fb = EmergentFeedbackOperator(cfg, delta_som=True)
+        with torch.no_grad():
+            fb.alpha_inh.zero_()
+            fb.alpha_inh[0] = 1.0
+            fb.som_baseline.zero_()
+
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_lo = torch.tensor([[1.0]])
+        gate_hi = torch.tensor([[1.1]])
+
+        som_lo = fb(q_pred, pi_eff, som_regime_gate=gate_lo)
+        som_hi = fb(q_pred, pi_eff, som_regime_gate=gate_hi)
+
+        assert torch.isfinite(som_hi).all()
+        assert torch.isfinite(som_lo).all()
+        pos_mask = som_lo > 0
+        neg_mask = som_lo < 0
+        assert pos_mask.any()
+        assert neg_mask.any()
+        assert (som_hi[pos_mask] >= som_lo[pos_mask] - 1e-7).all()
+        assert (som_hi[neg_mask] <= som_lo[neg_mask] + 1e-7).all()
+        assert som_hi.max().item() > som_lo.max().item()
+
     def test_manual_dampening_profile(self, cfg_emergent):
         """Setting alpha_inh to mimic narrow Gaussian should produce dampening-like profile."""
         fb = EmergentFeedbackOperator(cfg_emergent)
@@ -488,6 +567,26 @@ class TestEmergentFeedbackOperator:
 
         reloaded = LaminarV1V2Network(cfg)
         reloaded.load_state_dict(state_dict, strict=True)
+
+    def test_som_regime_head_backward_compatible_with_legacy_state_dict(self):
+        """Strict loading must tolerate checkpoints saved before the SOM gate head existed."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            som_regime_gate_enabled=True,
+            som_regime_gate_beta=0.10,
+        )
+        net = LaminarV1V2Network(cfg)
+        legacy_state_dict = {
+            key: value
+            for key, value in net.state_dict().items()
+            if key not in {
+                "v2.head_som_regime.weight",
+                "v2.head_som_regime.bias",
+            }
+        }
+
+        reloaded = LaminarV1V2Network(cfg)
+        reloaded.load_state_dict(legacy_state_dict, strict=True)
 
     def test_center_support_persists_into_early_probe_window(self):
         """VIP-gated center support should survive a few probe steps after cue offset."""
@@ -637,6 +736,225 @@ class TestEmergentFeedbackOperator:
         for recurrent_gain in probe_gains:
             assert recurrent_gain[0, 9].item() > 0.0
             assert recurrent_gain.argmax(dim=-1).item() == 9
+
+    def test_signed_recurrent_gain_has_positive_center_and_negative_flanks(self):
+        """Signed recurrent modulation should spare center gain while suppressing flanks."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_mode="signed_center_surround",
+            emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_flank_beta=0.12,
+            emergent_recurrent_gain_sigma=5.0,
+            emergent_recurrent_gain_sigma_surround=20.0,
+            emergent_recurrent_gain_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        recurrent_gain = fb.compute_recurrent_gain(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert recurrent_gain[0, 9].item() > 0.0
+        flank_vals = recurrent_gain[0, [7, 8, 10, 11]]
+        assert flank_vals.min().item() < 0.0
+        assert recurrent_gain[0, 9].item() > flank_vals.abs().max().item()
+        assert (1.0 + recurrent_gain).min().item() > 0.0
+
+    def test_flank_som_disabled_is_exact_zero(self, cfg_emergent):
+        """The flank-only SOM supplement must be a strict no-op by default."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        q_pred = _one_hot_q(9, cfg_emergent.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg_emergent.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        flank_boost = fb.compute_flank_som_boost(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert torch.allclose(flank_boost, torch.zeros_like(flank_boost))
+
+    def test_flank_som_is_center_spared_and_flank_positive_when_cued(self):
+        """Enabled flank SOM should spare the center and boost nearby flanks."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_flank_som_enabled=True,
+            emergent_flank_som_gain=0.12,
+            emergent_flank_som_sigma_center=5.0,
+            emergent_flank_som_sigma_surround=20.0,
+            emergent_flank_som_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        flank_boost = fb.compute_flank_som_boost(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        center_val = flank_boost[0, 9].item()
+        flank_vals = flank_boost[0, [7, 8, 10, 11]]
+
+        assert (flank_boost >= 0).all()
+        assert center_val < 1e-7
+        assert flank_vals.max().item() > 0.0
+        assert flank_vals.mean().item() > center_val
+
+    def test_zero_cue_keeps_flank_som_path_identical(self):
+        """With zero cue, enabling flank SOM should leave trajectories unchanged."""
+        cfg_off = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_flank_som_enabled=False,
+        )
+        net_off = LaminarV1V2Network(cfg_off)
+
+        cfg_on = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_flank_som_enabled=True,
+            emergent_flank_som_gain=0.12,
+            emergent_flank_som_sigma_center=5.0,
+            emergent_flank_som_sigma_surround=20.0,
+            emergent_flank_som_cue_gated=True,
+        )
+        net_on = LaminarV1V2Network(cfg_on)
+        net_on.load_state_dict(net_off.state_dict(), strict=True)
+
+        B, T, N = 2, 6, cfg_on.n_orientations
+        stim = torch.rand(B, T, N)
+        cue = torch.zeros(B, T, N)
+        task = torch.zeros(B, T, 2)
+        packed = net_on.pack_inputs(stim, cue, task)
+
+        r_off, state_off, aux_off = net_off(packed)
+        r_on, state_on, aux_on = net_on(packed)
+
+        assert torch.allclose(r_off, r_on, atol=1e-6)
+        assert torch.allclose(state_off.r_som, state_on.r_som, atol=1e-6)
+        assert torch.allclose(aux_off["r_som_all"], aux_on["r_som_all"], atol=1e-6)
+
+    def test_flank_shunt_disabled_is_exact_zero(self, cfg_emergent):
+        """The flank-only shunt branch must be a strict no-op by default."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        q_pred = _one_hot_q(9, cfg_emergent.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg_emergent.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        flank_shunt = fb.compute_flank_shunt(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        assert torch.allclose(flank_shunt, torch.zeros_like(flank_shunt))
+
+    def test_flank_shunt_is_center_spared_and_flank_positive_when_cued(self):
+        """Enabled flank shunt should spare the center and rise on nearby flanks."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_flank_shunt_enabled=True,
+            emergent_flank_shunt_gain=0.10,
+            emergent_flank_shunt_sigma_center=5.0,
+            emergent_flank_shunt_sigma_surround=20.0,
+            emergent_flank_shunt_cue_gated=True,
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+
+        flank_shunt = fb.compute_flank_shunt(
+            q_pred, pi_eff, gate_signal=gate_signal
+        )
+
+        center_val = flank_shunt[0, 9].item()
+        flank_vals = flank_shunt[0, [7, 8, 10, 11]]
+
+        assert (flank_shunt >= 0).all()
+        assert center_val < 1e-7
+        assert flank_vals.max().item() > 0.0
+        assert flank_vals.mean().item() > center_val
+
+    def test_center_recruited_flank_shunt_is_center_spared_and_flank_positive_when_cued(self):
+        """Center-recruited shunt should spread winner-driven suppression to flanks."""
+        cfg = ModelConfig(
+            feedback_mode='emergent',
+            emergent_flank_shunt_enabled=True,
+            emergent_flank_shunt_gain=0.10,
+            emergent_flank_shunt_sigma_center=5.0,
+            emergent_flank_shunt_sigma_surround=20.0,
+            emergent_flank_shunt_cue_gated=True,
+            emergent_flank_shunt_source="center_recruited",
+        )
+        fb = EmergentFeedbackOperator(cfg)
+        q_pred = _one_hot_q(9, cfg.n_orientations)
+        pi_eff = torch.tensor([[3.0]])
+        gate_signal = torch.zeros(1, cfg.n_orientations)
+        gate_signal[0, 9] = 1.0
+        winner_proxy = torch.zeros_like(q_pred)
+        winner_proxy[0, 9] = 2.0
+
+        flank_shunt = fb.compute_flank_shunt(
+            q_pred,
+            pi_eff,
+            gate_signal=gate_signal,
+            winner_proxy=winner_proxy,
+        )
+
+        center_val = flank_shunt[0, 9].item()
+        flank_vals = flank_shunt[0, [7, 8, 10, 11]]
+
+        assert (flank_shunt >= 0).all()
+        assert center_val < 1e-7
+        assert flank_vals.max().item() > 0.0
+        assert flank_vals.mean().item() > center_val
+
+    def test_zero_cue_keeps_flank_shunt_path_identical(self):
+        """With zero cue, enabling flank shunt should leave trajectories unchanged."""
+        cfg_off = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_flank_shunt_enabled=False,
+        )
+        net_off = LaminarV1V2Network(cfg_off)
+
+        cfg_on = ModelConfig(
+            feedback_mode='emergent',
+            vip_enabled=True,
+            vip_gain=0.35,
+            emergent_flank_shunt_enabled=True,
+            emergent_flank_shunt_gain=0.10,
+            emergent_flank_shunt_sigma_center=5.0,
+            emergent_flank_shunt_sigma_surround=20.0,
+            emergent_flank_shunt_cue_gated=True,
+            emergent_flank_shunt_source="center_recruited",
+        )
+        net_on = LaminarV1V2Network(cfg_on)
+        net_on.load_state_dict(net_off.state_dict(), strict=True)
+
+        B, T, N = 2, 6, cfg_on.n_orientations
+        stim = torch.rand(B, T, N)
+        cue = torch.zeros(B, T, N)
+        task = torch.zeros(B, T, 2)
+        packed = net_on.pack_inputs(stim, cue, task)
+
+        r_off, state_off, aux_off = net_off(packed)
+        r_on, state_on, aux_on = net_on(packed)
+
+        assert torch.allclose(r_off, r_on, atol=1e-6)
+        assert torch.allclose(state_off.r_l23, state_on.r_l23, atol=1e-6)
+        assert torch.allclose(aux_off["r_som_all"], aux_on["r_som_all"], atol=1e-6)
 
     def test_uncued_recurrent_gain_stays_zero_when_branch_enabled(self):
         """Without cue history, recurrent gain should remain exactly zero."""
@@ -802,6 +1120,7 @@ class TestNetworkForward:
         assert aux["state_logits_all"].shape == (B, T, 3)
         assert aux["deep_template_all"].shape == (B, T, N)
         assert aux["p_cw_all"].shape == (B, T, 1)
+        assert aux["som_regime_gate_all"].shape == (B, T, 1)
 
     @pytest.mark.parametrize("mech", list(MechanismType))
     def test_forward_no_nan(self, mech):
@@ -1100,6 +1419,13 @@ class TestGradientFlowNetwork:
         loss.backward()
 
         unused_params = {"l4.pv_gain.gain_raw"}
+        if not cfg.som_regime_gate_enabled:
+            unused_params.update(
+                {
+                    "v2.head_som_regime.weight",
+                    "v2.head_som_regime.bias",
+                }
+            )
         for name, param in net.named_parameters():
             if param.requires_grad and name not in unused_params:
                 assert param.grad is not None, f"No gradient for {name}"
@@ -1126,6 +1452,13 @@ class TestGradientFlowNetwork:
         assert net.v2.head_p_cw.weight.grad is not None
 
         unused_params = {"l4.pv_gain.gain_raw"}
+        if not cfg_emergent.som_regime_gate_enabled:
+            unused_params.update(
+                {
+                    "v2.head_som_regime.weight",
+                    "v2.head_som_regime.bias",
+                }
+            )
         for name, param in net.named_parameters():
             if param.requires_grad and name not in unused_params:
                 assert param.grad is not None, f"No gradient for {name}"

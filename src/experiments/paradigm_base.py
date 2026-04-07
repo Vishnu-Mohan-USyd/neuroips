@@ -191,31 +191,45 @@ class ParadigmBase:
         )
 
     def _run_trial_set(self, ts: TrialSet, batch_size: int) -> ConditionData:
-        """Run a TrialSet through the network in batches."""
+        """Run a TrialSet through the network in batches.
+
+        Inputs are moved onto the network's device before packing/forward so
+        checkpoint-backed CUDA evaluation works when experiment tensors were
+        generated on CPU. Outputs are moved back to CPU before accumulation to
+        preserve the historical ExperimentResult storage behavior and avoid
+        retaining large CUDA buffers across conditions.
+        """
         n = ts.stimulus.shape[0]
+        model_device = next(self.net.parameters()).device
         chunks: dict[str, list[Tensor]] = {
             k: [] for k in ["r_l4", "r_l23", "r_pv", "r_som",
                             "q_pred", "pi_pred", "state_logits", "deep_template", "r_vip"]
         }
 
         for i in range(0, n, batch_size):
-            stim = ts.stimulus[i:i + batch_size]
-            cue = ts.cue[i:i + batch_size] if ts.cue is not None else None
-            task = ts.task_state[i:i + batch_size] if ts.task_state is not None else None
+            stim = ts.stimulus[i:i + batch_size].to(model_device)
+            cue = (
+                ts.cue[i:i + batch_size].to(model_device)
+                if ts.cue is not None else None
+            )
+            task = (
+                ts.task_state[i:i + batch_size].to(model_device)
+                if ts.task_state is not None else None
+            )
 
             with torch.no_grad():
                 from src.model.network import LaminarV1V2Network
                 packed = LaminarV1V2Network.pack_inputs(stim, cue, task)
                 r_l23_all, _, aux = self.net.forward(packed)
 
-            chunks["r_l4"].append(aux["r_l4_all"])
-            chunks["r_l23"].append(r_l23_all)
-            chunks["r_pv"].append(aux["r_pv_all"])
-            chunks["r_som"].append(aux["r_som_all"])
-            chunks["q_pred"].append(aux["q_pred_all"])
-            chunks["pi_pred"].append(aux["pi_pred_all"])
-            chunks["state_logits"].append(aux["state_logits_all"])
-            chunks["deep_template"].append(aux["deep_template_all"])
-            chunks["r_vip"].append(aux["r_vip_all"])
+            chunks["r_l4"].append(aux["r_l4_all"].cpu())
+            chunks["r_l23"].append(r_l23_all.cpu())
+            chunks["r_pv"].append(aux["r_pv_all"].cpu())
+            chunks["r_som"].append(aux["r_som_all"].cpu())
+            chunks["q_pred"].append(aux["q_pred_all"].cpu())
+            chunks["pi_pred"].append(aux["pi_pred_all"].cpu())
+            chunks["state_logits"].append(aux["state_logits_all"].cpu())
+            chunks["deep_template"].append(aux["deep_template_all"].cpu())
+            chunks["r_vip"].append(aux["r_vip_all"].cpu())
 
         return ConditionData(**{k: torch.cat(v) for k, v in chunks.items()})

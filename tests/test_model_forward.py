@@ -670,6 +670,32 @@ class TestV1L23Basics:
         assert out_gain[0, 9].item() > out_base[0, 9].item()
         assert torch.allclose(out_gain[0, 0], out_base[0, 0], atol=1e-7)
 
+    def test_recurrent_gain_modulation_stays_stable_with_signed_suppression(self, l23, cfg):
+        """Negative recurrent modulation must keep the effective multiplier positive."""
+        B = 1
+        r_l4 = torch.zeros(B, cfg.n_orientations)
+        r_l23_prev = torch.zeros(B, cfg.n_orientations)
+        r_l23_prev[0, 9] = 1.0
+        template_modulation = torch.zeros(B, cfg.n_orientations)
+        r_som = torch.zeros(B, cfg.n_orientations)
+        r_pv = torch.zeros(B, 1)
+
+        out_base = l23(r_l4, r_l23_prev, template_modulation, r_som, r_pv)
+
+        recurrent_gain = torch.zeros(B, cfg.n_orientations)
+        recurrent_gain[0, 9] = -1.5
+        out_suppressed = l23(
+            r_l4,
+            r_l23_prev,
+            template_modulation,
+            r_som,
+            r_pv,
+            recurrent_gain_modulation=recurrent_gain,
+        )
+
+        assert torch.isfinite(out_suppressed).all()
+        assert out_suppressed[0, 9].item() < out_base[0, 9].item()
+
     def test_excitatory_gain_modulation_affects_ff_plus_rec(self, l23, cfg):
         """Apical gain should amplify the combined excitatory drive ff + rec."""
         B = 1

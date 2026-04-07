@@ -254,6 +254,7 @@ class V1L23Ring(nn.Module):
         r_pv: Tensor,
         recurrent_gain_modulation: Tensor | None = None,
         excitatory_gain_modulation: Tensor | None = None,
+        excitatory_shunt_modulation: Tensor | None = None,
     ) -> Tensor:
         """One Euler step for L2/3.
 
@@ -270,6 +271,9 @@ class V1L23Ring(nn.Module):
             excitatory_gain_modulation: Optional [B, N] bounded multiplicative
                 gain on the combined excitatory drive (ff + rec) only. When
                 None, the baseline excitatory pathway is unchanged.
+            excitatory_shunt_modulation: Optional [B, N] bounded non-negative
+                divisive shunt on the combined excitatory drive (ff + rec)
+                after any positive gain, before subtractive inhibition.
 
         Returns:
             r_l23: Updated L2/3 rates [B, N].
@@ -285,7 +289,11 @@ class V1L23Ring(nn.Module):
                 f"recurrent_gain_modulation shape {recurrent_gain_modulation.shape} "
                 f"must match recurrent term shape {rec.shape}"
             )
-            rec = rec * (1.0 + recurrent_gain_modulation.clamp_min(0.0))
+            recurrent_multiplier = (1.0 + recurrent_gain_modulation).clamp_min(1e-3)
+            assert torch.isfinite(recurrent_multiplier).all(), (
+                "recurrent multiplier must remain finite after stability clamp"
+            )
+            rec = rec * recurrent_multiplier
 
         exc_drive = ff + rec
         if excitatory_gain_modulation is not None:
@@ -294,6 +302,16 @@ class V1L23Ring(nn.Module):
                 f"must match excitatory drive shape {exc_drive.shape}"
             )
             exc_drive = exc_drive * (1.0 + excitatory_gain_modulation.clamp_min(0.0))
+        if excitatory_shunt_modulation is not None:
+            assert excitatory_shunt_modulation.shape == exc_drive.shape, (
+                f"excitatory_shunt_modulation shape {excitatory_shunt_modulation.shape} "
+                f"must match excitatory drive shape {exc_drive.shape}"
+            )
+            shunt_denominator = 1.0 + excitatory_shunt_modulation.clamp_min(0.0)
+            assert torch.isfinite(shunt_denominator).all(), (
+                "shunt denominator must remain finite"
+            )
+            exc_drive = exc_drive / shunt_denominator
 
         # L2/3 drive
         l23_drive = (exc_drive + template_modulation

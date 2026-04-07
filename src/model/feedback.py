@@ -257,7 +257,23 @@ class EmergentFeedbackOperator(nn.Module):
         self.recurrent_gain_enabled = cfg.emergent_recurrent_gain_enabled
         self.recurrent_gain_beta = cfg.emergent_recurrent_gain_beta
         self.recurrent_gain_sigma = cfg.emergent_recurrent_gain_sigma
+        self.recurrent_gain_mode = cfg.emergent_recurrent_gain_mode
+        self.recurrent_gain_flank_beta = cfg.emergent_recurrent_gain_flank_beta
+        self.recurrent_gain_sigma_surround = cfg.emergent_recurrent_gain_sigma_surround
         self.recurrent_gain_cue_gated = cfg.emergent_recurrent_gain_cue_gated
+        self.flank_som_enabled = cfg.emergent_flank_som_enabled
+        self.flank_som_gain = cfg.emergent_flank_som_gain
+        self.flank_som_sigma_center = cfg.emergent_flank_som_sigma_center
+        self.flank_som_sigma_surround = cfg.emergent_flank_som_sigma_surround
+        self.flank_som_cue_gated = cfg.emergent_flank_som_cue_gated
+        self.flank_shunt_enabled = cfg.emergent_flank_shunt_enabled
+        self.flank_shunt_gain = cfg.emergent_flank_shunt_gain
+        self.flank_shunt_sigma_center = cfg.emergent_flank_shunt_sigma_center
+        self.flank_shunt_sigma_surround = cfg.emergent_flank_shunt_sigma_surround
+        self.flank_shunt_cue_gated = cfg.emergent_flank_shunt_cue_gated
+        self.flank_shunt_source = cfg.emergent_flank_shunt_source
+        self.som_regime_gate_enabled = cfg.som_regime_gate_enabled
+        self.som_regime_gate_target = cfg.som_regime_gate_target
         self.apical_gain_enabled = cfg.apical_gain_enabled
         self.apical_gain_beta = cfg.apical_gain_beta
         self.apical_gain_sigma = cfg.apical_gain_sigma
@@ -284,6 +300,10 @@ class EmergentFeedbackOperator(nn.Module):
         self._cached_inh_circulant: Tensor | None = None
         self._cached_center_support_circulant: Tensor | None = None
         self._cached_recurrent_gain_circulant: Tensor | None = None
+        self._cached_recurrent_gain_surround_circulant: Tensor | None = None
+        self._cached_flank_som_circulant: Tensor | None = None
+        self._cached_flank_shunt_circulant: Tensor | None = None
+        self._cached_flank_shunt_center_circulant: Tensor | None = None
         self._cached_apical_gain_circulant: Tensor | None = None
 
         step = cfg.orientation_range / N
@@ -372,9 +392,22 @@ class EmergentFeedbackOperator(nn.Module):
         if self.center_support_enabled and self.center_support_gain > 0.0:
             center_profile = self._make_center_support_profile()
             self._cached_center_support_circulant = self._to_circulant(center_profile)
-        if self.recurrent_gain_enabled and self.recurrent_gain_beta > 0.0:
+        if self.recurrent_gain_enabled and (
+            self.recurrent_gain_beta > 0.0 or self.recurrent_gain_flank_beta > 0.0
+        ):
             recurrent_profile = self._make_recurrent_gain_profile()
             self._cached_recurrent_gain_circulant = self._to_circulant(recurrent_profile)
+            if self.recurrent_gain_mode == "signed_center_surround":
+                surround_profile = self._make_recurrent_gain_surround_profile()
+                self._cached_recurrent_gain_surround_circulant = self._to_circulant(surround_profile)
+        if self.flank_som_enabled and self.flank_som_gain > 0.0:
+            flank_profile = self._make_flank_som_profile()
+            self._cached_flank_som_circulant = self._to_circulant(flank_profile)
+        if self.flank_shunt_enabled and self.flank_shunt_gain > 0.0:
+            shunt_profile = self._make_flank_shunt_profile()
+            self._cached_flank_shunt_circulant = self._to_circulant(shunt_profile)
+            center_profile = self._make_flank_shunt_center_profile()
+            self._cached_flank_shunt_center_circulant = self._to_circulant(center_profile)
         if self.apical_gain_enabled and self.apical_gain_beta > 0.0:
             apical_profile = self._make_apical_gain_profile()
             self._cached_apical_gain_circulant = self._to_circulant(apical_profile)
@@ -384,6 +417,10 @@ class EmergentFeedbackOperator(nn.Module):
         self._cached_inh_circulant = None
         self._cached_center_support_circulant = None
         self._cached_recurrent_gain_circulant = None
+        self._cached_recurrent_gain_surround_circulant = None
+        self._cached_flank_som_circulant = None
+        self._cached_flank_shunt_circulant = None
+        self._cached_flank_shunt_center_circulant = None
         self._cached_apical_gain_circulant = None
 
     def _make_center_support_profile(self) -> Tensor:
@@ -399,7 +436,7 @@ class EmergentFeedbackOperator(nn.Module):
         return self._to_circulant(self._make_center_support_profile())
 
     def _make_recurrent_gain_profile(self) -> Tensor:
-        """Build a narrow non-negative gain profile centered at channel 0."""
+        """Build the center-focused recurrent-gain profile centered at channel 0."""
         sigma = max(self.recurrent_gain_sigma, 1e-6)
         profile = torch.exp(-self.center_support_dists_sq / (2.0 * sigma ** 2))
         return profile / profile.sum()
@@ -409,6 +446,72 @@ class EmergentFeedbackOperator(nn.Module):
         if self._cached_recurrent_gain_circulant is not None:
             return self._cached_recurrent_gain_circulant
         return self._to_circulant(self._make_recurrent_gain_profile())
+
+    def _make_recurrent_gain_surround_profile(self) -> Tensor:
+        """Build the broader surround profile for signed recurrent modulation."""
+        sigma_center = max(self.recurrent_gain_sigma, 1e-6)
+        sigma_surround = max(self.recurrent_gain_sigma_surround, sigma_center + 1e-6)
+        profile = torch.exp(-self.center_support_dists_sq / (2.0 * sigma_surround ** 2))
+        return profile / profile.sum()
+
+    def _get_recurrent_gain_surround_circulant(self) -> Tensor:
+        """Return cached or on-the-fly recurrent surround circulant matrix."""
+        if self._cached_recurrent_gain_surround_circulant is not None:
+            return self._cached_recurrent_gain_surround_circulant
+        return self._to_circulant(self._make_recurrent_gain_surround_profile())
+
+    def _make_flank_dog_profile(self, sigma_center: float, sigma_surround: float) -> Tensor:
+        """Build a broad-minus-narrow DoG profile for center-spared flank effects.
+
+        The returned profile is signed. After convolving with ``q_centered`` and
+        rectifying, it yields a non-negative field that is near zero at the
+        predicted center and positive on nearby flanks.
+        """
+        sigma_center = max(sigma_center, 1e-6)
+        sigma_surround = max(sigma_surround, sigma_center + 1e-6)
+        center = torch.exp(-self.center_support_dists_sq / (2.0 * sigma_center ** 2))
+        surround = torch.exp(-self.center_support_dists_sq / (2.0 * sigma_surround ** 2))
+        center = center / center.sum()
+        surround = surround / surround.sum()
+        return surround - center
+
+    def _make_flank_som_profile(self) -> Tensor:
+        """Build the flank-SOM DoG profile."""
+        return self._make_flank_dog_profile(
+            self.flank_som_sigma_center,
+            self.flank_som_sigma_surround,
+        )
+
+    def _get_flank_som_circulant(self) -> Tensor:
+        """Return cached or on-the-fly flank-SOM circulant matrix."""
+        if self._cached_flank_som_circulant is not None:
+            return self._cached_flank_som_circulant
+        return self._to_circulant(self._make_flank_som_profile())
+
+    def _make_flank_shunt_profile(self) -> Tensor:
+        """Build the flank-only shunting DoG profile."""
+        return self._make_flank_dog_profile(
+            self.flank_shunt_sigma_center,
+            self.flank_shunt_sigma_surround,
+        )
+
+    def _make_flank_shunt_center_profile(self) -> Tensor:
+        """Build a narrow center profile for center-recruited shunt sources."""
+        sigma = max(self.flank_shunt_sigma_center, 1e-6)
+        profile = torch.exp(-self.center_support_dists_sq / (2.0 * sigma ** 2))
+        return profile / profile.sum()
+
+    def _get_flank_shunt_circulant(self) -> Tensor:
+        """Return cached or on-the-fly flank-shunt circulant matrix."""
+        if self._cached_flank_shunt_circulant is not None:
+            return self._cached_flank_shunt_circulant
+        return self._to_circulant(self._make_flank_shunt_profile())
+
+    def _get_flank_shunt_center_circulant(self) -> Tensor:
+        """Return cached or on-the-fly center-recruitment circulant matrix."""
+        if self._cached_flank_shunt_center_circulant is not None:
+            return self._cached_flank_shunt_center_circulant
+        return self._to_circulant(self._make_flank_shunt_center_profile())
 
     def _make_apical_gain_profile(self) -> Tensor:
         """Build a narrow non-negative apical gain profile centered at channel 0."""
@@ -422,18 +525,40 @@ class EmergentFeedbackOperator(nn.Module):
             return self._cached_apical_gain_circulant
         return self._to_circulant(self._make_apical_gain_profile())
 
-    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> Tensor:
+    def forward(
+        self,
+        q_pred: Tensor,
+        pi_eff: Tensor,
+        som_regime_gate: Tensor | None = None,
+    ) -> Tensor:
         """Compute SOM drive from learned inhibitory profile.
 
         Args:
             q_pred: [B, N] -- predicted orientation distribution.
             pi_eff: [B, 1] -- effective precision (after warmup scaling).
+            som_regime_gate: Optional [B, 1] scalar gate that scales only the
+                learned inhibitory field before the SOM nonlinearity.
 
         Returns:
             som_drive: [B, N] -- non-negative drive for SOM ring.
         """
         if getattr(self, "_analysis_force_zero", False):
             return torch.zeros_like(q_pred)
+
+        if som_regime_gate is None or not self.som_regime_gate_enabled:
+            gate = torch.ones(
+                q_pred.shape[0], 1, device=q_pred.device, dtype=q_pred.dtype
+            )
+        else:
+            assert som_regime_gate.shape == (q_pred.shape[0], 1), (
+                f"som_regime_gate shape {som_regime_gate.shape} must be ({q_pred.shape[0]}, 1)"
+            )
+            if self.som_regime_gate_target != "alpha_inh":
+                raise ValueError(
+                    f"Unsupported som_regime_gate_target={self.som_regime_gate_target!r}. "
+                    "Expected 'alpha_inh'."
+                )
+            gate = som_regime_gate.to(device=q_pred.device, dtype=q_pred.dtype)
 
         N = q_pred.shape[-1]
         q_centered = q_pred - 1.0 / N  # zero-mean so feedback=0 when uninformative
@@ -447,6 +572,7 @@ class EmergentFeedbackOperator(nn.Module):
 
         # Circular convolution: circulant @ q_centered
         inh_field = (inh_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
+        inh_field = inh_field * gate
 
         # Scale by precision. Use softplus (not relu) to keep output non-negative
         # while preserving gradient flow at zero (relu has zero gradient at 0,
@@ -518,13 +644,34 @@ class EmergentFeedbackOperator(nn.Module):
 
         The gain is prediction-driven, spatially narrow, non-negative, and
         optionally gated by a persistent cue trace (for example VIP state).
-        It is bounded in [0, beta] and additionally scaled by the current
-        prediction precision to preserve recurrence stability during training.
+        In ``positive`` mode the branch is a narrow non-negative center gain.
+        In ``signed_center_surround`` mode it becomes a bounded center-positive,
+        flank-negative modulation built from a narrow center field and a
+        flank-only broad-minus-narrow surround field. The output is always
+        bounded so that the recurrent multiplier ``1 + gain`` remains positive.
         """
         if getattr(self, "_analysis_force_zero", False):
             return torch.zeros_like(q_pred)
 
-        if not self.recurrent_gain_enabled or self.recurrent_gain_beta <= 0.0:
+        if not self.recurrent_gain_enabled:
+            return torch.zeros_like(q_pred)
+
+        if self.recurrent_gain_mode not in {"positive", "signed_center_surround"}:
+            raise ValueError(
+                f"Unsupported emergent_recurrent_gain_mode={self.recurrent_gain_mode!r}. "
+                "Expected 'positive' or 'signed_center_surround'."
+            )
+
+        if (
+            self.recurrent_gain_mode == "positive"
+            and self.recurrent_gain_beta <= 0.0
+        ):
+            return torch.zeros_like(q_pred)
+        if (
+            self.recurrent_gain_mode == "signed_center_surround"
+            and self.recurrent_gain_beta <= 0.0
+            and self.recurrent_gain_flank_beta <= 0.0
+        ):
             return torch.zeros_like(q_pred)
 
         if gate_signal is not None:
@@ -533,20 +680,40 @@ class EmergentFeedbackOperator(nn.Module):
             )
 
         q_centered = q_pred - 1.0 / q_pred.shape[-1]
-        gain_circulant = self._get_recurrent_gain_circulant()
-        gain_field = (gain_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
-        gain_field = F.relu(gain_field)
-        gain_field = gain_field / (gain_field.amax(dim=-1, keepdim=True) + 1e-8)
+        precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
+        center_circulant = self._get_recurrent_gain_circulant()
+        center_raw = (center_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+        center_field = F.relu(center_raw)
+        center_field = center_field / (center_field.amax(dim=-1, keepdim=True) + 1e-8)
+
+        if self.recurrent_gain_mode == "positive":
+            if self.recurrent_gain_cue_gated:
+                if gate_signal is None:
+                    return torch.zeros_like(center_field)
+                gate_profile = gate_signal.clamp_min(0.0)
+                gate_profile = gate_profile / (gate_profile.amax(dim=-1, keepdim=True) + 1e-8)
+                center_field = center_field * gate_profile
+            return self.recurrent_gain_beta * precision_scale * center_field
+
+        surround_circulant = self._get_recurrent_gain_surround_circulant()
+        surround_raw = (surround_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+        flank_field = F.relu(surround_raw - center_raw)
+        flank_field = flank_field / (flank_field.amax(dim=-1, keepdim=True) + 1e-8)
 
         if self.recurrent_gain_cue_gated:
             if gate_signal is None:
-                return torch.zeros_like(gain_field)
-            gate_profile = gate_signal.clamp_min(0.0)
-            gate_profile = gate_profile / (gate_profile.amax(dim=-1, keepdim=True) + 1e-8)
-            gain_field = gain_field * gate_profile
+                return torch.zeros_like(center_field)
+            gate_strength = gate_signal.clamp_min(0.0).amax(dim=-1, keepdim=True)
+            center_field = center_field * gate_strength
+            flank_field = flank_field * gate_strength
 
-        precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
-        return self.recurrent_gain_beta * precision_scale * gain_field
+        gain_field = (
+            self.recurrent_gain_beta * center_field
+            - self.recurrent_gain_flank_beta * flank_field
+        ) * precision_scale
+        min_gain = -0.95 + 1e-6
+        max_gain = max(self.recurrent_gain_beta, 0.0)
+        return gain_field.clamp(min=min_gain, max=max_gain)
 
     def compute_apical_gain(
         self,
@@ -585,3 +752,135 @@ class EmergentFeedbackOperator(nn.Module):
 
         precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
         return self.apical_gain_beta * precision_scale * gain_field
+
+    def compute_flank_som_boost(
+        self,
+        q_pred: Tensor,
+        pi_eff: Tensor,
+        gate_signal: Tensor | None = None,
+    ) -> Tensor:
+        """Compute a cue-gated, prediction-driven SOM supplement on the flanks.
+
+        This branch is intentionally local and biologically simple: it adds
+        extra SOM drive only where a broad-minus-narrow predicted feature
+        profile is positive. The center is spared because the DoG field is
+        negative there and the branch is rectified before application.
+
+        Args:
+            q_pred: [B, N] predicted orientation distribution.
+            pi_eff: [B, 1] effective precision after warmup scaling.
+            gate_signal: Optional [B, N] persistent cue trace (for example VIP).
+
+        Returns:
+            flank_boost: [B, N] non-negative SOM supplement, near-zero at center.
+        """
+        if getattr(self, "_analysis_force_zero", False):
+            return torch.zeros_like(q_pred)
+
+        if not self.flank_som_enabled or self.flank_som_gain <= 0.0:
+            return torch.zeros_like(q_pred)
+
+        if gate_signal is not None:
+            assert gate_signal.shape == q_pred.shape, (
+                f"gate_signal shape {gate_signal.shape} must match q_pred shape {q_pred.shape}"
+            )
+
+        q_centered = q_pred - 1.0 / q_pred.shape[-1]
+        flank_circulant = self._get_flank_som_circulant()
+        flank_field = (flank_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+        flank_field = F.relu(flank_field)
+
+        if self.flank_som_cue_gated:
+            if gate_signal is None:
+                return torch.zeros_like(flank_field)
+            # Use the cue trace as an amplitude gate rather than a pointwise
+            # mask. A center-peaked cue should permit an off-center flank
+            # profile; multiplying by the cue profile itself would zero the
+            # flanks exactly.
+            gate_strength = gate_signal.clamp_min(0.0).amax(dim=-1, keepdim=True)
+            flank_field = flank_field * gate_strength
+
+        precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
+        return self.flank_som_gain * precision_scale * flank_field
+
+    def compute_flank_shunt(
+        self,
+        q_pred: Tensor,
+        pi_eff: Tensor,
+        gate_signal: Tensor | None = None,
+        winner_proxy: Tensor | None = None,
+    ) -> Tensor:
+        """Compute a bounded divisive shunt field on total excitatory drive.
+
+        The field is center-spared and flank-positive by construction. It is
+        applied later in the circuit as a divisive modulation on ``ff + rec``
+        (after any positive excitatory gain, before subtractive inhibition).
+
+        In ``prediction_direct`` mode, the shunt source is the predicted feature
+        profile itself. In ``center_recruited`` mode, the source is a narrow
+        winner proxy recruited from local L2/3 activity and confined to the
+        predicted center before being spread through the same flank DoG kernel.
+        When ``winner_proxy`` is omitted in center-recruited mode, the function
+        falls back to a narrow predicted-center proxy so standalone analysis
+        helpers remain compatible.
+
+        Args:
+            q_pred: [B, N] predicted orientation distribution.
+            pi_eff: [B, 1] effective precision after warmup scaling.
+            gate_signal: Optional [B, N] persistent cue trace (for example VIP).
+            winner_proxy: Optional [B, N] winner activity used only in
+                ``center_recruited`` mode.
+
+        Returns:
+            flank_shunt: [B, N] bounded non-negative shunt field.
+        """
+        if getattr(self, "_analysis_force_zero", False):
+            return torch.zeros_like(q_pred)
+
+        if not self.flank_shunt_enabled or self.flank_shunt_gain <= 0.0:
+            return torch.zeros_like(q_pred)
+
+        if gate_signal is not None:
+            assert gate_signal.shape == q_pred.shape, (
+                f"gate_signal shape {gate_signal.shape} must match q_pred shape {q_pred.shape}"
+            )
+        if winner_proxy is not None:
+            assert winner_proxy.shape == q_pred.shape, (
+                f"winner_proxy shape {winner_proxy.shape} must match q_pred shape {q_pred.shape}"
+            )
+
+        if self.flank_shunt_source not in {"prediction_direct", "center_recruited"}:
+            raise ValueError(
+                f"Unsupported emergent_flank_shunt_source={self.flank_shunt_source!r}. "
+                "Expected 'prediction_direct' or 'center_recruited'."
+            )
+
+        q_centered = q_pred - 1.0 / q_pred.shape[-1]
+        shunt_circulant = self._get_flank_shunt_circulant()
+        if self.flank_shunt_source == "prediction_direct":
+            shunt_source = q_centered
+        else:
+            center_circulant = self._get_flank_shunt_center_circulant()
+            center_field = (center_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)
+            center_field = F.relu(center_field)
+            center_field = center_field / (center_field.amax(dim=-1, keepdim=True) + 1e-8)
+            if winner_proxy is None:
+                shunt_source = center_field
+            else:
+                shunt_source = F.relu(winner_proxy) * center_field
+                shunt_source = shunt_source / (shunt_source.amax(dim=-1, keepdim=True) + 1e-8)
+
+        shunt_field = (shunt_circulant @ shunt_source.unsqueeze(-1)).squeeze(-1)
+        shunt_field = F.relu(shunt_field)
+        shunt_field = shunt_field / (shunt_field.amax(dim=-1, keepdim=True) + 1e-8)
+
+        if self.flank_shunt_cue_gated:
+            if gate_signal is None:
+                return torch.zeros_like(shunt_field)
+            gate_strength = gate_signal.clamp_min(0.0).amax(dim=-1, keepdim=True)
+            shunt_field = shunt_field * gate_strength
+
+        precision_scale = (pi_eff / max(self.pi_max, 1e-6)).clamp(0.0, 1.0)
+        flank_shunt = self.flank_shunt_gain * precision_scale * shunt_field
+        assert torch.isfinite(flank_shunt).all(), "flank shunt must remain finite"
+        return flank_shunt

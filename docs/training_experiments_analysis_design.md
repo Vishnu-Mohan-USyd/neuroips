@@ -30,6 +30,119 @@ For the implemented branch state and final metrics, see:
 - `results/option_b_apical_gain/`
 - `results/option_b_apical_gain_beta012/`
 - `results/option_b_apical_gain_beta016/`
+- `results/hardening_apical_eval/m7_full_gpu_attached/`
+- `results/hardening_apical_eval/m7_full_four_seed/`
+- `results/hardening_apical_eval/full_seed44/`
+- `results/hardening_apical_eval/full_seed45/`
+
+The hardened publication-style state is now:
+
+- existing-checkpoint reproduction of the `beta=0.16` apical result:
+  - cued M7 `δ5=+0.00783`, `δ10=+0.01331`
+  - uncued controls remain negative
+- two additional fully independent ON seeds (`44`, `45`) pass quick gates
+  with positive cued / negative uncued sign structure
+- final four-seed full-resolution aggregate:
+  - cued M7 `δ5=+0.00785 [0.00769, 0.00801]`
+  - cued M7 `δ10=+0.01331 [0.01319, 0.01344]`
+  - uncued remains negative at both deltas
+
+Current caveat:
+
+- the hardened ON-family result is stronger than the original two-seed claim,
+  but the **matched trained OFF ablation coverage is still only seed42**
+  rather than a full OFF sweep for the new independent seeds
+
+The best validated sharpening artifact remains:
+
+- `results/hardening_apical_eval/m7_full_four_seed/four_seed_full.json`
+  - cued `delta_5 = +0.0078457`
+  - cued `delta_10 = +0.0133137`
+  - uncued `delta_5 = -0.0009153`
+  - uncued `delta_10 = -0.0016248`
+
+That result supports a narrow oracle-guided, cue-assisted apical-gain
+sharpening claim and remains the strongest validated branch result.
+
+Subsequent work on this branch explicitly shifted from **claim-hardening** to
+**effect-size strengthening** after the user judged sub-1% direct flank
+effects too weak/noisy for the intended publication bar.
+
+Post-apical strengthening progression:
+
+- flank-SOM supplement
+- signed recurrent center-surround modulation
+- combined / ranked recurrent + flank variants
+- reduced-apical sweeps
+- direct shunt / center-recruited normalization probes
+- cue-conditioned normalization-pool evaluation probes
+- SOM-regime gate family
+
+Current status of those families:
+
+- none has yet replaced the hardened apical result as the branch's strongest
+  validated finding
+- the key diagnosis before SOM-regime training was that uncued baseline
+  suppression in the then-best checkpoint was traced to the always-on learned
+  SOM pathway (`alpha_inh` + `som_baseline`), not to apical, recurrent,
+  shunt, PV, or template branches
+- an eval-only SOM split showed that weakening SOM in uncued while keeping it
+  stronger in cued could in principle create stronger center-plus-flank
+  geometry; representative row:
+  - `uncued_scale=0.25`
+  - `cued_scale=1.10`
+  - cued `+0=1.1098`
+  - cued `+20/+25/+30=0.9672/0.9651/0.9676`
+  - uncued `+20/+25/+30=0.9801/0.9796/0.9776`
+  - `Δ20=0.0129`, `Δ25=0.0145`, `Δ30=0.0100`
+- first trained SOM-regime result:
+  - checkpoint:
+    - `results/hardening_apical_eval/som_regime_gate_seed42_reprocheck/center_surround_seed42/checkpoint.pt`
+  - cued:
+    - `+0=1.1703`
+    - `+20=0.9966`
+    - `+25=0.9947`
+    - `late_peak=1.1725`
+    - `M9=0.0038`
+  - uncued:
+    - `+0=0.9387`
+    - `+20=0.9797`
+    - `+25=0.9912`
+    - `+30=0.9979`
+    - `late_peak=0.9377`
+    - `M9=0.0180`
+  - cue-validity:
+    - `valid_neutral_gap_delta=+0.0022408589720726013`
+    - `invalid_neutral_gap_delta=+0.0009929761290550232`
+  - low-res paired seed42-minus-off42 M7:
+    - `delta_3=+0.0058203125`
+    - `delta_5=+0.0089453125`
+    - `delta_10=+0.0155859375`
+  - interpretation:
+    - still center-gain dominated
+    - failed the stricter flank / cued-over-uncued bar
+
+Current open question:
+
+- why the trained SOM-regime gate failed to reproduce the earlier eval-only
+  regime split strongly enough
+- this is in debugger investigation and remains unresolved
+
+Compact stricter future acceptance bar:
+
+- strong center gain
+- strong local flank suppression
+- clear cued-over-uncued separation
+- decoder improvement above the user's noise floor
+- no broad-gain cheating
+- correct cue-validity ordering
+- matched ablation evidence
+
+Operational note:
+
+- checkpoint-backed `cue_local_competitor` CUDA execution was fixed by moving
+  trial batches onto the model device inside `ParadigmBase._run_trial_set()`
+  before `pack_inputs(...)` / `forward(...)`
 
 ---
 

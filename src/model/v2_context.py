@@ -33,6 +33,9 @@ class V2ContextModule(nn.Module):
         self.hidden_dim = cfg.v2_hidden_dim
         self.pi_max = cfg.pi_max
         self.feedback_mode = cfg.feedback_mode
+        self.som_regime_gate_enabled = cfg.som_regime_gate_enabled
+        self.som_regime_gate_target = cfg.som_regime_gate_target
+        self.som_regime_gate_beta = cfg.som_regime_gate_beta
 
         # Input dimension depends on mode
         if self.v2_input_mode == 'l23':
@@ -59,6 +62,64 @@ class V2ContextModule(nn.Module):
         # Precision head (shared by both modes)
         self.head_pi = nn.Linear(cfg.v2_hidden_dim, 1)       # -> softplus + clamp
         nn.init.constant_(self.head_pi.bias, 0.0)
+
+        # Small scalar context head used only when cue-conditioned SOM gating is enabled.
+        self.head_som_regime = nn.Linear(cfg.v2_hidden_dim, 1)
+        nn.init.zeros_(self.head_som_regime.weight)
+        nn.init.constant_(self.head_som_regime.bias, cfg.som_regime_gate_init_bias)
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ) -> None:
+        """Allow older checkpoints to load without the new SOM-gate head keys."""
+        # Older checkpoints predate the SOM-regime head entirely. Populate the
+        # missing entries from the module's current parameters before the base
+        # loader records them as missing keys under strict loading.
+        for suffix, param in (
+            ("weight", self.head_som_regime.weight),
+            ("bias", self.head_som_regime.bias),
+        ):
+            key = prefix + f"head_som_regime.{suffix}"
+            if key not in state_dict:
+                state_dict[key] = param.detach().clone()
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
+    def compute_som_regime_gate(self, h_v2: Tensor) -> Tensor:
+        """Return a mild multiplicative gate on the learned SOM field.
+
+        Args:
+            h_v2: [B, H] current V2 hidden state.
+
+        Returns:
+            gate: [B, 1], equal to 1.0 when disabled and in [1, 1+beta] when enabled.
+        """
+        if not self.som_regime_gate_enabled or self.som_regime_gate_beta <= 0.0:
+            return torch.ones(h_v2.shape[0], 1, device=h_v2.device, dtype=h_v2.dtype)
+        if self.som_regime_gate_target != "alpha_inh":
+            raise ValueError(
+                f"Unsupported som_regime_gate_target={self.som_regime_gate_target!r}. "
+                "Expected 'alpha_inh'."
+            )
+        gate_strength = torch.sigmoid(self.head_som_regime(h_v2))
+        gate = 1.0 + self.som_regime_gate_beta * gate_strength
+        assert torch.isfinite(gate).all(), "som regime gate must remain finite"
+        assert (gate >= 1.0).all(), "som regime gate must be >= 1.0"
+        return gate
 
     def forward(
         self,

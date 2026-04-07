@@ -236,7 +236,13 @@ def run_stage2(
 
         # Build temporal stimulus sequence
         stim_seq, cue_seq, task_seq, true_thetas, true_next_thetas, true_states = (
-            build_stimulus_sequence(metadata, model_cfg, train_cfg, stim_cfg)
+            build_stimulus_sequence(
+                metadata,
+                model_cfg,
+                train_cfg,
+                stim_cfg,
+                generator=gen,
+            )
         )
         # Add stimulus noise if configured (Stage 2 only)
         if train_cfg.stimulus_noise > 0.0:
@@ -387,16 +393,21 @@ def run_stage2(
             outputs, readout_indices,
             steps_on=train_cfg.steps_on, steps_isi=train_cfg.steps_isi,
         )
+        steps_per = train_cfg.steps_on + train_cfg.steps_isi
+        _, ts_first = readout_indices[0]
+        w_start = ts_first[0]
+        w_end = ts_first[-1] + 1
+        B_batch = r_l23_all.shape[0]
+        S = len(readout_indices)
+        r_l23_late_windows = (
+            r_l23_all
+            .reshape(B_batch, S, steps_per, N)[:, :, w_start:w_end]
+        )
+        ambiguous_windows = metadata.is_ambiguous.to(dev)
 
         # Extract p_cw windows for emergent mode
         p_cw_windows = None
         if feedback_mode == 'emergent':
-            steps_per = train_cfg.steps_on + train_cfg.steps_isi
-            _, ts_first = readout_indices[0]
-            w_start = ts_first[0]
-            w_end = ts_first[-1] + 1
-            B_batch = aux["p_cw_all"].shape[0]
-            S = len(readout_indices)
             p_cw_windows = (
                 aux["p_cw_all"]
                 .reshape(B_batch, S, steps_per, 1)[:, :, w_start:w_end]
@@ -468,6 +479,8 @@ def run_stage2(
             r_l4_windows=r_l4_windows,
             mismatch_labels=mm_labels_windows,
             mismatch_mask=mm_mask_windows,
+            r_l23_late_windows=r_l23_late_windows,
+            ambiguous_windows=ambiguous_windows,
         )
 
         total_loss.backward()

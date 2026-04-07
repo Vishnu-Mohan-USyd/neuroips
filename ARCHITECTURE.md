@@ -233,7 +233,7 @@ Stimulus → L4 → PV (normalization)
 
 ## Tests
 
-385 tests covering V1 circuit, V2 factorization, feedback operator, training
+408 tests covering V1 circuit, V2 factorization, feedback operator, training
 pipeline, config parsing, and regression tests for all bugs discovered during
 the project. Run with `python -m pytest tests/ -v`.
 
@@ -250,3 +250,138 @@ zeros every added top-down branch, not just inhibitory SOM feedback:
 
 `sanity_check_ablation(...)` verifies that those branch outputs are zero before
 the OFF condition is trusted.
+
+## Hardening / Evaluation Surfaces
+
+The branch now has three distinct evaluation layers:
+
+- [scripts/analyze_representation.py](/home/vysoforlife/code_files/fs_codex/neuroips/scripts/analyze_representation.py):
+  canonical ON/OFF M6/M7 analysis, now with optional anchor-averaged M7
+- [scripts/run_m7_resolution.py](/home/vysoforlife/code_files/fs_codex/neuroips/scripts/run_m7_resolution.py):
+  repeated-seed, paired ON/OFF, bootstrap M7 hardening
+- [scripts/eval_cue_local_competitor.py](/home/vysoforlife/code_files/fs_codex/neuroips/scripts/eval_cue_local_competitor.py):
+  cue-validity summaries from saved experiment artifacts or checkpoints
+
+### Publication-hardened result surfaces
+
+Key saved artifacts for the final apical family are:
+
+- existing-checkpoint reproduction:
+  - `results/hardening_apical_eval/m7_full_gpu_attached/beta016_existing_checkpoints.json`
+- new full-pipeline seeds:
+  - `results/hardening_apical_eval/full_seed44/`
+  - `results/hardening_apical_eval/full_seed45/`
+- final four-seed full-resolution aggregate:
+  - `results/hardening_apical_eval/m7_full_four_seed/four_seed_full.json`
+
+### Experiment CUDA-path fix
+
+`ParadigmBase._run_trial_set()` now moves each trial batch to the model device
+before `pack_inputs(...)` and `self.net.forward(...)`, then moves stored
+outputs back to CPU for the `ExperimentResult`. This fixed checkpoint-backed
+CUDA execution for `cue_local_competitor`, which previously failed when trial
+tensors stayed on CPU while the network weights were on CUDA.
+
+### Current claim boundary
+
+The architecture and evaluation stack now support a strong four-seed ON-family
+claim for the apical multiplicative branch, but the **matched trained OFF
+ablation remains only seed42**. That caveat is scientific rather than
+architectural: the code can support more OFF seeds, but they have not yet been
+run on this branch.
+
+## Post-Apical Strengthening Extensions
+
+After the four-seed apical result was hardened, the branch added a second
+layer of exploratory mechanism work aimed at increasing **direct local flank
+suppression** while preserving center gain. These additions are now present in
+the code/config surface, but they do **not** replace the validated apical
+claim.
+
+Implemented exploratory families now include:
+
+- flank-only SOM supplement
+- signed recurrent center-surround modulation
+- combined ranked recurrent + flank variants
+- reduced-apical sweeps
+- direct shunt / center-recruited normalization probes
+- cue-conditioned normalization-pool evaluation probes
+- SOM-regime gate on the learned SOM field
+
+### New architectural/code surfaces
+
+The latest exploratory pass added:
+
+- new config knobs in [src/config.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/config.py)
+  for signed recurrent gain, flank SOM, flank shunt, SOM-regime gating, and
+  local ranking loss / sampled local competitors
+- new feedback-operator branches in [src/model/feedback.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/model/feedback.py)
+  for signed center-surround recurrent modulation, flank-only SOM supplements,
+  flank-only divisive shunts, and cue-conditioned SOM regime scaling
+- a scalar SOM-regime head in [src/model/v2_context.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/model/v2_context.py)
+- corresponding integration surfaces in
+  [src/model/network.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/model/network.py),
+  [src/model/populations.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/model/populations.py),
+  [src/training/losses.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/training/losses.py),
+  [src/training/trainer.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/training/trainer.py),
+  and [src/training/stage2_feedback.py](/home/vysoforlife/code_files/fs_codex/neuroips/src/training/stage2_feedback.py)
+- new triage / evaluation entry points:
+  [scripts/run_m7_resolution.py](/home/vysoforlife/code_files/fs_codex/neuroips/scripts/run_m7_resolution.py)
+  and
+  [scripts/eval_cue_local_competitor.py](/home/vysoforlife/code_files/fs_codex/neuroips/scripts/eval_cue_local_competitor.py)
+
+### Diagnostic takeaway
+
+The central diagnostic result from the strengthening pass was that the uncued
+baseline suppression in the best pre-SOM-regime checkpoint was traced to the
+always-on learned SOM pathway, specifically the `alpha_inh` + `som_baseline`
+route, rather than to:
+
+- apical gain
+- recurrent modulation
+- flank shunt
+- PV normalization
+- template-driven branches
+
+This diagnosis is what justified the SOM-regime family.
+
+### Eval-only motivation for SOM-regime gating
+
+Before training a new branch, the codebase was probed with evaluation-only
+SOM scaling. A representative passing row was:
+
+- `uncued_scale=0.25`
+- `cued_scale=1.10`
+- cued `+0=1.1098`
+- cued `+20/+25/+30=0.9672/0.9651/0.9676`
+- uncued `+20/+25/+30=0.9801/0.9796/0.9776`
+- `Δ20=0.0129`, `Δ25=0.0145`, `Δ30=0.0100`
+
+That eval-only geometry showed that a cue-conditioned SOM regime split could
+plausibly produce stronger center-plus-flank separation in principle.
+
+### Current exploratory status
+
+The first trained SOM-regime checkpoint did not reproduce the eval-only split
+strongly enough. It raised center gain and kept decoder deltas positive, but
+remained center-gain dominated and failed the stricter bar for clear
+cued-over-uncued flank suppression.
+
+So the architecture currently has:
+
+- a validated apical sharpening path
+- exploratory stronger-effect branches that are implemented and test-covered
+- an unresolved debugger question about why trained SOM-regime gating does not
+  yet reproduce the earlier eval-only split strongly enough
+
+### Current acceptance bar for future mechanisms
+
+Future strengthening work on this branch only counts if it produces:
+
+- strong center gain
+- strong local flank suppression
+- clear cued-over-uncued separation
+- decoder improvement above the user's noise floor
+- no broad-gain cheating
+- correct cue-validity ordering
+- matched ablation evidence

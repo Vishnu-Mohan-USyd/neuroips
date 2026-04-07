@@ -37,6 +37,7 @@ import logging
 import math
 import sys
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -135,6 +136,9 @@ def feedback_disabled(net: LaminarV1V2Network):
     saved_vip_gain = getattr(net.cfg, "vip_gain", None)
     saved_center_support_gain = getattr(fb, "center_support_gain", None)
     saved_recurrent_gain_beta = getattr(fb, "recurrent_gain_beta", None)
+    saved_recurrent_gain_flank_beta = getattr(fb, "recurrent_gain_flank_beta", None)
+    saved_flank_som_gain = getattr(fb, "flank_som_gain", None)
+    saved_flank_shunt_gain = getattr(fb, "flank_shunt_gain", None)
     saved_apical_gain_beta = getattr(fb, "apical_gain_beta", None)
     saved_force_zero = getattr(fb, "_analysis_force_zero", False)
     try:
@@ -149,6 +153,12 @@ def feedback_disabled(net: LaminarV1V2Network):
                 fb.center_support_gain = 0.0
             if saved_recurrent_gain_beta is not None:
                 fb.recurrent_gain_beta = 0.0
+            if saved_recurrent_gain_flank_beta is not None:
+                fb.recurrent_gain_flank_beta = 0.0
+            if saved_flank_som_gain is not None:
+                fb.flank_som_gain = 0.0
+            if saved_flank_shunt_gain is not None:
+                fb.flank_shunt_gain = 0.0
             if saved_apical_gain_beta is not None:
                 fb.apical_gain_beta = 0.0
             if saved_vip_gain is not None:
@@ -163,6 +173,12 @@ def feedback_disabled(net: LaminarV1V2Network):
                 fb.center_support_gain = saved_center_support_gain
             if saved_recurrent_gain_beta is not None:
                 fb.recurrent_gain_beta = saved_recurrent_gain_beta
+            if saved_recurrent_gain_flank_beta is not None:
+                fb.recurrent_gain_flank_beta = saved_recurrent_gain_flank_beta
+            if saved_flank_som_gain is not None:
+                fb.flank_som_gain = saved_flank_som_gain
+            if saved_flank_shunt_gain is not None:
+                fb.flank_shunt_gain = saved_flank_shunt_gain
             if saved_apical_gain_beta is not None:
                 fb.apical_gain_beta = saved_apical_gain_beta
             if saved_vip_gain is not None:
@@ -180,6 +196,7 @@ T_STEPS = 25            # total timesteps (stimulus on whole time, no ISI)
 READ_WINDOW = 5         # average L2/3 over the last READ_WINDOW steps
 EVAL_PI = 5.0           # oracle precision used during analysis (matches HARDENING_RESULTS pi=5)
 EVAL_CONTRAST = 1.0     # stimulus contrast used during analysis
+ANALYSIS_ANCHORS_DEG = (0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5)
 
 
 @dataclass(frozen=True)
@@ -961,7 +978,7 @@ def metric_local_dprime(
     step = period / N
     prefs = torch.arange(N, dtype=torch.float32, device=device) * step
 
-    anchors = [0.0, 22.5, 45.0, 67.5, 90.0, 112.5, 135.0, 157.5]
+    anchors = list(ANALYSIS_ANCHORS_DEG)
     deltas = [5.0, 10.0, 15.0]
 
     per_anchor: list[dict] = []
@@ -1055,18 +1072,19 @@ def metric_match_vs_near_miss_decoding(
     readout_noise_std: float = 0.3,
     seed: int = 42,
     oracle_theta: float = 90.0,
+    anchors: Sequence[float] | None = None,
     cue_cfg: CueConfig | None = None,
 ) -> dict:
     """Metric 7: trained LogReg decoder of match vs near-miss at small deltas.
 
-    For each δ ∈ {3°, 5°, 10°}:
-      - Generate n_train+n_test trials with labels: half at oracle_theta
-        (match), half at oracle_theta+δ (near-miss).
-      - Stimulus noise std=noise_std is applied to the input.
-      - Extract L2/3 readout response, add readout noise std=readout_noise_std.
-      - Train sklearn LogisticRegression on first n_train trials using all
-        36 channels as features; test on remaining n_test.
-      - Report test accuracy for feedback ON and OFF (identical noise).
+    By default the metric preserves the historical single-anchor behavior:
+    classification is measured at one oracle orientation ``oracle_theta``.
+
+    When ``anchors`` is provided, the metric is evaluated independently at each
+    anchor orientation and averaged across anchors, mirroring
+    :func:`metric_local_dprime`. In that mode the return value includes a
+    ``per_anchor`` breakdown so downstream scripts can compute publication-grade
+    confidence intervals without duplicating the decoding logic.
 
     Differs from metric 4 in three ways: (a) it tests the specific
     match-vs-near-miss discrimination at a single oracle (not general
@@ -1084,9 +1102,13 @@ def metric_match_vs_near_miss_decoding(
         readout_noise_std: output-side L2/3 noise (default 0.3).
         seed: reproducibility seed.
         oracle_theta: expected orientation (default 90°).
+        anchors: optional anchor orientations (degrees). If omitted, preserve
+            the historical single-anchor ``oracle_theta`` evaluation.
 
     Returns:
-        dict keyed by 'delta_{int}' with {on, off, delta_acc}.
+        dict keyed by 'delta_{int}' with {on, off, delta_acc}. When multiple
+        anchors are evaluated, the metric values are anchor averages and the
+        return value also contains ``per_anchor`` and ``anchors``.
     """
     period = net.cfg.orientation_range
     deltas = [3.0, 5.0, 10.0]
@@ -1095,59 +1117,92 @@ def metric_match_vs_near_miss_decoding(
     if n_total % 2 != 0:
         raise ValueError(f"n_train+n_test must be even, got {n_total}")
     n_half = n_total // 2
+    if anchors is None:
+        anchor_list = [float(oracle_theta)]
+        anchor_averaged = False
+    else:
+        anchor_list = [float(anchor % period) for anchor in anchors]
+        if not anchor_list:
+            raise ValueError("anchors must be non-empty when provided")
+        anchor_averaged = len(anchor_list) > 1
+
+    labels = np.concatenate([
+        np.zeros(n_half, dtype=np.int64),
+        np.ones(n_half, dtype=np.int64),
+    ])
 
     results: dict = {}
-    for delta in deltas:
-        thetas_match = torch.full((n_half,), oracle_theta, device=device)
-        thetas_miss = torch.full(
-            (n_half,), (oracle_theta + delta) % period, device=device
-        )
-        stim = torch.cat([thetas_match, thetas_miss], dim=0)
-        oracle_arr = torch.full_like(stim, oracle_theta)
-        labels = np.concatenate([
-            np.zeros(n_half, dtype=np.int64),
-            np.ones(n_half, dtype=np.int64),
-        ])
+    per_anchor: list[dict[str, object]] = []
+    agg: dict[float, dict[str, list[float]]] = {delta: {"on": [], "off": []} for delta in deltas}
 
-        trial_seed = seed + int(delta * 10)
-        r_on_clean = run_trials(
-            net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed, cue_cfg=cue_cfg,
-        ).cpu().numpy()
-        with feedback_disabled(net):
-            r_off_clean = run_trials(
-                net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed, cue_cfg=cue_cfg,
+    for ai, anchor in enumerate(anchor_list):
+        anchor_record: dict[str, object] = {"anchor": anchor}
+        for delta in deltas:
+            thetas_match = torch.full((n_half,), anchor, device=device)
+            thetas_miss = torch.full(
+                (n_half,), (anchor + delta) % period, device=device
+            )
+            stim = torch.cat([thetas_match, thetas_miss], dim=0)
+            oracle_arr = torch.full_like(stim, anchor)
+
+            trial_seed = seed + ai * 1000 + int(delta * 10)
+            r_on_clean = run_trials(
+                net, stim, oracle_arr, device, noise_std=noise_std,
+                seed=trial_seed, cue_cfg=cue_cfg,
             ).cpu().numpy()
+            with feedback_disabled(net):
+                r_off_clean = run_trials(
+                    net, stim, oracle_arr, device, noise_std=noise_std,
+                    seed=trial_seed, cue_cfg=cue_cfg,
+                ).cpu().numpy()
 
-        # Readout noise — same realization for on and off so only the
-        # feedback pathway differs between the two runs.
-        rs = np.random.RandomState(trial_seed + 7)
-        readout_noise = (rs.randn(*r_on_clean.shape).astype(np.float32)
-                         * readout_noise_std)
-        X_on = r_on_clean + readout_noise
-        X_off = r_off_clean + readout_noise
+            # Readout noise — same realization for on and off so only the
+            # feedback pathway differs between the two runs.
+            rs = np.random.RandomState(trial_seed + 7)
+            readout_noise = (
+                rs.randn(*r_on_clean.shape).astype(np.float32) * readout_noise_std
+            )
+            X_on = r_on_clean + readout_noise
+            X_off = r_off_clean + readout_noise
 
-        perm = rs.permutation(n_total)
-        train_idx = perm[:n_train]
-        test_idx = perm[n_train:]
+            perm = rs.permutation(n_total)
+            train_idx = perm[:n_train]
+            test_idx = perm[n_train:]
 
-        def _fit_and_score(X):
-            clf = LogisticRegression(max_iter=2000)
-            clf.fit(X[train_idx], labels[train_idx])
-            return float(clf.score(X[test_idx], labels[test_idx]))
+            def _fit_and_score(X: np.ndarray) -> float:
+                clf = LogisticRegression(max_iter=2000)
+                clf.fit(X[train_idx], labels[train_idx])
+                return float(clf.score(X[test_idx], labels[test_idx]))
 
-        acc_on = _fit_and_score(X_on)
-        acc_off = _fit_and_score(X_off)
+            acc_on = _fit_and_score(X_on)
+            acc_off = _fit_and_score(X_off)
+            delta_key = f"delta_{int(delta)}"
+            anchor_record[delta_key] = {
+                "on": acc_on,
+                "off": acc_off,
+                "delta_acc": acc_on - acc_off,
+            }
+            agg[delta]["on"].append(acc_on)
+            agg[delta]["off"].append(acc_off)
+        per_anchor.append(anchor_record)
 
+    for delta in deltas:
+        on_mean = float(np.mean(agg[delta]["on"]))
+        off_mean = float(np.mean(agg[delta]["off"]))
         results[f"delta_{int(delta)}"] = {
-            "on": acc_on,
-            "off": acc_off,
-            "delta_acc": acc_on - acc_off,
+            "on": on_mean,
+            "off": off_mean,
+            "delta_acc": on_mean - off_mean,
         }
     results["n_train"] = n_train
     results["n_test"] = n_test
     results["noise_std"] = noise_std
     results["readout_noise_std"] = readout_noise_std
-    results["oracle_theta"] = oracle_theta
+    results["anchor_averaged"] = anchor_averaged
+    results["anchors"] = anchor_list
+    results["per_anchor"] = per_anchor
+    if len(anchor_list) == 1:
+        results["oracle_theta"] = anchor_list[0]
     return results
 
 
@@ -1360,6 +1415,8 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
             drive_on = net.feedback(q, pi)
             center_on = net.feedback.compute_center_excitation(q, pi, gate_signal=gate)
             recurrent_on = net.feedback.compute_recurrent_gain(q, pi, gate_signal=gate)
+            flank_on = net.feedback.compute_flank_som_boost(q, pi, gate_signal=gate)
+            shunt_on = net.feedback.compute_flank_shunt(q, pi, gate_signal=gate)
             apical_on = net.feedback.compute_apical_gain(q, pi, gate_signal=gate)
     finally:
         net.feedback.uncache_kernels()
@@ -1370,6 +1427,8 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
                 drive_off = net.feedback(q, pi)
                 center_off = net.feedback.compute_center_excitation(q, pi, gate_signal=gate)
                 recurrent_off = net.feedback.compute_recurrent_gain(q, pi, gate_signal=gate)
+                flank_off = net.feedback.compute_flank_som_boost(q, pi, gate_signal=gate)
+                shunt_off = net.feedback.compute_flank_shunt(q, pi, gate_signal=gate)
                 apical_off = net.feedback.compute_apical_gain(q, pi, gate_signal=gate)
                 vip_gain_off = net.cfg.vip_gain
         finally:
@@ -1382,6 +1441,10 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
         "center_off_max_abs": float(center_off.abs().max().item()),
         "recurrent_on_max_abs": float(recurrent_on.abs().max().item()),
         "recurrent_off_max_abs": float(recurrent_off.abs().max().item()),
+        "flank_on_max_abs": float(flank_on.abs().max().item()),
+        "flank_off_max_abs": float(flank_off.abs().max().item()),
+        "shunt_on_max_abs": float(shunt_on.abs().max().item()),
+        "shunt_off_max_abs": float(shunt_off.abs().max().item()),
         "apical_on_max_abs": float(apical_on.abs().max().item()),
         "apical_off_max_abs": float(apical_off.abs().max().item()),
         "drive_on_sum": float(drive_on.sum().item()),
@@ -1391,6 +1454,8 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
             drive_off.abs().max().item() < 1e-7
             and center_off.abs().max().item() < 1e-7
             and recurrent_off.abs().max().item() < 1e-7
+            and flank_off.abs().max().item() < 1e-7
+            and shunt_off.abs().max().item() < 1e-7
             and apical_off.abs().max().item() < 1e-7
             and abs(vip_gain_off) < 1e-12
         ),

@@ -175,7 +175,12 @@ class LaminarV1V2Network(nn.Module):
                 pi_pred_raw = self.oracle_pi_pred
             state_logits = torch.zeros(stimulus.shape[0], 3, device=stimulus.device)
             p_cw = torch.full((stimulus.shape[0], 1), 0.5, device=stimulus.device)
-            h_v2 = state.h_v2
+            if self.cfg.feedback_mode == 'emergent' and self.v2.som_regime_gate_enabled:
+                _, _, h_v2 = self.v2(
+                    r_l4, state.r_l23, cue, task_state, state.h_v2
+                )
+            else:
+                h_v2 = state.h_v2
         elif self.cfg.feedback_mode == 'emergent':
             p_cw, pi_pred_raw, h_v2 = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
@@ -191,6 +196,7 @@ class LaminarV1V2Network(nn.Module):
 
         # Effective precision for V1 feedback (scaled by warmup ramp during training)
         pi_pred_eff = pi_pred_raw * self.feedback_scale
+        som_regime_gate = self.v2.compute_som_regime_gate(h_v2)
 
         # 4. Deep template (uses effective precision)
         deep_tmpl = self.deep_template(q_pred, pi_pred_eff)
@@ -203,12 +209,22 @@ class LaminarV1V2Network(nn.Module):
         if self.cfg.feedback_mode == 'emergent':
             # Emergent: learned operator outputs SOM drive plus optional narrow
             # prediction-driven center support and recurrent gain for L2/3.
-            som_drive = self.feedback(q_pred, pi_pred_eff)
+            som_drive = self.feedback(q_pred, pi_pred_eff, som_regime_gate=som_regime_gate)
+            flank_som_boost = self.feedback.compute_flank_som_boost(
+                q_pred, pi_pred_eff, gate_signal=r_vip
+            )
             center_exc = self.feedback.compute_center_excitation(
                 q_pred, pi_pred_eff, gate_signal=r_vip
             )
             recurrent_gain_mod = self.feedback.compute_recurrent_gain(
                 q_pred, pi_pred_eff, gate_signal=r_vip
+            )
+            shunt_winner_proxy = state.r_l23
+            flank_shunt_mod = self.feedback.compute_flank_shunt(
+                q_pred,
+                pi_pred_eff,
+                gate_signal=r_vip,
+                winner_proxy=shunt_winner_proxy,
             )
             apical_target = self.feedback.compute_apical_gain(
                 q_pred, pi_pred_eff, gate_signal=r_vip
@@ -224,7 +240,7 @@ class LaminarV1V2Network(nn.Module):
                     f"Unsupported apical_gain_mode={self.cfg.apical_gain_mode!r}. "
                     "Expected 'persistent_sum' or 'instantaneous_sum'."
                 )
-            som_drive = som_drive - self.cfg.vip_gain * r_vip
+            som_drive = som_drive + flank_som_boost - self.cfg.vip_gain * r_vip
             r_som = self.som(som_drive, state.r_som)
             l4_to_l23 = r_l4  # No error signal in emergent mode
             r_l23 = self.l23(
@@ -235,6 +251,7 @@ class LaminarV1V2Network(nn.Module):
                 r_pv,
                 recurrent_gain_modulation=recurrent_gain_mod,
                 excitatory_gain_modulation=a_apical,
+                excitatory_shunt_modulation=flank_shunt_mod,
             )
         else:
             # Fixed: mechanism-specific computation
@@ -313,7 +330,7 @@ class LaminarV1V2Network(nn.Module):
                  state_logits_all [B, T, 3], deep_template_all [B, T, N],
                  r_l4_all [B, T, N], r_pv_all [B, T, 1], r_som_all [B, T, N],
                  r_vip_all [B, T, N],
-                 p_cw_all [B, T, 1].
+                 p_cw_all [B, T, 1], som_regime_gate_all [B, T, 1].
         """
         N = self.cfg.n_orientations
 
@@ -349,6 +366,7 @@ class LaminarV1V2Network(nn.Module):
         state_logits_all = torch.empty(B, T, 3, device=device)
         deep_template_all = torch.empty(B, T, N, device=device)
         p_cw_all = torch.empty(B, T, 1, device=device)
+        som_regime_gate_all = torch.empty(B, T, 1, device=device)
 
         # Check if oracle mode uses sequence-length tensors [B, T, ...]
         _oracle_seq = (self.oracle_mode and self.oracle_q_pred is not None
@@ -380,6 +398,7 @@ class LaminarV1V2Network(nn.Module):
                 state_logits_all[:, t] = aux_t.state_logits
                 deep_template_all[:, t] = state.deep_template
                 p_cw_all[:, t] = aux_t.p_cw
+                som_regime_gate_all[:, t] = self.v2.compute_som_regime_gate(state.h_v2)
         finally:
             self.l23.uncache_kernels()
             if hasattr(self.feedback, 'uncache_kernels'):
@@ -396,6 +415,7 @@ class LaminarV1V2Network(nn.Module):
             "r_som_all": r_som_all,               # [B, T, N]
             "r_vip_all": r_vip_all,               # [B, T, N]
             "p_cw_all": p_cw_all,                 # [B, T, 1]
+            "som_regime_gate_all": som_regime_gate_all,  # [B, T, 1]
         }
 
         return r_l23_all, state, aux

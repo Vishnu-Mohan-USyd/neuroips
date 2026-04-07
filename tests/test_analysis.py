@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from src.model.network import LaminarV1V2Network
 from src.experiments.hidden_state import HiddenStateParadigm
 from src.experiments.omission import OmissionParadigm
 from src.experiments.ambiguous import AmbiguousParadigm
+from src.experiments.cue_local_competitor import CueLocalCompetitorParadigm
 from src.experiments.paradigm_base import ExperimentResult
 
 from src.analysis.suppression_profile import (
@@ -52,10 +54,10 @@ from src.analysis.v2_probes import (
 from src.analysis.ablations import run_ablation, AblationResult
 
 
-def _load_analyze_representation():
-    """Load the analysis script as a module for helper-level testing."""
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "analyze_representation.py"
-    spec = importlib.util.spec_from_file_location("analyze_representation_script", script_path)
+def _load_script_module(script_name: str):
+    """Load one repo-local script module for helper-level testing."""
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / script_name
+    spec = importlib.util.spec_from_file_location(f"{script_name}_script", script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     sys.modules[spec.name] = module
@@ -99,7 +101,17 @@ def p3_result(net_and_cfg):
 
 @pytest.fixture(scope="module")
 def analyze_script():
-    return _load_analyze_representation()
+    return _load_script_module("analyze_representation.py")
+
+
+@pytest.fixture(scope="module")
+def m7_resolution_script():
+    return _load_script_module("run_m7_resolution.py")
+
+
+@pytest.fixture(scope="module")
+def cue_validity_script():
+    return _load_script_module("eval_cue_local_competitor.py")
 
 
 @pytest.fixture(scope="module")
@@ -115,6 +127,12 @@ def emergent_vip_net():
     net = LaminarV1V2Network(cfg)
     net.eval()
     return net
+
+
+@pytest.fixture(scope="module")
+def cue_local_competitor_result(emergent_vip_net):
+    paradigm = CueLocalCompetitorParadigm(emergent_vip_net, emergent_vip_net.cfg)
+    return paradigm.run(n_trials=2, seed=42, batch_size=2)
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +426,16 @@ class TestAnalyzeRepresentationCueSupport:
             emergent_center_support_enabled=True,
             emergent_center_support_gain=0.12,
             emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_mode="signed_center_surround",
             emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_flank_beta=0.12,
+            emergent_flank_som_enabled=True,
+            emergent_flank_som_gain=0.12,
+            emergent_flank_shunt_enabled=True,
+            emergent_flank_shunt_gain=0.10,
+            emergent_flank_shunt_source="center_recruited",
+            som_regime_gate_enabled=True,
+            som_regime_gate_beta=0.10,
             apical_gain_enabled=True,
             apical_gain_beta=0.08,
         )
@@ -420,6 +447,9 @@ class TestAnalyzeRepresentationCueSupport:
             fb.som_baseline.detach().clone() if hasattr(fb, "som_baseline") else None,
             fb.center_support_gain,
             fb.recurrent_gain_beta,
+            fb.recurrent_gain_flank_beta,
+            fb.flank_som_gain,
+            fb.flank_shunt_gain,
             fb.apical_gain_beta,
             net.cfg.vip_gain,
         )
@@ -429,6 +459,9 @@ class TestAnalyzeRepresentationCueSupport:
                 assert torch.allclose(fb.som_baseline, torch.zeros_like(fb.som_baseline))
             assert fb.center_support_gain == 0.0
             assert fb.recurrent_gain_beta == 0.0
+            assert fb.recurrent_gain_flank_beta == 0.0
+            assert fb.flank_som_gain == 0.0
+            assert fb.flank_shunt_gain == 0.0
             assert fb.apical_gain_beta == 0.0
             assert net.cfg.vip_gain == 0.0
 
@@ -437,8 +470,11 @@ class TestAnalyzeRepresentationCueSupport:
             assert torch.allclose(fb.som_baseline, saved[1])
         assert fb.center_support_gain == saved[2]
         assert fb.recurrent_gain_beta == saved[3]
-        assert fb.apical_gain_beta == saved[4]
-        assert net.cfg.vip_gain == saved[5]
+        assert fb.recurrent_gain_flank_beta == saved[4]
+        assert fb.flank_som_gain == saved[5]
+        assert fb.flank_shunt_gain == saved[6]
+        assert fb.apical_gain_beta == saved[7]
+        assert net.cfg.vip_gain == saved[8]
 
     def test_sanity_check_ablation_reports_all_zeroed_branches(self, analyze_script):
         cfg = ModelConfig(
@@ -450,7 +486,16 @@ class TestAnalyzeRepresentationCueSupport:
             emergent_center_support_enabled=True,
             emergent_center_support_gain=0.12,
             emergent_recurrent_gain_enabled=True,
+            emergent_recurrent_gain_mode="signed_center_surround",
             emergent_recurrent_gain_beta=0.15,
+            emergent_recurrent_gain_flank_beta=0.12,
+            emergent_flank_som_enabled=True,
+            emergent_flank_som_gain=0.12,
+            emergent_flank_shunt_enabled=True,
+            emergent_flank_shunt_gain=0.10,
+            emergent_flank_shunt_source="center_recruited",
+            som_regime_gate_enabled=True,
+            som_regime_gate_beta=0.10,
             apical_gain_enabled=True,
             apical_gain_beta=0.08,
         )
@@ -459,6 +504,8 @@ class TestAnalyzeRepresentationCueSupport:
 
         assert sanity["center_off_max_abs"] < 1e-7
         assert sanity["recurrent_off_max_abs"] < 1e-7
+        assert sanity["flank_off_max_abs"] < 1e-7
+        assert sanity["shunt_off_max_abs"] < 1e-7
         assert sanity["apical_off_max_abs"] < 1e-7
         assert sanity["vip_gain_off"] == 0.0
         assert sanity["ablation_zero"] is True
@@ -512,6 +559,158 @@ class TestAnalyzeRepresentationCueSupport:
         assert "delta_5" in result
         assert "delta_10" in result
         assert result["n_trials_per_class"] == 2
+
+    def test_metric_match_vs_near_miss_single_anchor_preserves_default_shape(
+        self,
+        analyze_script,
+        emergent_vip_net,
+    ):
+        device = torch.device("cpu")
+        result = analyze_script.metric_match_vs_near_miss_decoding(
+            emergent_vip_net,
+            device,
+            n_train=8,
+            n_test=8,
+            noise_std=0.0,
+            readout_noise_std=0.0,
+            seed=11,
+            oracle_theta=90.0,
+        )
+
+        assert result["anchor_averaged"] is False
+        assert result["oracle_theta"] == pytest.approx(90.0)
+        assert result["anchors"] == [90.0]
+        assert len(result["per_anchor"]) == 1
+        assert "delta_5" in result
+        assert "delta_10" in result
+
+    def test_metric_match_vs_near_miss_anchor_averages_per_anchor_results(
+        self,
+        analyze_script,
+        emergent_vip_net,
+    ):
+        device = torch.device("cpu")
+        result = analyze_script.metric_match_vs_near_miss_decoding(
+            emergent_vip_net,
+            device,
+            n_train=8,
+            n_test=8,
+            noise_std=0.0,
+            readout_noise_std=0.0,
+            seed=19,
+            anchors=[0.0, 90.0],
+        )
+
+        assert result["anchor_averaged"] is True
+        assert result["anchors"] == [0.0, 90.0]
+        assert len(result["per_anchor"]) == 2
+
+        for delta_key in ["delta_3", "delta_5", "delta_10"]:
+            per_anchor_on = [anchor[delta_key]["on"] for anchor in result["per_anchor"]]
+            per_anchor_off = [anchor[delta_key]["off"] for anchor in result["per_anchor"]]
+            assert result[delta_key]["on"] == pytest.approx(sum(per_anchor_on) / len(per_anchor_on))
+            assert result[delta_key]["off"] == pytest.approx(sum(per_anchor_off) / len(per_anchor_off))
+
+
+class TestHardeningScripts:
+    def test_m7_resolution_helpers_combine_and_pair_deltas(self, m7_resolution_script):
+        runs = {
+            "run_a": {
+                "samples": {
+                    "delta_3": [0.0, 0.1],
+                    "delta_5": [0.1, 0.2],
+                    "delta_10": [0.2, 0.3],
+                }
+            },
+            "run_b": {
+                "samples": {
+                    "delta_3": [0.1, 0.2],
+                    "delta_5": [0.2, 0.3],
+                    "delta_10": [0.4, 0.5],
+                }
+            },
+        }
+        combined = m7_resolution_script._combine_runs(
+            "combined",
+            ["run_a", "run_b"],
+            runs,
+            bootstrap_draws=16,
+            bootstrap_seed=0,
+        )
+        paired = m7_resolution_script._pair_runs(
+            "paired",
+            "run_b",
+            "run_a",
+            runs,
+            bootstrap_draws=16,
+            bootstrap_seed=0,
+        )
+
+        assert combined["summary"]["delta_5"]["mean"] == pytest.approx(0.2)
+        assert combined["summary"]["delta_10"]["n_samples"] == 4
+        assert paired["summary"]["delta_5"]["mean"] == pytest.approx(0.1)
+        assert paired["summary"]["delta_10"]["mean"] == pytest.approx(0.2)
+
+    def test_cue_validity_summary_uses_existing_result_structure(
+        self,
+        cue_validity_script,
+        cue_local_competitor_result,
+    ):
+        summary = cue_validity_script.summarize_cue_validity(cue_local_competitor_result)
+
+        assert summary["paradigm_name"] == "cue_local_competitor"
+        assert set(summary["cue_kind_summary"]) == {"valid", "neutral", "invalid"}
+        assert summary["cue_kind_summary"]["neutral"]["prestim_vip_mean"] == pytest.approx(0.0, abs=1e-8)
+        assert summary["cue_kind_summary"]["valid"]["prestim_vip_mean"] > 0.0
+        assert "valid_neutral_gap_delta" in summary
+
+    def test_checkpoint_backed_cue_local_competitor_handles_model_device(
+        self,
+        cue_validity_script,
+        tmp_path,
+    ):
+        cfg = ModelConfig(
+            mechanism=MechanismType.CENTER_SURROUND,
+            n_orientations=36,
+            feedback_mode="emergent",
+            vip_enabled=True,
+            vip_gain=0.35,
+            apical_gain_enabled=True,
+            apical_gain_beta=0.16,
+        )
+        net = LaminarV1V2Network(cfg, delta_som=True)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        net.to(device)
+        net.eval()
+
+        checkpoint_path = tmp_path / "checkpoint.pt"
+        torch.save(
+            {
+                "model_state": net.state_dict(),
+                "config": {
+                    "model": asdict(cfg),
+                    "training": {"delta_som": True, "oracle_pi": 3.0},
+                },
+            },
+            checkpoint_path,
+        )
+
+        result = cue_validity_script.run_cue_local_competitor(
+            checkpoint=str(checkpoint_path),
+            config=str(Path(__file__).resolve().parents[1] / "config" / "option_b_apical_gain_screen_beta016.yaml"),
+            device=device,
+            n_trials=1,
+            seed=0,
+            batch_size=1,
+            competitor_offset=10.0,
+            cue_contrast=1.0,
+        )
+
+        assert result.paradigm_name == "cue_local_competitor"
+        first = next(iter(result.conditions.values()))
+        assert first.r_l23.device.type == "cpu"
+        assert first.r_vip is not None
+        assert first.r_vip.device.type == "cpu"
 
 
 # ---------------------------------------------------------------------------

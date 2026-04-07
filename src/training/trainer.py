@@ -173,6 +173,7 @@ def _ambiguous_components(
     orientations: Tensor,
     model_cfg: ModelConfig,
     stim_cfg: StimulusConfig,
+    generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
     """Return the two mixture components used for ambiguous presentations."""
     if stim_cfg.ambiguous_mode == "one_sided":
@@ -183,9 +184,38 @@ def _ambiguous_components(
             (orientations - half_offset) % model_cfg.orientation_range,
             (orientations + half_offset) % model_cfg.orientation_range,
         )
+    if stim_cfg.ambiguous_mode == "sampled_local_competitor":
+        offsets = torch.as_tensor(
+            stim_cfg.ambiguous_offsets,
+            dtype=orientations.dtype,
+            device=orientations.device,
+        )
+        assert offsets.ndim == 1 and offsets.numel() > 0, (
+            "stim_cfg.ambiguous_offsets must contain at least one positive offset "
+            "for ambiguous_mode='sampled_local_competitor'"
+        )
+        assert bool((offsets > 0).all()), (
+            "stim_cfg.ambiguous_offsets must be strictly positive"
+        )
+        sample_shape = orientations.shape
+        offset_idx = torch.randint(
+            low=0,
+            high=offsets.numel(),
+            size=sample_shape,
+            generator=generator,
+            device=orientations.device,
+        )
+        sampled_offsets = offsets[offset_idx]
+        side_sign = torch.where(
+            torch.rand(sample_shape, generator=generator, device=orientations.device) < 0.5,
+            torch.full(sample_shape, -1.0, dtype=orientations.dtype, device=orientations.device),
+            torch.full(sample_shape, 1.0, dtype=orientations.dtype, device=orientations.device),
+        )
+        competitor = (orientations + side_sign * sampled_offsets) % model_cfg.orientation_range
+        return orientations, competitor
     raise ValueError(
         f"Unsupported ambiguous_mode={stim_cfg.ambiguous_mode!r}. "
-        "Expected 'one_sided' or 'symmetric_local_competitor'."
+        "Expected 'one_sided', 'symmetric_local_competitor', or 'sampled_local_competitor'."
     )
 
 
@@ -194,6 +224,7 @@ def build_stimulus_sequence(
     model_cfg: ModelConfig,
     train_cfg: TrainingConfig,
     stim_cfg: StimulusConfig,
+    generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, Tensor]:
     """Convert HMM SequenceMetadata into temporal stimulus sequences.
 
@@ -239,7 +270,9 @@ def build_stimulus_sequence(
     # Handle ambiguous stimuli in batch
     is_amb_flat = metadata.is_ambiguous.reshape(-1)      # [B*S]
     if is_amb_flat.any():
-        amb_theta1_flat, amb_theta2_flat = _ambiguous_components(oris_flat, model_cfg, stim_cfg)
+        amb_theta1_flat, amb_theta2_flat = _ambiguous_components(
+            oris_flat, model_cfg, stim_cfg, generator=generator
+        )
         stim_amb = make_ambiguous_stimulus(
             amb_theta1_flat[is_amb_flat], amb_theta2_flat[is_amb_flat], contrasts_flat[is_amb_flat],
             n_orientations=N,

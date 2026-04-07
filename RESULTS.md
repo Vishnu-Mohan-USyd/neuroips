@@ -238,25 +238,273 @@ High-resolution M7:
 | M7 ΔAcc δ=5° | **+0.00744** | **[+0.00691, +0.00798]** |
 | M7 ΔAcc δ=10° | **+0.01298** | **[+0.01213, +0.01383]** |
 
-### Multi-seed strengthened evidence
+### Existing-checkpoint reproduction result
 
-Combined seed-42 + seed-43 cued M7:
+Before adding fully independent new seeds, the branch was hardened on the
+saved `beta=0.16` checkpoints using the publication-oriented M7 resolution
+runner:
+
+- `results/hardening_apical_eval/m7_full_gpu_attached/beta016_existing_checkpoints.json`
+- `results/hardening_apical_eval/m7_full_gpu_attached/beta016_existing_checkpoints.csv`
+
+That existing-checkpoint reproduction gave:
 
 | Metric | Mean | 95% bootstrap CI |
 |---|---|---|
-| M7 ΔAcc δ=5° | **+0.00743** | **[+0.00705, +0.00782]** |
-| M7 ΔAcc δ=10° | **+0.01299** | **[+0.01239, +0.01359]** |
+| Cued M7 ΔAcc δ=5° | **+0.00783** | **[+0.00761, +0.00806]** |
+| Cued M7 ΔAcc δ=10° | **+0.01331** | **[+0.01313, +0.01348]** |
+| Uncued M7 ΔAcc δ=5° | −0.00092 | [−0.00095, −0.00088] |
+| Uncued M7 ΔAcc δ=10° | −0.00163 | [−0.00170, −0.00156] |
+
+Paired `tuned42 - off42` remained cleanly positive:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| Paired ΔAcc difference δ=5° | **+0.00844** | **[+0.00813, +0.00876]** |
+| Paired ΔAcc difference δ=10° | **+0.01439** | **[+0.01415, +0.01463]** |
+
+This confirmed that the positive M7 signal was reproducible from the saved
+main checkpoints alone, before spending new end-to-end training seeds.
+
+### Fully independent seed-44 / seed-45 quick-gate pass
+
+Two additional **full-pipeline** seeds were then trained from scratch using
+`config/option_b_apical_gain_screen_beta016.yaml`:
+
+- `results/hardening_apical_eval/full_seed44/center_surround_seed44/checkpoint.pt`
+- `results/hardening_apical_eval/full_seed45/center_surround_seed45/checkpoint.pt`
+
+Quick-gate summaries:
+
+- Canonical uncued remained suppressive/negative.
+- Canonical cued M6 remained strongly positive for both seeds.
+- Cue-validity stayed in the expected direction:
+  - seed44 valid-neutral competitor-gap delta: **+0.00215**
+  - seed45 valid-neutral competitor-gap delta: **+0.00182**
+- Low-resolution anchor-averaged M7 stayed positive in the cued condition and
+  negative in the uncued condition for both seeds:
+  - seed44 cued: `δ5=+0.00844`, `δ10=+0.01445`
+  - seed45 cued: `δ5=+0.00836`, `δ10=+0.01453`
+  - seed44 uncued: `δ5=-0.00070`, `δ10=-0.00156`
+  - seed45 uncued: `δ5=-0.00074`, `δ10=-0.00152`
+
+Those quick gates were used only as a fail-fast filter before the final
+full-resolution aggregation; they are not the main claim artifact.
+
+### Four-seed full-resolution hardening result
+
+Final publication-oriented M7 aggregation across four accepted ON seeds:
+
+- `tuned42`, `tuned43`, `seed44`, `seed45`
+- shared OFF comparator: `off42`
+- artifact:
+  - `results/hardening_apical_eval/m7_full_four_seed/four_seed_full.json`
+  - `results/hardening_apical_eval/m7_full_four_seed/four_seed_full.csv`
+  - `results/hardening_apical_eval/m7_full_four_seed/four_seed_full.log`
+
+Combined four-seed cued M7:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| M7 ΔAcc δ=5° | **+0.00785** | **[+0.00769, +0.00801]** |
+| M7 ΔAcc δ=10° | **+0.01331** | **[+0.01319, +0.01344]** |
 
 Combined uncued control:
 
 | Metric | Mean | 95% bootstrap CI |
 |---|---|---|
-| Uncued ΔAcc δ=5° | −0.00092 | [−0.00106, −0.00077] |
-| Uncued ΔAcc δ=10° | −0.00170 | [−0.00185, −0.00156] |
+| Uncued ΔAcc δ=5° | −0.00092 | [−0.00094, −0.00089] |
+| Uncued ΔAcc δ=10° | −0.00162 | [−0.00167, −0.00158] |
 
-This satisfies the branch’s claim-grade decision rule: positive cued M7 at
-both deltas, mean size above threshold, uncued control remaining non-positive,
-and positive paired seed-42 main-minus-OFF contrasts.
+Shared paired OFF contrast retained the same sign:
+
+| Metric | Mean | 95% bootstrap CI |
+|---|---|---|
+| Paired `tuned42 - off42` ΔAcc δ=5° | **+0.00844** | **[+0.00813, +0.00876]** |
+| Paired `tuned42 - off42` ΔAcc δ=10° | **+0.01439** | **[+0.01415, +0.01463]** |
+
+This satisfies the branch’s hardening rule for the ON family: positive cued
+M7 at both deltas with non-positive uncued controls, reproduced first on the
+existing checkpoints and then on a four-seed aggregate that includes two new
+fully independent end-to-end seeds.
+
+### Restricted claim boundary / caveat
+
+The current claim remains intentionally restricted:
+
+- The **positive four-seed ON-family result is hard and replicated**.
+- The **matched trained OFF ablation is still only seed42**.
+- Seeds 44 and 45 were screened against the shared `off42` comparator via the
+  low-resolution anchor-averaged M7 gate, not against newly trained matched
+  OFF runs.
+
+So the strongest supported statement on this branch is:
+
+> The apical multiplicative family produces a robust positive canonical M7
+> signal across four ON seeds, while the available matched OFF seed remains
+> negative and the shared OFF comparison remains positive.
+
+That is stronger than the earlier two-seed result, but it is not yet the same
+thing as a full matched ON/OFF training sweep for every new seed.
+
+### CUDA-path hardening fix
+
+The publication-hardening pass also fixed a checkpoint-backed CUDA bug in the
+experiment path:
+
+- `ParadigmBase._run_trial_set()` now moves trial-batch tensors onto the
+  model device before `pack_inputs(...)` / `self.net.forward(...)`.
+- This specifically fixed checkpoint-backed `cue_local_competitor` evaluation
+  on CUDA, which previously mixed CPU trial tensors with CUDA model weights.
+
+That fix matters operationally because the seed44/45 cue-validity summaries
+and the later hardening experiment passes depend on this CUDA-backed path.
+
+### Best validated sharpening result remains the apical family
+
+The strongest validated sharpening result on this branch remains the
+four-seed full-resolution apical artifact:
+
+- `results/hardening_apical_eval/m7_full_four_seed/four_seed_full.json`
+
+Combined metrics from that artifact were:
+
+| Metric | Value |
+|---|---|
+| Cued `delta_5` | **+0.0078457** |
+| Cued `delta_10` | **+0.0133137** |
+| Uncued `delta_5` | **−0.0009153** |
+| Uncued `delta_10` | **−0.0016248** |
+
+This still supports the branch's best current sharpening statement:
+a **narrow oracle-guided, cue-assisted apical-gain sufficiency claim**.
+
+### Post-apical effect-size strengthening pass
+
+After the four-seed apical result was hardened, the project moved into a
+separate strengthening phase. The goal was not to replace the apical claim,
+but to increase the **direct center-plus-flank effect size** under a stricter
+publication bar after the user judged sub-1% direct flank effects too weak or
+too noise-like for the intended paper.
+
+The mechanism-search progression on this branch was:
+
+- flank-SOM supplement
+- signed recurrent center-surround modulation
+- combined / ranked recurrent + flank variants
+- reduced-apical sweeps
+- direct shunt / center-recruited normalization probes
+- cue-conditioned normalization-pool evaluation probes
+- SOM-regime gate family
+
+None of those strengthening families has yet displaced the validated apical
+result or cleared the stricter center-plus-flank bar.
+
+### Diagnostic finding before SOM-regime training
+
+The key diagnosis from the strengthening pass was that the **uncued baseline
+suppression** in the then-best checkpoint did **not** come from apical gain,
+recurrent modulation, shunt, PV, or template branches. It was traced to the
+always-on learned SOM pathway:
+
+- `alpha_inh`
+- `som_baseline`
+
+That diagnosis motivated the next family: a cue-conditioned regime control on
+the learned SOM field, rather than more tuning of the apical or recurrent
+branches.
+
+### Eval-only SOM-regime motivation
+
+Before training a new branch, evaluation-only SOM scaling was used to test
+whether weakening SOM in uncued while keeping it stronger in cued could, in
+principle, yield the desired geometry.
+
+Representative passing eval-only row:
+
+| Setting | Value |
+|---|---|
+| `uncued_scale` | `0.25` |
+| `cued_scale` | `1.10` |
+| Cued `+0` | `1.1098` |
+| Cued `+20/+25/+30` | `0.9672 / 0.9651 / 0.9676` |
+| Uncued `+20/+25/+30` | `0.9801 / 0.9796 / 0.9776` |
+| `Δ20` | `0.0129` |
+| `Δ25` | `0.0145` |
+| `Δ30` | `0.0100` |
+
+This did not count as a model result, but it showed that a **regime split on
+the learned SOM pathway** could in principle produce stronger center-plus-flank
+separation without broad-gain cheating.
+
+### First trained SOM-regime result
+
+The first trained SOM-regime checkpoint on this branch was:
+
+- `results/hardening_apical_eval/som_regime_gate_seed42_reprocheck/center_surround_seed42/checkpoint.pt`
+
+Associated triage artifacts:
+
+- `results/hardening_apical_eval/som_regime_gate_seed42_reprocheck/triage/analyze_seed42_cued.log`
+- `results/hardening_apical_eval/som_regime_gate_seed42_reprocheck/triage/analyze_seed42_uncued.log`
+- `results/hardening_apical_eval/som_regime_gate_seed42_reprocheck/triage/cue_validity_seed42.json`
+- `results/hardening_apical_eval/som_regime_gate_seed42_reprocheck/triage/m7_lowres_seed42.json`
+
+Reported values:
+
+| Metric | Value |
+|---|---|
+| Cued `+0` | `1.1703` |
+| Cued `+20` | `0.9966` |
+| Cued `+25` | `0.9947` |
+| Cued `late_peak` | `1.1725` |
+| Cued `M9` | `0.0038` |
+| Uncued `+0` | `0.9387` |
+| Uncued `+20` | `0.9797` |
+| Uncued `+25` | `0.9912` |
+| Uncued `+30` | `0.9979` |
+| Uncued `late_peak` | `0.9377` |
+| Uncued `M9` | `0.0180` |
+| Cue-validity `valid_neutral_gap_delta` | `+0.0022408589720726013` |
+| Cue-validity `invalid_neutral_gap_delta` | `+0.0009929761290550232` |
+| Low-res paired `seed42 - off42` `delta_3` | `+0.0058203125` |
+| Low-res paired `seed42 - off42` `delta_5` | `+0.0089453125` |
+| Low-res paired `seed42 - off42` `delta_10` | `+0.0155859375` |
+
+Interpretation:
+
+- center gain increased strongly
+- decoder support remained directionally positive
+- but the result stayed **center-gain dominated**
+- and it failed the stricter requirement that cued flank suppression clearly
+  outrun uncued baseline suppression by a non-noise margin
+
+So the SOM-regime family is currently exploratory, not claim-updating.
+
+### Current open question
+
+The active unresolved question from the latest strengthening pass is:
+
+> Why did the trained SOM-regime gate fail to reproduce the earlier
+> evaluation-only regime split strongly enough?
+
+That question is now explicitly in debugger investigation and is **not yet
+resolved** on this branch.
+
+### Stricter future acceptance bar
+
+Kuhn's compact stricter bar for any future mechanism on this branch is:
+
+- strong center gain
+- strong local flank suppression
+- clear cued-over-uncued separation
+- decoder improvement above the user's noise floor
+- no broad-gain cheating
+- correct cue-validity ordering
+- matched ablation evidence
+
+Until a mechanism clears that stricter bar, the four-seed apical family
+remains the strongest validated sharpening result in this codebase.
 
 ---
 

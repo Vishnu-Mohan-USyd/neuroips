@@ -28,6 +28,7 @@ from src.training.trainer import (
     unfreeze_stage2,
     create_stage2_optimizer,
     make_warmup_cosine_scheduler,
+    _ambiguous_components,
     build_stimulus_sequence,
     compute_readout_indices,
     extract_readout_data,
@@ -199,7 +200,24 @@ class TestCompositeLoss:
 
         assert isinstance(total_loss, torch.Tensor)
         assert total_loss.shape == ()
-        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc"}
+        expected_keys = {
+            "total",
+            "sensory",
+            "prediction",
+            "energy_exc",
+            "energy_total",
+            "homeostasis",
+            "state",
+            "fb_sparsity",
+            "surprise",
+            "error_readout",
+            "detection",
+            "l4_sensory",
+            "mismatch",
+            "sharp",
+            "local_disc",
+            "local_rank",
+        }
         assert set(loss_dict.keys()) == expected_keys
         for k, v in loss_dict.items():
             assert isinstance(v, float), f"{k} should be float, got {type(v)}"
@@ -512,6 +530,27 @@ class TestBuildStimulusSequence:
             period=model_cfg.orientation_range,
         )
         assert torch.allclose(stim_sym[0, 0], expected[0], atol=1e-6)
+
+    def test_sampled_local_competitor_uses_local_offsets_and_both_sides(self, model_cfg, stim_cfg):
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(7)
+        orientations = torch.full((256,), 90.0)
+        stim_cfg = StimulusConfig(
+            ambiguous_mode="sampled_local_competitor",
+            ambiguous_offsets=(5.0, 10.0, 15.0),
+        )
+
+        theta1, theta2 = _ambiguous_components(
+            orientations, model_cfg, stim_cfg, generator=generator
+        )
+
+        assert torch.allclose(theta1, orientations)
+        signed_diff = torch.remainder(theta2 - theta1 + 90.0, 180.0) - 90.0
+        abs_diff = signed_diff.abs()
+        allowed = torch.tensor([5.0, 10.0, 15.0])
+        assert torch.isin(abs_diff.cpu(), allowed).all()
+        assert (signed_diff < 0).any()
+        assert (signed_diff > 0).any()
 
 
 # ---------------------------------------------------------------------------
@@ -1105,6 +1144,95 @@ class TestLocalDiscriminationLoss:
         assert not hasattr(loss_fn, "local_disc_head")
         assert ld["local_disc"] == 0.0
         assert torch.isfinite(total).item()
+
+
+class TestLocalRankingLoss:
+    def test_local_rank_loss_zero_when_target_exceeds_competitors_by_margin(self):
+        model_cfg = ModelConfig(feedback_mode='emergent')
+        tc = TrainingConfig(
+            lambda_local_rank=1.0,
+            local_rank_offsets_deg=(5.0, 10.0, 15.0),
+            local_rank_margins=(0.1, 0.2, 0.3),
+            local_rank_weights=(1.0, 1.0, 1.0),
+            local_rank_late_weights=(1.0, 1.0, 1.0),
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, T_late, N = 1, 1, 3, model_cfg.n_orientations
+        r_l23 = torch.zeros(B, W, T_late, N)
+        theta = torch.tensor([[50.0]])
+        center = loss_fn._theta_to_channel(theta).item()
+        r_l23[..., center] = 1.0
+        for offset_ch, margin in zip(loss_fn._local_rank_channel_offsets(), tc.local_rank_margins):
+            r_l23[..., (center + offset_ch) % N] = 1.0 - margin - 0.05
+            r_l23[..., (center - offset_ch) % N] = 1.0 - margin - 0.05
+
+        loss = loss_fn.local_ranking_loss(
+            r_l23, theta, ambiguous_windows=torch.tensor([[True]])
+        )
+        assert loss.ndim == 0
+        assert torch.allclose(loss, torch.tensor(0.0), atol=1e-8)
+
+    def test_local_rank_late_weights_only_count_weighted_steps(self):
+        model_cfg = ModelConfig(feedback_mode='emergent')
+        tc = TrainingConfig(
+            lambda_local_rank=1.0,
+            local_rank_offsets_deg=(5.0,),
+            local_rank_margins=(0.0,),
+            local_rank_weights=(1.0,),
+            local_rank_late_weights=(0.0, 0.0, 2.0),
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, T_late, N = 1, 1, 3, model_cfg.n_orientations
+        r_l23 = torch.zeros(B, W, T_late, N)
+        theta = torch.tensor([[25.0]])
+        center = loss_fn._theta_to_channel(theta).item()
+        offset = loss_fn._local_rank_channel_offsets()[0]
+        r_l23[..., center] = 0.0
+        r_l23[..., (center + offset) % N] = 1.0
+        r_l23[..., (center - offset) % N] = 1.0
+
+        loss = loss_fn.local_ranking_loss(
+            r_l23, theta, ambiguous_windows=torch.tensor([[True]])
+        )
+        assert torch.allclose(loss, torch.tensor(1.0), atol=1e-6)
+
+    def test_forward_reports_local_rank_key(self):
+        torch.manual_seed(11)
+        model_cfg = ModelConfig(feedback_mode='emergent')
+        tc = TrainingConfig(
+            lambda_local_rank=1.0,
+            local_rank_offsets_deg=(5.0,),
+            local_rank_margins=(0.0,),
+            local_rank_weights=(1.0,),
+            local_rank_late_weights=(1.0, 1.0, 1.0),
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        net = LaminarV1V2Network(model_cfg)
+        B, T, N = 2, 5, model_cfg.n_orientations
+        stim = torch.randn(B, T, N).abs()
+        r_l23_all, _, aux = net(stim)
+        outputs = {
+            "r_l23": r_l23_all,
+            "q_pred": aux["q_pred_all"],
+            "r_l4": aux["r_l4_all"],
+            "r_pv": aux["r_pv_all"],
+            "r_som": aux["r_som_all"],
+            "deep_template": aux["deep_template_all"],
+        }
+        true_thetas = torch.rand(B, T) * 180
+        true_next = torch.rand(B, T) * 180
+        r_l23_late = r_l23_all[:, :, None, :].expand(-1, -1, 3, -1)
+        _, loss_dict = loss_fn(
+            outputs,
+            true_thetas,
+            true_next,
+            r_l23_all,
+            aux["q_pred_all"],
+            r_l23_late_windows=r_l23_late,
+            ambiguous_windows=torch.ones(B, T, dtype=torch.bool),
+        )
+        assert "local_rank" in loss_dict
+        assert loss_dict["local_rank"] >= 0.0
 
 
 class TestOracleSigma:
