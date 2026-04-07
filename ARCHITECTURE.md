@@ -59,12 +59,17 @@ what feedback regimes emerge under different computational objectives.
 
 GRU with 16 hidden units. Two output modes:
 
-### Emergent Mode (used in all current experiments)
-- Outputs: `p_cw` [B,1] (P(clockwise rule), sigmoid), `pi_pred` [B,1]
-  (precision, softplus + clamp to [0, pi_max])
-- `q_pred` constructed analytically: given current L4 orientation + p_cw,
-  compute expected CW (+step°) and CCW (−step°) bumps, mix by p_cw
-- Oracle mode: q_pred from ground-truth HMM state, V2 frozen
+### Emergent Mode — Learned Feature Prior (Branch A)
+- Outputs: `mu_pred` [B,N] (full orientation prior distribution, softmax),
+  `pi_pred` [B,1] (precision, softplus + clamp to [0, pi_max])
+- `q_pred = mu_pred` directly — V2 outputs the prior, not a state belief
+- head_mu: `nn.Linear(v2_hidden_dim, N)` → softmax
+- Enables genuine prestimulus priors: during ISI (when L4=0), V2 maintains
+  the prior from GRU memory + cue input
+- Prior supervised via KL divergence against true next orientation
+  (circular Gaussian target, sigma=10°)
+- v2_input_mode: `l4_l23` — V2 sees both L4 and L2/3 for temporal context
+- Oracle mode: q_pred from ground-truth HMM state, V2 frozen (bypasses mu_pred)
 
 ### Fixed Mode (legacy, not used in current results)
 - Outputs: q_pred [B,36] (softmax), pi_pred, state_logits [B,3], h_v2
@@ -114,8 +119,7 @@ GRU with 16 hidden units. Two output modes:
 
 ```
 Stimulus → L4 → PV (normalization)
-                L4 → V2 → p_cw, pi_pred
-                          p_cw + L4 → q_pred (analytical)
+                L4 → V2 → mu_pred (= q_pred), pi_pred   [learned orientation prior]
                           q_pred → K_inh ⊛ q_centered → inh_field → delta-SOM → som_drive
                           q_pred → K_vip ⊛ q_centered → vip_field → vip_drive
                           q_pred → K_apical ⊛ q_centered → apical_field → apical_gain
@@ -166,7 +170,7 @@ Stimulus → L4 → PV (normalization)
 | `lambda_mismatch` | Binary BCE mismatch detection (ground-truth) | L2/3 readout |
 | `lambda_local_disc` | 7-way CE local competitor discrimination | L2/3 readout (±3 channels = ±15°) |
 | `lambda_sharp` | Distance-weighted activity penalty | L2/3 (penalize flanks) |
-| `lambda_state` | BCE on p_cw vs true CW/CCW | V2 output |
+| `lambda_state` | KL(target ‖ mu_pred) — prior vs true next orientation | V2 output (learned prior) |
 | `lambda_energy` | L1 on all population rates | All |
 | `lambda_homeo` | Homeostasis (L2/3 mean in [0.05, 0.5]) | L2/3 |
 | `lambda_fb` | L1 sparsity on alpha_inh + alpha_vip + alpha_apical | Feedback operator |
@@ -207,6 +211,7 @@ Stimulus → L4 → PV (normalization)
 
 ## Tests
 
-366+ tests covering V1 circuit, V2 factorization, feedback operator (including
-VIP and apical gain pathways), training pipeline, config parsing, and regression
-tests for all bugs discovered during the project. Run with `python -m pytest tests/ -v`.
+366+ tests covering V1 circuit, V2 learned prior (mu_pred distribution properties),
+feedback operator (including VIP and apical gain pathways), training pipeline,
+config parsing, and regression tests for all bugs discovered during the project.
+Run with `python -m pytest tests/ -v`.

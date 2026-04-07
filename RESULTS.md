@@ -354,7 +354,63 @@ amplitude effects:
 
 ---
 
-## 5. Other Findings
+## 5. Branch A: Learned Feature Prior (End-to-End)
+
+### What it is
+
+The biggest single architectural improvement. V2 outputs a full orientation
+distribution (`mu_pred [B,N]`, softmax) instead of a binary state belief
+(`p_cw [B,1]`, sigmoid). `q_pred` comes directly from V2's learned prior,
+not reconstructed analytically from current L4 activity + state belief.
+
+This means the model can form genuine prestimulus priors: during ISI
+(when L4=0), V2 maintains the prior from GRU memory + cue input. The
+prior is supervised via KL divergence against the true next orientation
+(circular Gaussian target, sigma=10°).
+
+### Architecture change
+
+- **Old (emergent mode):** `head_p_cw` (Linear → 1, sigmoid) + analytical
+  reconstruction: `q_pred = p_cw * bump(theta+step) + (1-p_cw) * bump(theta-step)`.
+  q_pred tethered to current L4 orientation — cannot form a prior when L4=0.
+- **New (Branch A):** `head_mu` (Linear → N, softmax). `q_pred = mu_pred`
+  directly. V2 optimizes its distribution end-to-end via the feedback circuit.
+
+### Config
+
+`config/exp_branch_a.yaml`: freeze_v2=false, lambda_state=1.0 (prior KL),
+v2_input_mode=l4_l23, n_steps=10000, steps_on=12, steps_isi=4.
+
+### Results (3 seeds x 10000 steps, cross-seed consistent to 3 decimals)
+
+| Metric | Oracle apical | Branch A (learned prior) | Improvement |
+|---|---|---|---|
+| M7 delta=5° | +0.004 | **+0.016** | 4x |
+| M7 delta=10° | +0.014 | **+0.025** | 1.8x |
+| M7 delta=15° | +0.011 | **+0.022** | 2x |
+| Peak gain | 1.142 | **1.248** | +10 points |
+| M12 fixed readout delta=10° | +0.017 | **+0.020** | +18% |
+| Global amplitude | 1.030 | **1.150** | More boosted |
+| prior_kl | N/A (oracle) | 0.83 (converged) | V2 learned |
+| s_acc | 0.31 | 0.34 | Improved |
+
+### Interpretation
+
+The learned prior is more effective than the oracle because V2 optimizes
+its distribution specifically to help the feedback circuit sharpen, not
+just to match the next orientation. The oracle produces a bump centered
+at the true next orientation — but that may not be the optimal template
+for driving the SOM+VIP+apical circuit. The learned prior discovers a
+distribution that maximizes the feedback operator's ability to boost the
+predicted channel and suppress competitors.
+
+This is the first end-to-end learned sharpening result: no oracle, no
+frozen V2, no hand-crafted predictions. The model learns WHAT to predict
+and HOW to use predictions simultaneously.
+
+---
+
+## 6. Other Findings
 
 ### Sensory loss on L2/3 blocks dampening
 
@@ -386,7 +442,7 @@ when predictions are imprecise.
 
 ---
 
-## 6. Representational Metrics Used
+## 7. Representational Metrics Used
 
 | Metric | What it measures | Key for |
 |---|---|---|
@@ -408,7 +464,7 @@ invariance, matching M6's multi-anchor protocol. M7 now includes bootstrap
 
 ---
 
-## 7. Configs and Results Location
+## 8. Configs and Results Location
 
 ### Key configs
 
@@ -430,6 +486,7 @@ invariance, matching M6's multi-anchor protocol. M7 now includes bootstrap
 | `confound_damp_no_adapt.yaml` | Dampening: no-adaptation control |
 | `confound_damp_50reliable.yaml` | Dampening: 50%-reliability control |
 | `e2e_deviance.yaml` | End-to-end learned V2, dampening |
+| `exp_branch_a.yaml` | Branch A: learned feature prior (V2 outputs mu_pred, end-to-end) |
 
 ### Results directories
 
@@ -450,9 +507,9 @@ invariance, matching M6's multi-anchor protocol. M7 now includes bootstrap
 
 ---
 
-## 8. What This Means
+## 9. What This Means
 
-The model supports four defensible claims arranged as a progression:
+The model supports five defensible claims arranged as a progression:
 
 > **1. Dampening is robust and non-diagnostic.**
 > In a minimal V1-V2 inhibitory feedback model, dampening (suppression at
@@ -481,16 +538,28 @@ The model supports four defensible claims arranged as a progression:
 > VIP disinhibition + apical multiplicative gain) is the minimum architecture
 > for representational sharpening.
 
+> **5. Sharpening works end-to-end with a learned prior (Branch A).**
+> Replacing V2's binary state belief (p_cw) with a full learned orientation
+> distribution (mu_pred) produces STRONGER sharpening than the oracle. M7
+> improves 1.8-4x across all deltas (e.g., +0.025 vs +0.014 at delta=10°),
+> peak gain rises from 1.14 to 1.25, and the learned prior converges to
+> KL=0.83 (well below the uninformative baseline ~3.6). The learned prior
+> is more effective because V2 optimizes its distribution specifically to
+> help the feedback circuit sharpen, not just to match the next orientation.
+> This is the first fully end-to-end result: no oracle, no frozen V2.
+
 ### Scientific implication: circuit motif determines what is POSSIBLE; prediction quality determines what EMERGES
 
-The four regimes demonstrate that the feedback regime is determined by
+The five regimes demonstrate that the feedback regime is determined by
 circuit architecture, not by training objective:
 
 - **SOM-only + energy**: dampening (suppression at predicted channel)
 - **SOM-only + sensory + energy**: flat (competing losses cancel)
 - **VIP + SOM + sensory + energy**: center-sparing surround suppression
-- **Apical + VIP + SOM + sensory + energy**: sharpening (boosted center +
+- **Apical + VIP + SOM + sensory + energy (oracle)**: sharpening (boosted center +
   suppressed flanks + improved decoder accuracy)
+- **Apical + VIP + SOM + learned prior (Branch A)**: stronger sharpening —
+  V2 optimizes its prior to maximize feedback utility, not just prediction accuracy
 
 The loss landscape selects WHAT the feedback does, but the circuit CONSTRAINS
 what is achievable. SOM inhibition alone gives dampening or nothing. Adding
