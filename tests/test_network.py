@@ -142,14 +142,14 @@ class TestV2ContextEmergent:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        p_cw, pi_pred, h_v2_new = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, pi_pred, h_v2_new = v2(r_l4, r_l23, cue, task_state, h_v2)
 
-        assert p_cw.shape == (B, 1)
+        assert mu_pred.shape == (B, N)
         assert pi_pred.shape == (B, 1)
         assert h_v2_new.shape == (B, H)
 
-    def test_p_cw_bounded_0_1(self, cfg_emergent):
-        """p_cw should be in [0, 1] (sigmoid output)."""
+    def test_mu_pred_sums_to_one(self, cfg_emergent):
+        """mu_pred should be a valid probability distribution (softmax output)."""
         v2 = V2ContextModule(cfg_emergent)
         B, N, H = 8, cfg_emergent.n_orientations, cfg_emergent.v2_hidden_dim
 
@@ -160,13 +160,14 @@ class TestV2ContextEmergent:
             task_state = torch.zeros(B, 2)
             h_v2 = torch.randn(B, H) * 5
 
-            p_cw, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+            mu_pred, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
-            assert (p_cw >= 0).all()
-            assert (p_cw <= 1).all()
+            assert (mu_pred >= 0).all(), "mu_pred should be non-negative (softmax)"
+            assert torch.allclose(mu_pred.sum(dim=-1), torch.ones(B), atol=1e-5), \
+                "mu_pred should sum to 1 (valid distribution)"
 
-    def test_initial_p_cw_near_half(self, cfg_emergent):
-        """With zero inputs and zero hidden state, p_cw should be ~0.5."""
+    def test_initial_mu_pred_near_uniform(self, cfg_emergent):
+        """With zero inputs and zero hidden state, mu_pred should be near uniform."""
         v2 = V2ContextModule(cfg_emergent)
         B, N, H = 1, cfg_emergent.n_orientations, cfg_emergent.v2_hidden_dim
 
@@ -176,10 +177,17 @@ class TestV2ContextEmergent:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        p_cw, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
-        # sigmoid(0) = 0.5, but GRU output may shift this slightly
-        assert abs(p_cw.item() - 0.5) < 0.2
+        # With zero-initialized GRU and random head_mu weights, mu_pred
+        # won't be exactly uniform but should not be extremely peaked.
+        # Check entropy is at least 50% of max entropy.
+        max_entropy = torch.log(torch.tensor(float(N)))
+        entropy = -(mu_pred * (mu_pred + 1e-8).log()).sum()
+        assert entropy > 0.5 * max_entropy, (
+            f"mu_pred too peaked at init: entropy={entropy.item():.2f}, "
+            f"max={max_entropy.item():.2f}"
+        )
 
 
 # ── FeedbackMechanism Tests (fixed mode, unchanged) ─────────────────────
@@ -906,15 +914,14 @@ class TestGradientFlowNetwork:
 
         loss = (r_l23_all.sum()
                 + aux["deep_template_all"].sum()
-                + aux["q_pred_all"].sum()
-                + aux["pi_pred_all"].sum()
-                + aux["p_cw_all"].sum())
+                + aux["q_pred_all"].sum()  # q_pred = mu_pred in emergent mode
+                + aux["pi_pred_all"].sum())
         loss.backward()
 
         # Check emergent-specific params
         assert net.feedback.alpha_inh.grad is not None
-        # Check V2 p_cw head
-        assert net.v2.head_p_cw.weight.grad is not None
+        # Check V2 mu head (learned prior — q_pred IS mu_pred)
+        assert net.v2.head_mu.weight.grad is not None
 
         unused_params = {"l4.pv_gain.gain_raw"}
         for name, param in net.named_parameters():

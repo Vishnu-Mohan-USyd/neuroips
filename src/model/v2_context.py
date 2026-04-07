@@ -21,9 +21,10 @@ class V2ContextModule(nn.Module):
     'fixed' (legacy): Outputs q_pred [B, N], pi_pred [B, 1],
         state_logits [B, 3], h_v2 [B, H].
 
-    'emergent' (factorized): Outputs p_cw [B, 1] (sigmoid probability
-        that rule is CW), pi_pred [B, 1], h_v2 [B, H].
-        q_pred is constructed analytically in network.py from L4 + p_cw.
+    'emergent' (learned prior): Outputs mu_pred [B, N] (softmax
+        orientation prior distribution), pi_pred [B, 1], h_v2 [B, H].
+        mu_pred IS the prior — V2 directly outputs a full orientation
+        distribution, enabling genuine prestimulus priors during ISI.
     """
 
     def __init__(self, cfg: ModelConfig):
@@ -48,9 +49,8 @@ class V2ContextModule(nn.Module):
 
         # Output heads depend on feedback_mode
         if self.feedback_mode == 'emergent':
-            # Factorized: binary CW probability + precision
-            self.head_p_cw = nn.Linear(cfg.v2_hidden_dim, 1)  # -> sigmoid -> p_cw
-            nn.init.constant_(self.head_p_cw.bias, 0.0)  # sigmoid(0) = 0.5 (uninformative)
+            # Learned prior: full orientation distribution
+            self.head_mu = nn.Linear(cfg.v2_hidden_dim, n)  # -> softmax -> mu_pred [B, N]
         else:
             # Legacy: full orientation distribution + state logits
             self.head_q = nn.Linear(cfg.v2_hidden_dim, n)        # -> softmax -> q_pred
@@ -78,7 +78,7 @@ class V2ContextModule(nn.Module):
             h_v2_prev: [B, H] -- previous GRU hidden state.
 
         Returns (feedback_mode == 'emergent'):
-            p_cw: [B, 1] -- probability that rule is CW (sigmoid).
+            mu_pred: [B, N] -- predicted orientation prior (softmax, sums to 1).
             pi_pred: [B, 1] -- prediction precision in [0, pi_max].
             h_v2: [B, H] -- updated GRU hidden state.
 
@@ -99,8 +99,8 @@ class V2ContextModule(nn.Module):
         pi_pred = torch.clamp(F.softplus(self.head_pi(h_v2)), max=self.pi_max)  # [B, 1]
 
         if self.feedback_mode == 'emergent':
-            p_cw = torch.sigmoid(self.head_p_cw(h_v2))  # [B, 1]
-            return p_cw, pi_pred, h_v2
+            mu_pred = F.softmax(self.head_mu(h_v2), dim=-1)  # [B, N]
+            return mu_pred, pi_pred, h_v2
         else:
             q_pred = F.softmax(self.head_q(h_v2), dim=-1)  # [B, N]
             state_logits = self.head_state(h_v2)             # [B, 3]

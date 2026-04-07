@@ -181,10 +181,11 @@ class LaminarV1V2Network(nn.Module):
             p_cw = torch.full((stimulus.shape[0], 1), 0.5, device=stimulus.device)
             h_v2 = state.h_v2
         elif self.cfg.feedback_mode == 'emergent':
-            p_cw, pi_pred_raw, h_v2 = self.v2(
+            mu_pred, pi_pred_raw, h_v2 = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
             )
-            q_pred = self._construct_q_pred(r_l4, p_cw)
+            q_pred = mu_pred  # V2 directly outputs the prior distribution
+            p_cw = torch.full((stimulus.shape[0], 1), 0.5, device=stimulus.device)  # compat placeholder
             # No state_logits in emergent mode; use zeros placeholder for StepAux
             state_logits = torch.zeros(stimulus.shape[0], 3, device=stimulus.device)
         else:

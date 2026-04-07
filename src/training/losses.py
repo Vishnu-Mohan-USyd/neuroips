@@ -203,7 +203,8 @@ class CompositeLoss(nn.Module):
     ) -> Tensor:
         """Binary cross-entropy loss on p_cw vs true CW/CCW label.
 
-        Used in emergent mode where V2 outputs p_cw (probability of CW).
+        Legacy: used in emergent mode when V2 output p_cw. Retained for
+        backward compatibility with fixed mode and oracle mode.
 
         Args:
             p_cw_windows: [B, n_windows, 1] -- predicted CW probability (sigmoid).
@@ -216,6 +217,42 @@ class CompositeLoss(nn.Module):
         # Target: 1.0 for CW (state==0), 0.0 for CCW (state==1)
         target = (true_states_windows == 0).float().unsqueeze(-1)  # [B, W, 1]
         return F.binary_cross_entropy(p_cw_windows, target)
+
+    def prior_kl_loss(
+        self, mu_pred_windows: Tensor, true_next_theta_windows: Tensor
+    ) -> Tensor:
+        """KL divergence between V2's predicted prior and true next orientation.
+
+        Target: circular Gaussian bump at true next orientation, normalized
+        to a proper distribution. V2's mu_pred (softmax output) is treated
+        as the predicted distribution.
+
+        Args:
+            mu_pred_windows: [B, n_windows, N] -- V2's predicted prior (sums to 1).
+            true_next_theta_windows: [B, n_windows] -- true next orientations (degrees).
+
+        Returns:
+            Scalar KL divergence loss.
+        """
+        B, W, N = mu_pred_windows.shape
+        step = self.orient_step
+        prefs = torch.arange(N, device=mu_pred_windows.device).float() * step  # [N]
+
+        # Build target distribution: Gaussian bump at true next orientation
+        true_degs = true_next_theta_windows.unsqueeze(-1)  # [B, W, 1]
+        dists = torch.min(
+            torch.abs(prefs.unsqueeze(0).unsqueeze(0) - true_degs),
+            self.period - torch.abs(prefs.unsqueeze(0).unsqueeze(0) - true_degs)
+        )  # [B, W, N]
+        target = torch.exp(-dists ** 2 / (2 * 10.0 ** 2))  # sigma=10 deg
+        target = target / (target.sum(dim=-1, keepdim=True) + 1e-8)
+
+        # KL(target || mu_pred): F.kl_div expects log-input
+        log_mu = (mu_pred_windows + 1e-8).log()
+        return F.kl_div(
+            log_mu.reshape(-1, N), target.reshape(-1, N),
+            reduction='batchmean', log_target=False,
+        )
 
     def tuning_sharpness_loss(
         self, r_l23_windows: Tensor, true_theta_windows: Tensor
@@ -490,13 +527,16 @@ class CompositeLoss(nn.Module):
         }
 
         if self.feedback_mode == 'emergent':
-            # Emergent mode: BCE on p_cw + feedback sparsity
-            loss_dict["prediction"] = 0.0  # No prediction KL in emergent mode
+            # Emergent mode: prior KL on mu_pred (= q_pred) + feedback sparsity
+            loss_dict["prediction"] = 0.0
 
-            if p_cw_windows is not None and true_states_windows is not None:
-                l_state = self.state_bce_loss(p_cw_windows, true_states_windows)
-                total = total + self.lambda_state * l_state
-                loss_dict["state"] = l_state.item()
+            # Prior KL loss: q_pred_windows IS mu_pred in learned-prior mode
+            if self.lambda_state > 0 and true_states_windows is not None:
+                # true_states_windows is used as a flag: if not None, prior KL is active.
+                # The actual target is true_next_theta_windows (passed via true_next_theta_windows arg).
+                l_prior_kl = self.prior_kl_loss(q_pred_windows, true_next_theta_windows)
+                total = total + self.lambda_state * l_prior_kl
+                loss_dict["state"] = l_prior_kl.item()
             else:
                 loss_dict["state"] = 0.0
 

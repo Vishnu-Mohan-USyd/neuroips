@@ -200,7 +200,7 @@ def run_stage2(
     # Reference baselines
     if feedback_mode == 'emergent':
         logger.info(
-            "Baselines (emergent): CW_accuracy chance=0.50, "
+            "Baselines (emergent): prior_kl uninformative=~3.6 (uniform prior), "
             "sensory uniform=0.028 (1/36)"
         )
     else:
@@ -390,7 +390,8 @@ def run_stage2(
             steps_on=train_cfg.steps_on, steps_isi=train_cfg.steps_isi,
         )
 
-        # Extract p_cw windows for emergent mode
+        # Extract p_cw windows for emergent mode (placeholder — p_cw is 0.5 in
+        # learned-prior mode; retained for backward compat with loss_fn signature)
         p_cw_windows = None
         if feedback_mode == 'emergent':
             steps_per = train_cfg.steps_on + train_cfg.steps_isi
@@ -507,15 +508,10 @@ def run_stage2(
                 orient_step = model_cfg.orientation_range / N
 
                 if feedback_mode == 'emergent':
-                    # Emergent mode metrics: CW accuracy from p_cw
-                    if p_cw_windows is not None:
-                        cw_pred = (p_cw_windows.squeeze(-1) > 0.5).long()
-                        cw_target = (true_states == 0).long()
-                        state_acc = (cw_pred == cw_target).float().mean().item()
-                    else:
-                        state_acc = 0.0
+                    # Emergent mode metrics: prior KL accuracy (q_pred = mu_pred)
+                    state_acc = 0.0  # No CW/CCW classification in learned-prior mode
 
-                    # Prediction accuracy via analytically-constructed q_pred
+                    # Prediction accuracy via V2's mu_pred (= q_pred)
                     pred_channels = q_pred_windows[:, :-1].argmax(dim=-1)
                     true_channels = loss_fn._theta_to_channel(true_next_thetas[:, :-1])
                     pred_acc = (pred_channels == true_channels).float().mean().item()
@@ -567,12 +563,11 @@ def run_stage2(
                         f"Stage 2 step {step+1}/{n_steps}: "
                         f"loss={loss_dict['total']:.4f}, "
                         f"sens={loss_dict['sensory']:.4f}, "
-                        f"state_bce={loss_dict['state']:.4f}, "
+                        f"prior_kl={loss_dict['state']:.4f}, "
                         f"fb_sparse={loss_dict['fb_sparsity']:.4f}, "
                         f"energy={loss_dict['energy_total']:.4f}, "
                         f"homeo={loss_dict['homeostasis']:.4f}, "
                         f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
-                        f"cw_acc={state_acc:.3f}, "
                         f"ang_err={angular_error:.1f}, "
                         f"{fb_info}{l4_info}{mm_info}"
                         f"grad_norm={total_norm:.3f}, "
