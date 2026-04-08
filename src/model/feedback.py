@@ -270,7 +270,7 @@ class EmergentFeedbackOperator(nn.Module):
         # receive top-down feedback in layer 1, modulating gain of feedforward
         # drive (multiplicative, not additive).
         self.alpha_apical = nn.Parameter(torch.full((K,), 0.01))
-        self.max_apical_gain = 0.5  # ±50% maximum modulation
+        self.max_apical_gain = 0.7  # ±70% maximum modulation
 
         # Delta-SOM baseline: softplus(baseline + field) - softplus(baseline)
         # removes the constant bias from softplus, so zero field → zero drive.
