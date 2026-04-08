@@ -2,7 +2,7 @@
 
 Two feedback systems:
 1. FeedbackMechanism (fixed): Models A-E with hardcoded kernel shapes.
-2. EmergentFeedbackOperator: Learned circulant kernel via basis functions.
+2. EmergentFeedbackOperator: Learned circulant kernel via direct channel weights.
 
 Mechanism identity is imposed by constraining specific parameters to zero
 (fixed mode) or emerges from training objectives (emergent mode).
@@ -220,23 +220,17 @@ class FeedbackMechanism(nn.Module):
 
 
 class EmergentFeedbackOperator(nn.Module):
-    """Learned feedback operator via circulant basis functions.
+    """Learned feedback operator via direct channel-wise circulant kernels.
 
-    Instead of hardcoded kernel shapes (dampening, sharpening, center-surround),
-    this operator learns two profiles (inhibitory and excitatory) as linear
-    combinations of fixed circular basis functions.
-
-    Basis functions (K ~ 7):
-        Even: narrow (sigma=5), medium (sigma=15), broad (sigma=30),
-              very broad (sigma=60), Mexican hat (narrow - broad), constant.
-        Odd: sin-like for tuning shift detection.
+    Each pathway (SOM, VIP, apical) has one learnable weight per orientation
+    channel offset, giving full 5° resolution (N=36 weights per pathway).
+    The kernel profile is used as row 0 of a circulant matrix — shifting it
+    to each channel center via circular convolution.
 
     Learnable parameters:
-        alpha_inh [K]: weights for SOM (inhibitory) pathway
-
-    The scientific result is a phase diagram: under different loss weights,
-    the operator converges to different kernel shapes that can be classified
-    post-hoc against the known mechanism templates.
+        alpha_inh [N]: direct channel weights for SOM (inhibitory) pathway
+        alpha_vip [N]: direct channel weights for VIP (disinhibitory) pathway
+        alpha_apical [N]: direct channel weights for apical gain pathway
     """
 
     def __init__(self, cfg: ModelConfig, delta_som: bool = False):
@@ -246,31 +240,25 @@ class EmergentFeedbackOperator(nn.Module):
         self.period = cfg.orientation_range
         self.delta_som = delta_som
 
-        # Build fixed circular basis functions
-        basis = self._build_basis(N, cfg.orientation_range)  # [K, N]
-        self.register_buffer("basis", basis)
-        K = basis.shape[0]
-
-        # Learnable weights for inhibitory (SOM) profile only.
+        # Learnable weights — one per orientation channel offset [N].
         # Small non-zero init to avoid dead ReLU gradient (relu(0) has grad 0).
         # At 0.01, feedback output is ~0.01 * pi — effectively off but gradient
         # can flow. During burn-in (feedback_scale=0), this is fully zeroed out.
-        self.alpha_inh = nn.Parameter(torch.full((K,), 0.01))
+        self.alpha_inh = nn.Parameter(torch.full((N,), 0.01))
 
-        # VIP pathway: separate learnable weights, same basis functions.
-        # Init at 0.01 (same as alpha_inh) — NOT zero, because
-        # rectified_softplus has zero gradient at 0, which would permanently
-        # kill the VIP pathway. The L1 penalty will push alpha_vip back to
-        # zero if the task doesn't need disinhibition.
-        self.alpha_vip = nn.Parameter(torch.full((K,), 0.01))
+        # VIP pathway: separate learnable weights.
+        # Init at 0.01 — NOT zero, because rectified_softplus has zero gradient
+        # at 0, which would permanently kill the VIP pathway. The L1 penalty
+        # will push alpha_vip back to zero if the task doesn't need disinhibition.
+        self.alpha_vip = nn.Parameter(torch.full((N,), 0.01))
 
         # Apical gain pathway: multiplicative modulation of L2/3 excitatory
         # drive at the predicted channel. Constrained to [1-max, 1+max] via
         # tanh. Biologically: active apical dendrites in L2/3 pyramidal cells
         # receive top-down feedback in layer 1, modulating gain of feedforward
         # drive (multiplicative, not additive).
-        self.alpha_apical = nn.Parameter(torch.full((K,), 0.01))
-        self.max_apical_gain = 0.7  # ±70% maximum modulation
+        self.alpha_apical = nn.Parameter(torch.full((N,), 0.01))
+        self.max_apical_gain = cfg.max_apical_gain
 
         # Delta-SOM baseline: softplus(baseline + field) - softplus(baseline)
         # removes the constant bias from softplus, so zero field → zero drive.
@@ -294,77 +282,29 @@ class EmergentFeedbackOperator(nn.Module):
         self._cached_vip_circulant: Tensor | None = None
         self._cached_apical_circulant: Tensor | None = None
 
-    def _build_basis(self, N: int, period: float) -> Tensor:
-        """Build circular basis functions over orientation space.
-
-        Args:
-            N: Number of orientation channels (e.g. 36).
-            period: Orientation range in degrees (e.g. 180).
-
-        Returns:
-            Basis matrix [K, N] where K ~ 7 basis functions.
-        """
-        step = period / N
-        thetas = torch.arange(N, dtype=torch.float32) * step  # [N]
-
-        # Unsigned circular distances from channel 0
-        dists = circular_distance_abs(
-            thetas.unsqueeze(0), thetas[0:1].unsqueeze(1), period
-        ).squeeze(0)  # [N]
-
-        bases = []
-
-        # Even Gaussians at different widths (4 bases)
-        for sigma in [5.0, 15.0, 30.0, 60.0]:
-            g = torch.exp(-dists ** 2 / (2 * sigma ** 2))
-            g = g / g.sum()  # normalize to sum=1
-            bases.append(g)
-
-        # Mexican hat: narrow - broad (1 basis)
-        narrow = torch.exp(-dists ** 2 / (2 * 10.0 ** 2))
-        broad = torch.exp(-dists ** 2 / (2 * 30.0 ** 2))
-        mh = narrow / narrow.sum() - broad / broad.sum()
-        bases.append(mh)
-
-        # Constant / global gain (1 basis)
-        bases.append(torch.ones(N) / N)
-
-        # Odd basis: sin-like for tuning shifts (1 basis)
-        signed_dists = circular_distance(
-            thetas.unsqueeze(0), thetas[0:1].unsqueeze(1), period
-        ).squeeze(0)  # [N], signed
-        odd1 = torch.sin(signed_dists * math.pi / (period / 2))  # one cycle over +/- period/2
-        odd1 = odd1 / (odd1.abs().sum() + 1e-8)
-        bases.append(odd1)
-
-        return torch.stack(bases)  # [K, N]
-
     def get_profiles(self) -> Tensor:
         """Return the current inhibitory (SOM) kernel profile.
 
         Returns:
-            K_inh: [N] inhibitory (SOM) kernel profile.
+            K_inh: [N] inhibitory (SOM) kernel profile (direct channel weights).
         """
-        K_inh = (self.alpha_inh.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
-        return K_inh
+        return self.alpha_inh
 
     def get_vip_profile(self) -> Tensor:
         """Return the current VIP (disinhibitory) kernel profile.
 
         Returns:
-            K_vip: [N] VIP kernel profile.
+            K_vip: [N] VIP kernel profile (direct channel weights).
         """
-        K_vip = (self.alpha_vip.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
-        return K_vip
+        return self.alpha_vip
 
     def get_apical_profile(self) -> Tensor:
         """Return the current apical gain kernel profile.
 
         Returns:
-            K_apical: [N] apical gain kernel profile.
+            K_apical: [N] apical gain kernel profile (direct channel weights).
         """
-        K_apical = (self.alpha_apical.unsqueeze(-1) * self.basis).sum(dim=0)  # [N]
-        return K_apical
+        return self.alpha_apical
 
     def _to_circulant(self, profile: Tensor) -> Tensor:
         """Convert a 1D profile [N] to a circulant matrix [N, N].

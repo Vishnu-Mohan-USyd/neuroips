@@ -416,12 +416,13 @@ class TestEmergentFeedbackOperator:
         # VIP uses delta-style (signed) — just check finite
         assert torch.isfinite(vip_drive).all()
 
-    def test_basis_shape(self, cfg_emergent):
-        """Basis should be [K, N] with K ~ 7."""
+    def test_alpha_shapes(self, cfg_emergent):
+        """Alpha weights should be [N] — one per orientation channel."""
         fb = EmergentFeedbackOperator(cfg_emergent)
-        K, N = fb.basis.shape
-        assert N == cfg_emergent.n_orientations
-        assert K == 7  # 4 Gaussians + 1 Mexican hat + 1 constant + 1 odd
+        N = cfg_emergent.n_orientations
+        assert fb.alpha_inh.shape == (N,)
+        assert fb.alpha_vip.shape == (N,)
+        assert fb.alpha_apical.shape == (N,)
 
     def test_profiles_shape(self, cfg_emergent):
         fb = EmergentFeedbackOperator(cfg_emergent)
@@ -551,9 +552,12 @@ class TestVIPPathway:
     def test_gradient_flow_alpha_vip(self, cfg_emergent):
         """Gradient flows through alpha_vip after forward + backward."""
         net = LaminarV1V2Network(cfg_emergent, delta_som=True)
-        # Give alpha_vip nonzero values so gradient is nonzero
+        # Give alpha_vip non-uniform values so the circulant profile is
+        # asymmetric and produces nonzero field (uniform weights → uniform
+        # circulant → zero field on zero-mean input → zero gradient).
         with torch.no_grad():
-            net.feedback.alpha_vip.fill_(0.1)
+            torch.manual_seed(0)
+            net.feedback.alpha_vip.copy_(torch.randn(cfg_emergent.n_orientations) * 0.1)
 
         B, T, N = 2, 5, cfg_emergent.n_orientations
         stim = torch.randn(B, T, N).abs() * 0.5
@@ -649,7 +653,10 @@ class TestVIPPathway:
     def test_apical_gain_positive_when_match(self, cfg_emergent):
         """With matching prediction and L4, coincidence > 0, gain > 1.0 at predicted channel."""
         fb = EmergentFeedbackOperator(cfg_emergent)
-        fb.alpha_apical.data.fill_(1.0)
+        # Peaked profile at offset 0: "boost at the predicted channel"
+        # (uniform weights → flat circulant → zero field on zero-mean input)
+        fb.alpha_apical.data.zero_()
+        fb.alpha_apical.data[0] = 1.0
 
         B, N = 4, cfg_emergent.n_orientations
         # Both prediction and L4 peaked at channel 18
@@ -679,8 +686,11 @@ class TestVIPPathway:
         timesteps for the network to warm up from zero initial state.
         """
         net = LaminarV1V2Network(cfg_emergent, delta_som=True)
+        # Non-uniform weights required: uniform direct weights → flat circulant
+        # → zero field on zero-mean input → zero gradient.
         with torch.no_grad():
-            net.feedback.alpha_apical.fill_(0.5)
+            torch.manual_seed(1)
+            net.feedback.alpha_apical.copy_(torch.randn(cfg_emergent.n_orientations) * 0.5)
 
         B, T, N = 2, 15, cfg_emergent.n_orientations
         stim = torch.randn(B, T, N).abs() * 0.5
@@ -722,8 +732,9 @@ class TestVIPPathway:
             net.feedback.alpha_apical.zero_()
         l_fb = loss_fn.feedback_sparsity_loss(net)
         # L1(alpha_inh) + L1(alpha_vip) + relu(L1_vip - L1_inh) + L1(alpha_apical=0)
-        expected_inh = 0.5 * 7  # 7 basis
-        expected_vip = 0.3 * 7
+        N = cfg_emergent.n_orientations  # 36 direct channel weights
+        expected_inh = 0.5 * N
+        expected_vip = 0.3 * N
         # vip < inh so vip_excess = 0
         expected = expected_inh + expected_vip
         assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
@@ -741,8 +752,9 @@ class TestVIPPathway:
             net.feedback.alpha_vip.fill_(0.5)
             net.feedback.alpha_apical.zero_()
         l_fb = loss_fn.feedback_sparsity_loss(net)
-        l1_inh = 0.1 * 7
-        l1_vip = 0.5 * 7
+        N = cfg_emergent.n_orientations
+        l1_inh = 0.1 * N
+        l1_vip = 0.5 * N
         vip_excess = l1_vip - l1_inh  # positive
         expected = l1_inh + l1_vip + vip_excess
         assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
@@ -759,7 +771,7 @@ class TestVIPPathway:
             net.feedback.alpha_vip.zero_()
             net.feedback.alpha_apical.fill_(0.2)
         l_fb = loss_fn.feedback_sparsity_loss(net)
-        expected = 0.2 * 7  # L1(alpha_apical)
+        expected = 0.2 * cfg_emergent.n_orientations  # L1(alpha_apical)
         assert abs(l_fb.item() - expected) < 0.01, f"got {l_fb.item()}, expected {expected}"
 
 

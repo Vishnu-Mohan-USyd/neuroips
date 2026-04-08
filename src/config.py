@@ -72,6 +72,9 @@ class ModelConfig:
     # V2 input mode: 'l23' (default), 'l4', or 'l4_l23'
     v2_input_mode: str = 'l23'
 
+    # Apical gain: ±N% maximum multiplicative modulation of L2/3 drive
+    max_apical_gain: float = 0.7
+
     # Numerical stability
     dt: int = 1
 
