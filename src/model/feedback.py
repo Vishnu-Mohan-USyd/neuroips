@@ -270,7 +270,7 @@ class EmergentFeedbackOperator(nn.Module):
         # receive top-down feedback in layer 1, modulating gain of feedforward
         # drive (multiplicative, not additive).
         self.alpha_apical = nn.Parameter(torch.full((K,), 0.01))
-        self.max_apical_gain = 0.2  # ±20% maximum modulation
+        self.max_apical_gain = 0.5  # ±50% maximum modulation
 
         # Delta-SOM baseline: softplus(baseline + field) - softplus(baseline)
         # removes the constant bias from softplus, so zero field → zero drive.
@@ -397,12 +397,17 @@ class EmergentFeedbackOperator(nn.Module):
         self._cached_vip_circulant = None
         self._cached_apical_circulant = None
 
-    def forward(self, q_pred: Tensor, pi_eff: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def forward(self, q_pred: Tensor, pi_eff: Tensor, r_l4: Tensor | None = None) -> tuple[Tensor, Tensor, Tensor]:
         """Compute SOM drive, VIP drive, and apical gain from learned profiles.
 
         Args:
             q_pred: [B, N] -- predicted orientation distribution.
             pi_eff: [B, 1] -- effective precision (after warmup scaling).
+            r_l4: [B, N] or None -- L4 firing rates for coincidence gating of
+                apical gain. When provided, apical gain is gated by the
+                element-wise coincidence of top-down (apical_field) and
+                bottom-up (centered r_l4) signals. When None, falls back
+                to pure top-down apical modulation (backward compat).
 
         Returns:
             (som_drive, vip_drive, apical_gain): each [B, N].
@@ -444,7 +449,7 @@ class EmergentFeedbackOperator(nn.Module):
         # Always delta-style for VIP (bias-corrected)
         vip_drive = pi_eff * (F.softplus(self.vip_baseline + vip_field) - F.softplus(self.vip_baseline))
 
-        # --- Apical gain pathway ---
+        # --- Apical gain pathway (coincidence-gated) ---
         if self._cached_apical_circulant is not None:
             apical_circulant = self._cached_apical_circulant
         else:
@@ -452,8 +457,16 @@ class EmergentFeedbackOperator(nn.Module):
             apical_circulant = self._to_circulant(K_apical)
 
         apical_field = (apical_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
-        # Constrained multiplicative gain: centered at 1.0, range [1-max, 1+max].
-        # pi_eff scales the MODULATION DEPTH, not the base gain.
-        apical_gain = 1.0 + self.max_apical_gain * torch.tanh(pi_eff * apical_field)
+
+        if r_l4 is not None:
+            # Coincidence gate: top-down × bottom-up
+            # Center L4 so uniform/zero input → zero basal field
+            basal_field = r_l4 - r_l4.mean(dim=-1, keepdim=True)  # [B, N]
+            # Multiplicative coincidence: zero if either side is zero/negative
+            coincidence = F.relu(apical_field) * F.relu(basal_field)  # [B, N]
+            apical_gain = 1.0 + self.max_apical_gain * torch.tanh(pi_eff * coincidence)
+        else:
+            # Fallback: pure top-down (backward compat for direct calls without r_l4)
+            apical_gain = 1.0 + self.max_apical_gain * torch.tanh(pi_eff * apical_field)
 
         return som_drive, vip_drive, apical_gain

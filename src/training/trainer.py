@@ -71,6 +71,9 @@ def create_stage2_optimizer(
     # Add VIP→SOM gain if it exists (it's on the network, not on feedback)
     if hasattr(net, 'w_vip_som') and net.w_vip_som.requires_grad:
         feedback_params.append(net.w_vip_som)
+    # Branch C: template→L2/3 excitation weight
+    if hasattr(net, 'w_template_drive') and net.w_template_drive.requires_grad:
+        feedback_params.append(net.w_template_drive)
 
     param_groups = [
         {"params": list(net.v2.parameters()), "lr": cfg.stage2_lr_v2},

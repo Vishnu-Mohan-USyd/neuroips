@@ -44,11 +44,17 @@ what feedback regimes emerge under different computational objectives.
 - Receives `apical_gain` from the feedback operator (separate alpha_apical [7] weights)
 - Multiplies ONLY excitatory L2/3 drive: `excitatory_drive = apical_gain * (ff + rec + template)`
 - Does NOT affect inhibitory terms (SOM, PV)
-- Constrained: `apical_gain = 1.0 + 0.2 * tanh(pi_eff * K_apical ⊛ q_centered)`
-- Range: [0.8, 1.2] (±20% modulation maximum)
+- Constrained: `apical_gain = 1.0 + 0.5 * tanh(pi_eff * coincidence)`
+- Range: [0.5, 1.5] (±50% modulation maximum)
+- **Coincidence gate**: `coincidence = relu(apical_field) * relu(basal_field)`,
+  where `apical_field = K_apical ⊛ q_centered` (top-down) and
+  `basal_field = r_l4 - mean(r_l4)` (bottom-up centered L4). Gain is nonzero
+  only where both top-down prediction and bottom-up stimulus agree — a
+  biologically motivated AND-gate requiring dendritic coincidence detection
 - Biologically motivated: active apical dendrites in L2/3 pyramidal cells receive
   top-down feedback in layer 1, modulating the gain of feedforward drive
-  (multiplicative interaction, not additive excitation)
+  (multiplicative interaction, not additive excitation). The coincidence gate
+  implements dendritic coincidence detection (Larkum 2013)
 - No separate population — computed directly from the prediction template
 
 ### Deep Template
@@ -99,15 +105,21 @@ GRU with 16 hidden units. Two output modes:
 - `vip_baseline` [scalar]: VIP operating point (delta-style)
 - `w_vip_som` [scalar, on network]: VIP→SOM coupling gain (softplus)
 - `alpha_apical` [7]: one weight per basis function (apical gain pathway, init 0.01)
-- `max_apical_gain` [attribute, 0.2]: ±20% maximum gain modulation (not learned)
+- `max_apical_gain` [attribute, 0.5]: ±50% maximum gain modulation (not learned)
+- `w_template_drive` [scalar, on network]: Branch C template→L2/3 center excitation
+  weight (init 0.0 = off, in optimizer feedback group). `center_exc = w_template_drive * deep_tmpl`.
+  Learned to 0.0 in all A+B runs — the model prefers apical gain over direct excitation
 
 ### Kernel Computation
 - K_inh = Σ(alpha_inh_k × basis_k) — weighted sum → 36-channel profile
 - K_apical = Σ(alpha_apical_k × basis_k) — apical gain kernel
 - Circular convolution: inh_field = K_inh ⊛ q_centered
   where q_centered = q_pred − 1/36
-- Apical gain: `1.0 + 0.2 * tanh(pi_eff * K_apical ⊛ q_centered)`
+- Apical gain: `1.0 + 0.5 * tanh(pi_eff * relu(apical_field) * relu(basal_field))`
+  where `apical_field = K_apical ⊛ q_centered`, `basal_field = r_l4 - mean(r_l4)`
 - Returns 3-tuple: (som_drive, vip_drive, apical_gain)
+- Coincidence gate is active when `r_l4` is provided (always in `network.step()`);
+  falls back to pure top-down apical modulation when `r_l4=None` (backward compat)
 
 ### Delta-SOM (Bias-Corrected Softplus)
 - `som_drive = pi × (softplus(baseline + inh_field) − softplus(baseline))`

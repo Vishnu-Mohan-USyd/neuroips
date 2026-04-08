@@ -46,6 +46,8 @@ class LaminarV1V2Network(nn.Module):
         self.vip = VIPRing(cfg)
         # Learnable VIP→SOM gain (softplus-constrained to stay positive)
         self.w_vip_som = nn.Parameter(torch.tensor(0.5))
+        # Branch C: learnable template→L2/3 center excitation weight (init 0.0 = off)
+        self.w_template_drive = nn.Parameter(torch.tensor(0.0))
 
         # Feedback: emergent (learned) or fixed (hardcoded mechanism)
         if cfg.feedback_mode == 'emergent':
@@ -203,11 +205,11 @@ class LaminarV1V2Network(nn.Module):
         # 5-6. Feedback pathway (branched by mode)
         if self.cfg.feedback_mode == 'emergent':
             # Emergent: learned operator outputs SOM + VIP drives + apical gain
-            som_drive, vip_drive, apical_gain = self.feedback(q_pred, pi_pred_eff)
+            som_drive, vip_drive, apical_gain = self.feedback(q_pred, pi_pred_eff, r_l4=r_l4)
             r_vip = self.vip(vip_drive, state.r_vip)
             # VIP inhibits SOM: reduce SOM drive where VIP is active
             effective_som_drive = F.relu(som_drive - F.softplus(self.w_vip_som) * r_vip)
-            center_exc = torch.zeros_like(som_drive)
+            center_exc = self.w_template_drive * deep_tmpl
             r_som = self.som(effective_som_drive, state.r_som)
             l4_to_l23 = r_l4  # No error signal in emergent mode
             r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv,

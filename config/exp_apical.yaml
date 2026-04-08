@@ -67,8 +67,8 @@ training:
 
   batch_size: 32
   seq_length: 25
-  steps_on: 6
-  steps_isi: 2
+  steps_on: 12
+  steps_isi: 4
   n_seeds: 5
 
 stimulus:

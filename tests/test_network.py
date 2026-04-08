@@ -352,8 +352,9 @@ class TestEmergentFeedbackOperator:
         B, N = 4, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
+        r_l4 = torch.randn(B, N).abs()
 
-        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff, r_l4)
 
         assert som_drive.shape == (B, N)
         assert vip_drive.shape == (B, N)
@@ -369,8 +370,9 @@ class TestEmergentFeedbackOperator:
         B, N = 2, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
+        r_l4 = torch.randn(B, N).abs()
 
-        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff, r_l4)
 
         # Spatial variation should be very small (< 1% of mean)
         assert som_drive.std(dim=-1).max() < 0.1 * som_drive.mean()
@@ -383,8 +385,9 @@ class TestEmergentFeedbackOperator:
         B, N = 2, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
+        r_l4 = torch.randn(B, N).abs()
 
-        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff, r_l4)
 
         # With alpha=0, field=0, softplus(0)=ln(2)≈0.693 → uniform
         # Output should be constant across orientations (no spatial structure)
@@ -404,8 +407,9 @@ class TestEmergentFeedbackOperator:
         B, N = 8, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
+        r_l4 = torch.randn(B, N).abs()
 
-        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff)
+        som_drive, vip_drive, apical_gain = fb(q_pred, pi_eff, r_l4)
 
         # SOM uses plain softplus (no delta) by default → non-negative
         assert (som_drive >= -1e-6).all()
@@ -435,13 +439,14 @@ class TestEmergentFeedbackOperator:
         B, N = 4, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 2.0
+        r_l4 = torch.randn(B, N).abs()
 
         # Without cache
-        som1, vip1, apical1 = fb(q_pred, pi_eff)
+        som1, vip1, apical1 = fb(q_pred, pi_eff, r_l4)
 
         # With cache
         fb.cache_kernels()
-        som2, vip2, apical2 = fb(q_pred, pi_eff)
+        som2, vip2, apical2 = fb(q_pred, pi_eff, r_l4)
         fb.uncache_kernels()
 
         assert torch.allclose(som1, som2, atol=1e-6)
@@ -576,8 +581,9 @@ class TestVIPPathway:
             fb.alpha_apical.normal_(0, 1.0)
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
+        r_l4 = torch.randn(B, N).abs()
 
-        _, _, apical_gain = fb(q_pred, pi_eff)
+        _, _, apical_gain = fb(q_pred, pi_eff, r_l4)
 
         assert apical_gain.shape == (B, N)
         max_g = fb.max_apical_gain
@@ -596,12 +602,68 @@ class TestVIPPathway:
         B, N = 4, cfg_emergent.n_orientations
         q_pred = torch.softmax(torch.randn(B, N), dim=-1)
         pi_eff = torch.ones(B, 1) * 3.0
+        r_l4 = torch.randn(B, N).abs()
 
-        _, _, apical_gain = fb(q_pred, pi_eff)
+        _, _, apical_gain = fb(q_pred, pi_eff, r_l4)
 
         assert torch.allclose(apical_gain, torch.ones_like(apical_gain), atol=1e-6), (
             f"apical_gain should be 1.0 with alpha_apical=0, got range [{apical_gain.min():.6f}, {apical_gain.max():.6f}]"
         )
+
+    def test_apical_gain_unity_when_l4_uniform(self, cfg_emergent):
+        """With uniform L4 (centered basal_field=0), coincidence=0, gain=1.0."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        fb.alpha_apical.data.fill_(1.0)  # strong apical weights
+
+        B, N = 4, cfg_emergent.n_orientations
+        q_pred = torch.zeros(B, N)
+        q_pred[:, 18] = 1.0  # peaked prediction
+        q_pred = q_pred / q_pred.sum(dim=-1, keepdim=True)
+        pi_eff = torch.ones(B, 1) * 3.0
+        r_l4 = torch.ones(B, N) * 0.5  # uniform L4 → centered = 0
+
+        _, _, apical_gain = fb(q_pred, pi_eff, r_l4)
+        # Uniform L4 → zero basal field → zero coincidence → gain = 1.0
+        assert torch.allclose(apical_gain, torch.ones_like(apical_gain), atol=1e-5)
+
+    def test_apical_gain_zero_when_mismatch(self, cfg_emergent):
+        """With mismatched prediction and L4, coincidence ≈ 0, gain ≈ 1.0."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        fb.alpha_apical.data.fill_(1.0)
+
+        B, N = 4, cfg_emergent.n_orientations
+        # Prediction peaked at channel 18 (90°)
+        q_pred = torch.zeros(B, N)
+        q_pred[:, 18] = 1.0
+        q_pred = q_pred / q_pred.sum(dim=-1, keepdim=True)
+        pi_eff = torch.ones(B, 1) * 3.0
+
+        # L4 peaked at channel 0 (0°) — maximally mismatched
+        r_l4 = torch.zeros(B, N)
+        r_l4[:, 0] = 1.0
+
+        _, _, apical_gain = fb(q_pred, pi_eff, r_l4)
+        # Mismatch → coincidence ≈ 0 at both channel 0 and 18
+        assert torch.allclose(apical_gain, torch.ones_like(apical_gain), atol=0.05)
+
+    def test_apical_gain_positive_when_match(self, cfg_emergent):
+        """With matching prediction and L4, coincidence > 0, gain > 1.0 at predicted channel."""
+        fb = EmergentFeedbackOperator(cfg_emergent)
+        fb.alpha_apical.data.fill_(1.0)
+
+        B, N = 4, cfg_emergent.n_orientations
+        # Both prediction and L4 peaked at channel 18
+        q_pred = torch.zeros(B, N)
+        q_pred[:, 18] = 1.0
+        q_pred = q_pred / q_pred.sum(dim=-1, keepdim=True)
+        pi_eff = torch.ones(B, 1) * 3.0
+
+        r_l4 = torch.zeros(B, N)
+        r_l4[:, 18] = 1.0
+
+        _, _, apical_gain = fb(q_pred, pi_eff, r_l4)
+        # Match → positive coincidence at channel 18 → gain > 1.0
+        assert apical_gain[0, 18] > 1.01, f"Expected gain > 1.01 at matched channel, got {apical_gain[0, 18]}"
 
     def test_apical_profile_shape(self, cfg_emergent):
         """get_apical_profile returns [N] tensor."""
@@ -891,10 +953,11 @@ class TestGradientFlowNetwork:
                 + aux["pi_pred_all"].sum())
         loss.backward()
 
-        # VIP params don't get gradients in fixed mode (VIP is pass-through)
+        # VIP + emergent-only params don't get gradients in fixed mode
         unused_params = {
             "l4.pv_gain.gain_raw",
             "w_vip_som",
+            "w_template_drive",  # only used in emergent branch
             "vip.tau_vip",  # not a param, but guard
             "feedback.alpha_vip",
             "feedback.vip_baseline",
@@ -995,3 +1058,102 @@ class TestGoldenTrials:
         net2 = LaminarV1V2Network(cfg)
         r_l23_all2, _, _ = net2(stim_seq)
         assert torch.allclose(r_l23_all, r_l23_all2, atol=1e-6)
+
+
+# ── Branch C: Template Drive Tests ──────────────────────────────────────
+
+class TestTemplateDrive:
+    """Tests for w_template_drive: template→L2/3 center excitation (Branch C)."""
+
+    def test_param_exists_and_init(self, cfg_emergent):
+        """w_template_drive exists, is a scalar nn.Parameter, and inits at 0.0."""
+        net = LaminarV1V2Network(cfg_emergent)
+        assert hasattr(net, 'w_template_drive'), "Missing w_template_drive parameter"
+        assert isinstance(net.w_template_drive, torch.nn.Parameter)
+        assert net.w_template_drive.shape == ()
+        assert net.w_template_drive.item() == 0.0
+
+    def test_zero_init_matches_old_behavior(self, cfg_emergent):
+        """With w_template_drive=0.0 (default), center_exc=0 → same as old zeros behavior."""
+        torch.manual_seed(123)
+        net = LaminarV1V2Network(cfg_emergent)
+        N = cfg_emergent.n_orientations
+        ori = torch.tensor([45.0])
+        contrast = torch.tensor([0.8])
+        stim_single = generate_grating(ori, contrast, N)
+        stim = stim_single.unsqueeze(1).expand(1, 10, N)
+
+        r_l23_all, _, _ = net(stim)
+        assert not torch.isnan(r_l23_all).any()
+        # With w_template_drive=0.0, center_exc = 0*deep_tmpl = 0, identical to old code
+        assert torch.isfinite(r_l23_all).all()
+
+    def test_positive_weight_increases_l23(self, cfg_emergent):
+        """Positive w_template_drive adds excitation → L2/3 rates should increase."""
+        torch.manual_seed(42)
+        net = LaminarV1V2Network(cfg_emergent)
+        N = cfg_emergent.n_orientations
+        ori = torch.tensor([45.0, 90.0])
+        contrast = torch.tensor([0.8, 0.8])
+        stim_single = generate_grating(ori, contrast, N)  # [2, N]
+        stim = stim_single.unsqueeze(1).expand(2, 20, N)
+
+        # Baseline with w_template_drive=0
+        r_l23_base, _, _ = net(stim)
+
+        # Now set w_template_drive to a positive value
+        with torch.no_grad():
+            net.w_template_drive.fill_(2.0)
+        r_l23_pos, _, _ = net(stim)
+
+        # L2/3 should have higher mean activation with positive template drive
+        assert r_l23_pos.sum() >= r_l23_base.sum(), (
+            f"Positive w_template_drive should not decrease L2/3: "
+            f"base_sum={r_l23_base.sum():.6f}, pos_sum={r_l23_pos.sum():.6f}"
+        )
+
+    def test_gradient_flow(self, cfg_emergent):
+        """Gradient flows through w_template_drive after forward + backward."""
+        torch.manual_seed(42)
+        net = LaminarV1V2Network(cfg_emergent)
+        # Set nonzero so gradient is nonzero (at 0.0, deep_tmpl*0=0 has zero grad)
+        with torch.no_grad():
+            net.w_template_drive.fill_(0.5)
+
+        N = cfg_emergent.n_orientations
+        ori = torch.tensor([45.0, 90.0])
+        contrast = torch.tensor([0.8, 0.8])
+        stim_single = generate_grating(ori, contrast, N)
+        stim = stim_single.unsqueeze(1).expand(2, 15, N)
+        r_l23_all, _, _ = net(stim)
+
+        loss = r_l23_all.sum()
+        loss.backward()
+
+        assert net.w_template_drive.grad is not None, "w_template_drive has no gradient"
+        assert net.w_template_drive.grad.abs() > 0, "w_template_drive gradient is zero"
+
+    def test_in_optimizer(self, cfg_emergent):
+        """w_template_drive appears in Stage 2 optimizer parameter groups."""
+        from src.training.trainer import create_stage2_optimizer
+        from src.config import TrainingConfig
+
+        net = LaminarV1V2Network(cfg_emergent)
+        # Minimal loss_fn mock with orientation_decoder
+        class MockLoss(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.orientation_decoder = torch.nn.Linear(36, 1)
+        loss_fn = MockLoss()
+        train_cfg = TrainingConfig()
+
+        optimizer = create_stage2_optimizer(net, loss_fn, train_cfg)
+        # Collect all params from all groups
+        all_opt_params = set()
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                all_opt_params.add(id(p))
+
+        assert id(net.w_template_drive) in all_opt_params, (
+            "w_template_drive not found in optimizer param groups"
+        )
