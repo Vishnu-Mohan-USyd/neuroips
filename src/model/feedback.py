@@ -322,6 +322,30 @@ class EmergentFeedbackOperator(nn.Module):
         indices = torch.arange(N, device=profile.device)
         return profile[(indices.unsqueeze(0) - indices.unsqueeze(1)) % N]
 
+    def compute_simple_feedback(self, q_pred: Tensor) -> Tensor:
+        """Simple additive feedback: 36-weight kernel convolved with centered prediction.
+
+        Bypasses SOM/VIP/apical pathways entirely. Uses alpha_apical as the
+        single feedback kernel, applied via circulant convolution.
+
+        Args:
+            q_pred: [B, N] prediction distribution from V2.
+
+        Returns:
+            modulation: [B, N] additive modulation signal for L2/3 excitatory drive.
+        """
+        N = q_pred.shape[-1]
+        q_centered = q_pred - 1.0 / N
+
+        if self._cached_apical_circulant is not None:
+            K_circulant = self._cached_apical_circulant
+        else:
+            K = self.alpha_apical  # [N]
+            K_circulant = self._to_circulant(K)  # [N, N]
+
+        modulation = (K_circulant @ q_centered.unsqueeze(-1)).squeeze(-1)  # [B, N]
+        return modulation
+
     def cache_kernels(self) -> None:
         """Build and cache circulant matrices for reuse across timesteps."""
         K_inh = self.get_profiles()

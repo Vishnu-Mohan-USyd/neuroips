@@ -831,3 +831,104 @@ motif is the same — the prediction quality determines the sign of the net
 amplitude effect. This is a testable prediction: manipulating prediction
 reliability within a single paradigm should shift the amplitude signature
 from enhancement to suppression.
+
+---
+
+## 13. Architecture Simplification: V2 Direct Feedback
+
+### Motivation
+
+The 7-basis function EmergentFeedbackOperator with VIP/SOM/apical pathways
+was effective but complex (~40 learnable parameters in the feedback path).
+A simpler architecture was tested: V2 outputs feedback directly via a
+linear head, with the signal split by sign (Dale's law).
+
+### Architecture
+
+- `head_feedback = nn.Linear(v2_hidden_dim, N)` (576 params for dim=16, N=36)
+- Raw output, no activation — V2 learns sign and magnitude end-to-end
+- **E/I split** (Dale's law): `relu(+scaled_fb)` → excitation (center_exc),
+  `relu(-scaled_fb)` → SOM drive (integrated by SOMRing with tau_som=10)
+- Config: `simple_feedback: true`, `max_apical_gain: 0.0`
+
+### What was removed
+
+- 7-basis function decomposition → 36 direct channel weights
+- tanh/precision scaling/gain caps → simple additive/subtractive
+- VIP pathway (r_vip = 0)
+- Apical multiplicative gain
+- Coincidence gate
+
+---
+
+## 14. Energy-Efficient Sharpening Investigation
+
+### The M7 vs amplitude tradeoff
+
+V2 direct feedback produces massive M7 effects (+0.27–0.34) but also
+massive global amplitude inflation (2.5–6.4×). The target is M7 > +0.03
+AND global amplitude < 1.10×.
+
+### E/I Split Experiments (3 configs, 5000 stage2 steps, seed 42)
+
+| Experiment | λ_energy | λ_pred_suppress | M7 δ=10° | Global Amp | FWHM Δ |
+|---|---|---|---|---|---|
+| EI Baseline | 0.1 | 0.0 | +0.339 | 6.43× | +0.56° |
+| EI PredSup | 0.1 | 1.0 | +0.316 | 3.47× | +1.34° |
+| EI HighEnergy | 2.0 | 0.0 | +0.273 | 2.77× | **−1.86°** |
+
+### Energy Fix Experiments (3 configs, 5000 stage2 steps, seed 42)
+
+| Experiment | λ_energy | λ_fb_energy | l2_energy | λ_pred_sup | M7 δ=10° | Global Amp | FWHM Δ |
+|---|---|---|---|---|---|---|---|
+| FbEnergy | 0.1 | 2.0 | false | 0.0 | +0.318 | 3.69× | +0.40° |
+| L2Energy | 2.0 | 0.0 | true | 0.0 | +0.281 | 3.06× | −0.37° |
+| AllFixes | 2.0 | 1.0 | true | 0.5 | +0.244 | 2.46× | −1.73° |
+
+### Key findings
+
+1. **All experiments maintain M7 well above +0.03** (lowest: +0.244)
+2. **HighEnergy produces the best sharpening** (−1.86° FWHM delta)
+3. **AllFixes has lowest amplitude** (2.46×) but still far from 1.10× target
+4. **Feedback energy penalty alone is ineffective** — similar to PredSup
+5. **L2 energy on L2/3** provides mild sharpening (−0.37°) and lower amp (3.06×)
+6. **The amplitude-M7 tradeoff is monotonic**: more energy pressure → lower amp
+   but also lower M7. However, M7 remains far above threshold even at
+   maximum pressure, suggesting the target is achievable.
+
+### New loss functions
+
+| Loss | Formula | Purpose |
+|---|---|---|
+| `lambda_pred_suppress` | dot(r_l23, q_pred).mean() | Penalize L2/3 matching V2 prediction |
+| `lambda_fb_energy` | center_exc.abs().mean() | Penalize excitatory feedback magnitude |
+| `l2_energy` | r_l23.pow(2).mean() instead of abs | Quadratic L2/3 energy penalty |
+
+---
+
+## 15. Configs and Results (V2 Direct Feedback)
+
+### Configs
+
+| Config | Description |
+|---|---|
+| `exp_v2_ei_split.yaml` | E/I split baseline: λ_energy=0.1 |
+| `exp_v2_ei_predsup.yaml` | E/I + prediction suppression: λ_pred_suppress=1.0 |
+| `exp_v2_ei_highenergy.yaml` | E/I + high energy: λ_energy=2.0 |
+| `exp_v2_ei_fbenergy.yaml` | E/I + feedback energy: λ_fb_energy=2.0 |
+| `exp_v2_ei_l2energy.yaml` | E/I + L2 energy: λ_energy=2.0, l2_energy=true |
+| `exp_v2_ei_allfixes.yaml` | E/I + all fixes combined |
+| `exp_v2_direct_highenergy.yaml` | V2 direct (no E/I split) + high energy |
+| `exp_v2_direct_predsup.yaml` | V2 direct (no E/I split) + pred suppress |
+| `exp_simple_fb.yaml` | Simple additive feedback (original kernel-based) |
+
+### Results directories
+
+| Directory | Contents |
+|---|---|
+| `results/iter/v2_ei_split/` | E/I split baseline |
+| `results/iter/v2_ei_predsup/` | E/I + prediction suppression |
+| `results/iter/v2_ei_highenergy/` | E/I + high energy |
+| `results/iter/v2_ei_fbenergy/` | E/I + feedback energy penalty |
+| `results/iter/v2_ei_l2energy/` | E/I + L2 energy |
+| `results/iter/v2_ei_allfixes/` | E/I + all fixes combined |

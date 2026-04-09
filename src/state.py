@@ -33,6 +33,7 @@ class StepAux(NamedTuple):
     pi_pred_eff: Tensor   # [B, 1]  — effective precision (after warmup scaling)
     state_logits: Tensor  # [B, 3]  — HMM state logits (zeros in emergent mode)
     p_cw: Tensor          # [B, 1]  — CW probability (emergent mode; 0.5 in fixed mode)
+    center_exc: Tensor | None = None  # [B, N] — excitatory feedback to L2/3 (for fb energy loss)
 
 
 def initial_state(batch_size: int, n_orientations: int = 36,

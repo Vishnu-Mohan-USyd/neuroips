@@ -75,6 +75,10 @@ class ModelConfig:
     # Apical gain: ±N% maximum multiplicative modulation of L2/3 drive
     max_apical_gain: float = 0.7
 
+    # Simple additive feedback mode: bypasses SOM/VIP/apical, uses single
+    # 36-weight kernel convolved with centered q_pred, added directly to L2/3.
+    simple_feedback: bool = False
+
     # Numerical stability
     dt: int = 1
 
@@ -122,6 +126,9 @@ class TrainingConfig:
     lambda_mismatch: float = 0.0    # L2/3 mismatch detection weight (0 = disabled)
     lambda_sharp: float = 0.0       # Tuning sharpness: penalize L2/3 activity at flanks (0 = disabled)
     lambda_local_disc: float = 0.0  # Phase 4: local 5-way discrimination (expected vs ±1, ±2 neighbors). 0 = disabled.
+    lambda_pred_suppress: float = 0.0  # Prediction suppression: penalize L2/3 activity matching V2 prediction. 0 = disabled.
+    lambda_fb_energy: float = 0.0      # Feedback energy: penalize magnitude of excitatory feedback (center_exc). 0 = disabled.
+    l2_energy: bool = False             # Use L2 (quadratic) penalty on r_l23 in energy cost instead of L1.
 
     # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
     delta_som: bool = False
@@ -228,6 +235,9 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_mismatch=train_raw.get("lambda_mismatch", 0.0),
         lambda_sharp=train_raw.get("lambda_sharp", 0.0),
         lambda_local_disc=train_raw.get("lambda_local_disc", 0.0),
+        lambda_pred_suppress=train_raw.get("lambda_pred_suppress", 0.0),
+        lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
+        l2_energy=train_raw.get("l2_energy", False),
         delta_som=train_raw.get("delta_som", False),
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),

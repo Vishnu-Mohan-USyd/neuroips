@@ -51,6 +51,9 @@ class CompositeLoss(nn.Module):
         self.lambda_mismatch = cfg.lambda_mismatch      # 0.0 (disabled by default)
         self.lambda_sharp = cfg.lambda_sharp            # 0.0 (disabled by default)
         self.lambda_local_disc = cfg.lambda_local_disc  # 0.0 (disabled by default)
+        self.lambda_pred_suppress = cfg.lambda_pred_suppress  # 0.0 (disabled by default)
+        self.lambda_fb_energy = cfg.lambda_fb_energy          # 0.0 (disabled by default)
+        self.l2_energy = cfg.l2_energy                        # False (L1 by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -324,8 +327,44 @@ class CompositeLoss(nn.Module):
         )
         return F.cross_entropy(logits, targets)
 
+    def prediction_suppression_loss(
+        self, r_l23_windows: Tensor, q_pred_windows: Tensor
+    ) -> Tensor:
+        """Penalize L2/3 activity that matches V2's prediction.
+
+        Encourages dampening at predicted channels — the predictive coding
+        objective. dot(r_l23, q_pred) is high when V1 is active where V2
+        predicts, so minimizing this pushes V1 to suppress expected activity.
+
+        Args:
+            r_l23_windows: [B, W, N] -- L2/3 at readout timepoints.
+            q_pred_windows: [B, W, N] -- V2 predicted orientation prior.
+
+        Returns:
+            Scalar loss.
+        """
+        return (r_l23_windows * q_pred_windows).sum(dim=-1).mean()
+
+    def feedback_energy_loss(self, center_exc: Tensor) -> Tensor:
+        """Penalize magnitude of excitatory feedback to L2/3.
+
+        Specifically targets the center_exc signal that inflates amplitude.
+        Higher penalty → V2 must use inhibitory (SOM) path more.
+
+        Args:
+            center_exc: [B, T, N] -- excitatory feedback trajectory.
+
+        Returns:
+            Scalar L1 penalty on center_exc magnitude.
+        """
+        return center_exc.abs().mean()
+
     def energy_cost(self, outputs: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
         """Compute energy costs from network output trajectories.
+
+        When self.l2_energy is True, the r_l23 term uses a quadratic (L2)
+        penalty instead of L1. This penalizes high-amplitude L2/3 activity
+        more aggressively, helping control global amplitude ratio.
 
         Args:
             outputs: dict with 'r_l4' [B,T,N], 'r_l23' [B,T,N],
@@ -335,9 +374,10 @@ class CompositeLoss(nn.Module):
         Returns:
             (E_excitatory, E_total)
         """
+        r_l23_energy = outputs["r_l23"].pow(2).mean() if self.l2_energy else outputs["r_l23"].abs().mean()
         e_exc = (
             outputs["r_l4"].abs().mean()
-            + outputs["r_l23"].abs().mean()
+            + r_l23_energy
             + outputs["deep_template"].abs().mean()
         )
         e_inh = (
@@ -620,6 +660,22 @@ class CompositeLoss(nn.Module):
             loss_dict["local_disc"] = l_local.item()
         else:
             loss_dict["local_disc"] = 0.0
+
+        # Prediction suppression: penalize L2/3 activity matching V2 prediction
+        if self.lambda_pred_suppress > 0:
+            l_pred_sup = self.prediction_suppression_loss(r_l23_windows, q_pred_windows)
+            total = total + self.lambda_pred_suppress * l_pred_sup
+            loss_dict["pred_suppress"] = l_pred_sup.item()
+        else:
+            loss_dict["pred_suppress"] = 0.0
+
+        # Feedback energy: penalize excitatory feedback magnitude
+        if self.lambda_fb_energy > 0 and "center_exc" in outputs:
+            l_fb_energy = self.feedback_energy_loss(outputs["center_exc"])
+            total = total + self.lambda_fb_energy * l_fb_energy
+            loss_dict["fb_energy"] = l_fb_energy.item()
+        else:
+            loss_dict["fb_energy"] = 0.0
 
         loss_dict["total"] = total.item()
 

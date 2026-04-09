@@ -81,15 +81,39 @@ GRU with 16 hidden units. Two output modes:
 ### Fixed Mode (legacy, not used in current results)
 - Outputs: q_pred [B,36] (softmax), pi_pred, state_logits [B,3], h_v2
 
-## Feedback Operator (EmergentFeedbackOperator)
+## Feedback Modes
 
-### Architecture: SOM-Only
+### Simple Feedback Mode (`simple_feedback: true`) — CURRENT
+
+V2 outputs feedback directly via a linear head. No basis functions, no
+tanh/precision scaling, no multiplicative gain machinery. Signal is split
+into excitatory and inhibitory pathways following Dale's law.
+
+**Architecture:**
+- `head_feedback = nn.Linear(v2_hidden_dim, N)` on V2 (576 params for dim=16, N=36)
+- Raw output, no activation function — V2 learns the sign and magnitude
+- Signal split: `center_exc = relu(+scaled_fb)` → excitation to L2/3,
+  `som_drive = relu(-scaled_fb)` → SOM inhibition (integrated by SOMRing with tau_som=10)
+- `scaled_fb = feedback_signal * feedback_scale` (feedback_scale ramps 0→1 during burn-in)
+- Config flag: `simple_feedback: true` enables this mode
+- `max_apical_gain: 0.0` (configurable from YAML, set to 0 to disable apical)
+
+**Key differences from EmergentFeedbackOperator:**
+- 36 direct channel weights replace 7-basis function decomposition
+- No tanh/gain caps — additive (excitation) and subtractive (via SOM)
+- No VIP pathway (r_vip = 0), no apical gain
+- SOM receives V2 feedback through actual SOMRing dynamics (tau_som=10),
+  not instantaneous drive
+
+### Emergent Feedback Operator (legacy, `simple_feedback: false`)
+
+#### Architecture: SOM-Only
 - No excitatory pathway. `center_exc = 0`. Feedback acts exclusively
   through SOM inhibition of L2/3.
 - Removes the pathway gain asymmetry that confounded earlier dual-pathway
   results (direct excitatory gain ≈ 1.0 dominated indirect SOM gain < 1.0).
 
-### Basis Functions (7)
+#### Basis Functions (7)
 1. G(σ=5°) — narrow Gaussian
 2. G(σ=15°) — medium Gaussian
 3. G(σ=30°) — broad Gaussian
@@ -98,7 +122,7 @@ GRU with 16 hidden units. Two output modes:
 6. Constant — 1/N (flat)
 7. Odd/sine — sin(θ · π/90°), for tuning shift detection
 
-### Learnable Parameters
+#### Learnable Parameters
 - `alpha_inh` [7]: one weight per basis function (SOM pathway)
 - `som_baseline` [scalar]: learned operating point for delta-SOM
 - `som_tonic` [scalar]: learned positive SOM floor (init -3.0 → softplus≈0.049)
@@ -106,33 +130,46 @@ GRU with 16 hidden units. Two output modes:
 - `vip_baseline` [scalar]: VIP operating point (delta-style)
 - `w_vip_som` [scalar, on network]: VIP→SOM coupling gain (softplus)
 - `alpha_apical` [7]: one weight per basis function (apical gain pathway, init 0.01)
-- `max_apical_gain` [attribute, 0.7]: ±70% maximum gain modulation (not learned)
+- `max_apical_gain` [attribute, configurable from YAML]: maximum gain modulation
 - `w_template_drive` [scalar, on network]: Branch C template→L2/3 center excitation
   weight (init 0.0 = off, in optimizer feedback group). `center_exc = w_template_drive * deep_tmpl`.
   Learned to 0.0 in all A+B runs — the model prefers apical gain over direct excitation
 
-### Kernel Computation
+#### Kernel Computation
 - K_inh = Σ(alpha_inh_k × basis_k) — weighted sum → 36-channel profile
 - K_apical = Σ(alpha_apical_k × basis_k) — apical gain kernel
 - Circular convolution: inh_field = K_inh ⊛ q_centered
   where q_centered = q_pred − 1/36
-- Apical gain (pure top-down, recommended): `1.0 + 0.7 * tanh(pi_eff * apical_field)`
+- Apical gain (pure top-down, recommended): `1.0 + mag * tanh(pi_eff * apical_field)`
   where `apical_field = K_apical ⊛ q_centered`
-- Apical gain (coincidence gate, code retained): `1.0 + 0.7 * tanh(pi_eff * relu(apical_field) * relu(basal_field))`
-  where `basal_field = r_l4 - mean(r_l4)` — tested, found to compress signal without selectivity
 - Returns 3-tuple: (som_drive, vip_drive, apical_gain)
-- Coincidence gate is active when `r_l4` is provided (always in `network.step()`);
-  falls back to pure top-down apical modulation when `r_l4=None`
-- **Note:** Pure top-down (r_l4=None) is the recommended mode. Single-seed
-  preliminary result pending multi-seed confirmation.
 
-### Delta-SOM (Bias-Corrected Softplus)
+#### Delta-SOM (Bias-Corrected Softplus)
 - `som_drive = pi × (softplus(baseline + inh_field) − softplus(baseline))`
 - Zero drive when inh_field=0; positive when >0; negative when <0
 - Removes the constant softplus bias (softplus(0) = ln(2) ≈ 0.693) that
   previously created tonic SOM drive killing L2/3 at high precision
 
 ## Signal Flow Per Timestep
+
+### Simple Feedback Mode (current)
+
+```
+Stimulus → L4 → PV (normalization)
+                L4 → V2 (GRU) → head_feedback → feedback_signal [B, 36]
+                                  ↓
+                     feedback_signal × feedback_scale = scaled_fb
+                     relu(+scaled_fb) = center_exc → L2/3 (additive excitation)
+                     relu(-scaled_fb) = som_drive  → SOM (tau_som=10) → L2/3 (subtractive)
+                                                        ↓
+                L4 ──────→ L2/3 ← PV (subtractive)
+                           L2/3 ← SOM (subtractive)
+                           L2/3 += center_exc (additive)
+                           L2/3 ← W_rec (recurrence)
+                           L2/3 → readout decoder
+```
+
+### Emergent Feedback Mode (legacy)
 
 ```
 Stimulus → L4 → PV (normalization)
@@ -188,9 +225,12 @@ Stimulus → L4 → PV (normalization)
 | `lambda_local_disc` | 7-way CE local competitor discrimination | L2/3 readout (±3 channels = ±15°) |
 | `lambda_sharp` | Distance-weighted activity penalty | L2/3 (penalize flanks) |
 | `lambda_state` | KL(target ‖ mu_pred) — prior vs true next orientation | V2 output (learned prior) |
-| `lambda_energy` | L1 on all population rates | All |
+| `lambda_energy` | L1 on all population rates (L2 on r_l23 when `l2_energy: true`) | All |
 | `lambda_homeo` | Homeostasis (L2/3 mean in [0.05, 0.5]) | L2/3 |
 | `lambda_fb` | L1 sparsity on alpha_inh + alpha_vip + alpha_apical | Feedback operator |
+| `lambda_pred_suppress` | Penalize L2/3 activity matching V2 prediction: dot(r_l23, q_pred) | L2/3 vs V2 |
+| `lambda_fb_energy` | Penalize excitatory feedback magnitude: L1 on center_exc | Feedback signal |
+| `l2_energy` | When true, use quadratic penalty on r_l23 in energy cost | L2/3 |
 
 ## Key Config Options
 
@@ -208,6 +248,8 @@ Stimulus → L4 → PV (normalization)
 | `stimulus_noise` | 0.0 | Gaussian noise std on population code |
 | `ambiguous_fraction` | 0.0 | Fraction of presentations that are mixtures |
 | `ambiguous_offset` | 15.0 | Angular offset of competitor in mixtures |
+| `simple_feedback` | false | V2 direct feedback mode (bypasses SOM/VIP/apical machinery) |
+| `max_apical_gain` | 0.7 | Maximum ±% apical gain modulation (configurable from YAML) |
 
 ## Code Structure
 
@@ -228,7 +270,7 @@ Stimulus → L4 → PV (normalization)
 
 ## Tests
 
-366+ tests covering V1 circuit, V2 learned prior (mu_pred distribution properties),
-feedback operator (including VIP and apical gain pathways), training pipeline,
-config parsing, and regression tests for all bugs discovered during the project.
-Run with `python -m pytest tests/ -v`.
+374+ tests covering V1 circuit, V2 learned prior (mu_pred distribution properties),
+feedback operator (including VIP and apical gain pathways), simple feedback mode,
+training pipeline, config parsing, and regression tests for all bugs discovered
+during the project. Run with `python -m pytest tests/ -v`.

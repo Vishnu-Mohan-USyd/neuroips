@@ -382,6 +382,7 @@ def run_stage2(
             "deep_template": aux["deep_template_all"],
             "state_logits": aux["state_logits_all"],
             "p_cw": aux["p_cw_all"],
+            "center_exc": aux["center_exc_all"],
         }
 
         # Extract readout windows

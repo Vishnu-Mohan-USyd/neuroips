@@ -142,10 +142,11 @@ class TestV2ContextEmergent:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        mu_pred, pi_pred, h_v2_new = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, pi_pred, fb_signal, h_v2_new = v2(r_l4, r_l23, cue, task_state, h_v2)
 
         assert mu_pred.shape == (B, N)
         assert pi_pred.shape == (B, 1)
+        assert fb_signal.shape == (B, N)
         assert h_v2_new.shape == (B, H)
 
     def test_mu_pred_sums_to_one(self, cfg_emergent):
@@ -160,7 +161,7 @@ class TestV2ContextEmergent:
             task_state = torch.zeros(B, 2)
             h_v2 = torch.randn(B, H) * 5
 
-            mu_pred, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+            mu_pred, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
             assert (mu_pred >= 0).all(), "mu_pred should be non-negative (softmax)"
             assert torch.allclose(mu_pred.sum(dim=-1), torch.ones(B), atol=1e-5), \
@@ -177,7 +178,7 @@ class TestV2ContextEmergent:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        mu_pred, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
         # With zero-initialized GRU and random head_mu weights, mu_pred
         # won't be exactly uniform but should not be extremely peaked.
@@ -998,7 +999,8 @@ class TestGradientFlowNetwork:
         # Check V2 mu head (learned prior — q_pred IS mu_pred)
         assert net.v2.head_mu.weight.grad is not None
 
-        unused_params = {"l4.pv_gain.gain_raw"}
+        unused_params = {"l4.pv_gain.gain_raw",
+                         "v2.head_feedback.weight", "v2.head_feedback.bias"}
         for name, param in net.named_parameters():
             if param.requires_grad and name not in unused_params:
                 assert param.grad is not None, f"No gradient for {name}"

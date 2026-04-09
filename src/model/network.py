@@ -181,9 +181,17 @@ class LaminarV1V2Network(nn.Module):
                 pi_pred_raw = self.oracle_pi_pred
             state_logits = torch.zeros(stimulus.shape[0], 3, device=stimulus.device)
             p_cw = torch.full((stimulus.shape[0], 1), 0.5, device=stimulus.device)
-            h_v2 = state.h_v2
+            # In simple_feedback mode, V2's head_feedback must still run to
+            # produce the feedback signal — oracle only overrides q_pred/pi.
+            if self.cfg.simple_feedback and self.cfg.feedback_mode == 'emergent':
+                _, _, feedback_signal, h_v2 = self.v2(
+                    r_l4, state.r_l23, cue, task_state, state.h_v2
+                )
+            else:
+                h_v2 = state.h_v2
+                feedback_signal = torch.zeros(stimulus.shape[0], self.cfg.n_orientations, device=stimulus.device)
         elif self.cfg.feedback_mode == 'emergent':
-            mu_pred, pi_pred_raw, h_v2 = self.v2(
+            mu_pred, pi_pred_raw, feedback_signal, h_v2 = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
             )
             q_pred = mu_pred  # V2 directly outputs the prior distribution
@@ -203,7 +211,17 @@ class LaminarV1V2Network(nn.Module):
         deep_tmpl = self.deep_template(q_pred, pi_pred_eff)
 
         # 5-6. Feedback pathway (branched by mode)
-        if self.cfg.feedback_mode == 'emergent':
+        if self.cfg.feedback_mode == 'emergent' and self.cfg.simple_feedback:
+            # V2 direct feedback with E/I split (Dale's law):
+            # positive → excitation to L2/3, negative → drives SOM interneurons
+            scaled_fb = feedback_signal * self.feedback_scale
+            center_exc = torch.relu(scaled_fb)           # positive part → excitation
+            som_drive_fb = torch.relu(-scaled_fb)        # negative part → SOM drive
+            r_som = self.som(som_drive_fb, state.r_som)  # SOM integrates with tau_som
+            r_vip = torch.zeros_like(state.r_vip)
+            l4_to_l23 = r_l4
+            r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
+        elif self.cfg.feedback_mode == 'emergent':
             # Emergent: learned operator outputs SOM + VIP drives + apical gain
             som_drive, vip_drive, apical_gain = self.feedback(q_pred, pi_pred_eff, r_l4=None)
             r_vip = self.vip(vip_drive, state.r_vip)
@@ -219,9 +237,9 @@ class LaminarV1V2Network(nn.Module):
             r_vip = state.r_vip  # pass through unchanged
             som_drive = self.feedback.compute_som_drive(q_pred, pi_pred_eff)
             r_som = self.som(som_drive, state.r_som)
-            template_modulation = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
+            center_exc = self.feedback.compute_center_excitation(q_pred, pi_pred_eff)
             l4_to_l23 = self.feedback.compute_error_signal(r_l4, deep_tmpl)
-            r_l23 = self.l23(l4_to_l23, state.r_l23, template_modulation, r_som, r_pv)
+            r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
 
         new_state = NetworkState(
             r_l4=r_l4,
@@ -240,6 +258,7 @@ class LaminarV1V2Network(nn.Module):
             pi_pred_eff=pi_pred_eff,
             state_logits=state_logits,
             p_cw=p_cw,
+            center_exc=center_exc,
         )
 
         return new_state, aux
@@ -324,6 +343,7 @@ class LaminarV1V2Network(nn.Module):
         state_logits_all = torch.empty(B, T, 3, device=device)
         deep_template_all = torch.empty(B, T, N, device=device)
         p_cw_all = torch.empty(B, T, 1, device=device)
+        center_exc_all = torch.empty(B, T, N, device=device)
 
         # Check if oracle mode uses sequence-length tensors [B, T, ...]
         _oracle_seq = (self.oracle_mode and self.oracle_q_pred is not None
@@ -355,6 +375,10 @@ class LaminarV1V2Network(nn.Module):
                 state_logits_all[:, t] = aux_t.state_logits
                 deep_template_all[:, t] = state.deep_template
                 p_cw_all[:, t] = aux_t.p_cw
+                if aux_t.center_exc is not None:
+                    center_exc_all[:, t] = aux_t.center_exc
+                else:
+                    center_exc_all[:, t] = 0.0
         finally:
             self.l23.uncache_kernels()
             if hasattr(self.feedback, 'uncache_kernels'):
@@ -371,6 +395,7 @@ class LaminarV1V2Network(nn.Module):
             "r_som_all": r_som_all,               # [B, T, N]
             "r_vip_all": r_vip_all,               # [B, T, N]
             "p_cw_all": p_cw_all,                 # [B, T, 1]
+            "center_exc_all": center_exc_all,     # [B, T, N]
         }
 
         return r_l23_all, state, aux

@@ -51,6 +51,8 @@ class V2ContextModule(nn.Module):
         if self.feedback_mode == 'emergent':
             # Learned prior: full orientation distribution
             self.head_mu = nn.Linear(cfg.v2_hidden_dim, n)  # -> softmax -> mu_pred [B, N]
+            # Direct feedback signal: V2 outputs raw additive feedback to L2/3
+            self.head_feedback = nn.Linear(cfg.v2_hidden_dim, n)  # -> raw [B, N]
         else:
             # Legacy: full orientation distribution + state logits
             self.head_q = nn.Linear(cfg.v2_hidden_dim, n)        # -> softmax -> q_pred
@@ -67,7 +69,7 @@ class V2ContextModule(nn.Module):
         cue: Tensor,
         task_state: Tensor,
         h_v2_prev: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor, Tensor]:
         """One step of V2 context inference.
 
         Args:
@@ -80,6 +82,7 @@ class V2ContextModule(nn.Module):
         Returns (feedback_mode == 'emergent'):
             mu_pred: [B, N] -- predicted orientation prior (softmax, sums to 1).
             pi_pred: [B, 1] -- prediction precision in [0, pi_max].
+            feedback_signal: [B, N] -- raw additive feedback signal (no activation).
             h_v2: [B, H] -- updated GRU hidden state.
 
         Returns (feedback_mode == 'fixed'):
@@ -100,7 +103,8 @@ class V2ContextModule(nn.Module):
 
         if self.feedback_mode == 'emergent':
             mu_pred = F.softmax(self.head_mu(h_v2), dim=-1)  # [B, N]
-            return mu_pred, pi_pred, h_v2
+            feedback_signal = self.head_feedback(h_v2)        # [B, N] raw, no activation
+            return mu_pred, pi_pred, feedback_signal, h_v2
         else:
             q_pred = F.softmax(self.head_q(h_v2), dim=-1)  # [B, N]
             state_logits = self.head_state(h_v2)             # [B, 3]

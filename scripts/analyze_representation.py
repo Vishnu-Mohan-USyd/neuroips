@@ -142,6 +142,9 @@ def feedback_disabled(net: LaminarV1V2Network):
     if hasattr(net, "w_vip_som"):
         saved_w_vip_som = net.w_vip_som.detach().clone()
 
+    # Save feedback_scale (gates both operator and V2 direct feedback paths)
+    saved_fb_scale = net.feedback_scale.detach().clone()
+
     try:
         with torch.no_grad():
             for attr in saved:
@@ -153,6 +156,9 @@ def feedback_disabled(net: LaminarV1V2Network):
                     param.zero_()
             if saved_w_vip_som is not None:
                 net.w_vip_som.zero_()
+            # Zero feedback_scale to disable V2 direct feedback path
+            # (simple_feedback mode: center_exc = feedback_signal * feedback_scale)
+            net.feedback_scale.zero_()
         yield
     finally:
         with torch.no_grad():
@@ -160,6 +166,7 @@ def feedback_disabled(net: LaminarV1V2Network):
                 getattr(fb, attr).copy_(val)
             if saved_w_vip_som is not None:
                 net.w_vip_som.copy_(saved_w_vip_som)
+            net.feedback_scale.copy_(saved_fb_scale)
 
 
 # ---------------------------------------------------------------------------

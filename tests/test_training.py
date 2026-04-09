@@ -199,7 +199,7 @@ class TestCompositeLoss:
 
         assert isinstance(total_loss, torch.Tensor)
         assert total_loss.shape == ()
-        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc"}
+        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy"}
         assert set(loss_dict.keys()) == expected_keys
         for k, v in loss_dict.items():
             assert isinstance(v, float), f"{k} should be float, got {type(v)}"
