@@ -54,6 +54,7 @@ class CompositeLoss(nn.Module):
         self.lambda_pred_suppress = cfg.lambda_pred_suppress  # 0.0 (disabled by default)
         self.lambda_fb_energy = cfg.lambda_fb_energy          # 0.0 (disabled by default)
         self.l2_energy = cfg.l2_energy                        # False (L1 by default)
+        self.l23_energy_weight = cfg.l23_energy_weight        # 1.0 (equal weighting by default)
 
         self.feedback_mode = model_cfg.feedback_mode
 
@@ -375,6 +376,7 @@ class CompositeLoss(nn.Module):
             (E_excitatory, E_total)
         """
         r_l23_energy = outputs["r_l23"].pow(2).mean() if self.l2_energy else outputs["r_l23"].abs().mean()
+        r_l23_energy = r_l23_energy * self.l23_energy_weight
         e_exc = (
             outputs["r_l4"].abs().mean()
             + r_l23_energy

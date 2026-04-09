@@ -129,6 +129,7 @@ class TrainingConfig:
     lambda_pred_suppress: float = 0.0  # Prediction suppression: penalize L2/3 activity matching V2 prediction. 0 = disabled.
     lambda_fb_energy: float = 0.0      # Feedback energy: penalize magnitude of excitatory feedback (center_exc). 0 = disabled.
     l2_energy: bool = False             # Use L2 (quadratic) penalty on r_l23 in energy cost instead of L1.
+    l23_energy_weight: float = 1.0      # Multiplier on L2/3 term in energy cost. >1 penalizes L2/3 output more.
 
     # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
     delta_som: bool = False
@@ -238,6 +239,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_pred_suppress=train_raw.get("lambda_pred_suppress", 0.0),
         lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
         l2_energy=train_raw.get("l2_energy", False),
+        l23_energy_weight=train_raw.get("l23_energy_weight", 1.0),
         delta_som=train_raw.get("delta_som", False),
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),
