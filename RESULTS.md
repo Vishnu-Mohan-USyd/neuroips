@@ -981,7 +981,26 @@ Three seeds (42, 123, 456) of the EI HighEnergy config (λ_sensory=1.0,
 - FB-OFF condition shows the OPPOSITE pattern (expected > unexpected),
   confirming the effect is feedback-driven, not stimulus-driven
 
-### Mechanism: temporal priming + differential excitation
+### Feedback shape profiles
+
+The V2 head_feedback output (36 channels) learns qualitatively different
+profiles depending on the regime:
+
+- **Dampening (D1/D1W, λ_sensory=0)**: Feedback weights are **all-negative**
+  across the orientation spectrum. V2 drives SOM inhibition broadly,
+  suppressing L2/3 at all orientations. The SOM pathway (relu of negative
+  values) carries all the signal; center_exc (relu of positive values)
+  is near zero.
+- **Suppression + sharpening (D3/D3W/HEW, λ_sensory=1.0)**: Feedback
+  weights form a **center-surround** profile — positive (excitatory) at the
+  predicted orientation, negative (inhibitory via SOM) at flanks. This
+  creates the classic Mexican-hat modulation: boost at center, suppress
+  at surround. The center excitation is what produces the peak gain > 1.0
+  and positive M7.
+- **Enhancement (D2/D2W, λ_sensory=0.3)**: Intermediate profile — weak
+  center excitation dominates over weak surround SOM drive.
+
+### Mechanism: temporal priming + differential excitation (sharpening)
 
 The feedback operator learns to provide more excitatory drive for
 unexpected stimuli (large V2 prediction error) and less for expected
@@ -997,6 +1016,66 @@ This is a temporal priming mechanism: the V2 prediction sets the gain
 state, and the mismatch between prediction and stimulus determines the
 feedback magnitude. The E/I split (Dale's law) ensures this is implemented
 via differential excitation, not inhibition.
+
+### Mechanism: SOM pre-accumulation (dampening)
+
+In the dampening regime (λ_sensory=0), the mechanism is different:
+
+- V2 learns that expected stimuli are predictable → outputs strong
+  negative feedback (SOM drive) when the predicted orientation appears
+- SOM integrates this drive with tau_som=10 (slow dynamics) — by the time
+  the stimulus arrives, SOM has **pre-accumulated** inhibition at the
+  predicted orientation
+- Expected stimuli arrive into pre-built SOM inhibition → L2/3 suppressed
+- Unexpected stimuli have no pre-accumulated SOM → L2/3 unaffected
+- No excitatory pathway is used (center_exc ≈ 0); all modulation is
+  through SOM-mediated inhibition
+
+This produces the massive suppression ratios (56–80%) seen in D1/D1W,
+compared to the modest 6–9% in the sharpening regime where excitation
+and inhibition partially cancel.
+
+---
+
+## 16b. Expected-vs-Unexpected Analysis Methodology
+
+### Classification scheme
+
+Stimuli are classified as expected or unexpected based on V2's ISI
+prediction error:
+
+- **Expected**: V2 prediction error ≤ 10° (V2 correctly anticipated the
+  next orientation during the ISI)
+- **Unexpected**: V2 prediction error > 20° (V2 was surprised by the
+  stimulus)
+- Intermediate errors (10–20°) are excluded to create clean separation
+
+### Metrics
+
+For each classified presentation, we measure:
+- **L2/3 total activity**: mean across all 36 channels during stimulus-on
+- **L4 total activity**: same, as a control (should be unaffected by feedback)
+- **FB-ON gap**: (unexpected L2/3 − expected L2/3) with feedback active
+- **FB-OFF gap**: same measurement with feedback_scale=0 (feedback disabled)
+- **FB contribution**: FB-ON gap − FB-OFF gap (how much feedback changes
+  the expected-vs-unexpected difference)
+
+### Direction interpretation
+
+- **FB contribution > 0 (WIDENS)**: feedback enhances predictive
+  suppression — expected stimuli are MORE suppressed relative to
+  unexpected when feedback is on. This is the predictive coding signature.
+- **FB contribution < 0 (NARROWS)**: feedback opposes suppression —
+  expected stimuli are LESS suppressed with feedback on. This suggests
+  the feedback is providing gain/enhancement, not suppression.
+- **FB-OFF gap < 0**: WITHOUT feedback, expected > unexpected (temporal
+  priming from stimulus statistics). Feedback REVERSES this natural
+  direction in the sharpening regime.
+
+### Script
+
+`scripts/debug_expected_vs_unexpected.py` — parameterized with --config,
+--checkpoint, --label, --rng-seed flags for multi-seed/multi-config use.
 
 ---
 
@@ -1073,10 +1152,20 @@ to −0.076, NARROWS). D3W (amp=2.17) retains positive suppression
 
 | Config | λ_sens | λ_mm | Experimental analogue | Key prediction |
 |--------|--------|------|----------------------|----------------|
-| D1/D1W | 0.0 | 1.0 | Passive viewing, fMRI BOLD | Dampening (Richter 2018) |
-| D2/D2W | 0.3 | 1.0 | Weak task demand, partial attention | Enhancement / gain |
+| D1/D1W | 0.0 | 1.0 | Passive viewing, fMRI BOLD | Dampening (Richter 2018, Alink 2010) |
+| D2/D2W | 0.3 | 1.0 | Weak task demand, partial attention | Enhancement (Reynolds & Heeger 2009) |
 | D3/D3W | 1.0 | 1.0 | Active discrimination + deviant detection | Suppression + M7 (Kok 2012) |
 | HEW | 1.0 | 0.0 | Active discrimination, no deviant task | Suppression (pure energy) |
+
+### Connection to normalization models
+
+The three regimes parallel the attention framework of Reynolds & Heeger
+(2009): task demand modulates the balance between excitatory and
+suppressive feedback, shifting from net suppression (low demand) through
+gain (moderate demand) to sharpening (high demand). In our model,
+λ_sensory plays the role of attentional gain — it determines how strongly
+V1 must preserve orientation information, which in turn shapes what
+feedback strategy minimizes the total loss.
 
 ### The dual-process interpretation
 
