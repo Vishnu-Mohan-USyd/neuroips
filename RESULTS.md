@@ -1197,7 +1197,55 @@ the dual-process account from alternative explanations.
 
 ---
 
-## 20. Configs and Results (Dampening + Weighted Energy)
+## 20. Decoder Accuracy — Expected vs Unexpected Across Three Regimes
+
+### Three-way comparison
+
+| Metric | Dampening (D1W) | Enhancement (D2W) | Sharpening (EI HE) |
+|---|---|---|---|
+| λ_sensory | 0.0 | 0.3 | 1.0 |
+| Expected confidence | 0.038 (1.4× chance) | 0.315 (11.4× chance) | 0.495 (17.8× chance) |
+| FB effect on exp confidence | −77% (destroys) | +26% (helps) | +115% (helps most) |
+| Exp within-10° accuracy | 88% | 99.9% | 99.9% |
+| Exp exact accuracy | 32% | 50% | 86% |
+| Cross-condition transfer | ~20% | ~11–28% (lowest) | ~50% |
+| FWHM expected | 14.9° | 9.2° (sharpest) | 19.3° |
+| FB effect on exp mean error | 2.7° → 7.6° (3× worse) | — | 3.5° → 0.7° (5× better) |
+
+### Key findings
+
+1. **Dampening** (λ_sensory=0): Feedback erases the expected representation.
+   Confidence drops to 1.4× chance (near-uniform L2/3 activity at the
+   predicted orientation). The decoder scrapes residual signal from far-wing
+   channels, producing 88% within-10° but only 32% exact accuracy. Mean
+   error triples (2.7° → 7.6°) when feedback is on.
+
+2. **Enhancement** (λ_sensory=0.3): Ultra-sharp but fragile. FWHM=9.2°
+   (narrowest of all regimes), 99.9% within-10° accuracy, but only 50%
+   exact — the representation falls "between channels" due to the extreme
+   narrowing. Feedback helps confidence (+26%) but the peaked distribution
+   is less robust to noise.
+
+3. **Sharpening** (λ_sensory=1.0): Robust readable coding. 86% exact
+   accuracy, 17.8× chance confidence, error drops from 3.5° to 0.7° with
+   feedback. The representation is both sharp AND robust — the decoder can
+   confidently read the orientation from L2/3 activity.
+
+4. **Cross-condition transfer**: Lowest in enhancement (~11–28%) — expected
+   and unexpected stimuli produce maximally different representations.
+   Dampening ~20% (expected is near-erased, hard to read regardless).
+   Sharpening ~50% (expected and unexpected are both readable, just
+   differentially modulated).
+
+5. **The progression**: As λ_sensory increases, the expected representation
+   goes from erased → ultra-sharp → robust. This trades precision vs
+   robustness vs energy efficiency.
+
+All differences significant (bootstrap 95% CIs, 10000 resamples).
+
+---
+
+## 21. Configs and Results (Dampening + Weighted Energy)
 
 ### Configs
 
