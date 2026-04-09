@@ -1243,6 +1243,25 @@ the dual-process account from alternative explanations.
 
 All differences significant (bootstrap 95% CIs, 10000 resamples).
 
+### The λ_sensory progression
+
+```
+λ_sensory=0.0          →  0.3              →  1.0
+ERASED                    ULTRA-SHARP         ROBUST
+confidence: 1.4×          confidence: 11×     confidence: 18×
+FWHM: silenced            FWHM: 9.2°         FWHM: 19.3°
+accuracy: 32%             accuracy: 50%       accuracy: 86%
+energy: 0.40              energy: 1.21        energy: 2.17
+```
+
+As task demand (λ_sensory) increases, the network trades off precision vs
+robustness vs energy. Low task demand → energy-efficient suppression
+(expected representation erased, minimal L2/3 activity). Medium →
+maximum precision but fragile (narrowest tuning, but the ultra-sharp
+peak falls between discrete channels, limiting exact accuracy). High →
+robust readability at energy cost (the representation is both sharp and
+reliably decodable, but global amplitude is highest).
+
 ---
 
 ## 21. Configs and Results (Dampening + Weighted Energy)
