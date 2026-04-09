@@ -225,7 +225,7 @@ Stimulus → L4 → PV (normalization)
 | `lambda_local_disc` | 7-way CE local competitor discrimination | L2/3 readout (±3 channels = ±15°) |
 | `lambda_sharp` | Distance-weighted activity penalty | L2/3 (penalize flanks) |
 | `lambda_state` | KL(target ‖ mu_pred) — prior vs true next orientation | V2 output (learned prior) |
-| `lambda_energy` | L1 on all population rates (L2 on r_l23 when `l2_energy: true`) | All |
+| `lambda_energy` | L1 on all population rates (L2 on r_l23 when `l2_energy: true`); L2/3 term multiplied by `l23_energy_weight` | All |
 | `lambda_homeo` | Homeostasis (L2/3 mean in [0.05, 0.5]) | L2/3 |
 | `lambda_fb` | L1 sparsity on alpha_inh + alpha_vip + alpha_apical | Feedback operator |
 | `lambda_pred_suppress` | Penalize L2/3 activity matching V2 prediction: dot(r_l23, q_pred) | L2/3 vs V2 |
@@ -250,6 +250,8 @@ Stimulus → L4 → PV (normalization)
 | `ambiguous_offset` | 15.0 | Angular offset of competitor in mixtures |
 | `simple_feedback` | false | V2 direct feedback mode (bypasses SOM/VIP/apical machinery) |
 | `max_apical_gain` | 0.7 | Maximum ±% apical gain modulation (configurable from YAML) |
+| `l23_energy_weight` | 1.0 | Multiplier on L2/3 term in energy cost (>1 penalizes L2/3 output more) |
+| `lambda_mismatch` | 0.0 | Binary BCE expected/deviant classification from L2/3 |
 
 ## Code Structure
 

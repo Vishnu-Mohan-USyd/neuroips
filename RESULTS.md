@@ -932,3 +932,204 @@ AND global amplitude < 1.10×.
 | `results/iter/v2_ei_fbenergy/` | E/I + feedback energy penalty |
 | `results/iter/v2_ei_l2energy/` | E/I + L2 energy |
 | `results/iter/v2_ei_allfixes/` | E/I + all fixes combined |
+
+---
+
+## 16. Three Feedback Regimes from One Architecture
+
+### Core finding
+
+A single parameter — `lambda_sensory` (task demand on V1 orientation
+decoding) — switches the feedback regime among three qualitatively
+distinct behaviors, all from the same V2 direct feedback architecture
+(simple_feedback=true, E/I split):
+
+| Regime | λ_sensory | λ_mismatch | Behavior | Biological analogue |
+|--------|-----------|------------|----------|---------------------|
+| **Dampening** | 0.0 | 1.0 | Expected 56–80% lower than unexpected | Richter 2018, Alink 2010 |
+| **Enhancement** | 0.3 | 1.0 | Expected 10–14% higher than unexpected | Attention / gain literature |
+| **Suppression + sharpening** | 1.0 | 0.0 or 1.0 | Expected 6–9% lower, FWHM narrows, M7 +0.23 | Kok 2012 |
+
+### Full results table (all configs, seed 42, 5000 stage2 steps)
+
+#### Unweighted energy (l23_energy_weight=1.0)
+
+| Config | λ_sens | λ_mm | M7 δ=10° | Global Amp | FWHM Δ° | Peak ON | FB contribution | Direction |
+|--------|--------|------|----------|------------|---------|---------|-----------------|-----------|
+| D1 | 0.0 | 1.0 | negative | 0.54 | −5.4 | 0.131 | large positive | WIDENS |
+| D2 | 0.3 | 1.0 | +0.16 | 1.66 | −11.7 | — | positive | Enhancement |
+| D3 | 1.0 | 1.0 | +0.28 | 3.06 | −7.2 | — | +0.74 | WIDENS |
+
+#### Weighted energy (l23_energy_weight=3.0)
+
+| Config | λ_sens | λ_mm | M7 δ=10° | Global Amp | FWHM Δ° | Peak ON | FB contribution | Direction |
+|--------|--------|------|----------|------------|---------|---------|-----------------|-----------|
+| D1W | 0.0 | 1.0 | −0.076 | 0.40 | −5.4 | 0.131 | +0.556 | WIDENS |
+| D2W | 0.3 | 1.0 | +0.133 | 1.21 | −11.7 | 0.459 | −0.076 | NARROWS |
+| D3W | 1.0 | 1.0 | +0.233 | 2.17 | −7.2 | 0.779 | +0.274 | WIDENS |
+| HEW | 1.0 | 0.0 | +0.231 | 2.11 | −4.0 | 0.721 | +0.268 | WIDENS |
+
+### Multi-seed confirmation of predictive suppression
+
+Three seeds (42, 123, 456) of the EI HighEnergy config (λ_sensory=1.0,
+λ_energy=2.0, 10000 stage2 steps) all show:
+
+- L2/3 total activity ~8.3% lower for expected vs unexpected stimuli
+  (p < 10⁻²⁷ in all seeds)
+- L4 unaffected (no feedback effect on input layer)
+- Feedback widens the expected-vs-unexpected gap (+0.36 mean contribution)
+- FB-OFF condition shows the OPPOSITE pattern (expected > unexpected),
+  confirming the effect is feedback-driven, not stimulus-driven
+
+### Mechanism: temporal priming + differential excitation
+
+The feedback operator learns to provide more excitatory drive for
+unexpected stimuli (large V2 prediction error) and less for expected
+stimuli (small prediction error). During the ISI, V2 forms a prior.
+When the stimulus arrives:
+
+- **Expected**: V2 prediction error is small → feedback excitation is low
+  → L2/3 activity reduced relative to feedforward baseline
+- **Unexpected**: V2 prediction error is large → feedback excitation is
+  high → L2/3 activity boosted above feedforward baseline
+
+This is a temporal priming mechanism: the V2 prediction sets the gain
+state, and the mismatch between prediction and stimulus determines the
+feedback magnitude. The E/I split (Dale's law) ensures this is implemented
+via differential excitation, not inhibition.
+
+---
+
+## 17. Dampening Regime Confirmed
+
+### What it is
+
+When λ_sensory=0 (no task demand on V1 orientation decoding) and
+λ_mismatch=1.0 (V2 learns expected/deviant classification), the feedback
+operator learns to massively suppress expected stimuli:
+
+| Metric | D1 (l23w=1) | D1W (l23w=3) |
+|--------|-------------|--------------|
+| Global amplitude (ON/OFF) | 0.54 | 0.40 |
+| L2/3 suppression (expected vs unexpected) | 56–80% | similar |
+| M7 δ=10° | negative | −0.076 |
+| FB contribution | large positive | +0.556 |
+| Peak ON | collapsed | 0.131 |
+
+### Interpretation
+
+Without sensory pressure on L2/3, the energy cost drives L2/3 activity
+toward zero. Feedback learns to suppress expected stimuli because V2
+can predict them — reducing total activity. This matches:
+
+- **Richter et al. (2018)**: fMRI BOLD reduction for expected face parts
+  in hierarchical predictive coding paradigm
+- **Alink et al. (2010)**: reduced V1 BOLD for expected motion direction
+
+The dampening regime does NOT require correct predictions — any peaked
+template produces the same result (Section 1). λ_sensory=0 is the key:
+no orientation decoding demand means suppression is the path of least
+resistance.
+
+---
+
+## 18. L2/3-Weighted Energy
+
+### Biological motivation
+
+L2/3 pyramidal neurons project to V2 via long-range axons. The
+postsynaptic component of synaptic transmission accounts for ~50% of V2's
+metabolic budget (Attwell & Laughlin 2001). Penalizing L2/3 output more
+heavily than intracortical activity reflects this asymmetry.
+
+### Implementation
+
+`l23_energy_weight` (config option, default 1.0): multiplies the L2/3
+term in the energy cost. When l23_energy_weight=3.0, L2/3 output is
+penalized 3× more than L4, PV, SOM, VIP, and deep_template.
+
+### Effect on amplitude
+
+| Config | Amp (l23w=1) | Amp (l23w=3) | Reduction |
+|--------|--------------|--------------|-----------|
+| D2 (λ_sens=0.3) | 1.66 | 1.21 | −27% |
+| D3 (λ_sens=1.0) | 3.06 | 2.17 | −29% |
+
+l23_energy_weight=3.0 reduces amplitude ~30% across all configs.
+
+### Trade-off
+
+Stronger L2/3 energy penalty reduces global amplitude but also weakens
+feedback's differential effect. D2W (amp=1.21, closest to the <1.10
+target) lost predictive suppression direction (FB contribution flipped
+to −0.076, NARROWS). D3W (amp=2.17) retains positive suppression
+(FB contribution +0.274) but amplitude is still above 2.0.
+
+---
+
+## 19. Biological Mapping: Dual-Process Account
+
+### Config-to-paradigm mapping
+
+| Config | λ_sens | λ_mm | Experimental analogue | Key prediction |
+|--------|--------|------|----------------------|----------------|
+| D1/D1W | 0.0 | 1.0 | Passive viewing, fMRI BOLD | Dampening (Richter 2018) |
+| D2/D2W | 0.3 | 1.0 | Weak task demand, partial attention | Enhancement / gain |
+| D3/D3W | 1.0 | 1.0 | Active discrimination + deviant detection | Suppression + M7 (Kok 2012) |
+| HEW | 1.0 | 0.0 | Active discrimination, no deviant task | Suppression (pure energy) |
+
+### The dual-process interpretation
+
+Task demand (λ_sensory) is the switch:
+
+- **Low task demand** (passive viewing): V1 has no incentive to maintain
+  orientation representations → feedback suppresses everything at predicted
+  channels → dampening. This explains fMRI BOLD reduction paradigms.
+- **High task demand** (active discrimination): V1 must maintain accurate
+  orientation coding → feedback sharpens representations at predicted
+  channels → suppression + enhanced discriminability. This explains
+  psychophysics paradigms where subjects actively report orientation.
+
+The mismatch loss (λ_mismatch) has **negligible effect** at λ_sensory=1.0:
+D3W and HEW produce nearly identical results (M7 +0.233 vs +0.231,
+amp 2.17 vs 2.11, FB contribution +0.274 vs +0.268). The sensory
+pressure alone is sufficient to produce the suppression regime.
+
+### Testable prediction
+
+Manipulating task demand within a single paradigm should shift the
+feedback signature:
+- Low demand (passive viewing) → dampening (BOLD reduction)
+- High demand (orientation discrimination) → suppression + sharpening
+  (improved psychophysics)
+
+This is a within-subject, within-session prediction that can distinguish
+the dual-process account from alternative explanations.
+
+---
+
+## 20. Configs and Results (Dampening + Weighted Energy)
+
+### Configs
+
+| Config | Description |
+|---|---|
+| `exp_dampening_d1.yaml` | D1: λ_sensory=0.0, λ_mismatch=1.0 (pure dampening) |
+| `exp_dampening_d2.yaml` | D2: λ_sensory=0.3, λ_mismatch=1.0 (weak sensory) |
+| `exp_dampening_d3.yaml` | D3: λ_sensory=1.0, λ_mismatch=1.0 (full sensory + mismatch) |
+| `exp_dampening_d1_weighted.yaml` | D1W: D1 + l23_energy_weight=3.0 |
+| `exp_dampening_d2_weighted.yaml` | D2W: D2 + l23_energy_weight=3.0 |
+| `exp_dampening_d3_weighted.yaml` | D3W: D3 + l23_energy_weight=3.0 |
+| `exp_v2_ei_highenergy_weighted.yaml` | HEW: HighEnergy + l23_energy_weight=3.0 |
+
+### Results directories
+
+| Directory | Contents |
+|---|---|
+| `results/dampening/d1_sensory0/` | D1 dampening (seed 42) |
+| `results/dampening/d2_sensory03/` | D2 weak sensory (seed 42) |
+| `results/dampening/d3_sensory10/` | D3 full sensory + mismatch (seed 42) |
+| `results/dampening/d1w_sensory0/` | D1W weighted dampening (seed 42) |
+| `results/dampening/d2w_sensory03/` | D2W weighted weak sensory (seed 42) |
+| `results/dampening/d3w_sensory10/` | D3W weighted full (seed 42) |
+| `results/iter/v2_ei_highenergy_weighted/` | HEW weighted sharpening (seed 42) |
