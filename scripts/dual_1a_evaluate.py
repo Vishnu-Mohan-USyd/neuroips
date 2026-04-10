@@ -374,6 +374,104 @@ def ei_ratio(
     }
 
 
+# ---------- Per-regime trained-decoder accuracy (Phase 2.5 prep) ----------
+
+
+def decoder_accuracy(
+    net,
+    orientation_decoder: torch.nn.Linear,
+    device: torch.device,
+    task_state: tuple[float, float],
+    window: str,
+    n_trials: int = 256,
+    seed: int = 42,
+) -> dict:
+    """Trained-decoder top-1 accuracy + confidence per (regime, window).
+
+    Runs the **trained** ``orientation_decoder`` (loaded from the checkpoint's
+    ``decoder_state``) on the windowed r_l23 activity for FB-ON and FB-OFF
+    separately. This matches the training-time ``sensory_acc`` definition
+    verbatim (``logits = orientation_decoder(r_l23_windows); argmax == label``
+    from ``src/training/stage2_feedback.py`` ~line 502), giving a direct
+    cross-check of whether the network's own sensory read-out still reads
+    out orientation correctly in each (regime, window) slice of the
+    trajectory. Critically, this is NOT a probe fit from scratch — we use
+    the frozen decoder the network actually learned, so the per-regime
+    numbers are directly comparable to the aggregate s_acc in metrics.jsonl.
+
+    Sampling: ``n_trials`` random orientations uniformly in ``[0, period)``,
+    with ``stim == oracle`` (matched condition, no stimulus noise). Matched
+    condition keeps the probe focused on bottom-up read-out fidelity rather
+    than prediction / ambiguity handling. Noiseless because the other
+    per-regime probes in this script (M10, FWHM, channel_profile, ei_ratio,
+    gate_diagnostics) are also noiseless — keeps the whole diagnostic block
+    comparable.
+
+    Args:
+        net: loaded network (eval mode).
+        orientation_decoder: the trained ``nn.Linear(N, N)`` from the
+            checkpoint's ``decoder_state``. Must already be ``.to(device)``.
+        device: torch device.
+        task_state: ``(focused, routine)`` one-hot pair.
+        window: ``'default' | 'early' | 'mid' | 'late'`` — time slice of r_l23.
+        n_trials: number of random orientations (256 → stderr ≲ 0.03 @ acc 0.5).
+        seed: RNG seed for theta sampling reproducibility.
+
+    Returns:
+        dict with ``fb_on``/``fb_off`` sub-dicts (top1_acc, confidence),
+        plus ``delta_top1_acc`` and ``delta_confidence`` (on − off).
+    """
+    N = net.cfg.n_orientations
+    period = net.cfg.orientation_range
+    step = period / N
+
+    # Deterministic theta sampling — numpy RNG, not torch, so it's
+    # independent of any global torch seed state the network may have set.
+    rng = np.random.RandomState(seed)
+    thetas_np = rng.uniform(0.0, period, size=n_trials).astype(np.float32)
+    stim = torch.from_numpy(thetas_np).to(device)
+    oracle = stim.clone()  # matched (stim == oracle)
+
+    # True channel labels — matches CompositeLoss._theta_to_channel:
+    #   (theta / step).round().long() % N
+    labels = torch.from_numpy(
+        (np.round(thetas_np / step).astype(np.int64) % N)
+    ).to(device)
+
+    def _run_and_score(fb_on: bool) -> tuple[float, float]:
+        if fb_on:
+            r_l23_traj = run_full_trajectory(
+                net, stim, oracle, device, task_state=task_state,
+            )
+        else:
+            with feedback_disabled(net):
+                r_l23_traj = run_full_trajectory(
+                    net, stim, oracle, device, task_state=task_state,
+                )
+        r_l23_win = _window_mean(r_l23_traj, window)  # [B, N]
+        with torch.no_grad():
+            logits = orientation_decoder(r_l23_win)   # [B, N]
+            probs = torch.softmax(logits, dim=-1)     # [B, N]
+            preds = probs.argmax(dim=-1)              # [B]
+            top1 = (preds == labels).float().mean().item()
+            # Confidence: mean of the max softmax probability across the batch.
+            conf = probs.max(dim=-1).values.mean().item()
+        return float(top1), float(conf)
+
+    acc_on, conf_on = _run_and_score(fb_on=True)
+    acc_off, conf_off = _run_and_score(fb_on=False)
+
+    return {
+        "task_state": list(task_state),
+        "window": window,
+        "n_trials": int(n_trials),
+        "fb_on":  {"top1_acc": acc_on,  "confidence": conf_on},
+        "fb_off": {"top1_acc": acc_off, "confidence": conf_off},
+        "delta_top1_acc":   acc_on  - acc_off,
+        "delta_confidence": conf_on - conf_off,
+    }
+
+
 def extended_m7_single_window(
     net,
     device: torch.device,
@@ -684,6 +782,45 @@ def main() -> None:
         else:
             print(f"  {rname:8s} (use_ei_gate=False — alpha_net absent)")
 
+    # --- Phase 2.5 prep: per-regime sensory decoder accuracy ---
+    # Uses the TRAINED orientation_decoder stored alongside model_state in the
+    # checkpoint (same nn.Linear that produced the aggregate s_acc shown in
+    # metrics.jsonl during training). Lets us verify whether the "focused
+    # intact, routine collapsed" hypothesis holds directly, rather than
+    # back-solving from the aggregate number.
+    print()
+    print("Running per-regime decoder accuracy (trained sensory head)...",
+          flush=True)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
+    orientation_decoder = torch.nn.Linear(
+        net.cfg.n_orientations, net.cfg.n_orientations,
+    )
+    decoder_available = "decoder_state" in ckpt
+    if decoder_available:
+        orientation_decoder.load_state_dict(ckpt["decoder_state"])
+    else:
+        print("  WARN: checkpoint has no 'decoder_state' key; skipping "
+              "decoder_accuracy section.")
+    orientation_decoder.to(device).eval()
+
+    decoder_results: dict = {}
+    if decoder_available:
+        for rname, rstate in regimes.items():
+            decoder_results[rname] = {}
+            for w in windows:
+                d = decoder_accuracy(
+                    net, orientation_decoder, device, rstate, w,
+                    n_trials=256, seed=args.seed,
+                )
+                decoder_results[rname][w] = d
+                print(
+                    f"  {rname:8s} window={w:7s} "
+                    f"s_acc_on={d['fb_on']['top1_acc']:.3f}  "
+                    f"s_acc_off={d['fb_off']['top1_acc']:.3f}  "
+                    f"Δ={d['delta_top1_acc']:+.3f}  "
+                    f"conf_on={d['fb_on']['confidence']:.3f}"
+                )
+
     # --- Preregistered gates (Phase 1A) — all must hold for PASS ---
     # Primary metric for gates: default-window δ=10° on baseline/focused/routine.
     m7_focused = m7_results["focused"]["default"]["delta_10"]["delta_acc"]
@@ -746,6 +883,7 @@ def main() -> None:
         "channel_profile_by_regime": channel_results,
         "ei_ratio_by_regime": ei_results,
         "gate_diagnostics_by_regime": gate_results,
+        "decoder_accuracy_by_regime": decoder_results,
         "early_minus_late_by_regime": early_minus_late,
         "gates": gates,
         "gate_values": {
@@ -866,6 +1004,31 @@ def main() -> None:
                 "  (identity/no-learning signature: both Δ ≈ 0 AND all means ≈ 1.0)"
             )
             lines.append("")
+    # Per-regime trained-decoder accuracy (Phase 2.5 prep)
+    if decoder_available:
+        lines.append("Per-regime sensory decoder accuracy "
+                     "(trained orientation_decoder on windowed r_l23):")
+        lines.append("  stim == oracle (matched), no stimulus noise, "
+                     "n_trials=256 per (regime, window)")
+        da_header = (
+            f"{'regime':10s} {'window':10s} "
+            f"{'s_acc_on':>10s} {'s_acc_off':>10s} {'Δ_acc':>9s} "
+            f"{'conf_on':>9s} {'conf_off':>9s}"
+        )
+        lines.append(da_header)
+        lines.append("-" * len(da_header))
+        for rname in regimes:
+            for w in windows:
+                da = decoder_results[rname][w]
+                lines.append(
+                    f"{rname:10s} {w:10s} "
+                    f"{da['fb_on']['top1_acc']:10.4f} "
+                    f"{da['fb_off']['top1_acc']:10.4f} "
+                    f"{da['delta_top1_acc']:+9.4f} "
+                    f"{da['fb_on']['confidence']:9.4f} "
+                    f"{da['fb_off']['confidence']:9.4f}"
+                )
+        lines.append("")
     lines.append("Early-minus-late deltas per regime (early − late):")
     em_header = (f"{'regime':10s} {'m7_δ10':>10s} {'m10_amp':>10s} "
                  f"{'fwhm_Δ':>10s} {'peak':>10s} {'E/I':>10s}")
