@@ -1923,60 +1923,57 @@ def metric_temporal_evaluation(
 # Sanity and artifact checks
 # ---------------------------------------------------------------------------
 
-def _unpack_feedback(result):
-    """Unpack feedback operator output, handling old and new APIs.
+def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict:
+    """Confirm that inside feedback_disabled(), the V2 feedback drive to L2/3 is exactly zero.
+
+    In the current emergent-feedback architecture, V2's ``head_feedback`` output
+    is gated by the scalar buffer ``net.feedback_scale`` before being split by
+    Dale's law into ``center_exc`` (relu(+)) and SOM drive (relu(-)). Zeroing
+    ``feedback_scale`` therefore mathematically zeroes both pathways at the
+    step level.
+
+    This helper runs a short forward pass on a single stimulus bump (90°) with
+    feedback ON, then again with ``feedback_disabled``, and compares the
+    per-step ``center_exc`` captured in ``aux['center_exc_all']``. The OFF
+    trace must be exactly zero; any nonzero value would indicate a broken
+    ablation context manager.
+
+    Args:
+        net: trained network (emergent feedback).
+        device: torch device.
 
     Returns:
-        (som_drive, vip_drive, apical_gain) — any missing element is None.
-    """
-    if isinstance(result, tuple):
-        if len(result) == 3:
-            return result[0], result[1], result[2]  # som, vip, apical
-        if len(result) == 2:
-            return result[0], result[1], None  # som, vip (pre-apical)
-    return result, None, None  # som only (very old)
-
-
-def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict:
-    """Confirm that inside feedback_disabled(), the feedback operator's output is exactly zero.
-
-    Builds a peaked q_pred (bump at 90°) and a unit pi_pred, then calls
-    `net.feedback(q, pi)` both with and without the ablation context manager.
-    Returns the max-abs of both outputs; the ablated output must be 0 (or within
-    float epsilon).
+        dict with ``drive_on_max_abs`` / ``drive_off_max_abs`` (max-abs of
+        ``center_exc`` over time and channels), the corresponding sums, and a
+        boolean ``ablation_zero`` flag.
     """
     N = net.cfg.n_orientations
-    theta = torch.tensor([90.0], device=device)
-    q = net._make_bump(theta)
-    q = q / (q.sum(dim=-1, keepdim=True) + 1e-8)  # [1, N], normalised
-    pi = torch.tensor([[EVAL_PI]], device=device)
+    period = net.cfg.orientation_range
 
-    net.feedback.cache_kernels()
-    try:
-        with torch.no_grad():
-            som_on, vip_on, apical_on = _unpack_feedback(net.feedback(q, pi))
-    finally:
-        net.feedback.uncache_kernels()
+    # Build a one-batch stimulus: a static bump centered at 90° for T steps.
+    T = 20
+    stim = net._make_bump(torch.tensor([90.0], device=device))  # [1, N]
+    stim_seq = stim.unsqueeze(1).expand(1, T, N).contiguous()   # [1, T, N]
+    cue_seq = torch.zeros(1, T, N, device=device)
+    task_seq = torch.zeros(1, T, 2, device=device)
+    packed = LaminarV1V2Network.pack_inputs(stim_seq, cue_seq, task_seq)
+
+    with torch.no_grad():
+        _, _, aux_on = net(packed)
+        center_exc_on = aux_on["center_exc_all"]  # [1, T, N]
+
     with feedback_disabled(net):
-        net.feedback.cache_kernels()
-        try:
-            with torch.no_grad():
-                som_off, vip_off, apical_off = _unpack_feedback(net.feedback(q, pi))
-        finally:
-            net.feedback.uncache_kernels()
+        with torch.no_grad():
+            _, _, aux_off = net(packed)
+            center_exc_off = aux_off["center_exc_all"]  # [1, T, N]
 
-    result = {
-        "drive_on_max_abs": float(som_on.abs().max().item()),
-        "drive_off_max_abs": float(som_off.abs().max().item()),
-        "drive_on_sum": float(som_on.sum().item()),
-        "drive_off_sum": float(som_off.sum().item()),
-        "ablation_zero": bool(som_off.abs().max().item() < 1e-7),
+    return {
+        "drive_on_max_abs": float(center_exc_on.abs().max().item()),
+        "drive_off_max_abs": float(center_exc_off.abs().max().item()),
+        "drive_on_sum": float(center_exc_on.sum().item()),
+        "drive_off_sum": float(center_exc_off.sum().item()),
+        "ablation_zero": bool(center_exc_off.abs().max().item() < 1e-7),
     }
-    if vip_on is not None:
-        result["vip_on_max_abs"] = float(vip_on.abs().max().item())
-        result["vip_off_max_abs"] = float(vip_off.abs().max().item())
-        result["vip_ablation_zero"] = bool(vip_off.abs().max().item() < 1e-7)
-    return result
 
 
 def artifact_check_threshold(
