@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch
 import torch.nn as nn
 
-from src.config import ModelConfig, TrainingConfig, StimulusConfig, MechanismType
+from src.config import ModelConfig, TrainingConfig, StimulusConfig
 from src.model.network import LaminarV1V2Network
 from src.training.losses import CompositeLoss
 from src.stimulus.sequences import HMMSequenceGenerator
@@ -27,7 +27,7 @@ print(f'Device: {device}')
 if device.type == 'cuda':
     print(f'GPU: {torch.cuda.get_device_name(0)}')
 
-model_cfg = ModelConfig(mechanism=MechanismType.DAMPENING)
+model_cfg = ModelConfig()
 train_cfg = TrainingConfig()
 stim_cfg = StimulusConfig()
 N = model_cfg.n_orientations

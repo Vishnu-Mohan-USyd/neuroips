@@ -77,7 +77,7 @@ Stimulus -> L4 -> PV (normalization)
 ### Stage 1: Sensory Scaffold (2000 steps)
 - Random gratings, variable contrast
 - Trains L2/3 ff weights, PV gains, W_rec
-- Gating: decoder accuracy >= 87%, unimodal tuning, FWHM 15-30 deg
+- Gating: decoder accuracy >= 90%, unimodal tuning, FWHM 15-30 deg
 
 ### Stage 2: V2 + Feedback (5000+ steps)
 - HMM-generated orientation sequences
@@ -101,7 +101,7 @@ Stimulus -> L4 -> PV (normalization)
 |---|---|---|
 | `lambda_sensory` | **regime-dependent** | 36-way CE orientation decode on L2/3 |
 | `lambda_state` | 1.0 | KL(target \|\| mu_pred) -- V2 prior quality |
-| `lambda_energy` | 2.0 | L1 on population rates; L2/3 term multiplied by `l23_energy_weight` |
+| `lambda_energy` | 0.01 (exp: 2.0) | L1 on population rates; L2/3 term multiplied by `l23_energy_weight` |
 | `lambda_homeo` | 1.0 | Homeostasis (L2/3 mean in [0.05, 0.5]) |
 | `lambda_mismatch` | 0.0 | Binary BCE expected/deviant classification |
 | `lambda_pred_suppress` | 0.0 | Penalize L2/3 activity at predicted orientation |
@@ -113,10 +113,10 @@ Stimulus -> L4 -> PV (normalization)
 |---|---|---|
 | `lambda_sensory` | 0.3 | **Dominant**: controls feedback regime (0=dampen, 0.3=sharpen) |
 | `l23_energy_weight` | 1.0 | **Critical**: amplitude control (3.0=near-neutral, 5.0=sub-unity) |
-| `lambda_energy` | 2.0 | **Secondary**: broad energy constraint |
+| `lambda_energy` | 0.01 (exp: 2.0) | **Secondary**: broad energy constraint |
 | `feedback_mode` | emergent | V2 prediction mode |
 | `freeze_v2` | false | Oracle mode (ground-truth predictions) |
-| `oracle_pi` | 3.0 | Pi value in oracle mode |
+| `oracle_pi` | 1.0 | Pi value in oracle mode |
 | `oracle_template` | oracle_true | Template mode in oracle |
 | `stimulus_noise` | 0.25 | Gaussian noise std on population code |
 | `transition_step` | 5.0 | CW/CCW orientation step (degrees) |
@@ -127,7 +127,6 @@ Stimulus -> L4 -> PV (normalization)
 |---|---|
 | `src/model/populations.py` | V1L4Ring, PVPool, V1L23Ring, SOMRing |
 | `src/model/v2_context.py` | V2ContextModule (GRU + heads) |
-| `src/model/feedback.py` | Namespace placeholder (feedback is inline in network.py) |
 | `src/model/network.py` | LaminarV1V2Network (composes all modules) |
 | `src/training/losses.py` | CompositeLoss with all loss functions |
 | `src/training/stage1_sensory.py` | Stage 1 training loop |

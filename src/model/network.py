@@ -49,6 +49,32 @@ class LaminarV1V2Network(nn.Module):
         self._oracle_q_step: Tensor | None = None
         self._oracle_pi_step: Tensor | None = None
 
+    def _make_bump(
+        self,
+        thetas: Tensor,
+        sigma: float | None = None,
+    ) -> Tensor:
+        """Create Gaussian bumps centered at each orientation in ``thetas``.
+
+        Used by oracle-template modes in Stage 2 training (``stage2_feedback.py``)
+        to construct peaked prediction priors q_pred of shape [B, N].
+
+        Args:
+            thetas: [B] — center orientations in degrees.
+            sigma: Width of the bump in degrees. Defaults to ``cfg.sigma_ff``.
+
+        Returns:
+            bumps: [B, N] — un-normalised Gaussian bumps (caller normalises).
+        """
+        N = self.cfg.n_orientations
+        period = self.cfg.orientation_range
+        step = period / N
+        if sigma is None:
+            sigma = self.cfg.sigma_ff
+        pref = torch.arange(N, dtype=torch.float32, device=thetas.device) * step
+        diff = (pref.unsqueeze(0) - thetas.unsqueeze(1) + period / 2) % period - period / 2
+        return torch.exp(-diff ** 2 / (2 * sigma ** 2))
+
     def step(
         self,
         stimulus: Tensor,

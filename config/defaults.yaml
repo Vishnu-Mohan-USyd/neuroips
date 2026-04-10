@@ -1,6 +1,10 @@
 # ============================================================
 # Default hyperparameters for Laminar V1-V2 Expectation Model
 # ============================================================
+#
+# These mirror the dataclass defaults in src/config.py. Experiments
+# typically override lambda_energy, lambda_sensory, and l23_energy_weight
+# to land in a particular feedback regime (see RESULTS.md).
 
 model:
   # Orientation space
@@ -21,7 +25,7 @@ model:
   sigma_norm: 1.0             # Divisive normalization constant (sigma^2)
 
   # V1 L2/3
-  tau_l23: 10                  # L2/3 membrane time constant (timesteps)
+  tau_l23: 10                 # L2/3 membrane time constant (timesteps)
   sigma_rec: 15.0             # Recurrent kernel width (degrees)
   gain_rec: 0.3               # Recurrent kernel gain
 
@@ -31,12 +35,9 @@ model:
   # V2 context
   v2_hidden_dim: 16           # GRU hidden dimension
   pi_max: 5.0                 # Max prediction precision
-
-  # Deep template
-  template_gain: 1.0          # Deep template gain
-
-  # Feedback mechanism
-  mechanism: "center_surround"  # One of: dampening, sharpening, center_surround, adaptation_only, predictive_error
+  feedback_mode: "emergent"   # Single supported mode: V2 GRU + head_feedback
+  v2_input_mode: "l23"        # V2 sees L2/3 previous timestep
+  transition_step: 15.0       # CW/CCW orientation step (degrees)
 
   # Numerical stability
   dt: 1                       # Simulation timestep (dimensionless)
@@ -55,16 +56,22 @@ training:
     lr_feedback: 1.0e-4
     weight_decay: 1.0e-4
     warmup_steps: 1000
+    burnin_steps: 5000
+    ramp_steps: 5000
     gradient_clip: 1.0
     contrast_range: [0.15, 1.0]
     ambiguous_fraction: 0.15
 
-  # Loss weights
+  # Loss weights (dataclass defaults; override per-experiment)
   lambda_sensory: 1.0
   lambda_pred: 0.5
   lambda_energy: 0.01
   lambda_homeo: 1.0
   lambda_state: 0.25
+  lambda_mismatch: 0.0
+  lambda_pred_suppress: 0.0
+  lambda_fb_energy: 0.0
+  l23_energy_weight: 1.0
 
   # Batching
   batch_size: 32
@@ -72,7 +79,7 @@ training:
   steps_on: 8                 # Timesteps per grating
   steps_isi: 4                # Inter-stimulus interval
 
-  # Seeds for mechanism comparison
+  # Seeds
   n_seeds: 5
 
 stimulus:

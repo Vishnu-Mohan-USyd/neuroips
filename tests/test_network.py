@@ -385,3 +385,35 @@ class TestSimpleFeedback:
         assert not hasattr(net, 'w_template_drive'), "w_template_drive should be removed"
         assert not hasattr(net, 'deep_template'), "deep_template module should be removed"
         assert not hasattr(net, 'feedback'), "feedback operator should be removed"
+
+    def test_make_bump_exists_and_shapes(self, cfg):
+        """Regression: _make_bump must exist on the network for oracle modes.
+
+        stage2_feedback.py calls ``net._make_bump`` at four sites to build
+        peaked prediction priors for oracle_true, oracle_wrong and oracle_random
+        templates. A previous refactor silently removed the method, breaking
+        every oracle_template path except oracle_uniform. This test pins the
+        contract so it can never disappear again without a visible failure.
+        """
+        net = LaminarV1V2Network(cfg)
+        N = cfg.n_orientations
+
+        # Default sigma (sigma_ff fallback)
+        thetas = torch.tensor([0.0, 45.0, 90.0, 135.0])
+        bumps = net._make_bump(thetas)
+        assert bumps.shape == (4, N)
+        # Argmax should land on the nearest channel to each theta
+        # (45/180 * 36 = 9, 90/180 * 36 = 18, 135/180 * 36 = 27)
+        assert bumps.argmax(dim=-1).tolist() == [0, 9, 18, 27]
+
+        # Explicit sigma must match default when equal to sigma_ff
+        bumps_explicit = net._make_bump(thetas, sigma=cfg.sigma_ff)
+        assert torch.allclose(bumps, bumps_explicit)
+
+        # Narrower sigma → sharper peaks
+        bumps_narrow = net._make_bump(thetas, sigma=3.0)
+        assert bumps_narrow.max(dim=-1).values.sum() > 0
+        # Narrow bumps should have smaller mass at the off-peak channels
+        off_peak_mass_default = bumps.sum(dim=-1) - bumps.max(dim=-1).values
+        off_peak_mass_narrow = bumps_narrow.sum(dim=-1) - bumps_narrow.max(dim=-1).values
+        assert (off_peak_mass_narrow < off_peak_mass_default).all()
