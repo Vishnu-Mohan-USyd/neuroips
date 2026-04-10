@@ -236,39 +236,78 @@ def gate_diagnostics(
     device: torch.device,
     task_state: tuple[float, float],
 ) -> dict:
-    """Mean alpha_net gate outputs per regime (Phase 2 causal E/I gate probe).
+    """alpha_net gate-output distribution per regime (Phase 2 E/I gate probe).
 
     Runs the standard 8-anchor matched-stim trajectory (stim==oracle, no
-    noise) under the specified ``task_state`` and extracts the mean value
-    of g_E and g_I from the ``gains_all`` aux tensor ([B, T, 2]). Averages
-    over all timesteps and anchors. Used to diagnose whether the Phase 2
-    alpha_net actually learned task-state-aware gating or whether it stayed
-    near its identity init (g ≈ 1.0 everywhere).
+    noise) under the specified ``task_state`` and extracts all per-timestep
+    samples of g_E and g_I from the ``gains_all`` aux tensor ([B=1, T, 2]).
+    Gains are already post-``2*sigmoid`` in network.py (line 156), so
+    ``g ≈ 1.0`` means the gate is at its identity init.
 
-    Returns ``{"g_E": None, "g_I": None}`` if the network does not have
-    an alpha_net (use_ei_gate=False). Callers should check for this.
+    Each anchor contributes T samples (one per timestep). With 8 anchors and
+    T=25, that's 200 samples per regime — enough to compute a meaningful
+    mean/std/min/max/median and to tell whether the gate actually drifted
+    from identity or not.
+
+    Per-anchor means are also returned for backward compatibility with the
+    earlier (Phase 2.0) report.
+
+    Returns ``{"use_ei_gate": False, ...}`` if the network lacks alpha_net;
+    callers should check the flag before indexing numeric fields.
     """
     if not hasattr(net, "alpha_net"):
-        return {"task_state": list(task_state), "g_E": None, "g_I": None,
-                "use_ei_gate": False}
-    g_E_list: list[float] = []
-    g_I_list: list[float] = []
+        return {
+            "task_state": list(task_state),
+            "use_ei_gate": False,
+            "g_E_mean": None, "g_E_std": None,
+            "g_E_min": None, "g_E_max": None, "g_E_median": None,
+            "g_I_mean": None, "g_I_std": None,
+            "g_I_min": None, "g_I_max": None, "g_I_median": None,
+            "g_E": None, "g_I": None,
+        }
+
+    g_E_samples: list[float] = []     # flattened over anchors × T
+    g_I_samples: list[float] = []
+    g_E_anchor_means: list[float] = []   # backward compat (1 scalar per anchor)
+    g_I_anchor_means: list[float] = []
+
     for anchor in _ANCHORS:
         stim = torch.full((1,), anchor, device=device)
         oracle = torch.full((1,), anchor, device=device)
         _, aux = run_full_trajectory_with_aux(
             net, stim, oracle, device, task_state=task_state,
         )
-        gains = aux["gains_all"]                              # [1, T, 2]
-        g_E_list.append(float(gains[..., 0].mean().item()))
-        g_I_list.append(float(gains[..., 1].mean().item()))
+        gains = aux["gains_all"]                        # [1, T, 2]
+        g_E_flat = gains[..., 0].flatten().cpu().numpy().astype(float)
+        g_I_flat = gains[..., 1].flatten().cpu().numpy().astype(float)
+        g_E_samples.extend(g_E_flat.tolist())
+        g_I_samples.extend(g_I_flat.tolist())
+        g_E_anchor_means.append(float(g_E_flat.mean()))
+        g_I_anchor_means.append(float(g_I_flat.mean()))
+
+    g_E_arr = np.asarray(g_E_samples, dtype=np.float64)
+    g_I_arr = np.asarray(g_I_samples, dtype=np.float64)
+
     return {
         "task_state": list(task_state),
         "use_ei_gate": True,
-        "g_E": float(np.mean(g_E_list)),
-        "g_I": float(np.mean(g_I_list)),
-        "g_E_per_anchor": g_E_list,
-        "g_I_per_anchor": g_I_list,
+        "n_samples": int(g_E_arr.size),
+        # Primary distribution stats (over anchors × T)
+        "g_E_mean":   float(g_E_arr.mean()),
+        "g_E_std":    float(g_E_arr.std(ddof=0)),
+        "g_E_min":    float(g_E_arr.min()),
+        "g_E_max":    float(g_E_arr.max()),
+        "g_E_median": float(np.median(g_E_arr)),
+        "g_I_mean":   float(g_I_arr.mean()),
+        "g_I_std":    float(g_I_arr.std(ddof=0)),
+        "g_I_min":    float(g_I_arr.min()),
+        "g_I_max":    float(g_I_arr.max()),
+        "g_I_median": float(np.median(g_I_arr)),
+        # Backward compat with earlier report (Phase 2.0)
+        "g_E":            float(g_E_arr.mean()),
+        "g_I":            float(g_I_arr.mean()),
+        "g_E_per_anchor": g_E_anchor_means,
+        "g_I_per_anchor": g_I_anchor_means,
     }
 
 
@@ -634,9 +673,14 @@ def main() -> None:
     gate_results: dict = {}
     for rname, rstate in regimes.items():
         gate_results[rname] = gate_diagnostics(net, device, rstate)
-        if gate_results[rname]["use_ei_gate"]:
-            print(f"  {rname:8s} g_E={gate_results[rname]['g_E']:.4f}  "
-                  f"g_I={gate_results[rname]['g_I']:.4f}")
+        g = gate_results[rname]
+        if g["use_ei_gate"]:
+            print(f"  {rname:8s} "
+                  f"g_E={g['g_E_mean']:.4f}±{g['g_E_std']:.4f} "
+                  f"[{g['g_E_min']:.4f},{g['g_E_max']:.4f}]  "
+                  f"g_I={g['g_I_mean']:.4f}±{g['g_I_std']:.4f} "
+                  f"[{g['g_I_min']:.4f},{g['g_I_max']:.4f}]  "
+                  f"n={g['n_samples']}")
         else:
             print(f"  {rname:8s} (use_ei_gate=False — alpha_net absent)")
 
@@ -787,14 +831,41 @@ def main() -> None:
     lines.append("")
     # Phase 2 gate outputs per regime (only when use_ei_gate=True)
     if any(gate_results[r]["use_ei_gate"] for r in regimes):
-        lines.append("Phase 2 alpha_net causal E/I gate outputs (mean across 8 anchors × T steps):")
-        g_header = f"{'regime':10s} {'g_E':>9s} {'g_I':>9s}"
+        lines.append("Phase 2 alpha_net causal E/I gate outputs:")
+        lines.append(
+            "  (distribution over 8 anchors × T timesteps — identity init ⇒ g ≈ 1.0)"
+        )
+        g_header = (
+            f"{'regime':10s} {'g_E_mean':>9s} {'g_E_std':>9s} "
+            f"{'g_I_mean':>9s} {'g_I_std':>9s} "
+            f"{'g_E_range':>17s} {'g_I_range':>17s} {'n':>6s}"
+        )
         lines.append(g_header)
         lines.append("-" * len(g_header))
         for rname in regimes:
             g = gate_results[rname]
-            lines.append(f"{rname:10s} {g['g_E']:9.4f} {g['g_I']:9.4f}")
+            g_E_range = f"[{g['g_E_min']:.3f},{g['g_E_max']:.3f}]"
+            g_I_range = f"[{g['g_I_min']:.3f},{g['g_I_max']:.3f}]"
+            lines.append(
+                f"{rname:10s} "
+                f"{g['g_E_mean']:9.4f} {g['g_E_std']:9.4f} "
+                f"{g['g_I_mean']:9.4f} {g['g_I_std']:9.4f} "
+                f"{g_E_range:>17s} {g_I_range:>17s} {g['n_samples']:6d}"
+            )
         lines.append("")
+        # Cross-regime gate contrast (load-bearing for Phase 2 decision tree)
+        if all(gate_results[r]["use_ei_gate"] for r in ("focused", "routine")):
+            gf = gate_results["focused"]
+            gr = gate_results["routine"]
+            lines.append(
+                "  focused↔routine gate contrast: "
+                f"Δg_E = {gf['g_E_mean'] - gr['g_E_mean']:+.4f}   "
+                f"Δg_I = {gf['g_I_mean'] - gr['g_I_mean']:+.4f}"
+            )
+            lines.append(
+                "  (identity/no-learning signature: both Δ ≈ 0 AND all means ≈ 1.0)"
+            )
+            lines.append("")
     lines.append("Early-minus-late deltas per regime (early − late):")
     em_header = (f"{'regime':10s} {'m7_δ10':>10s} {'m10_amp':>10s} "
                  f"{'fwhm_Δ':>10s} {'peak':>10s} {'E/I':>10s}")
