@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import yaml
 
@@ -174,6 +175,124 @@ class TrainingConfig:
 
 
 @dataclass
+class SpikingConfig:
+    """Spiking neural network hyperparameters (Phase 1 SNN port).
+
+    Used by the `src/spiking/` modules; completely orthogonal to `ModelConfig`
+    so that instantiating a `SpikingConfig` does not touch the rate model.
+    Load via `load_spiking_config()` (separate from `load_config` for
+    backward compatibility — the rate model's `load_config` still returns a
+    3-tuple).
+
+    Evidence for every field is documented inline. Defaults match the Phase 1
+    port plan and, where applicable, the rate model's corresponding values.
+    """
+
+    # ---- LIF dynamics ---------------------------------------------------
+    # Standard LIF firing threshold (snnTorch Leaky default; no unit conversion
+    # since all tensor values are dimensionless in our rate normalization).
+    V_thresh: float = 1.0
+
+    # Subtract-reset baseline — matches snnTorch `reset_mechanism='subtract'`,
+    # chosen in the plan (plans/quirky-humming-giraffe.md lines 223-225) for
+    # "smoother gradient flow than hard reset".
+    V_reset: float = 0.0
+
+    # ---- Membrane time constants (match rate model; plan lines 46-55) ----
+    # Rate tau_l4 = 5  -> beta = exp(-1/5)  = 0.819  (plan line 48)
+    tau_mem_l4: float = 5.0
+    # Rate tau_l23 = 10 -> beta = exp(-1/10) = 0.905 (plan line 50)
+    tau_mem_l23: float = 10.0
+    # Rate tau_som = 10 -> beta = 0.905 (plan line 51)
+    tau_mem_som: float = 10.0
+    # Rate tau_vip = 10 -> beta = 0.905 (plan line 52)
+    tau_mem_vip: float = 10.0
+
+    # V2 LSNN membrane time constant. Bellec et al. 2018 uses tau_mem = 20 ms
+    # across ALL LSNN experiments (sMNIST tutorial, TIMIT paper body, lsnn/
+    # spiking_models.py ALIF class default). Evidence pack §B.7 confirms this
+    # as the single, stable choice. beta_mem = exp(-1/20) = 0.9512.
+    tau_mem_v2: float = 20.0
+
+    # ---- Filter / readout ------------------------------------------------
+    # Exponential spike trace filter time constant. Matches L2/3 tau so the
+    # filtered trace `x_l23` has temporal support comparable to the rate
+    # model's r_l23 signal. Plan line 35: "alpha = exp(-1/tau_filter)".
+    tau_filter: float = 10.0
+
+    # Cached alpha = exp(-1/tau_filter). If left None, `__post_init__`
+    # computes it from `tau_filter`. Explicit YAML overrides are honoured.
+    spike_filter_alpha: Optional[float] = None
+
+    # ---- Spike-rate adaptation (L4 SSA + V2 LSNN) -----------------------
+    # Matches the rate model's SSA tau_adaptation = 200 (src/config.py line 32)
+    # and the Bellec LSNN adaptation constant (plan lines 53-54 — row "L4 SSA"
+    # and "V2 LSNN" both list rho=0.995, which is exp(-1/200)).
+    tau_adapt: float = 200.0
+
+    # ---- Surrogate gradient ---------------------------------------------
+    # ATan surrogate slope parameter. Default 25.0 per plan line 213
+    # ("Slope parameter ~25 (tunable)"). See src/spiking/surrogate.py.
+    surrogate_slope: float = 25.0
+
+    # ---- V2 LSNN architecture (plan line 25) -----------------------------
+    # "Custom ALIF (40 LIF + 20 ALIF exc + 20 LIF inh)" -> 80 total neurons.
+    n_lsnn_neurons: int = 80
+    n_lsnn_exc: int = 40      # regular LIF excitatory
+    n_lsnn_adaptive: int = 20 # ALIF excitatory (adaptive threshold)
+    n_lsnn_inh: int = 20      # LIF inhibitory
+
+    # Bellec et al. 2018 adaptive-threshold coupling coefficient. Value taken
+    # from the LSNN-official sMNIST tutorial config
+    # (`bin/tutorial_sequential_mnist_with_LSNN.py`, `beta = 1.8`). Governs how
+    # strongly recent spiking elevates the effective firing threshold in the
+    # ALIF fraction of the V2 LSNN:
+    #     B[t] = V_thresh + lsnn_adapt_beta * b[t]
+    # See Bellec 2018 §2 eq. 1 and plan lines 38-42 for the per-step dynamics.
+    # Evidence pack §B.3 ("Adaptation amplitude β — definitive value").
+    lsnn_adapt_beta: float = 1.8
+
+    # ---- Surrogate-gradient dampening (Bellec 2018 §3) -------------------
+    # Pseudo-derivative amplitude multiplier. Bellec 2018 §3 (page 3) explicitly
+    # recommends reducing the surrogate-gradient amplitude by a factor < 1 for
+    # BPTT through "several 1000 layers of an unrolled feedforward network of
+    # spiking neurons" (i.e. recurrent spiking nets over many timesteps). Our
+    # Stage-2 BPTT window is 600 timesteps, well inside that regime. The
+    # published value from both LSNN-official `lsnn/spiking_models.py` and the
+    # sMNIST tutorial is `dampening_factor = 0.3`.
+    # Evidence pack §B.4 ("Dampened pseudo-derivative — is it necessary?").
+    surrogate_dampen: float = 0.3
+
+    # ---- Firing-rate target regime --------------------------------------
+    # When True, Phase 1 firing-rate tests and validation gates target the
+    # "stationary awake mouse" ranges from Niell & Stryker 2010 Figure 3D
+    # (broad-spiking evoked 2.9 ± 0.4 Hz) plus Atallah 2012 (PV evoked
+    # 12.1 ± 9.6 Hz). When False, tests use the "running / alert" ranges
+    # (~2.8× higher per Niell & Stryker). Team-lead Ruling 1 (2026-04-10):
+    # use stationary for an untrained network; training will pull rates up.
+    # Evidence pack §A.6 ("Firing rate targets — primary-source citations").
+    stationary_mode: bool = True
+
+    def __post_init__(self) -> None:
+        # Derive spike_filter_alpha from tau_filter when not explicitly set.
+        if self.spike_filter_alpha is None:
+            if self.tau_filter <= 0:
+                raise ValueError(
+                    f"tau_filter must be > 0, got {self.tau_filter}"
+                )
+            self.spike_filter_alpha = math.exp(-1.0 / self.tau_filter)
+
+        # Consistency check on LSNN sub-population decomposition.
+        lsnn_total = self.n_lsnn_exc + self.n_lsnn_adaptive + self.n_lsnn_inh
+        if lsnn_total != self.n_lsnn_neurons:
+            raise ValueError(
+                f"LSNN sub-populations must sum to n_lsnn_neurons: "
+                f"{self.n_lsnn_exc} + {self.n_lsnn_adaptive} + {self.n_lsnn_inh} "
+                f"= {lsnn_total}, expected {self.n_lsnn_neurons}"
+            )
+
+
+@dataclass
 class StimulusConfig:
     """Stimulus generation parameters."""
     n_states: int = 3
@@ -259,3 +378,26 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
     stim_cfg = StimulusConfig(**stim_raw)
 
     return model_cfg, training_cfg, stim_cfg
+
+
+def load_spiking_config(path: str | Path = "config/defaults.yaml") -> SpikingConfig:
+    """Load `SpikingConfig` from the `spiking:` block of a YAML config file.
+
+    Intentionally separate from `load_config` so that the existing 3-tuple
+    return signature of `load_config` (used by 13+ call sites) is not broken.
+
+    If the YAML file has no `spiking:` block (e.g. legacy rate-model configs),
+    returns a `SpikingConfig` with all defaults.
+
+    Args:
+        path: Path to the YAML config file.
+
+    Returns:
+        A `SpikingConfig` instance. Any keys from the YAML `spiking:` block are
+        passed through to the dataclass constructor.
+    """
+    with open(path) as f:
+        raw = yaml.safe_load(f) or {}
+
+    spiking_raw = raw.get("spiking", {}) or {}
+    return SpikingConfig(**spiking_raw)
