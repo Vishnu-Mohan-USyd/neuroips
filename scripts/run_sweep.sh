@@ -18,6 +18,93 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------
+# SIGHUP hardening (Task #9 — Debugger H7 root cause fix)
+# ------------------------------------------------------------------
+# Problem: the canonical launch chain is
+#     tmux new-session -d NAME 'bash run_sweep.sh cfg out ... 2>&1 | tee log'
+# When the tmux pty later dies (WSL terminated, SSH hang-up,
+# `tmux kill-server`, etc.), the kernel sends SIGHUP to every
+# process in the pty's session. TWO things then kill our training:
+#   a) the pipeline's bash and the external `tee` both receive
+#      SIGHUP and die (default action = terminate), and
+#   b) the child python3 process then tries to write to its now
+#      closed stdout pipe, receives SIGPIPE, and dies silently
+#      with no final log entry.
+# This is the confirmed root cause (Debugger H7) of the original
+# Phase 2.4 silent death.
+#
+# Fix: on first invocation, self-re-exec under `setsid` with TWO
+# things happening atomically via the exec line:
+#   (1) `setsid` moves the new process into a brand-new session
+#       with no controlling terminal, so SIGHUP from the old pty
+#       session cannot reach us;
+#   (2) stdin is detached (< /dev/null), and stdout/stderr are
+#       redirected directly to $OUTPUT_DIR/sweep.log on disk,
+#       BYPASSING the caller's external-tee pipeline. Writes to
+#       a regular file cannot be killed by SIGPIPE because there
+#       is no pipe anywhere in the chain.
+# `--wait` keeps the caller's pipeline member (the original cmd1
+# bash, now replaced by setsid) alive and blocked on the child,
+# so the final exit status is still propagated to the caller and
+# tmux `new-session -d` keeps its pane attached to a live process
+# on the happy path.
+#
+# We derive OUTPUT_DIR inline from `${2:-}` to keep the hardening
+# block self-contained without reordering the full arg parse
+# below. If args are malformed (e.g. $2 is empty) we fall through
+# and the normal Usage error below fires with its message visible
+# on the caller's terminal.
+#
+# Sentinel env var `RUN_SWEEP_DAEMONIZED=1` prevents re-exec
+# recursion. Opt-out: `RUN_SWEEP_NO_DAEMONIZE=1` skips the
+# hardening entirely (useful for interactive debugging where
+# Ctrl-C should kill the whole job immediately).
+#
+# Verified end-to-end by a standalone harness: tmux kill-session
+# destroys the pty mid-run, the detached child survives and runs
+# to natural completion with all ticks logged to sweep.log.
+# ------------------------------------------------------------------
+if [ -z "${RUN_SWEEP_DAEMONIZED:-}" ] && [ -z "${RUN_SWEEP_NO_DAEMONIZE:-}" ]; then
+    _RSH_OUTDIR="${2:-}"
+    if [ -n "$_RSH_OUTDIR" ] && command -v setsid >/dev/null 2>&1; then
+        export RUN_SWEEP_DAEMONIZED=1
+        mkdir -p "$_RSH_OUTDIR"
+        _RSH_LOGFILE="$_RSH_OUTDIR/sweep.log"
+        # Truncate logfile so the run starts fresh, then append
+        # below. Prevents stale content from a prior run leaking in.
+        : > "$_RSH_LOGFILE"
+        # exec replaces the current shell. setsid --wait creates a
+        # new session, forks, child runs the re-execed script, parent
+        # waits for exit status. FDs in the child:
+        #   fd0 = /dev/null       (no interactive stdin)
+        #   fd1 = /dev/null       (main-body stdout is discarded;
+        #                          the internal `| tee -a "$LOGFILE"`
+        #                          pipelines sprinkled throughout the
+        #                          script body are the sole source of
+        #                          LOGFILE writes, preventing any
+        #                          doubled output)
+        #   fd2 = $LOGFILE (append) (captures conda preflight stderr
+        #                          and any set -x / bash error messages
+        #                          that would otherwise go to /dev/null)
+        # The internal tee subshells inherit fd1=/dev/null, so their
+        # "stdout forward" is harmless; they still write to LOGFILE
+        # via their explicit file argument. No external pipes remain
+        # anywhere in the process tree → SIGPIPE is structurally
+        # impossible.
+        exec setsid --wait bash "$0" "$@" < /dev/null > /dev/null 2>>"$_RSH_LOGFILE"
+    elif ! command -v setsid >/dev/null 2>&1; then
+        # Extremely rare fallback (setsid ships with util-linux on
+        # every mainstream Linux distro). Install a SIGHUP-ignoring
+        # trap — less robust but better than nothing.
+        echo "WARN: setsid not found; installing SIGHUP-ignore trap as fallback" >&2
+        trap '' HUP
+    fi
+    # If _RSH_OUTDIR is empty, we fall through without detaching.
+    # The Usage error from the arg-parse block below will fire and
+    # the caller will see it directly on their terminal.
+fi
+
+# ------------------------------------------------------------------
 # Python env preflight
 # ------------------------------------------------------------------
 # The tmux / remote launcher may be a bare shell with no env activated.
@@ -79,7 +166,7 @@ SUMMARY="${OUTPUT_DIR}/summary.json"
 
 mkdir -p "$OUTPUT_DIR"
 
-echo "================================================================" | tee "$LOGFILE"
+echo "================================================================" | tee -a "$LOGFILE"
 echo "SWEEP: $LABEL (seed=$SEED, device=$DEVICE)"                      | tee -a "$LOGFILE"
 echo "Config:     $CONFIG"                                              | tee -a "$LOGFILE"
 echo "Output:     $OUTPUT_DIR"                                          | tee -a "$LOGFILE"
