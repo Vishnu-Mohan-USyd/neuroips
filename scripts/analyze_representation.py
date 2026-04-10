@@ -190,6 +190,7 @@ def run_trials(
     contrast: float = EVAL_CONTRAST,
     noise_std: float = 0.0,
     seed: int | None = None,
+    task_state: tuple[float, float] = (0.0, 0.0),
 ) -> torch.Tensor:
     """Run the network on a batch of trials and return the readout L2/3 activity.
 
@@ -207,6 +208,12 @@ def run_trials(
         noise_std: Gaussian noise added to the population-coded stimulus
                    (matches train_cfg.stimulus_noise semantics). 0 disables.
         seed: optional seed for noise reproducibility.
+        task_state: ``(task0, task1)`` values to write into the two-column
+            task_state input to V2 for every trial and timestep. Defaults to
+            ``(0.0, 0.0)`` so existing callers are bit-identical to the
+            previous hardcoded zeros. ``(1.0, 0.0)`` == focused,
+            ``(0.0, 1.0)`` == routine, matching the task_relevance paradigm
+            convention.
 
     Returns:
         r_l23: [B, N] — mean L2/3 activity over the read window.
@@ -243,6 +250,8 @@ def run_trials(
 
     cue_seq = torch.zeros(B, T_STEPS, N, device=device)
     task_seq = torch.zeros(B, T_STEPS, 2, device=device)
+    task_seq[..., 0] = task_state[0]
+    task_seq[..., 1] = task_state[1]
     packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
 
     # Inject oracle
@@ -268,6 +277,7 @@ def run_full_trajectory(
     oracle_thetas: torch.Tensor,
     device: torch.device,
     contrast: float = EVAL_CONTRAST,
+    task_state: tuple[float, float] = (0.0, 0.0),
 ) -> torch.Tensor:
     """Run the network and return the *full* L2/3 trajectory (all timesteps).
 
@@ -275,6 +285,8 @@ def run_full_trajectory(
     Used by metric_time_resolved to analyze how L2/3 evolves step-by-step.
     No noise is applied (this helper is only used for the deterministic
     time-resolved metric).
+
+    ``task_state`` defaults to ``(0.0, 0.0)`` for backward compatibility.
     """
     B = stim_thetas.shape[0]
     N = net.cfg.n_orientations
@@ -292,6 +304,8 @@ def run_full_trajectory(
     oracle_q, oracle_pi = _build_oracle(net, oracle_thetas.to(device))
     cue_seq = torch.zeros(B, T_STEPS, N, device=device)
     task_seq = torch.zeros(B, T_STEPS, 2, device=device)
+    task_seq[..., 0] = task_state[0]
+    task_seq[..., 1] = task_state[1]
     packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
     net.oracle_mode = True
     net.oracle_q_pred = oracle_q
@@ -314,8 +328,12 @@ def run_full_trajectory_noisy(
     contrast: float = EVAL_CONTRAST,
     noise_std: float = 0.0,
     seed: int | None = None,
+    task_state: tuple[float, float] = (0.0, 0.0),
 ) -> torch.Tensor:
-    """Like run_full_trajectory but with optional stimulus noise. Returns [B, T_STEPS, N]."""
+    """Like run_full_trajectory but with optional stimulus noise. Returns [B, T_STEPS, N].
+
+    ``task_state`` defaults to ``(0.0, 0.0)`` for backward compatibility.
+    """
     B = stim_thetas.shape[0]
     N = net.cfg.n_orientations
 
@@ -342,6 +360,8 @@ def run_full_trajectory_noisy(
     oracle_q, oracle_pi = _build_oracle(net, oracle_thetas.to(device))
     cue_seq = torch.zeros(B, T_STEPS, N, device=device)
     task_seq = torch.zeros(B, T_STEPS, 2, device=device)
+    task_seq[..., 0] = task_state[0]
+    task_seq[..., 1] = task_state[1]
     packed = net.pack_inputs(stim_seq, cue_seq, task_seq)
     net.oracle_mode = True
     net.oracle_q_pred = oracle_q
@@ -998,6 +1018,7 @@ def metric_match_vs_near_miss_decoding(
     readout_noise_std: float = 0.3,
     seed: int = 42,
     oracle_theta: float = 90.0,
+    task_state: tuple[float, float] = (0.0, 0.0),
 ) -> dict:
     """Metric 7: trained LogReg decoder of match vs near-miss at small deltas.
 
@@ -1025,6 +1046,10 @@ def metric_match_vs_near_miss_decoding(
         readout_noise_std: output-side L2/3 noise (default 0.3).
         seed: reproducibility seed.
         oracle_theta: legacy param (ignored — now uses 8 anchors).
+        task_state: ``(task0, task1)`` forwarded to ``run_trials`` for both
+            the ON and OFF branches. Defaults to ``(0.0, 0.0)`` so existing
+            invocations are bit-identical to the pre-scaffolding version.
+            Use ``(1.0, 0.0)`` for focused, ``(0.0, 1.0)`` for routine.
 
     Returns:
         dict keyed by 'delta_{int}' with {on, off, delta_acc, per_anchor}.
@@ -1058,10 +1083,12 @@ def metric_match_vs_near_miss_decoding(
             trial_seed = seed + int(delta * 10) + int(anchor * 100)
             r_on_clean = run_trials(
                 net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+                task_state=task_state,
             ).cpu().numpy()
             with feedback_disabled(net):
                 r_off_clean = run_trials(
                     net, stim, oracle_arr, device, noise_std=noise_std, seed=trial_seed,
+                    task_state=task_state,
                 ).cpu().numpy()
 
             rs = np.random.RandomState(trial_seed + 7)
@@ -1766,6 +1793,7 @@ def metric_temporal_evaluation(
     noise_std: float = 0.3,
     readout_noise_std: float = 0.3,
     seed: int = 42,
+    task_state: tuple[float, float] = (0.0, 0.0),
 ) -> dict:
     """Metric 14: cue→ISI→stimulus temporal structure matching training.
 
@@ -1842,6 +1870,8 @@ def metric_temporal_evaluation(
                 stim_on_block = (stim_on_block + noise).clamp(min=0.0)
 
             task_seq = torch.zeros(B, T, 2, device=device)
+            task_seq[..., 0] = task_state[0]
+            task_seq[..., 1] = task_state[1]
 
             # --- ON condition: cue during ISI, stim during ON, oracle active ---
             stim_seq_on = torch.zeros(B, T, N, device=device)
@@ -1923,7 +1953,11 @@ def metric_temporal_evaluation(
 # Sanity and artifact checks
 # ---------------------------------------------------------------------------
 
-def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict:
+def sanity_check_ablation(
+    net: LaminarV1V2Network,
+    device: torch.device,
+    task_state: tuple[float, float] = (0.0, 0.0),
+) -> dict:
     """Confirm that inside feedback_disabled(), the V2 feedback drive to L2/3 is exactly zero.
 
     In the current emergent-feedback architecture, V2's ``head_feedback`` output
@@ -1938,9 +1972,15 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
     trace must be exactly zero; any nonzero value would indicate a broken
     ablation context manager.
 
+    ``task_state`` defaults to ``(0.0, 0.0)`` so existing callers see the same
+    behavior as before; it is exposed for pattern consistency with the other
+    run helpers.
+
     Args:
         net: trained network (emergent feedback).
         device: torch device.
+        task_state: ``(task0, task1)`` values to write into the task_state
+            input; defaults to ``(0.0, 0.0)``.
 
     Returns:
         dict with ``drive_on_max_abs`` / ``drive_off_max_abs`` (max-abs of
@@ -1956,6 +1996,8 @@ def sanity_check_ablation(net: LaminarV1V2Network, device: torch.device) -> dict
     stim_seq = stim.unsqueeze(1).expand(1, T, N).contiguous()   # [1, T, N]
     cue_seq = torch.zeros(1, T, N, device=device)
     task_seq = torch.zeros(1, T, 2, device=device)
+    task_seq[..., 0] = task_state[0]
+    task_seq[..., 1] = task_state[1]
     packed = LaminarV1V2Network.pack_inputs(stim_seq, cue_seq, task_seq)
 
     with torch.no_grad():
@@ -2624,10 +2666,30 @@ def analyze_one(
     m5 = metric5_energy_by_distance(net, device, oracle_theta=90.0)
     # Phase 1 sharpening-detection metrics
     m6 = metric_local_dprime(net, device, n_trials=200, noise_std=0.3, seed=42)
-    m7 = metric_match_vs_near_miss_decoding(
+    # M7 is now run three times for the Phase 0.5 task_state scaffolding:
+    # (0,0) preserves legacy behavior (backward compatible — regression baseline),
+    # (1,0) is "focused", (0,1) is "routine". Until a checkpoint is trained
+    # with task_state-routed losses (Phase 1A), all three collapse to
+    # approximately the same value because V2 currently ignores task_state.
+    m7_baseline = metric_match_vs_near_miss_decoding(
         net, device, n_train=800, n_test=200,
         noise_std=0.3, readout_noise_std=0.3, seed=42, oracle_theta=90.0,
+        task_state=(0.0, 0.0),
     )
+    m7_focused = metric_match_vs_near_miss_decoding(
+        net, device, n_train=800, n_test=200,
+        noise_std=0.3, readout_noise_std=0.3, seed=42, oracle_theta=90.0,
+        task_state=(1.0, 0.0),
+    )
+    m7_routine = metric_match_vs_near_miss_decoding(
+        net, device, n_train=800, n_test=200,
+        noise_std=0.3, readout_noise_std=0.3, seed=42, oracle_theta=90.0,
+        task_state=(0.0, 1.0),
+    )
+    # Legacy key — stores the (0,0) baseline so downstream tools (e.g.,
+    # run_sweep.sh regex extraction from print_comparison_table output) keep
+    # reading the same values they read before this scaffolding change.
+    m7 = m7_baseline
     m8 = metric_time_resolved(net, device, oracle_theta=90.0, stim_theta=90.0)
     m9 = metric_energy_by_relative_distance_normalized(
         net, device, oracle_theta=90.0,
@@ -2648,6 +2710,9 @@ def analyze_one(
         "metric4": m4, "metric4_wide": m4_wide,
         "metric5": m5,
         "metric6": m6, "metric7": m7, "metric8": m8, "metric9": m9,
+        "metric7_baseline": m7_baseline,
+        "metric7_focused": m7_focused,
+        "metric7_routine": m7_routine,
         "metric10": m10,
         "metric11": m11, "metric12": m12, "metric13": m13, "metric14": m14,
         "sanity": sanity, "artifact": artifact,
