@@ -65,7 +65,7 @@ def main():
     ckpt_path = args.checkpoint
 
     model_cfg, train_cfg, stim_cfg = load_config(config_path)
-    net = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
+    net = LaminarV1V2Network(model_cfg)
     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     net.load_state_dict(ckpt['model_state'])
     net.eval()
@@ -314,7 +314,7 @@ def main():
     print("CONTROL: feedback_scale=0 (feedback OFF)")
     print("=" * 70)
 
-    net_off = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
+    net_off = LaminarV1V2Network(model_cfg)
     net_off.load_state_dict(ckpt['model_state'])
     net_off.eval()
     net_off.oracle_mode = False
