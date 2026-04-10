@@ -101,6 +101,17 @@ class TrainingConfig:
     l2_energy: bool = False             # Use L2 (quadratic) penalty on r_l23 in energy cost instead of L1.
     l23_energy_weight: float = 1.0      # Multiplier on L2/3 term in energy cost. >1 penalizes L2/3 output more.
 
+    # Phase 1A (dual-regime): per-sample loss routing by task_state. When set,
+    # CompositeLoss.forward() weights sensory / energy (r_l23 component) / fb_energy
+    # per-sample according to whether the sequence's task_state is focused [1,0]
+    # or routine [0,1]. None → legacy non-routed path (bit-identical to pre-1A).
+    # Expected shape:
+    #   {
+    #     "focused": {"sensory": float, "energy": float, "fb_energy": float},
+    #     "routine": {"sensory": float, "energy": float, "fb_energy": float},
+    #   }
+    task_routing: dict | None = None
+
     # Freeze V2 / use oracle predictor
     freeze_v2: bool = False
     oracle_pi: float = 1.0          # pi value when using oracle mode
@@ -208,6 +219,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
         l2_energy=train_raw.get("l2_energy", False),
         l23_energy_weight=train_raw.get("l23_energy_weight", 1.0),
+        task_routing=train_raw.get("task_routing", None),
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),
         oracle_shift_timing=train_raw.get("oracle_shift_timing", False),

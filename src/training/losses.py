@@ -488,6 +488,8 @@ class CompositeLoss(nn.Module):
         r_l4_windows: Tensor | None = None,
         mismatch_labels: Tensor | None = None,
         mismatch_mask: Tensor | None = None,
+        task_state: Tensor | None = None,
+        task_routing: dict | None = None,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -504,14 +506,75 @@ class CompositeLoss(nn.Module):
             use_e_total: If True, use E_total; else E_excitatory.
             fb_scale: Feedback scale (0 during burn-in, ramps to 1). Scales
                 L1 sparsity penalty to prevent alpha death during burn-in.
+            task_state: [B, 2] per-sample one-hot sequence-level task state
+                (`[1,0]` = focused, `[0,1]` = routine). When ``None`` (or
+                ``task_routing`` is ``None``), all routed loss terms use the
+                legacy non-routed reduction — bit-identical to pre-Phase-1A.
+            task_routing: Nested dict of per-regime per-term multipliers:
+                ``{"focused": {"sensory", "energy", "fb_energy"},
+                   "routine": {"sensory", "energy", "fb_energy"}}``.
+                These multipliers are applied **per-sample** BEFORE the
+                global ``lambda_*`` weights (i.e. the effective weight for
+                a focused sample on sensory is
+                ``lambda_sensory * task_routing['focused']['sensory']``).
+                Only the r_l23 component of ``energy_cost`` is routed; the
+                other four populations (r_l4, deep_template, r_pv, r_som)
+                keep the legacy global mean. homeostasis / prior_kl /
+                mismatch / sharp / local_disc / pred_suppress terms are
+                **not** routed.
 
         Returns:
             (total_loss, loss_dict) where loss_dict has .item() scalar values.
         """
-        l_sens = self.sensory_readout_loss(r_l23_windows, true_theta_windows)
-        e_exc, e_total = self.energy_cost(outputs)
-        l_homeo = self.homeostasis_penalty(outputs["r_l23"])
-        l_energy = e_total if use_e_total else e_exc
+        routing_active = task_state is not None and task_routing is not None
+
+        if routing_active:
+            # Build per-sample weight vectors. task_state is one-hot [B, 2]:
+            # column 0 = focused, column 1 = routine. A sample's effective
+            # weight is focused_w for focused samples, routine_w for routine.
+            w_sensory = (
+                task_state[:, 0] * float(task_routing['focused']['sensory'])
+                + task_state[:, 1] * float(task_routing['routine']['sensory'])
+            )  # [B]
+            w_energy = (
+                task_state[:, 0] * float(task_routing['focused']['energy'])
+                + task_state[:, 1] * float(task_routing['routine']['energy'])
+            )  # [B]
+            w_fb_energy = (
+                task_state[:, 0] * float(task_routing['focused']['fb_energy'])
+                + task_state[:, 1] * float(task_routing['routine']['fb_energy'])
+            )  # [B]
+
+            # --- Routed sensory readout: per-sample CE weighted by w_sensory ---
+            B, W, N = r_l23_windows.shape
+            logits = self.orientation_decoder(r_l23_windows.reshape(B * W, N))
+            targets = self._theta_to_channel(true_theta_windows).reshape(B * W)
+            ce_per_elem = F.cross_entropy(logits, targets, reduction='none')  # [B*W]
+            ce_per_sample = ce_per_elem.reshape(B, W).mean(dim=1)             # [B]
+            l_sens = (ce_per_sample * w_sensory).mean()
+
+            # --- Routed energy cost: r_l23 component per-sample, others global ---
+            r_l23_out = outputs["r_l23"]
+            if self.l2_energy:
+                r_l23_per_sample = r_l23_out.pow(2).mean(dim=(1, 2))   # [B]
+            else:
+                r_l23_per_sample = r_l23_out.abs().mean(dim=(1, 2))    # [B]
+            r_l23_routed = (r_l23_per_sample * w_energy).mean() * self.l23_energy_weight
+            e_exc = (
+                outputs["r_l4"].abs().mean()
+                + r_l23_routed
+                + outputs["deep_template"].abs().mean()
+            )
+            e_total = e_exc + outputs["r_pv"].abs().mean() + outputs["r_som"].abs().mean()
+
+            l_homeo = self.homeostasis_penalty(outputs["r_l23"])
+            l_energy = e_total if use_e_total else e_exc
+        else:
+            l_sens = self.sensory_readout_loss(r_l23_windows, true_theta_windows)
+            e_exc, e_total = self.energy_cost(outputs)
+            l_homeo = self.homeostasis_penalty(outputs["r_l23"])
+            l_energy = e_total if use_e_total else e_exc
+            w_fb_energy = None  # Unused on non-routed path; avoids NameError below.
 
         total = (
             self.lambda_sensory * l_sens
@@ -606,7 +669,14 @@ class CompositeLoss(nn.Module):
 
         # Feedback energy: penalize excitatory feedback magnitude
         if self.lambda_fb_energy > 0 and "center_exc" in outputs:
-            l_fb_energy = self.feedback_energy_loss(outputs["center_exc"])
+            if routing_active:
+                # Per-sample fb_energy magnitude, weighted by w_fb_energy.
+                # Bit-identical to feedback_energy_loss() when w_fb_energy = ones(B).
+                center_exc = outputs["center_exc"]  # [B, T, N]
+                fb_per_sample = center_exc.abs().mean(dim=(1, 2))  # [B]
+                l_fb_energy = (fb_per_sample * w_fb_energy).mean()
+            else:
+                l_fb_energy = self.feedback_energy_loss(outputs["center_exc"])
             total = total + self.lambda_fb_energy * l_fb_energy
             loss_dict["fb_energy"] = l_fb_energy.item()
         else:

@@ -458,6 +458,12 @@ def run_stage2(
         # In oracle/freeze_v2 mode, p_cw is a placeholder (0.5) — skip state BCE loss
         states_for_loss = None if train_cfg.freeze_v2 else true_states
         p_cw_for_loss = None if train_cfg.freeze_v2 else p_cw_windows
+        # Phase 1A: per-sample loss routing by task_state. task_seq is
+        # [B, T_total, 2] and constant across T (one-hot sequence-level
+        # regime). Take the first timestep → [B, 2]. When
+        # train_cfg.task_routing is None (legacy), CompositeLoss.forward()
+        # falls through to the bit-identical non-routed path.
+        task_state_batch = task_seq[:, 0, :]  # [B, 2]
         total_loss, loss_dict = loss_fn(
             outputs, true_thetas, true_next_thetas,
             r_l23_windows, q_pred_windows,
@@ -471,6 +477,8 @@ def run_stage2(
             r_l4_windows=r_l4_windows,
             mismatch_labels=mm_labels_windows,
             mismatch_mask=mm_mask_windows,
+            task_state=task_state_batch,
+            task_routing=train_cfg.task_routing,
         )
 
         total_loss.backward()

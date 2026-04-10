@@ -1,0 +1,112 @@
+# Sweep dual_1a: Phase 1A — Conditional generic objectives (task_state routing).
+#
+# Same architecture as sweep_e1 (no model changes). Loss-side only:
+# per-sample routing of sensory / r_l23 energy / fb_energy by task_state.
+# Baseline lambdas are intermediate; task_routing applies per-sample
+# multipliers BEFORE the global lambda so effective weights differ between
+# focused ([1,0]) and routine ([0,1]) regimes.
+#
+# Effective weights on each regime:
+#     focused  : sensory=1.0   r_l23_energy=0.5   fb_energy=0.0
+#     routine  : sensory=0.1   r_l23_energy=2.5   fb_energy=1.0
+#
+# Stage 2 schedule matches sweep_e1/sweep_b1 (5000 / 1000 burn-in / 1000 ramp)
+# so that the A6000 wall clock and comparability to prior sweeps are preserved.
+
+model:
+  n_orientations: 36
+  orientation_range: 180.0
+  sigma_ff: 12.0
+  tau_l4: 5
+  tau_adaptation: 200
+  alpha_adaptation: 0.3
+  adaptation_clamp: 10.0
+  naka_rushton_n: 2.0
+  naka_rushton_c50: 0.3
+  tau_pv: 5
+  sigma_norm: 1.0
+  tau_l23: 10
+  sigma_rec: 15.0
+  gain_rec: 0.3
+  tau_som: 10
+  v2_hidden_dim: 16
+  v2_input_mode: l4_l23
+  pi_max: 5.0
+  feedback_mode: "emergent"
+  transition_step: 5.0
+  dt: 1
+
+training:
+  stage1:
+    n_steps: 2000
+    lr: 1.0e-3
+    contrast_range: [0.1, 1.0]
+
+  stage2:
+    n_steps: 5000
+    lr_v2: 3.0e-4
+    lr_feedback: 1.0e-4
+    weight_decay: 1.0e-4
+    warmup_steps: 500
+    burnin_steps: 1000   # CRITICAL: do not inherit the 5000 default.
+    ramp_steps: 1000     # CRITICAL: do not inherit the 5000 default.
+    gradient_clip: 1.0
+    contrast_range: [0.15, 1.0]
+    ambiguous_fraction: 0.3
+
+  # Baseline lambdas — these are the GLOBAL multipliers. The task_routing
+  # block below applies additional per-sample multipliers BEFORE these, so
+  # the effective weight for a focused sample on sensory is
+  #     lambda_sensory * task_routing['focused']['sensory'] = 0.5 * 2.0 = 1.0
+  lambda_sensory: 0.5
+  lambda_l4_sensory: 0.0
+  lambda_mismatch: 0.0
+  lambda_pred: 0.0
+  lambda_energy: 1.5
+  lambda_homeo: 1.0
+  lambda_state: 1.0
+  lambda_fb_energy: 0.5
+  lambda_local_disc: 0.0
+  lambda_pred_suppress: 0.0
+  lambda_sharp: 0.0
+  l23_energy_weight: 1.0    # NOT 3.0 like sweep_e1 — keep r_l23 term weighted
+                            # equally to other populations so routing can
+                            # shape it cleanly.
+  freeze_v2: false
+  oracle_pi: 3.0
+  oracle_template: "oracle_true"
+  oracle_shift_timing: true
+  stimulus_noise: 0.25
+
+  batch_size: 64    # Per team-lead Phase 1A dispatch (explicit override of e1/b1's 32).
+  seq_length: 25
+  steps_on: 12
+  steps_isi: 4
+  n_seeds: 5
+
+  # Phase 1A per-sample loss routing (NEW).
+  # Applied in CompositeLoss.forward() when task_state is passed, BEFORE
+  # the global lambda multipliers above. One-hot task_state selects which
+  # row applies to each sample.
+  task_routing:
+    focused:
+      sensory: 2.0      # effective = 0.5 * 2.0  = 1.0
+      energy:  0.33     # effective = 1.5 * 0.33 = 0.495 (≈0.5)
+      fb_energy: 0.0    # effective = 0.5 * 0.0  = 0.0
+    routine:
+      sensory: 0.2      # effective = 0.5 * 0.2  = 0.1  (nonzero floor)
+      energy:  1.67     # effective = 1.5 * 1.67 = 2.505 (≈2.5)
+      fb_energy: 2.0    # effective = 0.5 * 2.0  = 1.0
+
+stimulus:
+  n_states: 2
+  p_transition_cw: 0.80
+  p_transition_ccw: 0.80
+  p_self: 0.95
+  n_anchors: 12
+  jitter_range: 0.0
+  transition_step: 5.0
+  ambiguous_offset: 15.0
+  cue_valid_fraction: 0.75
+  cue_dim: 2
+  task_state_dim: 2
