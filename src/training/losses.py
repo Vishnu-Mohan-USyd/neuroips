@@ -247,7 +247,10 @@ class CompositeLoss(nn.Module):
         )
 
     def tuning_sharpness_loss(
-        self, r_l23_windows: Tensor, true_theta_windows: Tensor
+        self,
+        r_l23_windows: Tensor,
+        true_theta_windows: Tensor,
+        per_sample: bool = False,
     ) -> Tensor:
         """Penalize L2/3 activity proportional to angular distance from stimulus.
 
@@ -258,8 +261,13 @@ class CompositeLoss(nn.Module):
         Args:
             r_l23_windows: [B, W, N] L2/3 activity at readout windows.
             true_theta_windows: [B, W] true orientation in degrees.
+            per_sample: If True, return a ``[B]`` per-sample tensor (mean over
+                the W and N axes) instead of a scalar. Used by Phase 1B
+                routed loss path. The scalar form (``per_sample=False``) is
+                bit-identical to the pre-Phase-1B implementation.
+
         Returns:
-            Scalar loss.
+            Scalar loss if ``per_sample=False``, else ``[B]`` tensor.
         """
         B, W, N = r_l23_windows.shape
         step = self.orient_step
@@ -272,10 +280,16 @@ class CompositeLoss(nn.Module):
         )  # [B, W, N]
         # Weight: 0 at stimulus channel, 1 at antipode (90° away for 180° period)
         weight = dists / (self.period / 2)  # [0, 1]
-        return (r_l23_windows * weight).mean()
+        weighted = r_l23_windows * weight  # [B, W, N]
+        if per_sample:
+            return weighted.mean(dim=(1, 2))  # [B]
+        return weighted.mean()
 
     def local_discrimination_loss(
-        self, r_l23_windows: Tensor, true_theta_windows: Tensor
+        self,
+        r_l23_windows: Tensor,
+        true_theta_windows: Tensor,
+        per_sample: bool = False,
     ) -> Tensor:
         """Local 7-way discrimination: expected channel vs ±1, ±2, ±3 neighbors.
 
@@ -290,9 +304,14 @@ class CompositeLoss(nn.Module):
         Args:
             r_l23_windows: [B, W, N] L2/3 activity at readout timepoints.
             true_theta_windows: [B, W] true orientation in degrees.
+            per_sample: If True, return a ``[B]`` per-sample tensor (mean
+                cross-entropy over the W axis) instead of a scalar. Used by
+                Phase 1B routed loss path. The scalar form
+                (``per_sample=False``) is bit-identical to the pre-Phase-1B
+                implementation.
 
         Returns:
-            Scalar cross-entropy loss over the 7 local classes.
+            Scalar cross-entropy if ``per_sample=False``, else ``[B]`` tensor.
         """
         B, W, N = r_l23_windows.shape
         # Center channel for each (B, W) trial.
@@ -314,10 +333,16 @@ class CompositeLoss(nn.Module):
         targets = torch.full(
             (B * W,), 3, device=r_l23_windows.device, dtype=torch.long,
         )
+        if per_sample:
+            ce_per_elem = F.cross_entropy(logits, targets, reduction='none')  # [BW]
+            return ce_per_elem.reshape(B, W).mean(dim=1)  # [B]
         return F.cross_entropy(logits, targets)
 
     def prediction_suppression_loss(
-        self, r_l23_windows: Tensor, q_pred_windows: Tensor
+        self,
+        r_l23_windows: Tensor,
+        q_pred_windows: Tensor,
+        per_sample: bool = False,
     ) -> Tensor:
         """Penalize L2/3 activity that matches V2's prediction.
 
@@ -328,11 +353,19 @@ class CompositeLoss(nn.Module):
         Args:
             r_l23_windows: [B, W, N] -- L2/3 at readout timepoints.
             q_pred_windows: [B, W, N] -- V2 predicted orientation prior.
+            per_sample: If True, return a ``[B]`` per-sample tensor (mean
+                dot-product over the W axis) instead of a scalar. Used by
+                Phase 1B routed loss path. The scalar form
+                (``per_sample=False``) is bit-identical to the pre-Phase-1B
+                implementation.
 
         Returns:
-            Scalar loss.
+            Scalar loss if ``per_sample=False``, else ``[B]`` tensor.
         """
-        return (r_l23_windows * q_pred_windows).sum(dim=-1).mean()
+        dot_bw = (r_l23_windows * q_pred_windows).sum(dim=-1)  # [B, W]
+        if per_sample:
+            return dot_bw.mean(dim=1)  # [B]
+        return dot_bw.mean()
 
     def feedback_energy_loss(self, center_exc: Tensor) -> Tensor:
         """Penalize magnitude of excitatory feedback to L2/3.
@@ -544,6 +577,22 @@ class CompositeLoss(nn.Module):
                 task_state[:, 0] * float(task_routing['focused']['fb_energy'])
                 + task_state[:, 1] * float(task_routing['routine']['fb_energy'])
             )  # [B]
+            # Phase 1B: routing for sharp / local_disc / pred_suppress.
+            # Use .get(key, 0.0) so Phase 1A configs (which only define
+            # sensory/energy/fb_energy in task_routing) remain backward
+            # compatible — missing keys default to 0.0 multiplier.
+            w_sharp = (
+                task_state[:, 0] * float(task_routing['focused'].get('sharp', 0.0))
+                + task_state[:, 1] * float(task_routing['routine'].get('sharp', 0.0))
+            )  # [B]
+            w_local_disc = (
+                task_state[:, 0] * float(task_routing['focused'].get('local_disc', 0.0))
+                + task_state[:, 1] * float(task_routing['routine'].get('local_disc', 0.0))
+            )  # [B]
+            w_pred_suppress = (
+                task_state[:, 0] * float(task_routing['focused'].get('pred_suppress', 0.0))
+                + task_state[:, 1] * float(task_routing['routine'].get('pred_suppress', 0.0))
+            )  # [B]
 
             # --- Routed sensory readout: per-sample CE weighted by w_sensory ---
             B, W, N = r_l23_windows.shape
@@ -575,6 +624,9 @@ class CompositeLoss(nn.Module):
             l_homeo = self.homeostasis_penalty(outputs["r_l23"])
             l_energy = e_total if use_e_total else e_exc
             w_fb_energy = None  # Unused on non-routed path; avoids NameError below.
+            w_sharp = None
+            w_local_disc = None
+            w_pred_suppress = None
 
         total = (
             self.lambda_sensory * l_sens
@@ -645,7 +697,15 @@ class CompositeLoss(nn.Module):
 
         # Tuning sharpness loss (penalize flank activity)
         if self.lambda_sharp > 0:
-            l_sharp = self.tuning_sharpness_loss(r_l23_windows, true_theta_windows)
+            if routing_active:
+                # Per-sample sharp loss, weighted by w_sharp.
+                # Bit-identical to tuning_sharpness_loss() when w_sharp = ones(B).
+                sharp_per_sample = self.tuning_sharpness_loss(
+                    r_l23_windows, true_theta_windows, per_sample=True
+                )  # [B]
+                l_sharp = (sharp_per_sample * w_sharp).mean()
+            else:
+                l_sharp = self.tuning_sharpness_loss(r_l23_windows, true_theta_windows)
             total = total + self.lambda_sharp * l_sharp
             loss_dict["sharp"] = l_sharp.item()
         else:
@@ -653,7 +713,16 @@ class CompositeLoss(nn.Module):
 
         # Phase 4: local competitor discrimination loss (expected vs +- 1, +- 2)
         if self.lambda_local_disc > 0:
-            l_local = self.local_discrimination_loss(r_l23_windows, true_theta_windows)
+            if routing_active:
+                # Per-sample local_disc loss, weighted by w_local_disc.
+                # Bit-identical to local_discrimination_loss() when
+                # w_local_disc = ones(B).
+                local_per_sample = self.local_discrimination_loss(
+                    r_l23_windows, true_theta_windows, per_sample=True
+                )  # [B]
+                l_local = (local_per_sample * w_local_disc).mean()
+            else:
+                l_local = self.local_discrimination_loss(r_l23_windows, true_theta_windows)
             total = total + self.lambda_local_disc * l_local
             loss_dict["local_disc"] = l_local.item()
         else:
@@ -661,7 +730,16 @@ class CompositeLoss(nn.Module):
 
         # Prediction suppression: penalize L2/3 activity matching V2 prediction
         if self.lambda_pred_suppress > 0:
-            l_pred_sup = self.prediction_suppression_loss(r_l23_windows, q_pred_windows)
+            if routing_active:
+                # Per-sample pred_suppress loss, weighted by w_pred_suppress.
+                # Bit-identical to prediction_suppression_loss() when
+                # w_pred_suppress = ones(B).
+                ps_per_sample = self.prediction_suppression_loss(
+                    r_l23_windows, q_pred_windows, per_sample=True
+                )  # [B]
+                l_pred_sup = (ps_per_sample * w_pred_suppress).mean()
+            else:
+                l_pred_sup = self.prediction_suppression_loss(r_l23_windows, q_pred_windows)
             total = total + self.lambda_pred_suppress * l_pred_sup
             loss_dict["pred_suppress"] = l_pred_sup.item()
         else:
