@@ -17,11 +17,54 @@
 
 set -euo pipefail
 
-# Activate conda if available (needed on remote machines)
-if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/miniconda3/etc/profile.d/conda.sh"
-    conda activate base 2>/dev/null || true
+# ------------------------------------------------------------------
+# Python env preflight
+# ------------------------------------------------------------------
+# The tmux / remote launcher may be a bare shell with no env activated.
+# We must guarantee `python3` can import torch BEFORE training starts,
+# otherwise the job crashes in <1s with ModuleNotFoundError.
+#
+# Strategy (first match wins):
+#   1. If CONDA_ENV is set, activate it (explicit override)
+#   2. Else try conda env "sc_model" (project default, has torch 2.10)
+#   3. If conda is unavailable or activation fails, fall back to
+#      system /usr/bin/python3 (has torch via user site-packages)
+#   4. Verify `python3 -c "import torch"` succeeds; exit 1 if not
+# ------------------------------------------------------------------
+CONDA_ENV="${CONDA_ENV:-sc_model}"
+CONDA_SH="$HOME/miniconda3/etc/profile.d/conda.sh"
+
+if [ -f "$CONDA_SH" ]; then
+    # shellcheck disable=SC1090
+    source "$CONDA_SH"
+    if ! conda activate "$CONDA_ENV" 2>/dev/null; then
+        echo "WARN: conda env '$CONDA_ENV' not available, trying base..." >&2
+        conda activate base 2>/dev/null || true
+    fi
 fi
+
+# If the currently-selected python3 lacks torch, fall back to /usr/bin/python3
+# (which has torch installed via pip --user at ~/.local/lib/python3.10/...)
+if ! python3 -c "import torch" >/dev/null 2>&1; then
+    if /usr/bin/python3 -c "import torch" >/dev/null 2>&1; then
+        echo "INFO: preferred python3 lacks torch; falling back to /usr/bin/python3" >&2
+        export PATH="/usr/bin:$PATH"
+        hash -r
+    fi
+fi
+
+# Final hard check — if torch still can't be imported, fail loudly instead of
+# crashing inside scripts/train.py 5 lines later.
+if ! python3 -c "import torch" >/dev/null 2>&1; then
+    echo "ERROR: torch is not importable in any candidate python3 interpreter." >&2
+    echo "  which python3: $(which python3 || echo none)" >&2
+    echo "  CONDA_DEFAULT_ENV: ${CONDA_DEFAULT_ENV:-<none>}" >&2
+    echo "  Set CONDA_ENV=<name> to force a specific conda env, or install torch." >&2
+    exit 1
+fi
+
+# Report the resolved env so logs capture it
+python3 -c "import torch, sys; print(f'[env] python3={sys.executable} torch={torch.__version__} cuda={torch.cuda.is_available()}')" >&2
 
 CONFIG="${1:?Usage: $0 <config> <output_dir> [seed] [device]}"
 OUTPUT_DIR="${2:?Usage: $0 <config> <output_dir> [seed] [device]}"
