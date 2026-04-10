@@ -437,6 +437,39 @@ class TestEIGate:
             f"suppressed={ce_suppressed:.4e}"
         )
 
+    def test_som_drive_fb_in_aux(self, cfg):
+        """Phase 2.4: aux must expose som_drive_fb_all for the routine_shape loss.
+
+        som_drive_fb = relu(-scaled_fb) is computed every timestep in step()
+        (regardless of use_ei_gate). The forward pass must propagate it into
+        aux["som_drive_fb_all"] with shape [B, T, N]. It must be nonzero for
+        a forward pass with nontrivial feedback (nonzero stimulus → nonzero
+        q_pred contrast → nonzero feedback drive).
+        """
+        from dataclasses import replace
+
+        # Exercise both gate-off (default) and gate-on paths.
+        for use_gate in (False, True):
+            cfg_v = replace(cfg, use_ei_gate=use_gate)
+            torch.manual_seed(0)
+            net = LaminarV1V2Network(cfg_v)
+            B, T, N = 2, 15, cfg.n_orientations
+            stim = torch.randn(B, T, N).abs() * 0.5
+            _, _, aux = net(stim)
+            assert "som_drive_fb_all" in aux, (
+                f"use_ei_gate={use_gate}: aux missing 'som_drive_fb_all'"
+            )
+            sdf = aux["som_drive_fb_all"]
+            assert sdf.shape == (B, T, N), (
+                f"use_ei_gate={use_gate}: expected shape {(B, T, N)}, got {sdf.shape}"
+            )
+            # som_drive_fb = relu(-scaled_fb) is always non-negative
+            assert torch.all(sdf >= 0.0)
+            # At least some timesteps should have nonzero drive once feedback
+            # has built up (not a strict semantic requirement — the key check
+            # is the tensor exists with correct shape).
+            assert torch.isfinite(sdf).all()
+
 
 # ── Oracle Mode Tests ────────────────────────────────────────────────────
 

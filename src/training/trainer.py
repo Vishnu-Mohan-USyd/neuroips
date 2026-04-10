@@ -73,12 +73,14 @@ def create_stage2_optimizer(
         {"params": list(loss_fn.orientation_decoder.parameters()), "lr": cfg.stage1_lr},
     ]
     # Phase 2: causal E/I gate (alpha_net) — only present when use_ei_gate=True.
-    # Given its own parameter group so its LR can be tuned independently if
-    # the default V2 LR proves insufficient (dispatch warns about burn-in
-    # zero-gradient risk). Uses stage2_lr_v2 as the default.
+    # Given its own parameter group so its LR can be tuned independently.
+    # Phase 2.4: multiplier `cfg.lr_mult_alpha` on top of stage2_lr_v2 to
+    # counteract the burn-in zero-gradient starvation (debugger H2 confirmed).
+    # Default multiplier is 1.0 → bit-identical to Phase 2 behavior.
     if hasattr(net, "alpha_net"):
+        alpha_lr = cfg.stage2_lr_v2 * cfg.lr_mult_alpha
         param_groups.append(
-            {"params": list(net.alpha_net.parameters()), "lr": cfg.stage2_lr_v2}
+            {"params": list(net.alpha_net.parameters()), "lr": alpha_lr}
         )
     # Add optional readout head params
     for head_name in ('surprise_detector', 'error_decoder', 'detection_head', 'l4_decoder', 'mismatch_head', 'local_disc_head'):

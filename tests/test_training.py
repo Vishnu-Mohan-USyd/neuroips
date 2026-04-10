@@ -199,7 +199,7 @@ class TestCompositeLoss:
 
         assert isinstance(total_loss, torch.Tensor)
         assert total_loss.shape == ()
-        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy"}
+        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy", "routine_shape"}
         assert set(loss_dict.keys()) == expected_keys
         for k, v in loss_dict.items():
             assert isinstance(v, float), f"{k} should be float, got {type(v)}"
@@ -1043,3 +1043,332 @@ class TestOracleSigma:
             assert tc.ambiguous_fraction == 0.3
             assert tc.oracle_template == "oracle_true"
             assert tc.freeze_v2 is True
+
+
+class TestPhase24RoutineShape:
+    """Phase 2.4: routine E/I symmetry-break loss + alpha_net LR multiplier.
+
+    The routine_shape loss term is:
+        shape_per_sample = |center_exc|.mean(T,N) - 0.5 * |som_drive_fb|.mean(T,N)
+        l_routine_shape  = (shape_per_sample * w_routine_shape).mean()
+        total += lambda_routine_shape * l_routine_shape
+
+    where w_routine_shape is routed per-sample via task_routing (0.0 for
+    focused, 2.0 for routine in sweep_dual_2_4.yaml). Only routine samples
+    are rewarded for routing feedback through the inhibitory (SOM) branch.
+
+    Plus: TrainingConfig gains an `lr_mult_alpha` field. The multiplier is
+    applied to the alpha_net param group on top of stage2_lr_v2, so
+    `lr_mult_alpha=10` produces alpha_net LR = stage2_lr_v2 * 10.
+    """
+
+    def _make_outputs(self, ce_mag: float, sdf_mag: float, B: int = 4,
+                      T: int = 8, N: int = 36) -> dict:
+        """Synthetic outputs dict with known center_exc / som_drive_fb magnitudes."""
+        return {
+            "r_l4":          torch.zeros(B, T, N),
+            "r_l23":         torch.zeros(B, T, N),
+            "r_pv":          torch.zeros(B, T, 1),
+            "r_som":         torch.zeros(B, T, N),
+            "deep_template": torch.zeros(B, T, N),
+            "center_exc":    torch.full((B, T, N), ce_mag),
+            "som_drive_fb":  torch.full((B, T, N), sdf_mag),
+        }
+
+    def test_default_lambda_routine_shape_is_zero(self):
+        """Default TrainingConfig.lambda_routine_shape is 0.0 (legacy)."""
+        tc = TrainingConfig()
+        assert tc.lambda_routine_shape == 0.0
+
+    def test_default_lr_mult_alpha_is_one(self):
+        """Default TrainingConfig.lr_mult_alpha is 1.0 (legacy, no-op)."""
+        tc = TrainingConfig()
+        assert tc.lr_mult_alpha == 1.0
+
+    def test_routine_shape_disabled_when_lambda_zero(self, model_cfg):
+        """With lambda=0 the loss term is 0.0 regardless of outputs."""
+        tc = TrainingConfig(lambda_routine_shape=0.0)
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 2, 36
+        outputs = self._make_outputs(ce_mag=0.1, sdf_mag=0.05, B=B, N=N)
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        _, ld = loss_fn(outputs, true_theta, true_next, r_l23_w, q_pred_w)
+        assert ld["routine_shape"] == 0.0
+
+    def test_routine_shape_analytic_math(self, model_cfg):
+        """Legacy (no-routing) path computes shape_per_sample.mean()."""
+        tc = TrainingConfig(lambda_routine_shape=1.0)
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 2, 36
+        ce_mag, sdf_mag = 0.04, 0.02
+        outputs = self._make_outputs(ce_mag=ce_mag, sdf_mag=sdf_mag, B=B, N=N)
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        _, ld = loss_fn(outputs, true_theta, true_next, r_l23_w, q_pred_w)
+        # shape_per_sample = 0.04 - 0.5*0.02 = 0.030
+        expected = ce_mag - 0.5 * sdf_mag
+        assert abs(ld["routine_shape"] - expected) < 1e-6, (
+            f"routine_shape={ld['routine_shape']}, expected {expected}"
+        )
+
+    def test_routine_shape_routed_focused_zero(self, model_cfg):
+        """All-focused routing → routine_shape is 0 (focused weight is 0)."""
+        tc = TrainingConfig(
+            lambda_routine_shape=1.0,
+            task_routing={
+                "focused": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 0.0,
+                },
+                "routine": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 2.0,
+                },
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 2, 36
+        outputs = self._make_outputs(ce_mag=0.04, sdf_mag=0.02, B=B, N=N)
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state = torch.tensor([[1.0, 0.0]] * B)  # all focused
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state, task_routing=tc.task_routing,
+        )
+        assert abs(ld["routine_shape"]) < 1e-6
+
+    def test_routine_shape_routed_routine_scales(self, model_cfg):
+        """All-routine routing → routine_shape = 2.0 * (ce - 0.5*sdf)."""
+        tc = TrainingConfig(
+            lambda_routine_shape=1.0,
+            task_routing={
+                "focused": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 0.0,
+                },
+                "routine": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 2.0,
+                },
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 2, 36
+        ce_mag, sdf_mag = 0.04, 0.02
+        outputs = self._make_outputs(ce_mag=ce_mag, sdf_mag=sdf_mag, B=B, N=N)
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state = torch.tensor([[0.0, 1.0]] * B)  # all routine
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state, task_routing=tc.task_routing,
+        )
+        expected = 2.0 * (ce_mag - 0.5 * sdf_mag)  # 0.060
+        assert abs(ld["routine_shape"] - expected) < 1e-6
+
+    def test_routine_shape_prefers_inhibitory_gate(self, model_cfg):
+        """Loss is strictly lower for a "perfect" gate (g_E=0.2, g_I=1.8)
+        than for the identity gate (g_E=1, g_I=1) on a routine-only batch.
+
+        Simulates the effect of the gate on a synthetic raw feedback signal
+        of unit magnitude. Proves the loss landscape now rewards inhibitory
+        routing — the key Phase 2.4 semantic guarantee.
+        """
+        tc = TrainingConfig(
+            lambda_routine_shape=1.0,
+            task_routing={
+                "focused": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 0.0,
+                },
+                "routine": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 2.0,
+                },
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+
+        B, W, N = 4, 2, 36
+        T = 8
+        raw_ce = 0.04   # what center_exc would be at g_E=1
+        raw_sdf = 0.04  # what som_drive_fb would be at g_I=1
+
+        # Identity gate: g_E=1, g_I=1
+        out_ident = {
+            "r_l4": torch.zeros(B, T, N), "r_l23": torch.zeros(B, T, N),
+            "r_pv": torch.zeros(B, T, 1), "r_som": torch.zeros(B, T, N),
+            "deep_template": torch.zeros(B, T, N),
+            "center_exc":   torch.full((B, T, N), 1.0 * raw_ce),
+            "som_drive_fb": torch.full((B, T, N), 1.0 * raw_sdf),
+        }
+        # Perfect gate: g_E=0.2, g_I=1.8
+        out_perfect = {
+            "r_l4": torch.zeros(B, T, N), "r_l23": torch.zeros(B, T, N),
+            "r_pv": torch.zeros(B, T, 1), "r_som": torch.zeros(B, T, N),
+            "deep_template": torch.zeros(B, T, N),
+            "center_exc":   torch.full((B, T, N), 0.2 * raw_ce),
+            "som_drive_fb": torch.full((B, T, N), 1.8 * raw_sdf),
+        }
+
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state = torch.tensor([[0.0, 1.0]] * B)
+
+        _, ld_ident = loss_fn(
+            out_ident, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state, task_routing=tc.task_routing,
+        )
+        _, ld_perfect = loss_fn(
+            out_perfect, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state, task_routing=tc.task_routing,
+        )
+        assert ld_perfect["routine_shape"] < ld_ident["routine_shape"], (
+            f"perfect gate routine_shape={ld_perfect['routine_shape']:.6f} "
+            f"is not < identity routine_shape={ld_ident['routine_shape']:.6f} — "
+            "loss landscape is not rewarding inhibitory routing."
+        )
+
+    def test_routine_shape_gradient_directions(self, model_cfg):
+        """Autograd flows with the expected signs into ce and sdf."""
+        tc = TrainingConfig(
+            lambda_routine_shape=1.0,
+            task_routing={
+                "focused": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 0.0,
+                },
+                "routine": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 2.0,
+                },
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+
+        B, W, N = 4, 2, 36
+        T = 8
+        ce_leaf = torch.full((B, T, N), 0.04, requires_grad=True)
+        sdf_leaf = torch.full((B, T, N), 0.02, requires_grad=True)
+        outputs = {
+            "r_l4": torch.zeros(B, T, N), "r_l23": torch.zeros(B, T, N),
+            "r_pv": torch.zeros(B, T, 1), "r_som": torch.zeros(B, T, N),
+            "deep_template": torch.zeros(B, T, N),
+            "center_exc": ce_leaf, "som_drive_fb": sdf_leaf,
+        }
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state = torch.tensor([[0.0, 1.0]] * B)
+
+        total, _ = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state, task_routing=tc.task_routing,
+        )
+        total.backward()
+        # d(routine_shape)/d(ce) > 0 → descent shrinks ce
+        # d(routine_shape)/d(sdf) < 0 → descent grows sdf
+        assert ce_leaf.grad.mean().item() > 0, (
+            f"grad center_exc.mean() = {ce_leaf.grad.mean().item():+.3e}"
+        )
+        assert sdf_leaf.grad.mean().item() < 0, (
+            f"grad som_drive_fb.mean() = {sdf_leaf.grad.mean().item():+.3e}"
+        )
+
+    def test_lr_mult_alpha_scales_alpha_net_group(self):
+        """lr_mult_alpha=10 → alpha_net param group has LR = 10 * stage2_lr_v2.
+
+        When use_ei_gate=True the network has an alpha_net module. The
+        create_stage2_optimizer helper must add a dedicated param group for
+        alpha_net whose LR equals stage2_lr_v2 * lr_mult_alpha.
+        """
+        from dataclasses import replace
+        model_cfg = ModelConfig(feedback_mode="emergent", use_ei_gate=True)
+        tc = TrainingConfig(stage2_lr_v2=3e-4, lr_mult_alpha=10.0)
+        net = LaminarV1V2Network(model_cfg)
+        loss_fn = CompositeLoss(tc, model_cfg)
+        freeze_stage1(net)
+        unfreeze_stage2(net)
+        assert hasattr(net, "alpha_net")
+
+        optimizer = create_stage2_optimizer(net, loss_fn, tc)
+        alpha_ids = {id(p) for p in net.alpha_net.parameters()}
+
+        # Find the group that contains alpha_net params.
+        alpha_group = None
+        for group in optimizer.param_groups:
+            group_ids = {id(p) for p in group["params"]}
+            if alpha_ids.issubset(group_ids):
+                alpha_group = group
+                break
+        assert alpha_group is not None, (
+            "alpha_net params not found in any optimizer group"
+        )
+        expected_lr = tc.stage2_lr_v2 * tc.lr_mult_alpha  # 3e-3
+        assert abs(alpha_group["lr"] - expected_lr) < 1e-9, (
+            f"alpha_net LR = {alpha_group['lr']}, expected {expected_lr}"
+        )
+        # alpha_net params must be in exactly one group (no double-counting).
+        count = 0
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                if id(p) in alpha_ids:
+                    count += 1
+        assert count == len(alpha_ids), (
+            f"alpha_net param count mismatch: {count} vs {len(alpha_ids)}"
+        )
+
+    def test_lr_mult_alpha_default_legacy(self):
+        """lr_mult_alpha=1.0 (default) → alpha_net LR == stage2_lr_v2."""
+        model_cfg = ModelConfig(feedback_mode="emergent", use_ei_gate=True)
+        tc = TrainingConfig(stage2_lr_v2=3e-4)  # default lr_mult_alpha=1.0
+        assert tc.lr_mult_alpha == 1.0
+        net = LaminarV1V2Network(model_cfg)
+        loss_fn = CompositeLoss(tc, model_cfg)
+        freeze_stage1(net)
+        unfreeze_stage2(net)
+
+        optimizer = create_stage2_optimizer(net, loss_fn, tc)
+        alpha_ids = {id(p) for p in net.alpha_net.parameters()}
+        for group in optimizer.param_groups:
+            if alpha_ids.issubset({id(p) for p in group["params"]}):
+                assert abs(group["lr"] - tc.stage2_lr_v2) < 1e-9
+                return
+        raise AssertionError("alpha_net params not found in any optimizer group")
+
+    def test_no_alpha_group_when_gate_off(self):
+        """use_ei_gate=False → no alpha_net group (legacy 3-group layout)."""
+        model_cfg = ModelConfig(feedback_mode="emergent", use_ei_gate=False)
+        tc = TrainingConfig(lr_mult_alpha=10.0)  # ignored without gate
+        net = LaminarV1V2Network(model_cfg)
+        assert not hasattr(net, "alpha_net")
+        loss_fn = CompositeLoss(tc, model_cfg)
+        freeze_stage1(net)
+        unfreeze_stage2(net)
+        optimizer = create_stage2_optimizer(net, loss_fn, tc)
+        # Legacy behavior: 3 param groups (V2, W_rec, decoder). No alpha_net.
+        assert len(optimizer.param_groups) == 3
+
+    def test_sweep_dual_2_4_yaml_loads(self):
+        """sweep_dual_2_4.yaml parses with all expected Phase 2.4 fields."""
+        from src.config import load_config
+        mc, tc, _ = load_config("config/sweep/sweep_dual_2_4.yaml")
+        assert mc.use_ei_gate is True
+        assert tc.lambda_routine_shape == 1.0
+        assert tc.lr_mult_alpha == 10.0
+        assert tc.task_routing is not None
+        assert tc.task_routing["focused"]["routine_shape"] == 0.0
+        assert tc.task_routing["routine"]["routine_shape"] == 2.0

@@ -188,6 +188,7 @@ class LaminarV1V2Network(nn.Module):
             state_logits=state_logits,
             p_cw=p_cw,
             center_exc=center_exc,
+            som_drive_fb=som_drive_fb,
             gains=gains,
         )
 
@@ -274,6 +275,10 @@ class LaminarV1V2Network(nn.Module):
         deep_template_all = torch.empty(B, T, N, device=device)
         p_cw_all = torch.empty(B, T, 1, device=device)
         center_exc_all = torch.empty(B, T, N, device=device)
+        # Phase 2.4: also track som_drive_fb trajectory so the routine_shape
+        # loss can read it from aux. Populated in both gate-on and gate-off
+        # paths (som_drive_fb is always computed in step()).
+        som_drive_fb_all = torch.empty(B, T, N, device=device)
         # Phase 2: preallocate per-step gate output trajectory. Only populated
         # when use_ei_gate=True, otherwise left as zeros so downstream code
         # can assume the key exists and has a defined shape.
@@ -310,6 +315,10 @@ class LaminarV1V2Network(nn.Module):
                     center_exc_all[:, t] = aux_t.center_exc
                 else:
                     center_exc_all[:, t] = 0.0
+                if aux_t.som_drive_fb is not None:
+                    som_drive_fb_all[:, t] = aux_t.som_drive_fb
+                else:
+                    som_drive_fb_all[:, t] = 0.0
                 if aux_t.gains is not None:
                     gains_all[:, t] = aux_t.gains
         finally:
@@ -327,6 +336,7 @@ class LaminarV1V2Network(nn.Module):
             "r_vip_all": r_vip_all,               # [B, T, N]
             "p_cw_all": p_cw_all,                 # [B, T, 1]
             "center_exc_all": center_exc_all,     # [B, T, N]
+            "som_drive_fb_all": som_drive_fb_all, # [B, T, N]
             "gains_all": gains_all,               # [B, T, 2]  zeros when use_ei_gate=False
         }
 

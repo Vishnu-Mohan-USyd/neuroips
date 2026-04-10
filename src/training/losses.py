@@ -43,6 +43,8 @@ class CompositeLoss(nn.Module):
         self.lambda_local_disc = cfg.lambda_local_disc  # 0.0 (disabled by default)
         self.lambda_pred_suppress = cfg.lambda_pred_suppress  # 0.0 (disabled by default)
         self.lambda_fb_energy = cfg.lambda_fb_energy          # 0.0 (disabled by default)
+        # Phase 2.4: routine E/I symmetry-break loss. 0.0 = disabled → legacy.
+        self.lambda_routine_shape = cfg.lambda_routine_shape
         self.l2_energy = cfg.l2_energy                        # False (L1 by default)
         self.l23_energy_weight = cfg.l23_energy_weight        # 1.0 (equal weighting by default)
 
@@ -593,6 +595,12 @@ class CompositeLoss(nn.Module):
                 task_state[:, 0] * float(task_routing['focused'].get('pred_suppress', 0.0))
                 + task_state[:, 1] * float(task_routing['routine'].get('pred_suppress', 0.0))
             )  # [B]
+            # Phase 2.4: routine_shape routing (focused → 0.0, routine → ~2.0).
+            # Missing key defaults to 0.0 so pre-2.4 configs are untouched.
+            w_routine_shape = (
+                task_state[:, 0] * float(task_routing['focused'].get('routine_shape', 0.0))
+                + task_state[:, 1] * float(task_routing['routine'].get('routine_shape', 0.0))
+            )  # [B]
 
             # --- Routed sensory readout: per-sample CE weighted by w_sensory ---
             B, W, N = r_l23_windows.shape
@@ -627,6 +635,7 @@ class CompositeLoss(nn.Module):
             w_sharp = None
             w_local_disc = None
             w_pred_suppress = None
+            w_routine_shape = None
 
         total = (
             self.lambda_sensory * l_sens
@@ -759,6 +768,50 @@ class CompositeLoss(nn.Module):
             loss_dict["fb_energy"] = l_fb_energy.item()
         else:
             loss_dict["fb_energy"] = 0.0
+
+        # Phase 2.4: routine E/I symmetry-break loss.
+        #
+        # Incentivizes routine samples to route feedback through the inhibitory
+        # branch (som_drive_fb, via SOM) rather than the excitatory branch
+        # (center_exc, directly to L2/3). Per-sample shape term:
+        #
+        #     shape_i = |center_exc_i|.mean(T,N) - 0.5 * |som_drive_fb_i|.mean(T,N)
+        #
+        # Minimizing shape_i pushes center_exc down AND som_drive_fb up. The
+        # per-sample weight w_routine_shape is 0 for focused and (typically)
+        # 2.0 for routine in sweep_dual_2_4.yaml — so at a 50/50 batch,
+        # `.mean(B)` = 1.0 * mean_over_routine(shape), matching the debugger's
+        # analytic target of Δloss ≈ -0.026 at lambda=1.0 (exceeds the +0.022
+        # counter-gradient from the existing loss terms).
+        #
+        # This term is an *incentive*, not a bounded penalty — it can go
+        # negative, which is fine (its gradient contribution to `total` is
+        # what matters, not its sign). Requires both center_exc and
+        # som_drive_fb in outputs. task_state/task_routing must be supplied;
+        # otherwise we fall back to a global-mean form (bit-equivalent to the
+        # all-routine routing, but not gated).
+        if (
+            self.lambda_routine_shape > 0
+            and "center_exc" in outputs
+            and "som_drive_fb" in outputs
+        ):
+            ce = outputs["center_exc"]       # [B, T, N]
+            sdf = outputs["som_drive_fb"]    # [B, T, N]
+            ce_per_sample = ce.abs().mean(dim=(1, 2))   # [B]
+            sdf_per_sample = sdf.abs().mean(dim=(1, 2))  # [B]
+            shape_per_sample = ce_per_sample - 0.5 * sdf_per_sample  # [B]
+            if routing_active:
+                l_routine_shape = (shape_per_sample * w_routine_shape).mean()
+            else:
+                # Legacy fallback: apply uniformly (no task_state → no routing).
+                # This branch is not exercised by sweep_dual_2_4.yaml but keeps
+                # the term self-consistent for non-routed configs that might
+                # enable the incentive globally.
+                l_routine_shape = shape_per_sample.mean()
+            total = total + self.lambda_routine_shape * l_routine_shape
+            loss_dict["routine_shape"] = l_routine_shape.item()
+        else:
+            loss_dict["routine_shape"] = 0.0
 
         loss_dict["total"] = total.item()
 

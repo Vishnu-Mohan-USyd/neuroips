@@ -382,6 +382,10 @@ def run_stage2(
             "state_logits": aux["state_logits_all"],
             "p_cw": aux["p_cw_all"],
             "center_exc": aux["center_exc_all"],
+            # Phase 2.4: som_drive_fb trajectory exposed for routine_shape loss
+            # (per-sample E/I symmetry-break incentive). Always present in aux
+            # even when gate is off — zeros feedback produces zero tensor.
+            "som_drive_fb": aux["som_drive_fb_all"],
         }
 
         # Extract readout windows

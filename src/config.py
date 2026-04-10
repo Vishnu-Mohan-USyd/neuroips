@@ -85,6 +85,11 @@ class TrainingConfig:
     stage2_lr_v2: float = 3e-4
     stage2_lr_feedback: float = 1e-4
     stage2_weight_decay: float = 1e-4
+    # Phase 2.4: LR multiplier applied to the alpha_net param group on top of
+    # stage2_lr_v2. 1.0 = legacy (alpha_net uses the same LR as V2). >1.0
+    # accelerates alpha_net learning to break out of identity init when the
+    # burn-in starves its gradient path. No-op when use_ei_gate=False.
+    lr_mult_alpha: float = 1.0
     stage2_warmup_steps: int = 1000
     stage2_burnin_steps: int = 5000
     stage2_ramp_steps: int = 5000
@@ -107,6 +112,13 @@ class TrainingConfig:
     lambda_local_disc: float = 0.0  # Phase 4: local 5-way discrimination (expected vs ±1, ±2 neighbors). 0 = disabled.
     lambda_pred_suppress: float = 0.0  # Prediction suppression: penalize L2/3 activity matching V2 prediction. 0 = disabled.
     lambda_fb_energy: float = 0.0      # Feedback energy: penalize magnitude of excitatory feedback (center_exc). 0 = disabled.
+    # Phase 2.4: routine E/I symmetry-break loss.
+    #   shape_per_sample = |center_exc|.mean(T,N) - 0.5 * |som_drive_fb|.mean(T,N)
+    # Weighted per-sample by task_routing[*]['routine_shape'] (0 for focused,
+    # 2.0 for routine in sweep_dual_2_4.yaml) so only routine samples are
+    # rewarded for routing feedback through the inhibitory (SOM) branch.
+    # 0.0 = disabled → legacy bit-identical.
+    lambda_routine_shape: float = 0.0
     l2_energy: bool = False             # Use L2 (quadratic) penalty on r_l23 in energy cost instead of L1.
     l23_energy_weight: float = 1.0      # Multiplier on L2/3 term in energy cost. >1 penalizes L2/3 output more.
 
@@ -206,6 +218,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         stage2_lr_v2=stage2.get("lr_v2", 3e-4),
         stage2_lr_feedback=stage2.get("lr_feedback", 1e-4),
         stage2_weight_decay=stage2.get("weight_decay", 1e-4),
+        lr_mult_alpha=stage2.get("lr_mult_alpha", 1.0),
         stage2_warmup_steps=stage2.get("warmup_steps", 1000),
         stage2_burnin_steps=stage2.get("burnin_steps", 5000),
         stage2_ramp_steps=stage2.get("ramp_steps", 5000),
@@ -226,6 +239,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_local_disc=train_raw.get("lambda_local_disc", 0.0),
         lambda_pred_suppress=train_raw.get("lambda_pred_suppress", 0.0),
         lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
+        lambda_routine_shape=train_raw.get("lambda_routine_shape", 0.0),
         l2_energy=train_raw.get("l2_energy", False),
         l23_energy_weight=train_raw.get("l23_energy_weight", 1.0),
         task_routing=train_raw.get("task_routing", None),
