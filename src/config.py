@@ -53,6 +53,15 @@ class ModelConfig:
     # Numerical stability
     dt: int = 1
 
+    # Phase 2: causal E/I gate on the feedback split.
+    # When True, LaminarV1V2Network instantiates a small alpha_net:
+    #     nn.Linear(2 + 1, 2)  taking (task_state, pi_pred_raw) → (g_E, g_I)
+    # whose outputs (via 2*sigmoid) multiply center_exc and som_drive_fb
+    # respectively. Init is near-identity (bias=0, tiny weight std),
+    # so legacy behavior is preserved at step 0. Default False keeps all
+    # pre-Phase-2 configs bit-identical.
+    use_ei_gate: bool = False
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations

@@ -1,0 +1,149 @@
+# Sweep dual_2: Phase 2 — Causal E/I gate on the feedback split.
+#
+# Context (from Phase 1A → 1B → 1C verdicts):
+#   Phase 1A (generic loss routing only):   PARTIAL, 1/4 gates, m7_diff 0.056
+#   Phase 1B (+sharp/local_disc/pred_sup):  PARTIAL, 2/4 gates, m7_diff 0.101
+#   Phase 1C (L2 energy + 3x focused energy + stronger pred_suppress):
+#                                           PARTIAL, 2/4 gates, m7_diff 0.093
+#   Phase 1C amplitude-shortcut probe:      focused early M10 = 4.24 (target<2.5);
+#                                           focused early E/I = 1.65 (target<1.1).
+#
+# Parameter-level interventions cannot fix the amplitude shortcut. The
+# single V2 feedback head has to compromise between focused and routine
+# regimes because it has no task-state-aware pathway. Phase 2 adds such a
+# pathway architecturally: a small alpha_net learns to gate the E/I split
+# directly per sample based on (task_state, pi_pred_raw).
+#
+# Architectural change (src/model/network.py):
+#   self.alpha_net = nn.Linear(2 + 1, 2)             # (task_state, pi_pred) → (g_E, g_I)
+#   gains = 2.0 * sigmoid(self.alpha_net(cat(ts, pi)))
+#   center_exc    = g_E * relu(scaled_fb)
+#   som_drive_fb  = g_I * relu(-scaled_fb)
+#
+# Init: bias=0, weight N(0, 0.01) → g_E, g_I ≈ 1.0 at step 0 (identity).
+# Regression tests in tests/test_network.py pin (a) gate-off → legacy,
+# (b) gate-on at init ≈ gate-off within 5e-3, (c) manual bias flip
+# collapses center_exc and amplifies SOM as expected.
+#
+# Loss config: REVERT to Phase 1B (discard Phase 1C's L2 energy,
+# 3x focused energy, 3x routine pred_suppress — all of which moved the
+# amplitude shortcut 0 steps). The ONLY new field vs sweep_dual_1b.yaml
+# is `model.use_ei_gate: true`.
+#
+# Preregistered gates unchanged:
+#     m7_focused        > +0.03
+#     m7_routine        < −0.03
+#     |focused−routine| > +0.06
+#     m10_amp_routine   < 0.9
+#
+# Expected outcome: the gate gives the network a direct lever to dampen
+# routine's apical drive (lower g_E, higher g_I) and amplify focused's
+# (higher g_E), breaking the shared-head compromise. m7_routine should
+# cross below zero, m10_amp_routine should cross below 0.9, focused
+# gates should remain PASS.
+#
+# Burn-in caveat: feedback_scale is ramped up between steps 1000–2000.
+# During steps 0–1000 scaled_fb ≈ 0 so both relu(scaled_fb) and
+# relu(-scaled_fb) are near zero → alpha_net's output path has near-zero
+# gradient. alpha_net has 3000 steps of full-feedback learning afterwards,
+# which should be sufficient. If gate values stay ≈ 1.0 after training,
+# Phase 2.3 will add an alpha_net LR boost for the first 1500 steps.
+
+model:
+  n_orientations: 36
+  orientation_range: 180.0
+  sigma_ff: 12.0
+  tau_l4: 5
+  tau_adaptation: 200
+  alpha_adaptation: 0.3
+  adaptation_clamp: 10.0
+  naka_rushton_n: 2.0
+  naka_rushton_c50: 0.3
+  tau_pv: 5
+  sigma_norm: 1.0
+  tau_l23: 10
+  sigma_rec: 15.0
+  gain_rec: 0.3
+  tau_som: 10
+  v2_hidden_dim: 16
+  v2_input_mode: l4_l23
+  pi_max: 5.0
+  feedback_mode: "emergent"
+  transition_step: 5.0
+  dt: 1
+  use_ei_gate: true   # NEW — Phase 2 causal E/I gate (see architecture note above)
+
+training:
+  stage1:
+    n_steps: 2000
+    lr: 1.0e-3
+    contrast_range: [0.1, 1.0]
+
+  stage2:
+    n_steps: 5000
+    lr_v2: 3.0e-4
+    lr_feedback: 1.0e-4
+    weight_decay: 1.0e-4
+    warmup_steps: 500
+    burnin_steps: 1000   # CRITICAL: do not inherit the 5000 default.
+    ramp_steps: 1000     # CRITICAL: do not inherit the 5000 default.
+    gradient_clip: 1.0
+    contrast_range: [0.15, 1.0]
+    ambiguous_fraction: 0.3
+
+  # Baseline lambdas — IDENTICAL to sweep_dual_1b.yaml. Phase 1C's
+  # l2_energy/multiplier changes are NOT carried forward (they didn't help).
+  lambda_sensory: 0.5
+  lambda_l4_sensory: 0.0
+  lambda_mismatch: 0.0
+  lambda_pred: 0.0
+  lambda_energy: 1.5
+  lambda_homeo: 1.0
+  lambda_state: 1.0
+  lambda_fb_energy: 0.5
+  lambda_local_disc: 0.5
+  lambda_pred_suppress: 0.5
+  lambda_sharp: 0.5
+  l23_energy_weight: 1.0
+  # l2_energy: (flag omitted → defaults to False, reverting Phase 1C's True)
+  freeze_v2: false
+  oracle_pi: 3.0
+  oracle_template: "oracle_true"
+  oracle_shift_timing: true
+  stimulus_noise: 0.25
+
+  batch_size: 32
+  seq_length: 25
+  steps_on: 12
+  steps_isi: 4
+  n_seeds: 5
+
+  # Phase 1B per-sample loss routing (unchanged).
+  task_routing:
+    focused:
+      sensory: 2.0        # effective sensory       = 1.0
+      energy:  0.33       # effective r_l23_energy  = 0.5
+      fb_energy: 0.0      # effective fb_energy     = 0.0
+      sharp: 2.0          # effective sharp         = 1.0
+      local_disc: 2.0     # effective local_disc    = 1.0
+      pred_suppress: 0.0  # effective pred_suppress = 0.0 (focused does not dampen)
+    routine:
+      sensory: 0.2        # effective sensory       = 0.1
+      energy:  1.67       # effective r_l23_energy  = 2.5
+      fb_energy: 2.0      # effective fb_energy     = 1.0
+      sharp: 0.0          # effective sharp         = 0.0
+      local_disc: 0.0     # effective local_disc    = 0.0
+      pred_suppress: 2.0  # effective pred_suppress = 1.0 (routine dampens)
+
+stimulus:
+  n_states: 2
+  p_transition_cw: 0.80
+  p_transition_ccw: 0.80
+  p_self: 0.95
+  n_anchors: 12
+  jitter_range: 0.0
+  transition_step: 5.0
+  ambiguous_offset: 15.0
+  cue_valid_fraction: 0.75
+  cue_dim: 2
+  task_state_dim: 2

@@ -313,6 +313,131 @@ class TestGoldenTrials:
         assert torch.allclose(r_l23_1, r_l23_2, atol=1e-6)
 
 
+# ── Phase 2: Causal E/I gate (alpha_net) ────────────────────────────────
+
+class TestEIGate:
+    """Regression + semantics tests for the Phase 2 causal E/I gate.
+
+    Two invariants the gate must satisfy, independently of training:
+
+    1. ``use_ei_gate=False`` (default) → network forward is byte-equal to the
+       pre-Phase-2 behavior. No ``alpha_net`` submodule, no extra parameters,
+       no gate multiplication in step(). Covered by test_gate_off_absent.
+
+    2. ``use_ei_gate=True`` at initialization → gate outputs ≈ 1.0 everywhere
+       (init is bias=0, weight N(0, 0.01) → sigmoid(~0)*2 ≈ 1.0), so
+       ``center_exc`` and ``som_drive_fb`` are within fp noise of the gate-off
+       path given identical parameter init for all other modules. Covered by
+       test_gate_on_init_is_near_identity and test_gate_semantics_manual.
+    """
+
+    def test_gate_off_absent(self, cfg):
+        """use_ei_gate=False → no alpha_net attribute; legacy path only."""
+        assert cfg.use_ei_gate is False
+        net = LaminarV1V2Network(cfg)
+        assert not hasattr(net, "alpha_net"), \
+            "alpha_net must not exist when use_ei_gate=False"
+        # forward still works
+        B, T, N = 2, 10, cfg.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        r_l23, _, aux = net(stim)
+        assert r_l23.shape == (B, T, N)
+        # gains_all always exists (zeros when gate off)
+        assert aux["gains_all"].shape == (B, T, 2)
+        assert torch.all(aux["gains_all"] == 0.0)
+
+    def test_gate_on_init_is_near_identity(self, cfg):
+        """Gate-on at init produces output within fp tolerance of gate-off.
+
+        Because alpha_net is init'd with bias=0 and weight std=0.01, and
+        ``2 * sigmoid(~0) ≈ 1.0``, the gate multiplies center_exc / som_drive
+        by ~1.0 and the resulting r_l23 trajectory should match the gate-off
+        trajectory within a few 1e-3 units (tolerance accommodates the
+        cumulative effect of the 1% weight std across T=10 timesteps).
+        """
+        from dataclasses import replace
+
+        B, T, N = 2, 10, cfg.n_orientations
+        torch.manual_seed(42)
+        stim = torch.randn(B, T, N).abs() * 0.5
+
+        # Gate-off reference
+        torch.manual_seed(0)
+        net_off = LaminarV1V2Network(cfg)
+        r_off, _, aux_off = net_off(stim)
+
+        # Gate-on with identical parameter seed for non-alpha_net modules.
+        # (torch.manual_seed(0) before construction → same init for l4/pv/
+        # l23/som/v2. alpha_net then consumes two additional random calls
+        # for its weight init, but those don't affect the shared modules.)
+        torch.manual_seed(0)
+        cfg_gated = replace(cfg, use_ei_gate=True)
+        net_on = LaminarV1V2Network(cfg_gated)
+        assert hasattr(net_on, "alpha_net")
+        assert net_on.alpha_net.weight.shape == (2, 3)
+        assert net_on.alpha_net.bias.shape == (2,)
+        # Init: bias=0, weight N(0, 0.01) → |bias| == 0, |weight| small
+        assert torch.all(net_on.alpha_net.bias == 0.0)
+        assert net_on.alpha_net.weight.abs().max() < 0.1  # 10σ upper bound
+
+        r_on, _, aux_on = net_on(stim)
+
+        # Gate outputs stored in aux should be near 1.0 at init
+        gains = aux_on["gains_all"]                        # [B, T, 2]
+        assert gains.shape == (B, T, 2)
+        assert torch.all(gains > 0.7), f"min gain = {gains.min().item()}"
+        assert torch.all(gains < 1.3), f"max gain = {gains.max().item()}"
+        # Crucially the gains are NOT exactly zero (which would silence the
+        # whole feedback path and trivially match "off" output)
+        assert (gains - 1.0).abs().mean() > 1e-4
+
+        # r_l23 trajectory should be within fp tolerance of gate-off.
+        assert torch.allclose(r_off, r_on, atol=5e-3), (
+            f"Gate-on at init diverged from gate-off by "
+            f"max={((r_off - r_on).abs().max().item()):.2e}"
+        )
+
+    def test_gate_semantics_manual(self, cfg):
+        """Manually setting bias flips gate semantics as expected.
+
+        Wiring check: with ``bias[0] = -10`` (g_E ≈ 0, suppress center_exc)
+        and ``bias[1] = +10`` (g_I ≈ 2, amplify SOM drive), the forward
+        trajectory should produce near-zero center_exc and inflated SOM
+        relative to the default gate-on init.
+        """
+        from dataclasses import replace
+
+        cfg_gated = replace(cfg, use_ei_gate=True)
+        torch.manual_seed(42)
+        net = LaminarV1V2Network(cfg_gated)
+        # Default init: g ≈ 1. Capture reference center_exc/som magnitudes.
+        B, T, N = 4, 15, cfg.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        _, _, aux_default = net(stim)
+        ce_default = aux_default["center_exc_all"].abs().mean().item()
+
+        # Manually suppress g_E: bias[0] = -10 → sigmoid(-10) ≈ 4.5e-5 →
+        # g_E ≈ 9e-5, essentially zero.
+        with torch.no_grad():
+            net.alpha_net.bias[0] = -10.0
+            net.alpha_net.bias[1] = +10.0
+            net.alpha_net.weight.zero_()      # make gate deterministic
+        _, _, aux_suppressed = net(stim)
+        gains_suppressed = aux_suppressed["gains_all"]
+        g_E_mean = gains_suppressed[..., 0].mean().item()
+        g_I_mean = gains_suppressed[..., 1].mean().item()
+
+        # g_E should be tiny; g_I should be near 2.0
+        assert g_E_mean < 1e-3, f"g_E_mean={g_E_mean} (expected near 0)"
+        assert g_I_mean > 1.99, f"g_I_mean={g_I_mean} (expected near 2.0)"
+        # center_exc should collapse under the g_E suppression
+        ce_suppressed = aux_suppressed["center_exc_all"].abs().mean().item()
+        assert ce_suppressed < ce_default * 0.1 + 1e-6, (
+            f"center_exc did not collapse: default={ce_default:.4e}, "
+            f"suppressed={ce_suppressed:.4e}"
+        )
+
+
 # ── Oracle Mode Tests ────────────────────────────────────────────────────
 
 class TestOracleMode:

@@ -34,6 +34,7 @@ class StepAux(NamedTuple):
     state_logits: Tensor  # [B, 3]  — HMM state logits (zeros in emergent mode)
     p_cw: Tensor          # [B, 1]  — CW probability (emergent mode; 0.5 in fixed mode)
     center_exc: Tensor | None = None  # [B, N] — excitatory feedback to L2/3 (for fb energy loss)
+    gains: Tensor | None = None       # [B, 2] — (g_E, g_I) from Phase 2 alpha_net; None when use_ei_gate=False
 
 
 def initial_state(batch_size: int, n_orientations: int = 36,

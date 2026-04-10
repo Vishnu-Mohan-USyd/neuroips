@@ -231,6 +231,47 @@ def channel_profile(
     }
 
 
+def gate_diagnostics(
+    net,
+    device: torch.device,
+    task_state: tuple[float, float],
+) -> dict:
+    """Mean alpha_net gate outputs per regime (Phase 2 causal E/I gate probe).
+
+    Runs the standard 8-anchor matched-stim trajectory (stim==oracle, no
+    noise) under the specified ``task_state`` and extracts the mean value
+    of g_E and g_I from the ``gains_all`` aux tensor ([B, T, 2]). Averages
+    over all timesteps and anchors. Used to diagnose whether the Phase 2
+    alpha_net actually learned task-state-aware gating or whether it stayed
+    near its identity init (g ≈ 1.0 everywhere).
+
+    Returns ``{"g_E": None, "g_I": None}`` if the network does not have
+    an alpha_net (use_ei_gate=False). Callers should check for this.
+    """
+    if not hasattr(net, "alpha_net"):
+        return {"task_state": list(task_state), "g_E": None, "g_I": None,
+                "use_ei_gate": False}
+    g_E_list: list[float] = []
+    g_I_list: list[float] = []
+    for anchor in _ANCHORS:
+        stim = torch.full((1,), anchor, device=device)
+        oracle = torch.full((1,), anchor, device=device)
+        _, aux = run_full_trajectory_with_aux(
+            net, stim, oracle, device, task_state=task_state,
+        )
+        gains = aux["gains_all"]                              # [1, T, 2]
+        g_E_list.append(float(gains[..., 0].mean().item()))
+        g_I_list.append(float(gains[..., 1].mean().item()))
+    return {
+        "task_state": list(task_state),
+        "use_ei_gate": True,
+        "g_E": float(np.mean(g_E_list)),
+        "g_I": float(np.mean(g_I_list)),
+        "g_E_per_anchor": g_E_list,
+        "g_I_per_anchor": g_I_list,
+    }
+
+
 def ei_ratio(
     net,
     device: torch.device,
@@ -587,6 +628,18 @@ def main() -> None:
             print(f"  {rname:8s} window={w:7s} "
                   f"E={d['E']:.4f}  I={d['I']:.4f}  E/I={d['EI_ratio']:.4f}")
 
+    # --- Phase 2: alpha_net causal E/I gate outputs per regime (if present) ---
+    print()
+    print("Running gate diagnostics per regime (Phase 2)...", flush=True)
+    gate_results: dict = {}
+    for rname, rstate in regimes.items():
+        gate_results[rname] = gate_diagnostics(net, device, rstate)
+        if gate_results[rname]["use_ei_gate"]:
+            print(f"  {rname:8s} g_E={gate_results[rname]['g_E']:.4f}  "
+                  f"g_I={gate_results[rname]['g_I']:.4f}")
+        else:
+            print(f"  {rname:8s} (use_ei_gate=False — alpha_net absent)")
+
     # --- Preregistered gates (Phase 1A) — all must hold for PASS ---
     # Primary metric for gates: default-window δ=10° on baseline/focused/routine.
     m7_focused = m7_results["focused"]["default"]["delta_10"]["delta_acc"]
@@ -648,6 +701,7 @@ def main() -> None:
         "fwhm_by_regime": fwhm_results,
         "channel_profile_by_regime": channel_results,
         "ei_ratio_by_regime": ei_results,
+        "gate_diagnostics_by_regime": gate_results,
         "early_minus_late_by_regime": early_minus_late,
         "gates": gates,
         "gate_values": {
@@ -731,6 +785,16 @@ def main() -> None:
                          f"{e['mean_r_l4']:9.4f} {e['mean_r_l23']:9.4f} "
                          f"{e['mean_r_pv']:9.4f} {e['mean_r_som']:9.4f}")
     lines.append("")
+    # Phase 2 gate outputs per regime (only when use_ei_gate=True)
+    if any(gate_results[r]["use_ei_gate"] for r in regimes):
+        lines.append("Phase 2 alpha_net causal E/I gate outputs (mean across 8 anchors × T steps):")
+        g_header = f"{'regime':10s} {'g_E':>9s} {'g_I':>9s}"
+        lines.append(g_header)
+        lines.append("-" * len(g_header))
+        for rname in regimes:
+            g = gate_results[rname]
+            lines.append(f"{rname:10s} {g['g_E']:9.4f} {g['g_I']:9.4f}")
+        lines.append("")
     lines.append("Early-minus-late deltas per regime (early − late):")
     em_header = (f"{'regime':10s} {'m7_δ10':>10s} {'m10_amp':>10s} "
                  f"{'fwhm_Δ':>10s} {'peak':>10s} {'E/I':>10s}")

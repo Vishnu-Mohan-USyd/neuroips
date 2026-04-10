@@ -40,6 +40,20 @@ class LaminarV1V2Network(nn.Module):
         # Feedback warmup scale: registered as buffer so torch.compile can see it
         self.register_buffer("feedback_scale", torch.tensor(1.0))
 
+        # Phase 2: causal E/I gate on the feedback split.
+        # When use_ei_gate is True, a tiny Linear(3, 2) maps
+        # (task_state[:, :2], pi_pred_raw[:, :1]) → (g_E, g_I) via 2*sigmoid,
+        # giving the network a direct multiplicative pathway for task_state
+        # to bias the E/I split without compromising V2's feedback head.
+        # Init: bias=0, weight N(0, 0.01) → sigmoid(~0)*2 ≈ 1.0 at step 0,
+        # so the module is near-identity at initialization (preserves
+        # pre-Phase-2 behavior within fp noise for regression tests).
+        self.use_ei_gate = getattr(cfg, "use_ei_gate", False)
+        if self.use_ei_gate:
+            self.alpha_net = nn.Linear(2 + 1, 2)
+            nn.init.zeros_(self.alpha_net.bias)
+            nn.init.normal_(self.alpha_net.weight, std=0.01)
+
         # Oracle mode: bypass V2 with injected predictions
         self.oracle_mode = False
         self.oracle_q_pred = None   # set externally: [B, N] (per-step) or [B, T, N] (per-sequence)
@@ -133,8 +147,21 @@ class LaminarV1V2Network(nn.Module):
         # 4. V2 direct feedback with E/I split (Dale's law):
         # positive → excitation to L2/3, negative → drives SOM interneurons
         scaled_fb = feedback_signal * self.feedback_scale
-        center_exc = torch.relu(scaled_fb)           # positive part → excitation
-        som_drive_fb = torch.relu(-scaled_fb)        # negative part → SOM drive
+        if self.use_ei_gate:
+            # Phase 2 causal gate: multiplicative per-sample E/I scaling.
+            # Gate input uses pi_pred_raw (not pi_pred_eff) so the gate can
+            # receive nonzero gradient signal during the feedback_scale burn-in
+            # when scaled_fb ≈ 0 would otherwise zero out the downstream path.
+            gate_input = torch.cat([task_state, pi_pred_raw], dim=-1)  # [B, 3]
+            gains = 2.0 * torch.sigmoid(self.alpha_net(gate_input))    # [B, 2], init ≈ 1.0
+            g_E = gains[:, 0:1]                                         # [B, 1] → broadcast to [B, N]
+            g_I = gains[:, 1:2]                                         # [B, 1]
+            center_exc = g_E * torch.relu(scaled_fb)
+            som_drive_fb = g_I * torch.relu(-scaled_fb)
+        else:
+            gains = None
+            center_exc = torch.relu(scaled_fb)           # positive part → excitation
+            som_drive_fb = torch.relu(-scaled_fb)        # negative part → SOM drive
         r_som = self.som(som_drive_fb, state.r_som)  # SOM integrates with tau_som
 
         # 5. L2/3 update
@@ -161,6 +188,7 @@ class LaminarV1V2Network(nn.Module):
             state_logits=state_logits,
             p_cw=p_cw,
             center_exc=center_exc,
+            gains=gains,
         )
 
         return new_state, aux
@@ -246,6 +274,10 @@ class LaminarV1V2Network(nn.Module):
         deep_template_all = torch.empty(B, T, N, device=device)
         p_cw_all = torch.empty(B, T, 1, device=device)
         center_exc_all = torch.empty(B, T, N, device=device)
+        # Phase 2: preallocate per-step gate output trajectory. Only populated
+        # when use_ei_gate=True, otherwise left as zeros so downstream code
+        # can assume the key exists and has a defined shape.
+        gains_all = torch.zeros(B, T, 2, device=device)
 
         # Check if oracle mode uses sequence-length tensors [B, T, ...]
         _oracle_seq = (self.oracle_mode and self.oracle_q_pred is not None
@@ -278,6 +310,8 @@ class LaminarV1V2Network(nn.Module):
                     center_exc_all[:, t] = aux_t.center_exc
                 else:
                     center_exc_all[:, t] = 0.0
+                if aux_t.gains is not None:
+                    gains_all[:, t] = aux_t.gains
         finally:
             self.l23.uncache_kernels()
 
@@ -293,6 +327,7 @@ class LaminarV1V2Network(nn.Module):
             "r_vip_all": r_vip_all,               # [B, T, N]
             "p_cw_all": p_cw_all,                 # [B, T, 1]
             "center_exc_all": center_exc_all,     # [B, T, N]
+            "gains_all": gains_all,               # [B, T, 2]  zeros when use_ei_gate=False
         }
 
         return r_l23_all, state, aux
