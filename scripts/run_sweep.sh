@@ -29,7 +29,7 @@ SEED="${3:-42}"
 DEVICE="${4:-cuda}"
 
 LABEL="$(basename "$CONFIG" .yaml)"
-CHECKPOINT_DIR="${OUTPUT_DIR}/center_surround_seed${SEED}"
+CHECKPOINT_DIR="${OUTPUT_DIR}/emergent_seed${SEED}"
 CHECKPOINT="${CHECKPOINT_DIR}/checkpoint.pt"
 LOGFILE="${OUTPUT_DIR}/sweep.log"
 SUMMARY="${OUTPUT_DIR}/summary.json"
