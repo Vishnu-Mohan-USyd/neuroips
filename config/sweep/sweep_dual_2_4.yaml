@@ -119,7 +119,12 @@ training:
   lambda_local_disc: 0.5
   lambda_pred_suppress: 0.5
   lambda_sharp: 0.5
-  lambda_routine_shape: 1.0   # NEW (Phase 2.4) — routine E/I symmetry-break incentive
+  lambda_routine_shape: 2.0   # NEW (Phase 2.4) — routine E/I symmetry-break incentive
+                              #   MOD 1: bumped from 1.0 → 2.0 per team-lead to
+                              #   compensate for per-batch mean() halving when
+                              #   routine is ~50% of the batch; effective Δ
+                              #   lifted from 0.013 → 0.026, above the 0.022
+                              #   counter-gradient threshold from debugger E4.
   l23_energy_weight: 1.0
   freeze_v2: false
   oracle_pi: 3.0

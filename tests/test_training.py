@@ -1363,12 +1363,114 @@ class TestPhase24RoutineShape:
         assert len(optimizer.param_groups) == 3
 
     def test_sweep_dual_2_4_yaml_loads(self):
-        """sweep_dual_2_4.yaml parses with all expected Phase 2.4 fields."""
+        """sweep_dual_2_4.yaml parses with all expected Phase 2.4 fields.
+
+        Note: lambda_routine_shape=2.0 is the MOD 1 bump — the effective
+        contribution at 50/50 batch is doubled relative to the
+        route-weight-only approach (see sweep header for debugger math).
+        """
         from src.config import load_config
         mc, tc, _ = load_config("config/sweep/sweep_dual_2_4.yaml")
         assert mc.use_ei_gate is True
-        assert tc.lambda_routine_shape == 1.0
+        assert tc.lambda_routine_shape == 2.0
         assert tc.lr_mult_alpha == 10.0
         assert tc.task_routing is not None
         assert tc.task_routing["focused"]["routine_shape"] == 0.0
         assert tc.task_routing["routine"]["routine_shape"] == 2.0
+
+    def test_routine_shape_sign_check_manual_gate(self):
+        """MOD 2: end-to-end sign check with a manually set "perfect" gate.
+
+        Wiring:
+          - Build a network with use_ei_gate=True
+          - Set alpha_net.bias = [-5, +5], weight = 0
+            → g_E = 2*sigmoid(-5) ≈ 0.01345  (near zero)
+            → g_I = 2*sigmoid(+5) ≈ 1.98655  (near 2)
+          - Forward a random stimulus through the network
+          - Build CompositeLoss with lambda_routine_shape=2.0 + full
+            routing dict (routine_shape=2.0 on routine, 0.0 on focused)
+          - Run loss with task_state = all-routine, [0, 1]
+          - Assert loss_dict["routine_shape"] < -0.005
+
+        A negative value proves the loss is *rewarding* (decreasing) the
+        inhibitory-routed gate configuration — this validates the loss
+        *direction* not just the routing math. The threshold -0.005 is a
+        conservative floor; in practice the value is ~-0.03 because the
+        |som_drive_fb| term dominates with g_I near 2 and g_E near 0.
+        """
+        from dataclasses import replace
+
+        model_cfg = ModelConfig(feedback_mode="emergent", use_ei_gate=True)
+        tc = TrainingConfig(
+            lambda_routine_shape=2.0,
+            task_routing={
+                "focused": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 0.0,
+                },
+                "routine": {
+                    "sensory": 1.0, "energy": 1.0, "fb_energy": 1.0,
+                    "routine_shape": 2.0,
+                },
+            },
+        )
+
+        torch.manual_seed(0)
+        net = LaminarV1V2Network(model_cfg)
+        assert hasattr(net, "alpha_net")
+
+        # Install "perfect" gate: g_E ≈ 0.013, g_I ≈ 1.987 deterministically
+        # (zero weight → gate depends only on bias).
+        with torch.no_grad():
+            net.alpha_net.bias[0] = -5.0
+            net.alpha_net.bias[1] = +5.0
+            net.alpha_net.weight.zero_()
+
+        # Nontrivial stimulus so the network produces nonzero feedback.
+        B, T, N = 4, 20, model_cfg.n_orientations
+        stim = torch.randn(B, T, N).abs() * 0.5
+        r_l23_all, _, aux = net(stim)
+
+        # Sanity: gains captured in aux should match manual setting.
+        gains = aux["gains_all"]  # [B, T, 2]
+        g_E_mean = gains[..., 0].mean().item()
+        g_I_mean = gains[..., 1].mean().item()
+        assert g_E_mean < 0.02, f"g_E_mean={g_E_mean} (expected ≈ 0.0135)"
+        assert g_I_mean > 1.98, f"g_I_mean={g_I_mean} (expected ≈ 1.987)"
+
+        outputs = {
+            "r_l4": aux["r_l4_all"],
+            "r_l23": r_l23_all,
+            "r_pv": aux["r_pv_all"],
+            "r_som": aux["r_som_all"],
+            "deep_template": aux["deep_template_all"],
+            "center_exc": aux["center_exc_all"],
+            "som_drive_fb": aux["som_drive_fb_all"],
+        }
+        # Sanity: som_drive_fb should be present & nonzero (else the test
+        # would be trivially zero — false confidence).
+        assert outputs["som_drive_fb"].abs().mean().item() > 1e-5, (
+            "som_drive_fb is ~zero — cannot validate sign."
+        )
+
+        loss_fn = CompositeLoss(tc, model_cfg)
+        W = 2
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state = torch.tensor([[0.0, 1.0]] * B)  # all routine
+
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state, task_routing=tc.task_routing,
+        )
+        # THE sign check: negative = loss is rewarding inhibitory routing.
+        assert ld["routine_shape"] < -0.005, (
+            f"routine_shape={ld['routine_shape']:.6f} — expected < -0.005. "
+            f"g_E={g_E_mean:.4f}, g_I={g_I_mean:.4f}, "
+            f"|ce|={outputs['center_exc'].abs().mean().item():.4e}, "
+            f"|sdf|={outputs['som_drive_fb'].abs().mean().item():.4e}. "
+            "A non-negative value means the loss direction is wrong — "
+            "gradient descent would move AWAY from the perfect gate."
+        )
