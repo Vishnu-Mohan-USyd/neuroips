@@ -1,0 +1,149 @@
+# Sweep dual_1c: Phase 1C — Target the amplitude shortcut, no new code.
+#
+# Context (from Debugger investigation of Phase 1B FWHM paradox):
+#   The focused regime passes M7 through an amplitude shortcut — E/I ratio is
+#   high (~1.31), focused early-window M10 is ~4.12, focused far-flank activity
+#   is ~9.9× routine. The sharpening term cannot compete with the sensory CE
+#   gradient (60× weaker, directionally opposite at near flanks), so the model
+#   wins discrimination by inflating responses rather than by narrowing tuning.
+#   Current losses do not penalize "high amplitude without selectivity".
+#
+# Phase 1C strategy — three PARAMETER changes, no code changes:
+#   1. l2_energy: True
+#        Switches the r_l23 energy penalty from L1 to L2 (quadratic). L1 is
+#        linear in amplitude, so halving a peak halves the cost; L2 is
+#        quadratic, so halving a peak cuts the cost 4×. This hits the
+#        amplitude shortcut harder than L1.
+#   2. focused energy multiplier  0.33 → 1.00
+#        Effective focused r_l23_energy: 1.5 * 0.33 = 0.5  →  1.5 * 1.0 = 1.5
+#        Triples energy pressure on focused so amplitude inflation becomes
+#        expensive even when it helps sensory accuracy.
+#   3. routine pred_suppress multiplier  2.0 → 3.0
+#        Effective routine pred_suppress: 0.5 * 2.0 = 1.0  →  0.5 * 3.0 = 1.5
+#        Stronger dampening at predicted channels to push the routine amplitude
+#        ratio below the 0.9 gate.
+#
+# Everything else (arch, Stage 1/2 schedule, lambdas, routine energy, sharp,
+# local_disc, fb_energy, stimulus) is carried forward unchanged from 1b so any
+# change in outcomes is attributable to the three edits above.
+#
+# Effective weights (lambda * task_routing multiplier):
+#     focused  :
+#         sensory       = 0.5 * 2.0  = 1.0
+#         r_l23_energy  = 1.5 * 1.0  = 1.5   (CHANGED — was 0.5)
+#         fb_energy     = 0.5 * 0.0  = 0.0
+#         sharp         = 0.5 * 2.0  = 1.0
+#         local_disc    = 0.5 * 2.0  = 1.0
+#         pred_suppress = 0.5 * 0.0  = 0.0
+#     routine  :
+#         sensory       = 0.5 * 0.2  = 0.1
+#         r_l23_energy  = 1.5 * 1.67 = 2.5
+#         fb_energy     = 0.5 * 2.0  = 1.0
+#         sharp         = 0.5 * 0.0  = 0.0
+#         local_disc    = 0.5 * 0.0  = 0.0
+#         pred_suppress = 0.5 * 3.0  = 1.5   (CHANGED — was 1.0)
+#
+# Note: the L2 energy switch applies to BOTH regimes (the flag lives outside
+# the routing table). That is intentional — L2 should also tamp down routine's
+# already-high r_l23_energy effective weight of 2.5, which is desirable.
+
+model:
+  n_orientations: 36
+  orientation_range: 180.0
+  sigma_ff: 12.0
+  tau_l4: 5
+  tau_adaptation: 200
+  alpha_adaptation: 0.3
+  adaptation_clamp: 10.0
+  naka_rushton_n: 2.0
+  naka_rushton_c50: 0.3
+  tau_pv: 5
+  sigma_norm: 1.0
+  tau_l23: 10
+  sigma_rec: 15.0
+  gain_rec: 0.3
+  tau_som: 10
+  v2_hidden_dim: 16
+  v2_input_mode: l4_l23
+  pi_max: 5.0
+  feedback_mode: "emergent"
+  transition_step: 5.0
+  dt: 1
+
+training:
+  stage1:
+    n_steps: 2000
+    lr: 1.0e-3
+    contrast_range: [0.1, 1.0]
+
+  stage2:
+    n_steps: 5000
+    lr_v2: 3.0e-4
+    lr_feedback: 1.0e-4
+    weight_decay: 1.0e-4
+    warmup_steps: 500
+    burnin_steps: 1000   # CRITICAL: do not inherit the 5000 default.
+    ramp_steps: 1000     # CRITICAL: do not inherit the 5000 default.
+    gradient_clip: 1.0
+    contrast_range: [0.15, 1.0]
+    ambiguous_fraction: 0.3
+
+  # Baseline lambdas — same as 1b.
+  lambda_sensory: 0.5
+  lambda_l4_sensory: 0.0
+  lambda_mismatch: 0.0
+  lambda_pred: 0.0
+  lambda_energy: 1.5
+  lambda_homeo: 1.0
+  lambda_state: 1.0
+  lambda_fb_energy: 0.5
+  lambda_local_disc: 0.5
+  lambda_pred_suppress: 0.5
+  lambda_sharp: 0.5
+  l23_energy_weight: 1.0
+
+  # CHANGE 1: L2 (quadratic) penalty on r_l23 in the energy term.
+  l2_energy: true
+
+  freeze_v2: false
+  oracle_pi: 3.0
+  oracle_template: "oracle_true"
+  oracle_shift_timing: true
+  stimulus_noise: 0.25
+
+  batch_size: 32
+  seq_length: 25
+  steps_on: 12
+  steps_isi: 4
+  n_seeds: 5
+
+  # Phase 1C per-sample loss routing.
+  # CHANGES 2 and 3 below — everything else is carried from 1b.
+  task_routing:
+    focused:
+      sensory: 2.0
+      energy:  1.0        # CHANGED — was 0.33. Effective = 1.5*1.0 = 1.5
+      fb_energy: 0.0
+      sharp: 2.0
+      local_disc: 2.0
+      pred_suppress: 0.0
+    routine:
+      sensory: 0.2
+      energy:  1.67
+      fb_energy: 2.0
+      sharp: 0.0
+      local_disc: 0.0
+      pred_suppress: 3.0  # CHANGED — was 2.0. Effective = 0.5*3.0 = 1.5
+
+stimulus:
+  n_states: 2
+  p_transition_cw: 0.80
+  p_transition_ccw: 0.80
+  p_self: 0.95
+  n_anchors: 12
+  jitter_range: 0.0
+  transition_step: 5.0
+  ambiguous_offset: 15.0
+  cue_valid_fraction: 0.75
+  cue_dim: 2
+  task_state_dim: 2

@@ -153,11 +153,105 @@ def main() -> None:
             marker = "PASS" if ok else "FAIL"
             print(f"{name:30s}  {term:14s}  {actual:>12.6f}  {expected:>12.6f}  {marker}")
     print()
+
+    # ------------------------------------------------------------------
+    # Phase 1C regression guard: l2_energy flag actually changes r_l23
+    # penalty from L1 to L2.
+    # ------------------------------------------------------------------
+    print("=" * 90)
+    print("Phase 1C l2_energy regression guard")
+    print("=" * 90)
+    l2_fail = _verify_l2_energy(model_cfg, device)
+    if l2_fail:
+        any_fail = True
+
     if any_fail:
         print("RESULT: FAIL — one or more routed terms did not scale as expected.")
         sys.exit(1)
     else:
-        print("RESULT: PASS — all three new terms route correctly per task_state.")
+        print("RESULT: PASS — all routed terms + l2_energy flag behave correctly.")
+
+
+def _verify_l2_energy(model_cfg, device: torch.device) -> bool:
+    """Synthetic check: l2_energy=True changes r_l23 energy penalty to L2.
+
+    Builds two CompositeLoss instances — identical config except for the
+    ``l2_energy`` flag — and compares their ``energy_exc`` value on the
+    same synthetic ``outputs`` dict with a known r_l23 constant
+    magnitude (0.5 everywhere).
+
+    Analytic expectation:
+        L1 path: r_l23_energy_component = |0.5|     = 0.5
+        L2 path: r_l23_energy_component = (0.5)**2  = 0.25
+        delta  = 0.5 - 0.25                         = 0.25
+
+    All other terms in energy_exc (|r_l4|.mean(), |deep_template|.mean(),
+    l23_energy_weight) are held constant, so energy_exc_L1 - energy_exc_L2
+    must equal 0.25 * l23_energy_weight to within numerical tolerance.
+
+    Returns:
+        True if the guard FAILS (so caller can bubble the failure up),
+        False if it PASSES.
+    """
+    from copy import deepcopy
+
+    from src.config import load_config
+    from src.training.losses import CompositeLoss
+
+    # Use Phase 1C config which has l2_energy: true.
+    _, train_cfg_l2, _ = load_config("config/sweep/sweep_dual_1c.yaml")
+    # Sanity: the yaml under test must actually set l2_energy=True.
+    if not getattr(train_cfg_l2, "l2_energy", False):
+        print("FAIL: sweep_dual_1c.yaml does not set l2_energy=True")
+        return True
+
+    # Make a matched L1 config by deep-copying and flipping the flag off.
+    train_cfg_l1 = deepcopy(train_cfg_l2)
+    train_cfg_l1.l2_energy = False
+
+    loss_l1 = CompositeLoss(train_cfg_l1, model_cfg).to(device)
+    loss_l2 = CompositeLoss(train_cfg_l2, model_cfg).to(device)
+
+    # Synthetic outputs with known constants so we can compute analytically:
+    # r_l23 = 0.5 everywhere → L1 mean = 0.5, L2 mean = 0.25, Δ = 0.25.
+    B, T, N = 4, 8, model_cfg.n_orientations
+    outputs = {
+        "r_l4":          torch.zeros(B, T, N, device=device),
+        "r_l23":         torch.full((B, T, N), 0.5, device=device),
+        "r_pv":          torch.zeros(B, T, 1, device=device),
+        "r_som":         torch.zeros(B, T, N, device=device),
+        "deep_template": torch.zeros(B, T, N, device=device),
+        "center_exc":    torch.zeros(B, T, N, device=device),
+    }
+
+    e_exc_l1, _ = loss_l1.energy_cost(outputs)
+    e_exc_l2, _ = loss_l2.energy_cost(outputs)
+    e_exc_l1 = float(e_exc_l1.item())
+    e_exc_l2 = float(e_exc_l2.item())
+
+    w = float(train_cfg_l1.l23_energy_weight)
+    expected_delta = (0.5 - 0.25) * w  # 0.25 * l23_energy_weight
+    actual_delta = e_exc_l1 - e_exc_l2
+
+    print(f"  l23_energy_weight  = {w:.4f}")
+    print(f"  energy_exc (L1)    = {e_exc_l1:.6f}")
+    print(f"  energy_exc (L2)    = {e_exc_l2:.6f}")
+    print(f"  Δ (L1 - L2)        = {actual_delta:.6f}")
+    print(f"  expected Δ         = {expected_delta:.6f}")
+
+    ok_delta = abs(actual_delta - expected_delta) < 1e-5
+    ok_sign = e_exc_l2 < e_exc_l1   # L2 must strictly reduce on |r|<1
+    ok_flag = loss_l2.l2_energy is True and loss_l1.l2_energy is False
+    all_ok = ok_delta and ok_sign and ok_flag
+    marker = "PASS" if all_ok else "FAIL"
+    print(f"  guard verdict      = {marker}")
+    if not ok_delta:
+        print(f"    FAIL: |actual - expected| = {abs(actual_delta - expected_delta):.2e} > 1e-5")
+    if not ok_sign:
+        print("    FAIL: L2 energy did not reduce the penalty vs L1")
+    if not ok_flag:
+        print("    FAIL: l2_energy flag did not propagate to CompositeLoss")
+    return not all_ok
 
 
 if __name__ == "__main__":
