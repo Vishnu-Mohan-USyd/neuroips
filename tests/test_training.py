@@ -256,6 +256,75 @@ class TestTrainerUtils:
         assert net.l23.sigma_rec_raw.requires_grad
         assert net.l23.gain_rec_raw.requires_grad
 
+    def test_unfreeze_stage2_reenables_alpha_net_after_blanket_freeze(self):
+        """Regression (Phase 2.4.1 / Debugger Task #11):
+
+        stage1_sensory.py calls ``for p in net.parameters(): p.requires_grad_(False)``
+        which blanket-freezes alpha_net (when use_ei_gate=True). Stage 1 only
+        re-enables l23+pv. At the Stage 1 → Stage 2 boundary, the caller then
+        runs ``freeze_stage1(net); unfreeze_stage2(net)``. The old
+        ``unfreeze_stage2`` did not touch alpha_net, so its params stayed
+        frozen and were silently dropped by ``create_stage2_optimizer``'s
+        ``requires_grad`` filter — Phase 2.4's Δg_E was bit-for-bit identical
+        to Phase 2 despite the lr_mult_alpha=10 config.
+
+        This test reproduces the exact Stage 1 → Stage 2 lifecycle and
+        asserts that (a) alpha_net is trainable after ``unfreeze_stage2``
+        and (b) the alpha_net param group actually lands in the optimizer
+        with the correct lr_mult_alpha-scaled LR.
+        """
+        model_cfg = ModelConfig(feedback_mode="emergent", use_ei_gate=True)
+        tc = TrainingConfig(stage2_lr_v2=3e-4, lr_mult_alpha=10.0)
+        net = LaminarV1V2Network(model_cfg)
+        loss_fn = CompositeLoss(tc, model_cfg)
+        assert hasattr(net, "alpha_net")
+
+        # Reproduce stage1_sensory.py's blanket freeze.
+        for p in net.parameters():
+            p.requires_grad_(False)
+        # Stage 1 only re-enables l23 + pv.
+        for p in net.l23.parameters():
+            p.requires_grad_(True)
+        for p in net.pv.parameters():
+            p.requires_grad_(True)
+
+        # Pre-condition: alpha_net is frozen coming out of Stage 1.
+        for p in net.alpha_net.parameters():
+            assert not p.requires_grad, (
+                "test precondition broken: alpha_net should be frozen after "
+                "the stage1_sensory blanket freeze"
+            )
+
+        # Stage 1 → Stage 2 boundary.
+        freeze_stage1(net)
+        unfreeze_stage2(net)
+
+        # Post-condition (a): alpha_net must be trainable.
+        for p in net.alpha_net.parameters():
+            assert p.requires_grad, (
+                "unfreeze_stage2 failed to re-enable alpha_net — the "
+                "Phase 2.4.1 freeze bug has regressed"
+            )
+
+        # Post-condition (b): alpha_net lands in an optimizer group with
+        # the correct lr_mult_alpha-scaled LR (not silently filtered out).
+        optimizer = create_stage2_optimizer(net, loss_fn, tc)
+        alpha_ids = {id(p) for p in net.alpha_net.parameters()}
+        expected_lr = tc.stage2_lr_v2 * tc.lr_mult_alpha
+        alpha_group = None
+        for group in optimizer.param_groups:
+            group_ids = {id(p) for p in group["params"]}
+            if alpha_ids.issubset(group_ids):
+                alpha_group = group
+                break
+        assert alpha_group is not None, (
+            "alpha_net params are frozen or missing from optimizer — "
+            "requires_grad filter in create_stage2_optimizer dropped them"
+        )
+        assert abs(alpha_group["lr"] - expected_lr) < 1e-9, (
+            f"alpha_net group LR = {alpha_group['lr']}, expected {expected_lr}"
+        )
+
     def test_stage2_optimizer_groups(self, net, loss_fn, train_cfg):
         groups = create_stage2_optimizer(net, loss_fn, train_cfg)
         assert len(groups.param_groups) == 3

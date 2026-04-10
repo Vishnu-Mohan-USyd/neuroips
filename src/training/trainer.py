@@ -42,12 +42,35 @@ def freeze_stage1(net: LaminarV1V2Network) -> None:
 
 
 def unfreeze_stage2(net: LaminarV1V2Network) -> None:
-    """Ensure Stage 2 parameters are trainable: V2, SOM, W_rec."""
+    """Ensure Stage 2 parameters are trainable: V2, SOM, W_rec, alpha_net.
+
+    NOTE (Phase 2.4.1 — Debugger Task #11 root cause fix):
+        ``stage1_sensory.py`` runs ``for p in net.parameters(): p.requires_grad_(False)``
+        before Stage 1 training, which blanket-freezes *every* parameter —
+        including ``alpha_net`` when ``use_ei_gate=True``. Stage 1 then only
+        re-enables ``l23`` + ``pv``, so alpha_net stays frozen across the
+        Stage 1 → Stage 2 boundary. ``create_stage2_optimizer`` later filters
+        param groups by ``requires_grad``, silently dropping the alpha_net
+        group, so its LR multiplier and gradient flow do nothing.
+
+        Confirmed failure mode: Phase 2.4 Δg_E = +0.0038 (bit-for-bit
+        identical to Phase 2, whose alpha_net was in the optimizer by
+        accident of init order). Gradients reach alpha_net via the
+        loss but AdamW never calls ``.step()`` on frozen params.
+
+        Fix: explicitly re-enable alpha_net here, guarded by hasattr
+        so ``use_ei_gate=False`` networks still work.
+    """
     for p in net.v2.parameters():
         p.requires_grad_(True)
     # W_rec stays trainable in Stage 2
     net.l23.sigma_rec_raw.requires_grad_(True)
     net.l23.gain_rec_raw.requires_grad_(True)
+    # Phase 2.4.1: causal E/I gate is a Stage-2 param; undo the
+    # blanket Stage-1 freeze so AdamW actually updates it.
+    if hasattr(net, "alpha_net"):
+        for p in net.alpha_net.parameters():
+            p.requires_grad_(True)
 
 
 def create_stage2_optimizer(
