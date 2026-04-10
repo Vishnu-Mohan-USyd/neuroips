@@ -4,6 +4,7 @@ config/sweep/sweep_a3.yaml results/sweep/a3
 config/sweep/sweep_a4.yaml results/sweep/a4
 config/sweep/sweep_a5.yaml results/sweep/a5
 config/sweep/sweep_a6.yaml results/sweep/a6
+config/sweep/sweep_a7.yaml results/sweep/a7
 config/sweep/sweep_b1.yaml results/sweep/b1
 config/sweep/sweep_b2.yaml results/sweep/b2
 config/sweep/sweep_b3.yaml results/sweep/b3

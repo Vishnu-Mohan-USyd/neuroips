@@ -21,7 +21,7 @@ LOG_DIR="logs/sweep"
 mkdir -p "$LOG_DIR" results/sweep
 
 echo "================================================================"
-echo "SWEEP LAUNCHER — 18 configs across 5 groups"
+echo "SWEEP LAUNCHER — 19 configs across 5 groups"
 echo "Seed: $SEED, Device: $DEVICE"
 echo "Started: $(date -Iseconds)"
 echo "================================================================"
@@ -64,8 +64,8 @@ launch_group() {
 
 TOTAL_FAILED=0
 
-# Group A: Phase boundary (6 runs)
-launch_group "A" "a1" "a2" "a3" "a4" "a5" "a6" || TOTAL_FAILED=$((TOTAL_FAILED + $?))
+# Group A: Phase boundary (7 runs)
+launch_group "A" "a1" "a2" "a3" "a4" "a5" "a6" "a7" || TOTAL_FAILED=$((TOTAL_FAILED + $?))
 
 # Group B: Energy interaction (5 runs)
 launch_group "B" "b1" "b2" "b3" "b4" "b5" || TOTAL_FAILED=$((TOTAL_FAILED + $?))
@@ -86,7 +86,7 @@ python3 -c "
 import json, os
 
 results = []
-for name in ['a1','a2','a3','a4','a5','a6','b1','b2','b3','b4','b5','c1','c2','d1','d2','d3','e1','e2']:
+for name in ['a1','a2','a3','a4','a5','a6','a7','b1','b2','b3','b4','b5','c1','c2','d1','d2','d3','e1','e2']:
     path = f'results/sweep/{name}/summary.json'
     if os.path.exists(path):
         with open(path) as f:
@@ -117,7 +117,7 @@ for r in results:
 
 echo ""
 echo "================================================================"
-echo "SWEEP COMPLETE — 18 runs, $TOTAL_FAILED failed"
+echo "SWEEP COMPLETE — 19 runs, $TOTAL_FAILED failed"
 echo "Results: results/sweep/all_results.json"
 echo "Finished: $(date -Iseconds)"
 echo "================================================================"

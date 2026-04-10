@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate all 18 sweep config YAMLs from the base template.
+"""Generate all 19 sweep config YAMLs from the base template.
 
 Usage:
     python scripts/generate_sweep_configs.py
@@ -22,6 +22,7 @@ SWEEP_GRID = [
     ("a4", "Phase boundary: λ_sens=0.3", 0.3, 2.0, 0.0, 1.0),
     ("a5", "Phase boundary: λ_sens=0.5", 0.5, 2.0, 0.0, 1.0),
     ("a6", "Phase boundary: λ_sens=0.7", 0.7, 2.0, 0.0, 1.0),
+    ("a7", "Phase boundary: λ_sens=1.0 (sharpening baseline)", 1.0, 2.0, 0.0, 1.0),
     # Group B: Energy interaction (λ_mm=0.0, l23w=1.0)
     ("b1", "Energy interaction: λ_sens=0.0, λ_energy=5.0", 0.0, 5.0, 0.0, 1.0),
     ("b2", "Energy interaction: λ_sens=0.3, λ_energy=5.0", 0.3, 5.0, 0.0, 1.0),

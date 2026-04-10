@@ -17,6 +17,12 @@
 
 set -euo pipefail
 
+# Activate conda if available (needed on remote machines)
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate base 2>/dev/null || true
+fi
+
 CONFIG="${1:?Usage: $0 <config> <output_dir> [seed] [device]}"
 OUTPUT_DIR="${2:?Usage: $0 <config> <output_dir> [seed] [device]}"
 SEED="${3:-42}"
