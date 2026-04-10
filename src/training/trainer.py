@@ -14,7 +14,6 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from src.config import ModelConfig, TrainingConfig, StimulusConfig
 from src.model.network import LaminarV1V2Network
-from src.model.feedback import EmergentFeedbackOperator
 from src.stimulus.gratings import generate_grating, make_ambiguous_stimulus
 from src.stimulus.sequences import HMMSequenceGenerator
 
@@ -43,12 +42,9 @@ def freeze_stage1(net: LaminarV1V2Network) -> None:
 
 
 def unfreeze_stage2(net: LaminarV1V2Network) -> None:
-    """Ensure Stage 2 parameters are trainable: V2, feedback, SOM, deep_template, W_rec."""
+    """Ensure Stage 2 parameters are trainable: V2, SOM, W_rec."""
     for p in net.v2.parameters():
         p.requires_grad_(True)
-    for p in net.feedback.parameters():
-        p.requires_grad_(True)
-    net.deep_template.gain_raw.requires_grad_(True)
     # W_rec stays trainable in Stage 2
     net.l23.sigma_rec_raw.requires_grad_(True)
     net.l23.gain_rec_raw.requires_grad_(True)
@@ -61,28 +57,16 @@ def create_stage2_optimizer(
 ) -> AdamW:
     """AdamW with separate LR groups for Stage 2.
 
-    Group 1: V2 params (lr_v2)
-    Group 2: Feedback params (lr_feedback)
-    Group 3: W_rec + deep_template (lr_feedback)
-    Group 4: Decoder (stage1_lr)
+    Group 1: V2 params (lr_v2) — includes head_feedback
+    Group 2: W_rec (lr_feedback)
+    Group 3: Decoder (stage1_lr)
     """
-    # Feedback params: works for both FeedbackMechanism and EmergentFeedbackOperator
-    feedback_params = [p for p in net.feedback.parameters() if p.requires_grad]
-    # Add VIP→SOM gain if it exists (it's on the network, not on feedback)
-    if hasattr(net, 'w_vip_som') and net.w_vip_som.requires_grad:
-        feedback_params.append(net.w_vip_som)
-    # Branch C: template→L2/3 excitation weight
-    if hasattr(net, 'w_template_drive') and net.w_template_drive.requires_grad:
-        feedback_params.append(net.w_template_drive)
-
     param_groups = [
         {"params": list(net.v2.parameters()), "lr": cfg.stage2_lr_v2},
-        {"params": feedback_params, "lr": cfg.stage2_lr_feedback},
         {
             "params": [
                 net.l23.sigma_rec_raw,
                 net.l23.gain_rec_raw,
-                net.deep_template.gain_raw,
             ],
             "lr": cfg.stage2_lr_feedback,
         },

@@ -3,20 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import List, Tuple
 
 import yaml
-
-
-class MechanismType(str, Enum):
-    """Feedback mechanism variants."""
-    DAMPENING = "dampening"             # Model A: SOM inhibits AT expected
-    SHARPENING = "sharpening"           # Model B: SOM inhibits broadly, sparing expected
-    CENTER_SURROUND = "center_surround" # Model C: narrow excitation + broad inhibition
-    ADAPTATION_ONLY = "adaptation_only" # Model D: no feedback
-    PREDICTIVE_ERROR = "predictive_error"  # Model E: error = l4 - prediction
 
 
 @dataclass
@@ -47,37 +37,18 @@ class ModelConfig:
     # SOM
     tau_som: int = 10
 
-    # VIP interneurons (disinhibitory: VIP→SOM→L2/3)
-    tau_vip: int = 10
-
     # V2 context
     v2_hidden_dim: int = 16
     pi_max: float = 5.0
 
-    # Deep template
-    template_gain: float = 1.0
-
-    # Feedback mechanism
-    mechanism: MechanismType = MechanismType.CENTER_SURROUND
-
-    # Feedback mode: 'emergent' (learned basis) or 'fixed' (hardcoded mechanism)
+    # Feedback mode: always 'emergent' (V2 GRU with head_feedback)
     feedback_mode: str = 'emergent'
 
-    # Transition step for analytical q_pred construction (degrees)
+    # Transition step for orientation prediction (degrees)
     transition_step: float = 15.0
-
-    # Number of basis functions for emergent feedback operator
-    n_basis: int = 7
 
     # V2 input mode: 'l23' (default), 'l4', or 'l4_l23'
     v2_input_mode: str = 'l23'
-
-    # Apical gain: ±N% maximum multiplicative modulation of L2/3 drive
-    max_apical_gain: float = 0.7
-
-    # Simple additive feedback mode: bypasses SOM/VIP/apical, uses single
-    # 36-weight kernel convolved with centered q_pred, added directly to L2/3.
-    simple_feedback: bool = False
 
     # Numerical stability
     dt: int = 1
@@ -118,7 +89,6 @@ class TrainingConfig:
     lambda_energy: float = 0.01
     lambda_homeo: float = 1.0
     lambda_state: float = 0.25
-    lambda_fb: float = 0.01          # L1 sparsity on emergent feedback weights
     lambda_surprise: float = 0.0     # Surprise detection loss (0 = disabled)
     lambda_error: float = 0.0        # Prediction error readout loss (0 = disabled)
     lambda_detection: float = 0.0    # Detection confirmation loss (0 = disabled)
@@ -130,9 +100,6 @@ class TrainingConfig:
     lambda_fb_energy: float = 0.0      # Feedback energy: penalize magnitude of excitatory feedback (center_exc). 0 = disabled.
     l2_energy: bool = False             # Use L2 (quadratic) penalty on r_l23 in energy cost instead of L1.
     l23_energy_weight: float = 1.0      # Multiplier on L2/3 term in energy cost. >1 penalizes L2/3 output more.
-
-    # Delta-SOM: bias-corrected softplus in EmergentFeedbackOperator
-    delta_som: bool = False
 
     # Freeze V2 / use oracle predictor
     freeze_v2: bool = False
@@ -199,11 +166,13 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         raw = yaml.safe_load(f)
 
     model_raw = raw.get("model", {})
-    # Convert mechanism string to enum
-    mech_str = model_raw.pop("mechanism", "center_surround")
+    # Remove legacy keys that may exist in old YAML configs
+    for legacy_key in ('mechanism', 'n_basis', 'max_apical_gain', 'tau_vip',
+                       'simple_feedback', 'template_gain'):
+        model_raw.pop(legacy_key, None)
     # Extract feedback_mode with default
     feedback_mode = model_raw.pop("feedback_mode", "emergent")
-    model_cfg = ModelConfig(**model_raw, mechanism=MechanismType(mech_str), feedback_mode=feedback_mode)
+    model_cfg = ModelConfig(**model_raw, feedback_mode=feedback_mode)
 
     train_raw = raw.get("training", {})
     # Flatten nested stage configs
@@ -228,7 +197,6 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_energy=train_raw.get("lambda_energy", 0.01),
         lambda_homeo=train_raw.get("lambda_homeo", 1.0),
         lambda_state=train_raw.get("lambda_state", 0.25),
-        lambda_fb=train_raw.get("lambda_fb", 0.01),
         lambda_surprise=train_raw.get("lambda_surprise", 0.0),
         lambda_error=train_raw.get("lambda_error", 0.0),
         lambda_detection=train_raw.get("lambda_detection", 0.0),
@@ -240,7 +208,6 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
         l2_energy=train_raw.get("l2_energy", False),
         l23_energy_weight=train_raw.get("l23_energy_weight", 1.0),
-        delta_som=train_raw.get("delta_som", False),
         freeze_v2=train_raw.get("freeze_v2", False),
         freeze_decoder=train_raw.get("freeze_decoder", False),
         oracle_shift_timing=train_raw.get("oracle_shift_timing", False),

@@ -12,9 +12,8 @@ import torch.nn.functional as F
 import math
 from pathlib import Path
 
-from src.config import ModelConfig, MechanismType
+from src.config import ModelConfig
 from src.model.network import LaminarV1V2Network
-from src.model.feedback import FeedbackMechanism
 from src.stimulus.gratings import generate_grating, population_code
 from src.utils import circular_distance_abs, circular_gaussian
 

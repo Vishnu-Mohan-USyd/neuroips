@@ -15,7 +15,7 @@ from src.utils import (
     ExcitatoryLinear,
     InhibitoryGain,
 )
-from src.config import ModelConfig, MechanismType, TrainingConfig, StimulusConfig, load_config
+from src.config import ModelConfig, TrainingConfig, StimulusConfig, load_config
 from src.state import NetworkState, initial_state
 from src.stimulus.gratings import population_code, naka_rushton, generate_grating, make_ambiguous_stimulus
 from src.stimulus.sequences import (
@@ -155,10 +155,6 @@ class TestSignConstrainedLayers:
 
 class TestConfig:
 
-    def test_mechanism_enum(self):
-        assert MechanismType("dampening") == MechanismType.DAMPENING
-        assert MechanismType("center_surround") == MechanismType.CENTER_SURROUND
-
     def test_model_config_defaults(self):
         cfg = ModelConfig()
         assert cfg.n_orientations == 36
@@ -172,7 +168,6 @@ class TestConfig:
         assert isinstance(model_cfg, ModelConfig)
         assert isinstance(train_cfg, TrainingConfig)
         assert isinstance(stim_cfg, StimulusConfig)
-        assert model_cfg.mechanism == MechanismType.CENTER_SURROUND
         assert train_cfg.batch_size == 32
         assert stim_cfg.n_states == 3
 
@@ -427,12 +422,6 @@ class TestHMMSequenceGenerator:
         # Count sequences with task_state [1, 0] vs [0, 1]
         relevant = (meta.task_states[:, 0, 0] == 1.0).float().mean().item()
         assert 0.35 < relevant < 0.65  # roughly 50/50
-
-    def test_mechanism_type_is_str(self):
-        # MechanismType(str, Enum) should be usable as string
-        assert MechanismType.DAMPENING == "dampening"
-        assert str(MechanismType.SHARPENING) == "MechanismType.SHARPENING"
-        assert MechanismType.CENTER_SURROUND.value == "center_surround"
 
     def test_cues_populated_when_cue_valid_fraction_positive(self):
         """When cue_valid_fraction > 0, cues should be non-zero for s > 0."""

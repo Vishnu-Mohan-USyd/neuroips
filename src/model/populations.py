@@ -1,4 +1,4 @@
-"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing."""
+"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, SOMRing."""
 
 from __future__ import annotations
 
@@ -252,20 +252,16 @@ class V1L23Ring(nn.Module):
         template_modulation: Tensor,
         r_som: Tensor,
         r_pv: Tensor,
-        apical_gain: Tensor | None = None,
     ) -> Tensor:
         """One Euler step for L2/3.
 
         Args:
             r_l4: [B, N] — current L4 rates.
             r_l23_prev: [B, N] — previous L2/3 rates.
-            template_modulation: [B, N] — mechanism-specific excitatory input.
-                Zeros for models A, B, D. Center excitation for model C.
+            template_modulation: [B, N] — additive excitatory input.
+                In simple feedback mode: center_exc from V2 feedback.
             r_som: [B, N] — current SOM rates.
             r_pv: [B, 1] — current PV rate.
-            apical_gain: [B, N] or None — multiplicative gain for excitatory
-                drive from apical dendrite feedback. Values centered at 1.0.
-                None means no apical modulation (backward compat).
 
         Returns:
             r_l23: Updated L2/3 rates [B, N].
@@ -277,12 +273,8 @@ class V1L23Ring(nn.Module):
         W_rec = self.W_rec  # [N, N]
         rec = F.linear(r_l23_prev, W_rec)  # [B, N]
 
-        # Excitatory drive (apical gain modulates only excitatory components,
-        # not inhibitory — biologically, apical gain modulates dendritic
-        # integration of excitatory inputs in layer 1)
+        # Excitatory drive
         excitatory_drive = ff + rec + template_modulation
-        if apical_gain is not None:
-            excitatory_drive = apical_gain * excitatory_drive
 
         # L2/3 drive
         l23_drive = excitatory_drive - self.w_som(r_som) - self.w_pv_l23(r_pv)
@@ -293,40 +285,6 @@ class V1L23Ring(nn.Module):
         )
 
         return r_l23
-
-
-class DeepTemplate(nn.Module):
-    """Deep-V1 expectation template population.
-
-    Computes: deep_template = gain * q_pred * π_pred
-
-    This is a deep-layer population state. It does NOT feed into L2/3
-    by default — the feedback mechanism determines how (or whether) the
-    template influences superficial V1.
-    """
-
-    def __init__(self, cfg: ModelConfig):
-        super().__init__()
-        # Learnable gain scalar, softplus-constrained.
-        # Initialize so softplus(raw) ≈ 1.0
-        raw_init = math.log(math.exp(cfg.template_gain) - 1.0)
-        self.gain_raw = nn.Parameter(torch.tensor(raw_init))
-
-    @property
-    def gain(self) -> Tensor:
-        return F.softplus(self.gain_raw)
-
-    def forward(self, q_pred: Tensor, pi_pred: Tensor) -> Tensor:
-        """Compute deep template.
-
-        Args:
-            q_pred: [B, N] — predicted orientation distribution (softmax from V2).
-            pi_pred: [B, 1] — prediction precision (bounded scalar from V2).
-
-        Returns:
-            deep_template: [B, N] — expectation template.
-        """
-        return self.gain * q_pred * pi_pred
 
 
 class SOMRing(nn.Module):
@@ -360,33 +318,3 @@ class SOMRing(nn.Module):
         return r_som
 
 
-class VIPRing(nn.Module):
-    """VIP interneuron ring — disinhibits L2/3 by inhibiting SOM.
-
-    VIP neurons inhibit SOM interneurons, thereby releasing L2/3 pyramidal
-    cells from SOM-mediated suppression.  This implements the VIP→SOM→L2/3
-    disinhibitory circuit (Pfeffer et al. 2013, Furutachi et al. 2024).
-
-    Equation:
-        r_vip += dt/τ_vip * (-r_vip + rectified_softplus(vip_drive))
-    """
-
-    def __init__(self, cfg: ModelConfig):
-        super().__init__()
-        self.dt = cfg.dt
-        self.tau_vip = cfg.tau_vip
-
-    def forward(self, vip_drive: Tensor, r_vip_prev: Tensor) -> Tensor:
-        """One Euler step for VIP ring.
-
-        Args:
-            vip_drive: [B, N] — drive from feedback mechanism.
-            r_vip_prev: [B, N] — previous VIP rates.
-
-        Returns:
-            r_vip: Updated VIP rates [B, N].
-        """
-        r_vip = r_vip_prev + (self.dt / self.tau_vip) * (
-            -r_vip_prev + rectified_softplus(vip_drive)
-        )
-        return r_vip

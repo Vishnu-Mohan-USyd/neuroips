@@ -1,4 +1,4 @@
-"""Tests for V1 populations: L4, PV (Phase 2), L2/3, DeepTemplate, SOM (Phase 3).
+"""Tests for V1 populations: L4, PV (Phase 2), L2/3, SOM (Phase 3).
 
 Includes validation checks with numerical results.
 """
@@ -12,12 +12,12 @@ from src.config import ModelConfig
 from src.utils import circular_gaussian_fwhm, shifted_softplus, rectified_softplus
 from src.state import initial_state
 from src.stimulus.gratings import population_code, naka_rushton, generate_grating
-from src.model.populations import V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing
+from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing
 
 
 @pytest.fixture
 def cfg():
-    return ModelConfig(feedback_mode='fixed')
+    return ModelConfig()
 
 
 @pytest.fixture
@@ -720,54 +720,6 @@ class TestV1L23Stability:
 
         assert peak_rec > peak_no, \
             f"Recurrence should amplify: with_rec={peak_rec:.4f}, without={peak_no:.4f}"
-
-
-# ===================================================================
-# Phase 3: DeepTemplate
-# ===================================================================
-
-class TestDeepTemplate:
-
-    def test_output_shape(self, cfg):
-        dt = DeepTemplate(cfg)
-        B = 4
-        q_pred = torch.randn(B, cfg.n_orientations).softmax(dim=-1)
-        pi_pred = torch.ones(B, 1)
-        out = dt(q_pred, pi_pred)
-        assert out.shape == (B, cfg.n_orientations)
-
-    def test_zero_precision_gives_zero(self, cfg):
-        dt = DeepTemplate(cfg)
-        q_pred = torch.randn(4, cfg.n_orientations).softmax(dim=-1)
-        pi_pred = torch.zeros(4, 1)
-        out = dt(q_pred, pi_pred)
-        assert torch.allclose(out, torch.zeros_like(out))
-
-    def test_scales_with_precision(self, cfg):
-        dt = DeepTemplate(cfg)
-        q_pred = torch.randn(1, cfg.n_orientations).softmax(dim=-1)
-        out_low = dt(q_pred, torch.tensor([[1.0]]))
-        out_high = dt(q_pred, torch.tensor([[5.0]]))
-        assert out_high.sum().item() > out_low.sum().item()
-
-    def test_gain_is_learnable(self, cfg):
-        """DeepTemplate gain should be a learnable parameter."""
-        dt = DeepTemplate(cfg)
-        params = list(dt.named_parameters())
-        assert len(params) == 1
-        assert params[0][0] == "gain_raw"
-        assert dt.gain.item() == pytest.approx(cfg.template_gain, rel=0.1)
-
-    def test_one_hot_template(self, cfg):
-        """With one-hot q_pred at ch 9, pi=3.0, gain=1.0: template[9]=3.0."""
-        dt = DeepTemplate(cfg)
-        q_pred = torch.zeros(1, cfg.n_orientations)
-        q_pred[0, 9] = 1.0
-        pi_pred = torch.tensor([[3.0]])
-        out = dt(q_pred, pi_pred)
-        gain = dt.gain.item()
-        assert out[0, 9].item() == pytest.approx(gain * 3.0, rel=0.05)
-        assert out[0, 0].item() == pytest.approx(0.0, abs=1e-6)
 
 
 # ===================================================================

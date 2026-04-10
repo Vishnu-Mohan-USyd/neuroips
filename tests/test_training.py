@@ -19,7 +19,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from src.config import ModelConfig, TrainingConfig, StimulusConfig, MechanismType
+from src.config import ModelConfig, TrainingConfig, StimulusConfig
 from src.model.network import LaminarV1V2Network
 from src.training.losses import CompositeLoss
 from src.training.trainer import (
@@ -41,7 +41,7 @@ from src.stimulus.sequences import HMMSequenceGenerator
 
 @pytest.fixture
 def model_cfg():
-    return ModelConfig(mechanism=MechanismType.CENTER_SURROUND, feedback_mode='fixed')
+    return ModelConfig()
 
 @pytest.fixture
 def train_cfg():
@@ -230,7 +230,7 @@ class TestCompositeLoss:
 
         assert net.l23.sigma_rec_raw.grad is not None
         assert net.v2.gru.weight_ih.grad is not None
-        assert net.feedback.surround_gain_raw.grad is not None
+        assert net.v2.head_feedback.weight.grad is not None
 
 
 # ---------------------------------------------------------------------------
@@ -253,14 +253,12 @@ class TestTrainerUtils:
         unfreeze_stage2(net)
         for p in net.v2.parameters():
             assert p.requires_grad
-        for p in net.feedback.parameters():
-            assert p.requires_grad
         assert net.l23.sigma_rec_raw.requires_grad
         assert net.l23.gain_rec_raw.requires_grad
 
     def test_stage2_optimizer_groups(self, net, loss_fn, train_cfg):
         groups = create_stage2_optimizer(net, loss_fn, train_cfg)
-        assert len(groups.param_groups) == 4
+        assert len(groups.param_groups) == 3
 
     def test_warmup_cosine_scheduler(self):
         """Scheduler warms up then decays."""
@@ -453,7 +451,7 @@ class TestBuildStimulusSequence:
 class TestStage1Smoke:
     def test_stage1_runs(self):
         """Stage 1 completes with a few steps without errors."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
+        cfg = ModelConfig()
         train = TrainingConfig(stage1_n_steps=10)
         net = LaminarV1V2Network(cfg)
 
@@ -473,7 +471,7 @@ class TestStage1Smoke:
         the gains to produce nonzero L2/3. Here we just verify V1 forward
         runs without error and V2 is not involved.
         """
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
+        cfg = ModelConfig()
         train = TrainingConfig(stage1_n_steps=5)
         net = LaminarV1V2Network(cfg)
 
@@ -487,7 +485,7 @@ class TestStage1Smoke:
 
     def test_stage1_freezes_params(self):
         """After Stage 1, L4 and PV params are frozen."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
+        cfg = ModelConfig()
         train = TrainingConfig(stage1_n_steps=5)
         net = LaminarV1V2Network(cfg)
 
@@ -502,7 +500,7 @@ class TestStage1Smoke:
 class TestStage2Smoke:
     def test_stage2_runs(self):
         """Stage 2 completes with a few steps without errors."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
+        cfg = ModelConfig()
         train = TrainingConfig(stage2_n_steps=3, batch_size=2, seq_length=5)
         stim = StimulusConfig()
         net = LaminarV1V2Network(cfg)
@@ -514,19 +512,6 @@ class TestStage2Smoke:
         assert result.n_steps_trained == 3
         assert not math.isnan(result.final_loss)
 
-    def test_stage2_all_mechanisms(self):
-        """Stage 2 runs for all 5 mechanism types."""
-        train = TrainingConfig(stage2_n_steps=2, batch_size=2, seq_length=3)
-        stim = StimulusConfig()
-
-        for mech in MechanismType:
-            cfg = ModelConfig(mechanism=mech, feedback_mode='fixed')
-            net = LaminarV1V2Network(cfg)
-            loss_fn = CompositeLoss(train, cfg)
-            from src.training.stage2_feedback import run_stage2
-            result = run_stage2(net, loss_fn, cfg, train, stim, seed=42)
-            assert not math.isnan(result.final_loss), f"NaN loss for {mech.value}"
-
 
 # ---------------------------------------------------------------------------
 # Checkpoint save/load
@@ -535,7 +520,7 @@ class TestStage2Smoke:
 class TestCheckpoint:
     def test_save_load_identical(self):
         """Save checkpoint, reload, verify forward pass is identical."""
-        cfg = ModelConfig(mechanism=MechanismType.DAMPENING, feedback_mode='fixed')
+        cfg = ModelConfig()
         train = TrainingConfig()
         net = LaminarV1V2Network(cfg)
         loss_fn = CompositeLoss(train, cfg)
@@ -694,7 +679,7 @@ class TestRegressionBugs:
         """
         model_cfg = ModelConfig(feedback_mode='emergent')
         train_cfg = TrainingConfig(freeze_v2=True)
-        net = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
+        net = LaminarV1V2Network(model_cfg)
         loss_fn = CompositeLoss(train_cfg, model_cfg)
 
         freeze_stage1(net)
@@ -953,7 +938,7 @@ class TestLocalDiscriminationLoss:
         """create_stage2_optimizer must include local_disc_head params when enabled."""
         model_cfg = ModelConfig(feedback_mode='emergent')
         tc = TrainingConfig(lambda_local_disc=1.0)
-        net = LaminarV1V2Network(model_cfg, delta_som=tc.delta_som)
+        net = LaminarV1V2Network(model_cfg)
         loss_fn = CompositeLoss(tc, model_cfg)
         freeze_stage1(net)
         unfreeze_stage2(net)
@@ -971,32 +956,6 @@ class TestLocalDiscriminationLoss:
         assert head_param_ids, "local_disc_head has no parameters"
         assert head_param_ids.issubset(opt_params), (
             "local_disc_head params missing from optimizer"
-        )
-
-    def test_w_vip_som_in_optimizer(self):
-        """w_vip_som (on the network, not on feedback) must be in the optimizer.
-
-        Regression test: w_vip_som was missing from all optimizer groups,
-        staying at init value 0.5 for all VIP experiments.
-        """
-        model_cfg = ModelConfig(feedback_mode='emergent')
-        tc = TrainingConfig()
-        net = LaminarV1V2Network(model_cfg, delta_som=tc.delta_som)
-        loss_fn = CompositeLoss(tc, model_cfg)
-        freeze_stage1(net)
-        unfreeze_stage2(net)
-
-        optimizer = create_stage2_optimizer(net, loss_fn, tc)
-
-        # Collect all optimizer param ids
-        opt_params = set()
-        for group in optimizer.param_groups:
-            for p in group["params"]:
-                opt_params.add(id(p))
-
-        assert hasattr(net, 'w_vip_som'), "network missing w_vip_som parameter"
-        assert id(net.w_vip_som) in opt_params, (
-            "w_vip_som missing from optimizer — VIP→SOM coupling will never learn"
         )
 
     def test_lambda_disabled_loss_identical_to_pre_phase4(self):
@@ -1065,68 +1024,6 @@ class TestOracleSigma:
         _, tc, _ = load_config(cfg_path)
         assert tc.oracle_sigma == 5.0
 
-    def test_make_bump_accepts_sigma_parameter(self):
-        """_make_bump(theta, sigma=X) returns a bump whose width scales with sigma.
-
-        We compare the FWHM of the bump against the analytic expectation
-        FWHM = 2 * sqrt(2 * ln 2) * sigma ~= 2.355 * sigma.
-        """
-        import math
-        mc = ModelConfig(feedback_mode='emergent')
-        net = LaminarV1V2Network(mc)
-
-        theta = torch.tensor([90.0])  # middle of the range for cleanest FWHM
-        N = mc.n_orientations
-        step = mc.orientation_range / N  # 5 deg
-
-        def fwhm(bump: torch.Tensor) -> float:
-            """Linear-interpolation FWHM in degrees."""
-            b = bump[0]
-            peak = b.max().item()
-            half = peak / 2.0
-            # Channel indices sorted by distance from the peak channel.
-            peak_ch = b.argmax().item()
-            above = (b >= half)
-            # Count contiguous channels above half-max; this gives a
-            # coarse FWHM, but we refine with linear interpolation
-            # between the last "above" channel and the first "below"
-            # channel on each side.
-            width_channels = above.sum().item()
-            # With N=36 and a symmetric bump, channel width is a
-            # monotone function of sigma even without interpolation.
-            return width_channels * step
-
-        bump_narrow = net._make_bump(theta, sigma=5.0)   # narrow
-        bump_mid = net._make_bump(theta, sigma=12.0)     # default / sigma_ff
-        bump_wide = net._make_bump(theta, sigma=20.0)    # wide
-
-        fwhm_narrow = fwhm(bump_narrow)
-        fwhm_mid = fwhm(bump_mid)
-        fwhm_wide = fwhm(bump_wide)
-
-        # Strict monotone: narrower sigma -> narrower bump.
-        assert fwhm_narrow < fwhm_mid < fwhm_wide, (
-            f"FWHMs not monotone: narrow={fwhm_narrow} "
-            f"mid={fwhm_mid} wide={fwhm_wide}"
-        )
-
-        # Analytic target: FWHM = 2*sqrt(2*ln(2)) * sigma (~ 2.355 * sigma).
-        # With N=36 step=5deg the channel-width measurement rounds to the
-        # nearest multiple of 5, so allow ~1 channel (5 deg) tolerance.
-        expected_mid = 2 * math.sqrt(2 * math.log(2)) * 12.0  # ~28.3 deg
-        assert abs(fwhm_mid - expected_mid) <= 2 * step, (
-            f"sigma=12 FWHM off: got {fwhm_mid}, expected ~{expected_mid}"
-        )
-
-    def test_oracle_sigma_defaults_to_sigma_ff(self):
-        """_make_bump(theta) with no sigma is identical to _make_bump(theta, sigma=sigma_ff)."""
-        mc = ModelConfig(feedback_mode='emergent')
-        net = LaminarV1V2Network(mc)
-        theta = torch.tensor([30.0, 90.0, 150.0])
-        bump_default = net._make_bump(theta)
-        bump_explicit = net._make_bump(theta, sigma=mc.sigma_ff)
-        assert torch.allclose(bump_default, bump_explicit)
-
     def test_all_four_sigma_configs_load(self):
         """All 4 Phase 5 sweep configs parse with the expected oracle_sigma."""
         from src.config import load_config
@@ -1146,4 +1043,3 @@ class TestOracleSigma:
             assert tc.ambiguous_fraction == 0.3
             assert tc.oracle_template == "oracle_true"
             assert tc.freeze_v2 is True
-            assert tc.delta_som is True

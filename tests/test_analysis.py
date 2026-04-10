@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from src.config import ModelConfig, MechanismType
+from src.config import ModelConfig
 from src.model.network import LaminarV1V2Network
 from src.experiments.hidden_state import HiddenStateParadigm
 from src.experiments.omission import OmissionParadigm
@@ -55,7 +55,7 @@ from src.analysis.ablations import run_ablation, AblationResult
 @pytest.fixture(scope="module")
 def net_and_cfg():
     torch.manual_seed(0)
-    cfg = ModelConfig(mechanism=MechanismType.DAMPENING, n_orientations=36, feedback_mode='fixed')
+    cfg = ModelConfig(n_orientations=36)
     net = LaminarV1V2Network(cfg)
     net.eval()
     return net, cfg

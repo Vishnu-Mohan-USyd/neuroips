@@ -2,12 +2,11 @@
 
 Components:
     1. Sensory readout: cross-entropy on L2/3 -> decoded orientation
-    2. Prediction: cross-entropy on V2 q_pred -> next orientation (fixed mode)
-    3. State BCE: binary cross-entropy on p_cw vs true CW label (emergent mode)
-    4. State classification: cross-entropy on state_logits (fixed mode)
-    5. Energy cost: L1 on population rates
-    6. Homeostasis: penalizes mean L2/3 rate outside target range
-    7. Feedback sparsity: L1 on emergent operator weights (emergent mode)
+    2. Prior KL: KL divergence on V2 mu_pred -> next orientation
+    3. Energy cost: L1 on population rates (with l23_energy_weight)
+    4. Homeostasis: penalizes mean L2/3 rate outside target range
+    5. Mismatch detection: binary BCE on expected/deviant classification
+    6. Optional: pred_suppress, fb_energy
 """
 
 from __future__ import annotations
@@ -23,17 +22,9 @@ from src.config import ModelConfig, TrainingConfig
 class CompositeLoss(nn.Module):
     """Multi-objective loss for the V1-V2 network.
 
-    Supports both feedback modes:
-
-    Fixed mode:
-        L = lambda_sensory * sensory + lambda_pred * prediction
-          + lambda_state * state_CE + lambda_energy * energy
-          + lambda_homeo * homeostasis
-
-    Emergent mode:
-        L = lambda_sensory * sensory + lambda_state * BCE(p_cw, true_cw)
-          + lambda_energy * energy + lambda_homeo * homeostasis
-          + lambda_fb * |alpha_inh|_1
+    L = lambda_sensory * sensory + lambda_state * prior_KL
+      + lambda_energy * energy + lambda_homeo * homeostasis
+      + optional terms (mismatch, pred_suppress, fb_energy)
     """
 
     def __init__(self, cfg: TrainingConfig, model_cfg: ModelConfig):
@@ -43,7 +34,6 @@ class CompositeLoss(nn.Module):
         self.lambda_energy = cfg.lambda_energy     # 0.01
         self.lambda_homeo = cfg.lambda_homeo       # 1.0
         self.lambda_state = cfg.lambda_state       # 0.25
-        self.lambda_fb = cfg.lambda_fb             # 0.01
         self.lambda_surprise = cfg.lambda_surprise   # 0.0 (disabled by default)
         self.lambda_error = cfg.lambda_error         # 0.0 (disabled by default)
         self.lambda_detection = cfg.lambda_detection # 0.0 (disabled by default)
@@ -55,8 +45,6 @@ class CompositeLoss(nn.Module):
         self.lambda_fb_energy = cfg.lambda_fb_energy          # 0.0 (disabled by default)
         self.l2_energy = cfg.l2_energy                        # False (L1 by default)
         self.l23_energy_weight = cfg.l23_energy_weight        # 1.0 (equal weighting by default)
-
-        self.feedback_mode = model_cfg.feedback_mode
 
         N = model_cfg.n_orientations  # 36
         self.orient_step = model_cfg.orientation_range / N  # 5.0
@@ -369,8 +357,7 @@ class CompositeLoss(nn.Module):
 
         Args:
             outputs: dict with 'r_l4' [B,T,N], 'r_l23' [B,T,N],
-                     'r_pv' [B,T,1], 'r_som' [B,T,N], 'deep_template' [B,T,N],
-                     and optionally 'r_vip' [B,T,N].
+                     'r_pv' [B,T,1], 'r_som' [B,T,N], 'deep_template' [B,T,N].
 
         Returns:
             (E_excitatory, E_total)
@@ -386,8 +373,6 @@ class CompositeLoss(nn.Module):
             outputs["r_pv"].abs().mean()
             + outputs["r_som"].abs().mean()
         )
-        if "r_vip" in outputs:
-            e_inh = e_inh + outputs["r_vip"].abs().mean()
         return e_exc, e_exc + e_inh
 
     def homeostasis_penalty(self, r_l23: Tensor) -> Tensor:
@@ -485,33 +470,6 @@ class CompositeLoss(nn.Module):
         targets = is_expected.reshape(B * W, 1).float()
         return F.binary_cross_entropy_with_logits(logits, targets)
 
-    def feedback_sparsity_loss(self, model: nn.Module) -> Tensor:
-        """L1 sparsity penalty on emergent feedback operator weights.
-
-        Penalizes both SOM (alpha_inh) and VIP (alpha_vip) pathways.
-        Additionally penalizes VIP magnitude exceeding SOM magnitude
-        (norm-matching) to prevent runaway disinhibition.
-
-        Args:
-            model: The network (must have feedback.alpha_inh / alpha_vip).
-
-        Returns:
-            Scalar L1 penalty.
-        """
-        if not hasattr(model, 'feedback') or not hasattr(model.feedback, 'alpha_inh'):
-            return torch.tensor(0.0)
-        fb = model.feedback
-        l1_inh = fb.alpha_inh.abs().sum()
-        total = l1_inh
-        if hasattr(fb, 'alpha_vip'):
-            l1_vip = fb.alpha_vip.abs().sum()
-            # Norm-matching: penalize VIP exceeding SOM magnitude
-            vip_excess = F.relu(l1_vip - l1_inh)
-            total = total + l1_vip + vip_excess
-        if hasattr(fb, 'alpha_apical'):
-            total = total + fb.alpha_apical.abs().sum()
-        return total
-
     def forward(
         self,
         outputs: dict[str, Tensor],
@@ -568,40 +526,15 @@ class CompositeLoss(nn.Module):
             "homeostasis": l_homeo.item(),
         }
 
-        if self.feedback_mode == 'emergent':
-            # Emergent mode: prior KL on mu_pred (= q_pred) + feedback sparsity
-            loss_dict["prediction"] = 0.0
-
-            # Prior KL loss: q_pred_windows IS mu_pred in learned-prior mode
-            if self.lambda_state > 0 and true_states_windows is not None:
-                # true_states_windows is used as a flag: if not None, prior KL is active.
-                # The actual target is true_next_theta_windows (passed via true_next_theta_windows arg).
-                l_prior_kl = self.prior_kl_loss(q_pred_windows, true_next_theta_windows)
-                total = total + self.lambda_state * l_prior_kl
-                loss_dict["state"] = l_prior_kl.item()
-            else:
-                loss_dict["state"] = 0.0
-
-            if model is not None:
-                l_fb = self.feedback_sparsity_loss(model)
-                total = total + self.lambda_fb * fb_scale * l_fb
-                loss_dict["fb_sparsity"] = l_fb.item()
-            else:
-                loss_dict["fb_sparsity"] = 0.0
+        # Prior KL loss: q_pred_windows IS mu_pred (V2's learned prior)
+        loss_dict["prediction"] = 0.0
+        if self.lambda_state > 0 and true_states_windows is not None:
+            l_prior_kl = self.prior_kl_loss(q_pred_windows, true_next_theta_windows)
+            total = total + self.lambda_state * l_prior_kl
+            loss_dict["state"] = l_prior_kl.item()
         else:
-            # Fixed mode: prediction KL + state classification
-            l_pred = self.prediction_loss(q_pred_windows, true_next_theta_windows)
-            total = total + self.lambda_pred * l_pred
-            loss_dict["prediction"] = l_pred.item()
-
-            if state_logits_windows is not None and true_states_windows is not None:
-                l_state = self.state_classification_loss(state_logits_windows, true_states_windows)
-                total = total + self.lambda_state * l_state
-                loss_dict["state"] = l_state.item()
-            else:
-                loss_dict["state"] = 0.0
-
-            loss_dict["fb_sparsity"] = 0.0
+            loss_dict["state"] = 0.0
+        loss_dict["fb_sparsity"] = 0.0
 
         # Surprise detection loss (when enabled)
         if self.lambda_surprise > 0 and is_expected is not None:

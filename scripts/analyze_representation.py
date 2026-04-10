@@ -79,26 +79,21 @@ def load_model(
     if "config" in ckpt and "model" in ckpt["config"]:
         model_raw = dict(ckpt["config"]["model"])
         train_raw = dict(ckpt["config"]["training"])
+        # Strip legacy keys from old checkpoints
+        for legacy_key in ('mechanism', 'n_basis', 'max_apical_gain', 'tau_vip',
+                           'simple_feedback', 'template_gain'):
+            model_raw.pop(legacy_key, None)
         model_cfg = ModelConfig(**model_raw)
-        # TrainingConfig round-trip: strip keys that aren't constructor args.
-        # This is unused except for delta_som & oracle_pi, but we keep it so
-        # the caller can introspect training conditions.
         train_fields = set(TrainingConfig.__dataclass_fields__.keys())
         train_cfg = TrainingConfig(**{k: v for k, v in train_raw.items() if k in train_fields})
-        logger.info(f"Loaded config from checkpoint: mechanism={model_cfg.mechanism.value}, "
-                    f"feedback_mode={model_cfg.feedback_mode}, delta_som={train_cfg.delta_som}, "
+        logger.info(f"Loaded config from checkpoint: "
+                    f"feedback_mode={model_cfg.feedback_mode}, "
                     f"oracle_pi(train)={train_cfg.oracle_pi}")
     else:
         model_cfg, train_cfg, _ = load_config(config_path)
         logger.warning(f"No config in checkpoint; using {config_path}")
 
-    if model_cfg.feedback_mode != "emergent":
-        raise ValueError(
-            f"This analysis script only supports emergent feedback; "
-            f"got feedback_mode={model_cfg.feedback_mode}"
-        )
-
-    net = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
+    net = LaminarV1V2Network(model_cfg)
     net.load_state_dict(ckpt["model_state"])
     net.to(device)
     net.eval()
@@ -112,60 +107,24 @@ def load_model(
 
 @contextlib.contextmanager
 def feedback_disabled(net: LaminarV1V2Network):
-    """Temporarily zero the emergent feedback operator.
+    """Temporarily disable feedback by zeroing the feedback_scale buffer.
 
-    Saves and restores all feedback pathway parameters:
-    - alpha_inh, som_baseline, som_tonic (SOM pathway)
-    - alpha_vip, vip_baseline (VIP pathway)
-    - alpha_apical (apical gain pathway)
-    - w_vip_som (network-level VIP→SOM gain)
+    In the current architecture, V2 feedback flows through a single
+    head_feedback linear layer, gated by `feedback_scale`. Zeroing this
+    buffer disables both the excitatory (center_exc) and inhibitory
+    (SOM drive) feedback pathways.
 
-    With all these zeroed:
-    - SOM drive = 0 (alpha_inh=0 → field=0, som_tonic → -inf → softplus ≈ 0)
-    - VIP drive = 0 (alpha_vip=0 → field=0, delta-style → 0)
-    - VIP→SOM interaction = 0
-
-    Note: this only affects the feedback pathway. L4, PV, L2/3 recurrence, and
-    adaptation all remain active — exactly what we want for an "ablate feedback,
-    keep everything else" comparison.
+    L4, PV, L2/3 recurrence, and adaptation all remain active — exactly
+    what we want for an "ablate feedback, keep everything else" comparison.
     """
-    fb = net.feedback
-
-    # Save all feedback-related params that need zeroing
-    saved = {}
-    for attr in ("alpha_inh", "som_baseline", "som_tonic", "alpha_vip", "vip_baseline", "alpha_apical"):
-        if hasattr(fb, attr):
-            saved[attr] = getattr(fb, attr).detach().clone()
-
-    # Also save w_vip_som from the network level
-    saved_w_vip_som = None
-    if hasattr(net, "w_vip_som"):
-        saved_w_vip_som = net.w_vip_som.detach().clone()
-
-    # Save feedback_scale (gates both operator and V2 direct feedback paths)
     saved_fb_scale = net.feedback_scale.detach().clone()
 
     try:
         with torch.no_grad():
-            for attr in saved:
-                param = getattr(fb, attr)
-                if attr == "som_tonic":
-                    # Push tonic to -inf so softplus(som_tonic) ≈ 0
-                    param.fill_(-20.0)
-                else:
-                    param.zero_()
-            if saved_w_vip_som is not None:
-                net.w_vip_som.zero_()
-            # Zero feedback_scale to disable V2 direct feedback path
-            # (simple_feedback mode: center_exc = feedback_signal * feedback_scale)
             net.feedback_scale.zero_()
         yield
     finally:
         with torch.no_grad():
-            for attr, val in saved.items():
-                getattr(fb, attr).copy_(val)
-            if saved_w_vip_som is not None:
-                net.w_vip_som.copy_(saved_w_vip_som)
             net.feedback_scale.copy_(saved_fb_scale)
 
 
@@ -179,11 +138,33 @@ EVAL_PI = 5.0           # oracle precision used during analysis (matches HARDENI
 EVAL_CONTRAST = 1.0     # stimulus contrast used during analysis
 
 
+def _make_bump(cfg: ModelConfig, thetas: torch.Tensor, sigma: float | None = None) -> torch.Tensor:
+    """Create a Gaussian bump in orientation space.
+
+    Args:
+        cfg: Model config (for n_orientations, orientation_range, sigma_ff).
+        thetas: [B] — center orientations (degrees).
+        sigma: Width of the bump (degrees). Defaults to sigma_ff.
+
+    Returns:
+        bump: [B, N] — normalized Gaussian bumps.
+    """
+    N = cfg.n_orientations
+    period = cfg.orientation_range
+    step = period / N
+    if sigma is None:
+        sigma = cfg.sigma_ff
+    pref = torch.arange(N, dtype=torch.float32, device=thetas.device) * step
+    diff = (pref.unsqueeze(0) - thetas.unsqueeze(1) + period / 2) % period - period / 2
+    bump = torch.exp(-diff ** 2 / (2 * sigma ** 2))
+    return bump
+
+
 def _build_oracle(net: LaminarV1V2Network, oracle_thetas: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Build oracle_q_pred and oracle_pi_pred tensors for a batch of trials.
 
     Args:
-        net: the network (used only for _make_bump and cfg).
+        net: the network (used for cfg).
         oracle_thetas: [B] — oracle target orientation (degrees) per trial.
 
     Returns:
@@ -194,7 +175,7 @@ def _build_oracle(net: LaminarV1V2Network, oracle_thetas: torch.Tensor) -> tuple
     N = net.cfg.n_orientations
     B = oracle_thetas.shape[0]
     device = oracle_thetas.device
-    q_single = net._make_bump(oracle_thetas)  # [B, N]
+    q_single = _make_bump(net.cfg, oracle_thetas)  # [B, N]
     q_single = q_single / (q_single.sum(dim=-1, keepdim=True) + 1e-8)
     oracle_q = q_single.unsqueeze(1).expand(B, T_STEPS, N).contiguous()
     oracle_pi = torch.full((B, T_STEPS, 1), EVAL_PI, device=device)

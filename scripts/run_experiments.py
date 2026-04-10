@@ -18,7 +18,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import ModelConfig, TrainingConfig, MechanismType
+from src.config import ModelConfig, TrainingConfig
 from src.model.network import LaminarV1V2Network
 from src.experiments import ALL_PARADIGMS
 
@@ -30,9 +30,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run experimental paradigms")
     parser.add_argument("--checkpoint", type=str, required=True,
                         help="Path to trained model checkpoint")
-    parser.add_argument("--mechanism", type=str, default="center_surround",
-                        choices=[m.value for m in MechanismType],
-                        help="Mechanism type (must match checkpoint)")
     parser.add_argument("--paradigm", type=str, default=None,
                         choices=list(ALL_PARADIGMS.keys()),
                         help="Run a single paradigm (default: all)")
@@ -50,35 +47,23 @@ def main() -> None:
 
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
 
-    # Reconstruct ModelConfig + TrainingConfig from checkpoint's saved config.
-    # We need TrainingConfig so we can pass delta_som through to the network,
-    # matching how the checkpoint was trained. This mirrors the pattern used in
-    # scripts/analyze_representation.py (load_model).
+    # Reconstruct ModelConfig from checkpoint's saved config.
     if "config" in ckpt and "model" in ckpt["config"]:
         model_raw = dict(ckpt["config"]["model"])
+        # Strip legacy keys that may be in old checkpoints
+        for legacy_key in ('mechanism', 'n_basis', 'max_apical_gain', 'tau_vip',
+                           'simple_feedback', 'template_gain'):
+            model_raw.pop(legacy_key, None)
         cfg = ModelConfig(**model_raw)
-        train_raw = dict(ckpt["config"].get("training", {}))
-        # Filter keys down to valid TrainingConfig constructor args — the YAML
-        # has nested stage1/stage2 dicts that aren't valid field names.
-        train_fields = set(TrainingConfig.__dataclass_fields__.keys())
-        train_cfg = TrainingConfig(**{k: v for k, v in train_raw.items() if k in train_fields})
-        logger.info(
-            f"Loaded config from checkpoint: mechanism={cfg.mechanism.value}, "
-            f"feedback_mode={cfg.feedback_mode}, delta_som={train_cfg.delta_som}"
-        )
+        logger.info(f"Loaded config from checkpoint: feedback_mode={cfg.feedback_mode}")
     else:
-        # Fallback for legacy checkpoints without saved config
-        cfg = ModelConfig(mechanism=MechanismType(args.mechanism))
-        train_cfg = TrainingConfig()
-        logger.warning("No config in checkpoint, using --mechanism flag and default TrainingConfig")
+        cfg = ModelConfig()
+        logger.warning("No config in checkpoint, using default ModelConfig")
 
-    net = LaminarV1V2Network(cfg, delta_som=train_cfg.delta_som)
+    net = LaminarV1V2Network(cfg)
     net.load_state_dict(ckpt["model_state"])
     net.eval()
-    logger.info(
-        f"Loaded checkpoint: {args.checkpoint}  "
-        f"(net.feedback.delta_som={net.feedback.delta_som})"
-    )
+    logger.info(f"Loaded checkpoint: {args.checkpoint}")
 
     paradigms = ALL_PARADIGMS
     if args.paradigm:

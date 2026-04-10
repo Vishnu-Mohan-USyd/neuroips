@@ -3,7 +3,6 @@
 
 Usage:
     python -m scripts.train                          # full pipeline, default config
-    python -m scripts.train --mechanism dampening     # specific mechanism
     python -m scripts.train --stage 1                 # Stage 1 only
     python -m scripts.train --stage 2                 # Stage 2 only (needs Stage 1 checkpoint)
     python -m scripts.train --config config/custom.yaml
@@ -22,7 +21,7 @@ import torch
 # Ensure project root on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.config import ModelConfig, TrainingConfig, StimulusConfig, MechanismType, load_config
+from src.config import ModelConfig, TrainingConfig, StimulusConfig, load_config
 from src.model.network import LaminarV1V2Network
 from src.training.losses import CompositeLoss
 from src.training.stage1_sensory import run_stage1
@@ -37,9 +36,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train laminar V1-V2 model")
     parser.add_argument("--config", type=str, default="config/defaults.yaml",
                         help="Path to config YAML")
-    parser.add_argument("--mechanism", type=str, default=None,
-                        choices=[m.value for m in MechanismType],
-                        help="Override mechanism type")
     parser.add_argument("--stage", type=int, default=None, choices=[1, 2],
                         help="Run only a specific stage (default: both)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -60,9 +56,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--v2-input", type=str, default=None,
                         choices=['l23', 'l4', 'l4_l23'],
                         help="Override V2 input mode")
-    parser.add_argument("--feedback-mode", type=str, default=None,
-                        choices=['emergent', 'fixed'],
-                        help="Override feedback mode")
     parser.add_argument("--allow-gating-fail", action="store_true",
                         help="Allow proceeding to Stage 2 even if Stage 1 gating fails")
     return parser.parse_args()
@@ -72,9 +65,6 @@ def main() -> None:
     args = parse_args()
 
     # Reproducibility guard: Stage 2 alone requires a Stage 1 checkpoint.
-    # Starting Stage 2 from random init produces a model that looks trained
-    # but has an unscaffolded V1 circuit — results are not reproducible or
-    # interpretable. Fail loudly rather than silently training garbage.
     if args.stage == 2 and not args.stage1_checkpoint:
         raise ValueError(
             "Stage 2 training requires a Stage 1 checkpoint. "
@@ -85,20 +75,9 @@ def main() -> None:
     # Load config
     model_cfg, train_cfg, stim_cfg = load_config(args.config)
 
-    # Override mechanism if specified
-    if args.mechanism:
-        model_cfg = ModelConfig(
-            **{k: v for k, v in model_cfg.__dict__.items() if k != "mechanism"},
-            mechanism=MechanismType(args.mechanism),
-        )
-
     # Override V2 input mode if specified
     if args.v2_input:
         model_cfg.v2_input_mode = args.v2_input
-
-    # Override feedback mode if specified
-    if args.feedback_mode:
-        model_cfg.feedback_mode = args.feedback_mode
 
     # Override Stage 2 steps if specified
     if args.stage2_steps is not None:
@@ -116,20 +95,17 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
 
-    logger.info(f"Mechanism: {model_cfg.mechanism.value}")
     logger.info(f"Feedback mode: {model_cfg.feedback_mode}")
     logger.info(f"Device: {device}")
     logger.info(f"Seed: {args.seed}")
 
     # Output directory
-    out_dir = Path(args.output) / f"{model_cfg.mechanism.value}_seed{args.seed}"
+    out_dir = Path(args.output) / f"emergent_seed{args.seed}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Build network
-    net = LaminarV1V2Network(model_cfg, delta_som=train_cfg.delta_som)
+    net = LaminarV1V2Network(model_cfg)
     logger.info(f"Network parameters: {sum(p.numel() for p in net.parameters())}")
-    if train_cfg.delta_som:
-        logger.info("Delta-SOM mode enabled")
 
     # Loss function (shared between stages for decoder continuity)
     loss_fn = CompositeLoss(train_cfg, model_cfg)
@@ -173,8 +149,6 @@ def main() -> None:
                 )
 
     # Load Stage 1 checkpoint if doing Stage 2 only
-    # (Presence of args.stage1_checkpoint is enforced at start of main() when
-    # args.stage == 2, so this branch is always taken here.)
     if args.stage == 2:
         ckpt = torch.load(args.stage1_checkpoint, map_location=device, weights_only=False)
         net.load_state_dict(ckpt["model_state"])
