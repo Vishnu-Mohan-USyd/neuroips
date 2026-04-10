@@ -79,58 +79,63 @@ Stimulus -> L4 -> PV (normalization)
 ### Stage 1: Sensory Scaffold (2000 steps)
 - Random gratings, variable contrast
 - Trains L2/3 ff weights, PV gains, W_rec
-- Gating: decoder accuracy >= 87%, unimodal tuning, FWHM 15-30°
+- Gating: decoder accuracy >= 90%, unimodal tuning, FWHM 15-30°
 
 ### Stage 2: V2 + Feedback (5000 steps)
 - HMM-generated orientation sequences
-- Curriculum: burn-in (fb=0, 1000 steps) -> ramp (fb 0->1, 1000 steps) -> full
+- Curriculum: burn-in (fb=0, 1000 steps sweep / 5000 code default) -> ramp (fb 0->1, 1000 steps sweep / 5000 code default) -> full
 - LR: V2 3e-4, feedback 1e-4, weight decay 1e-4
 - Gradient clipping: 1.0
 - Oracle mode available: V2 frozen, q_pred from ground-truth state
 
 ## Stimulus Generation
 
-- HMM with 2 states (CW, CCW): p_self=0.95, p_transition=0.80
+- HMM with 2 states in sweep experiments (CW, CCW); code supports 3 states (CW, CCW, NEUTRAL): p_self=0.95, p_transition=0.80
 - 12 anchor orientations (every 15° from 0-180°)
-- transition_step=5.0° per presentation
-- 25 presentations per sequence, steps_on=12, steps_isi=4
+- transition_step=5.0° per presentation (sweep value; code default is 15.0°)
+- 25 presentations per sequence, steps_on=12, steps_isi=4 (sweep values; code defaults are seq_length=50, steps_on=8)
 - Gaussian noise on population code (stimulus_noise=0.25)
-- Optional ambiguous stimuli (ambiguous_fraction=0.3, offset=15°)
+- Optional ambiguous stimuli (ambiguous_fraction=0.3 sweep / 0.15 code default, offset=15°)
 
 ## Loss Functions
 
 | Loss | Weight | Target |
 |---|---|---|
 | `lambda_sensory` | **regime-dependent** | 36-way CE orientation decode on L2/3 |
-| `lambda_state` | 1.0 | KL(target || mu_pred) -- V2 prior quality |
+| `lambda_state` | 1.0 (sweep) / 0.25 (code default) | KL(target || mu_pred) -- V2 prior quality |
 | `lambda_energy` | 2.0 | L1 on population rates; L2/3 term multiplied by `l23_energy_weight` |
 | `lambda_homeo` | 1.0 | Homeostasis (L2/3 mean in [0.05, 0.5]) |
 | `lambda_mismatch` | 0.0 | Binary BCE expected/deviant classification (negligible effect) |
 | `lambda_pred_suppress` | 0.0 | Penalize L2/3 activity at predicted orientation |
+| `lambda_pred` | 0.0 (sweep) / 0.5 (code default) | KL prediction quality (fixed feedback mode) |
 | `lambda_fb_energy` | 0.0 | Penalize excitatory feedback magnitude |
 
 ## Key Config Parameters
 
-| Config | Default | Role |
-|---|---|---|
-| `lambda_sensory` | 0.3 | **Dominant**: controls feedback regime (0=dampen, 0.3=sharpen) |
-| `l23_energy_weight` | 1.0 | **Critical**: amplitude control (3.0=near-neutral, 5.0=sub-unity) |
-| `lambda_energy` | 2.0 | **Secondary**: broad energy constraint (0.5=runaway, 5.0=over-constrained) |
-| `simple_feedback` | true | V2 direct feedback mode (current) |
-| `feedback_mode` | emergent | V2 prediction mode |
-| `max_apical_gain` | 0.0 | Unused in simple_feedback mode |
-| `delta_som` | true | Bias-corrected softplus in feedback |
-| `freeze_v2` | false | Oracle mode (ground-truth predictions) |
-| `oracle_pi` | 3.0 | Pi value in oracle mode |
-| `oracle_template` | oracle_true | Template mode in oracle |
-| `stimulus_noise` | 0.25 | Gaussian noise std on population code |
-| `transition_step` | 5.0 | CW/CCW orientation step (degrees) |
+> **Note:** Values in this table reflect the sweep experiment configurations
+> (`config/` sweep YAMLs), which differ from `config/defaults.yaml` and the
+> Python dataclass defaults in `src/config.py`.
+
+| Config | Sweep Value | Code Default | Role |
+|---|---|---|---|
+| `lambda_sensory` | 0.3 | 1.0 | **Dominant**: controls feedback regime (0=dampen, 0.3=sharpen) |
+| `l23_energy_weight` | 1.0 | 1.0 | **Critical**: amplitude control (3.0=near-neutral, 5.0=sub-unity) |
+| `lambda_energy` | 2.0 | 0.01 | **Secondary**: broad energy constraint (0.5=runaway, 5.0=over-constrained) |
+| `simple_feedback` | true | false | V2 direct feedback mode (current) |
+| `feedback_mode` | emergent | emergent | V2 prediction mode |
+| `max_apical_gain` | 0.0 | 0.7 | Unused in simple_feedback mode |
+| `delta_som` | true | false | Bias-corrected softplus in feedback |
+| `freeze_v2` | false | false | Oracle mode (ground-truth predictions) |
+| `oracle_pi` | 3.0 | 1.0 | Pi value in oracle mode |
+| `oracle_template` | oracle_true | oracle_true | Template mode in oracle |
+| `stimulus_noise` | 0.25 | 0.0 | Gaussian noise std on population code |
+| `transition_step` | 5.0 | 15.0 | CW/CCW orientation step (degrees) |
 
 ## Legacy Feedback Mode (code preserved, not used)
 
 ### EmergentFeedbackOperator (`simple_feedback: false`)
-- 7 basis functions (Gaussians at sigma=5/15/30/60°, Mexican hat, constant, sine)
-- Separate alpha weights for SOM, VIP, and apical gain pathways
+- Direct channel-wise circulant kernels (36 weights per pathway: SOM, VIP, apical)
+- Separate alpha weights for SOM (`alpha_inh`), VIP (`alpha_vip`), and apical gain (`alpha_apical`) pathways
 - Delta-SOM bias correction
 - Coincidence gate option (tested, found ineffective at 10° resolution)
 - Multiplicative apical gain: `1.0 + 0.7 * tanh(pi * K_apical * q_centered)`
@@ -140,7 +145,7 @@ Stimulus -> L4 -> PV (normalization)
 
 | File | Contents |
 |---|---|
-| `src/model/populations.py` | V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing |
+| `src/model/populations.py` | V1L4Ring, PVPool, V1L23Ring, DeepTemplate, SOMRing, VIPRing |
 | `src/model/v2_context.py` | V2ContextModule (GRU + heads) |
 | `src/model/feedback.py` | EmergentFeedbackOperator + simple feedback path |
 | `src/model/network.py` | LaminarV1V2Network (composes all modules) |
