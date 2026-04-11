@@ -663,31 +663,47 @@ class TestCheckpoint:
         assert logits.shape == (B * W, 1), f"got {tuple(logits.shape)}"
         assert not torch.isnan(logits).any()
 
-    def test_checkpoint_round_trip_includes_mismatch_head(self):
-        """Save loss_fn.state_dict(), reload into a fresh CompositeLoss,
-        verify mismatch_head params are bit-identical.
+    def test_mismatch_head_is_mlp_and_saved(self):
+        """Combined regression for Task #6 / Fix A:
 
-        This is the regression for the latent bug Task #6 fixed: the old
-        train.py only saved `decoder_state` (orientation_decoder only),
-        so the trained mismatch_head was silently lost on reload — any
-        downstream consumer that re-instantiated CompositeLoss got a
-        randomly-initialised head.
+        1. The mismatch head IS a 2-layer MLP (Linear→ReLU→Linear).
+        2. The head's weights round-trip cleanly through the
+           `loss_heads` sub-dict checkpoint format used by
+           `scripts.train._collect_loss_heads` /
+           `scripts.train._load_loss_heads`.
+
+        This is the test the Lead's Fix A dispatch explicitly required.
         """
+        import torch.nn as nn
+        from scripts.train import _collect_loss_heads, _load_loss_heads
+
         cfg = ModelConfig()
         train = TrainingConfig(lambda_mismatch=1.0)
         loss_fn = CompositeLoss(train, cfg)
 
-        # Perturb the head so the saved state isn't trivially the init.
+        # 1. MLP structure check.
+        head = loss_fn.mismatch_head
+        assert isinstance(head, nn.Sequential), (
+            f"mismatch_head should be nn.Sequential, got {type(head).__name__}"
+        )
+        linear_layers = [m for m in head if isinstance(m, nn.Linear)]
+        assert len(linear_layers) == 2, (
+            f"expected 2 Linear layers, got {len(linear_layers)}"
+        )
+
+        # 2. Round-trip: perturb so saved state isn't init, save via
+        #    the helper, reload into a fresh CompositeLoss, assert
+        #    bit-identical mismatch_head params.
         with torch.no_grad():
             for p in loss_fn.mismatch_head.parameters():
                 p.add_(torch.randn_like(p) * 0.1)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "ckpt_with_mm.pt"
-            torch.save({"loss_state": loss_fn.state_dict()}, path)
+            path = Path(tmpdir) / "ckpt_loss_heads.pt"
+            torch.save({"loss_heads": _collect_loss_heads(loss_fn)}, path)
 
             loss_fn2 = CompositeLoss(train, cfg)
-            # Sanity: fresh head must NOT match the perturbed one.
+            # Sanity: fresh head must NOT match the perturbed source.
             for p1, p2 in zip(loss_fn.mismatch_head.parameters(),
                               loss_fn2.mismatch_head.parameters()):
                 assert not torch.allclose(p1, p2), (
@@ -696,13 +712,19 @@ class TestCheckpoint:
                 )
 
             ckpt = torch.load(path, weights_only=False)
-            loss_fn2.load_state_dict(ckpt["loss_state"], strict=False)
+            loaded = _load_loss_heads(loss_fn2, ckpt)
+            assert "mismatch_head" in loaded, (
+                f"_load_loss_heads did not load mismatch_head: {loaded}"
+            )
+            assert "orientation_decoder" in loaded, (
+                f"_load_loss_heads did not load orientation_decoder: {loaded}"
+            )
 
             for p1, p2 in zip(loss_fn.mismatch_head.parameters(),
                               loss_fn2.mismatch_head.parameters()):
                 assert torch.allclose(p1, p2, atol=0), (
                     "mismatch_head params differ after round-trip — "
-                    "loss_state did not preserve them"
+                    "_collect_loss_heads / _load_loss_heads did not preserve them"
                 )
 
             # Forward equivalence: identical input → identical logits.
@@ -710,6 +732,42 @@ class TestCheckpoint:
             assert torch.allclose(
                 loss_fn.mismatch_head(x), loss_fn2.mismatch_head(x), atol=0,
             )
+
+    def test_legacy_decoder_state_still_loads(self):
+        """Backward-compat regression: old checkpoints that carry only
+        the flat `decoder_state` key (orientation_decoder state_dict)
+        must still load via `_load_loss_heads` so existing checkpoints
+        (dual_2, dual_2_4_1, dual_2_4_2, simple_dual seed 42) remain
+        evaluable after Fix A.
+        """
+        from scripts.train import _load_loss_heads
+
+        cfg = ModelConfig()
+        train = TrainingConfig()  # default: only orientation_decoder
+        loss_fn = CompositeLoss(train, cfg)
+
+        # Perturb orientation_decoder so the saved state is non-trivial.
+        with torch.no_grad():
+            for p in loss_fn.orientation_decoder.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "legacy_ckpt.pt"
+            # Legacy format: flat `decoder_state` key, no `loss_heads`.
+            torch.save({
+                "decoder_state": loss_fn.orientation_decoder.state_dict(),
+            }, path)
+
+            loss_fn2 = CompositeLoss(train, cfg)
+            ckpt = torch.load(path, weights_only=False)
+            loaded = _load_loss_heads(loss_fn2, ckpt)
+
+            assert loaded == ["orientation_decoder"], (
+                f"legacy load should report only orientation_decoder, got {loaded}"
+            )
+            for p1, p2 in zip(loss_fn.orientation_decoder.parameters(),
+                              loss_fn2.orientation_decoder.parameters()):
+                assert torch.allclose(p1, p2, atol=0)
 
 
 # ---------------------------------------------------------------------------
