@@ -620,6 +620,97 @@ class TestCheckpoint:
             assert torch.allclose(r_l23_orig, r_l23_loaded, atol=1e-6)
             assert torch.allclose(aux_orig["q_pred_all"], aux_loaded["q_pred_all"], atol=1e-6)
 
+    # ------------------------------------------------------------------
+    # Task #6 / Fix A: MLP mismatch head + checkpoint save
+    # ------------------------------------------------------------------
+    def test_mismatch_head_is_two_layer_mlp(self):
+        """When lambda_mismatch>0, mismatch_head is a 2-layer MLP, not Linear.
+
+        Per debugger evidence, a plain nn.Linear(N, 1) plateaued at ~0.74
+        on the same r_l23, while a Linear(N,64)→ReLU→Linear(64,1) MLP
+        reached ~0.89. This test pins the architecture so a future refactor
+        can't silently revert to a single Linear layer.
+        """
+        import torch.nn as nn
+        cfg = ModelConfig()
+        train = TrainingConfig(lambda_mismatch=1.0)
+        loss_fn = CompositeLoss(train, cfg)
+
+        head = loss_fn.mismatch_head
+        assert isinstance(head, nn.Sequential), (
+            f"mismatch_head should be nn.Sequential, got {type(head).__name__}"
+        )
+        # Linear → ReLU → Linear
+        assert len(head) == 3, f"expected 3 layers, got {len(head)}"
+        assert isinstance(head[0], nn.Linear)
+        assert isinstance(head[1], nn.ReLU)
+        assert isinstance(head[2], nn.Linear)
+        N = cfg.n_orientations
+        assert head[0].in_features == N
+        assert head[0].out_features == 64
+        assert head[2].in_features == 64
+        assert head[2].out_features == 1
+
+    def test_mismatch_head_forward_shape(self):
+        """The MLP head accepts [B*W, N] and returns [B*W, 1] logits."""
+        cfg = ModelConfig()
+        train = TrainingConfig(lambda_mismatch=1.0)
+        loss_fn = CompositeLoss(train, cfg)
+
+        B, W, N = 4, 5, cfg.n_orientations
+        r_l23 = torch.randn(B, W, N).abs()
+        logits = loss_fn.mismatch_head(r_l23.reshape(B * W, N))
+        assert logits.shape == (B * W, 1), f"got {tuple(logits.shape)}"
+        assert not torch.isnan(logits).any()
+
+    def test_checkpoint_round_trip_includes_mismatch_head(self):
+        """Save loss_fn.state_dict(), reload into a fresh CompositeLoss,
+        verify mismatch_head params are bit-identical.
+
+        This is the regression for the latent bug Task #6 fixed: the old
+        train.py only saved `decoder_state` (orientation_decoder only),
+        so the trained mismatch_head was silently lost on reload — any
+        downstream consumer that re-instantiated CompositeLoss got a
+        randomly-initialised head.
+        """
+        cfg = ModelConfig()
+        train = TrainingConfig(lambda_mismatch=1.0)
+        loss_fn = CompositeLoss(train, cfg)
+
+        # Perturb the head so the saved state isn't trivially the init.
+        with torch.no_grad():
+            for p in loss_fn.mismatch_head.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "ckpt_with_mm.pt"
+            torch.save({"loss_state": loss_fn.state_dict()}, path)
+
+            loss_fn2 = CompositeLoss(train, cfg)
+            # Sanity: fresh head must NOT match the perturbed one.
+            for p1, p2 in zip(loss_fn.mismatch_head.parameters(),
+                              loss_fn2.mismatch_head.parameters()):
+                assert not torch.allclose(p1, p2), (
+                    "fresh CompositeLoss has the same mismatch_head params "
+                    "as the perturbed source — perturbation didn't take"
+                )
+
+            ckpt = torch.load(path, weights_only=False)
+            loss_fn2.load_state_dict(ckpt["loss_state"], strict=False)
+
+            for p1, p2 in zip(loss_fn.mismatch_head.parameters(),
+                              loss_fn2.mismatch_head.parameters()):
+                assert torch.allclose(p1, p2, atol=0), (
+                    "mismatch_head params differ after round-trip — "
+                    "loss_state did not preserve them"
+                )
+
+            # Forward equivalence: identical input → identical logits.
+            x = torch.randn(8, cfg.n_orientations)
+            assert torch.allclose(
+                loss_fn.mismatch_head(x), loss_fn2.mismatch_head(x), atol=0,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Regression tests for bugs found during sharpening investigation

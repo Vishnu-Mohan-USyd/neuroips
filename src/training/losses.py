@@ -60,9 +60,18 @@ class CompositeLoss(nn.Module):
         if self.lambda_l4_sensory > 0:
             self.l4_decoder = nn.Linear(N, N)
 
-        # L2/3 mismatch detection head: L2/3 -> binary (expected vs deviant)
+        # L2/3 mismatch detection head: L2/3 -> binary (expected vs deviant).
+        # Two-layer MLP (Linear → ReLU → Linear) per debugger evidence — a
+        # plain linear head plateaued at ~0.74 on the same r_l23 input where
+        # an MLP reached ~0.89 (Task #6 / Fix A). The hidden width of 64 is
+        # ~2x the n_orientations (36) and adds 36*64 + 64 + 64*1 + 1 = 2369
+        # params, negligible vs. the rest of the network (~7.4k params).
         if self.lambda_mismatch > 0:
-            self.mismatch_head = nn.Linear(N, 1)
+            self.mismatch_head = nn.Sequential(
+                nn.Linear(N, 64),
+                nn.ReLU(),
+                nn.Linear(64, 1),
+            )
 
         # Surprise detection head: L2/3 -> binary (expected vs unexpected)
         if self.lambda_surprise > 0:

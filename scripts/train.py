@@ -127,11 +127,20 @@ def main() -> None:
                      f"acc={result1.decoder_accuracy:.3f}")
         logger.info(f"Gating checks: {result1.gating_passed}")
 
-        # Save Stage 1 checkpoint
+        # Save Stage 1 checkpoint.
+        # `loss_state` captures the *full* CompositeLoss module (including
+        # `orientation_decoder`, `mismatch_head`, and any other auxiliary
+        # heads allocated by the lambdas in train_cfg). This is the fix for
+        # the Task #6 latent bug: previously only `decoder_state` was saved,
+        # so any downstream consumer that re-instantiated CompositeLoss and
+        # tried to use mismatch_head got randomly-initialised garbage. The
+        # standalone `decoder_state` key is retained for backward compat
+        # with older eval scripts that read it directly.
         ckpt_path = out_dir / "stage1_checkpoint.pt"
         torch.save({
             "model_state": net.state_dict(),
             "decoder_state": loss_fn.orientation_decoder.state_dict(),
+            "loss_state": loss_fn.state_dict(),
             "gating": result1.gating_passed,
             "config": {"model": vars(model_cfg), "training": vars(train_cfg)},
         }, ckpt_path)
@@ -148,11 +157,18 @@ def main() -> None:
                     "Use --allow-gating-fail to override."
                 )
 
-    # Load Stage 1 checkpoint if doing Stage 2 only
+    # Load Stage 1 checkpoint if doing Stage 2 only.
+    # Prefer the full `loss_state` dict (includes all CompositeLoss heads
+    # like mismatch_head). Fall back to standalone `decoder_state` for
+    # backward compat with older Stage 1 checkpoints. `strict=False` lets
+    # us load Stage 1 checkpoints whose head shapes differ slightly from
+    # the current CompositeLoss config (e.g. lambdas changed across runs).
     if args.stage == 2:
         ckpt = torch.load(args.stage1_checkpoint, map_location=device, weights_only=False)
         net.load_state_dict(ckpt["model_state"])
-        if "decoder_state" in ckpt:
+        if "loss_state" in ckpt:
+            loss_fn.load_state_dict(ckpt["loss_state"], strict=False)
+        elif "decoder_state" in ckpt:
             loss_fn.orientation_decoder.load_state_dict(ckpt["decoder_state"])
         logger.info(f"Loaded Stage 1 checkpoint from {args.stage1_checkpoint}")
 
@@ -172,6 +188,7 @@ def main() -> None:
             torch.save({
                 "model_state": net.state_dict(),
                 "decoder_state": loss_fn.orientation_decoder.state_dict(),
+                "loss_state": loss_fn.state_dict(),
                 "step": step,
                 "config": {"model": vars(model_cfg), "training": vars(train_cfg)},
             }, ckpt_path)
@@ -188,11 +205,14 @@ def main() -> None:
                      f"s_acc={result2.final_sensory_acc:.3f}, "
                      f"p_acc={result2.final_pred_acc:.3f}")
 
-        # Save final checkpoint
+        # Save final checkpoint. Includes the full loss_fn state_dict so
+        # the trained mismatch_head (and any other heads) can be reloaded
+        # for downstream evaluation. See Task #6 / Fix A.
         ckpt_path = out_dir / "checkpoint.pt"
         torch.save({
             "model_state": net.state_dict(),
             "decoder_state": loss_fn.orientation_decoder.state_dict(),
+            "loss_state": loss_fn.state_dict(),
             "history": {"loss": result2.loss_history},
             "config": {"model": vars(model_cfg), "training": vars(train_cfg)},
         }, ckpt_path)
