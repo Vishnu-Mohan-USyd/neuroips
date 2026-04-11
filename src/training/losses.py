@@ -564,59 +564,95 @@ class CompositeLoss(nn.Module):
         routing_active = task_state is not None and task_routing is not None
 
         if routing_active:
-            # Build per-sample weight vectors. task_state is one-hot [B, 2]:
-            # column 0 = focused, column 1 = routine. A sample's effective
-            # weight is focused_w for focused samples, routine_w for routine.
-            w_sensory = (
-                task_state[:, 0] * float(task_routing['focused']['sensory'])
-                + task_state[:, 1] * float(task_routing['routine']['sensory'])
-            )  # [B]
-            w_energy = (
-                task_state[:, 0] * float(task_routing['focused']['energy'])
-                + task_state[:, 1] * float(task_routing['routine']['energy'])
-            )  # [B]
-            w_fb_energy = (
-                task_state[:, 0] * float(task_routing['focused']['fb_energy'])
-                + task_state[:, 1] * float(task_routing['routine']['fb_energy'])
-            )  # [B]
-            # Phase 1B: routing for sharp / local_disc / pred_suppress.
-            # Use .get(key, 0.0) so Phase 1A configs (which only define
-            # sensory/energy/fb_energy in task_routing) remain backward
-            # compatible — missing keys default to 0.0 multiplier.
-            w_sharp = (
-                task_state[:, 0] * float(task_routing['focused'].get('sharp', 0.0))
-                + task_state[:, 1] * float(task_routing['routine'].get('sharp', 0.0))
-            )  # [B]
-            w_local_disc = (
-                task_state[:, 0] * float(task_routing['focused'].get('local_disc', 0.0))
-                + task_state[:, 1] * float(task_routing['routine'].get('local_disc', 0.0))
-            )  # [B]
-            w_pred_suppress = (
-                task_state[:, 0] * float(task_routing['focused'].get('pred_suppress', 0.0))
-                + task_state[:, 1] * float(task_routing['routine'].get('pred_suppress', 0.0))
-            )  # [B]
-            # Phase 2.4: routine_shape routing (focused → 0.0, routine → ~2.0).
-            # Missing key defaults to 0.0 so pre-2.4 configs are untouched.
-            w_routine_shape = (
-                task_state[:, 0] * float(task_routing['focused'].get('routine_shape', 0.0))
-                + task_state[:, 1] * float(task_routing['routine'].get('routine_shape', 0.0))
-            )  # [B]
-
-            # --- Routed sensory readout: per-sample CE weighted by w_sensory ---
+            # task_state may arrive as either:
+            #   [B, 2]     — legacy sequence-level one-hot (pre-simple-dual
+            #                configs). Broadcast to [B, W, 2] so every
+            #                presentation inherits the same regime.
+            #   [B, W, 2]  — simple-dual-regime per-presentation one-hot
+            #                (Markov task_state). Used as-is.
             B, W, N = r_l23_windows.shape
+            if task_state.dim() == 2:
+                task_state_bw = task_state.unsqueeze(1).expand(B, W, 2)
+            else:
+                task_state_bw = task_state  # [B, W, 2]
+
+            ts_foc = task_state_bw[..., 0]   # [B, W] focused indicator
+            ts_rou = task_state_bw[..., 1]   # [B, W] routine indicator
+
+            # --- Per-presentation weights [B, W] for the three core terms ---
+            w_sensory_bw = (
+                ts_foc * float(task_routing['focused']['sensory'])
+                + ts_rou * float(task_routing['routine']['sensory'])
+            )
+            w_energy_bw = (
+                ts_foc * float(task_routing['focused']['energy'])
+                + ts_rou * float(task_routing['routine']['energy'])
+            )
+            # New key: per-presentation mismatch routing. Missing key → 0.0
+            # so pre-simple-dual configs that don't define 'mismatch' retain
+            # the legacy (un-gated) scalar mismatch behavior at the call site
+            # (since lambda_mismatch=0 in those configs anyway).
+            w_mismatch_bw = (
+                ts_foc * float(task_routing['focused'].get('mismatch', 0.0))
+                + ts_rou * float(task_routing['routine'].get('mismatch', 0.0))
+            )
+
+            # --- Per-sample [B] weights for all other routed terms.
+            # With 2D legacy task_state (broadcast to constant along W),
+            # .mean(dim=1) returns the sample-level weight unchanged — this
+            # path is bit-identical to the pre-simple-dual [B] computation.
+            # With 3D per-presentation task_state it returns the average
+            # regime weight across presentations for each sample; these
+            # terms have lambda=0 in the simple-dual YAML and are retained
+            # only for backward compatibility with Phase 2.4 configs.
+            w_fb_energy = (
+                ts_foc * float(task_routing['focused']['fb_energy'])
+                + ts_rou * float(task_routing['routine']['fb_energy'])
+            ).mean(dim=1)  # [B]
+            w_sharp = (
+                ts_foc * float(task_routing['focused'].get('sharp', 0.0))
+                + ts_rou * float(task_routing['routine'].get('sharp', 0.0))
+            ).mean(dim=1)  # [B]
+            w_local_disc = (
+                ts_foc * float(task_routing['focused'].get('local_disc', 0.0))
+                + ts_rou * float(task_routing['routine'].get('local_disc', 0.0))
+            ).mean(dim=1)  # [B]
+            w_pred_suppress = (
+                ts_foc * float(task_routing['focused'].get('pred_suppress', 0.0))
+                + ts_rou * float(task_routing['routine'].get('pred_suppress', 0.0))
+            ).mean(dim=1)  # [B]
+            w_routine_shape = (
+                ts_foc * float(task_routing['focused'].get('routine_shape', 0.0))
+                + ts_rou * float(task_routing['routine'].get('routine_shape', 0.0))
+            ).mean(dim=1)  # [B]
+
+            # --- Routed sensory readout: per-presentation CE gated by w_sensory_bw ---
             logits = self.orientation_decoder(r_l23_windows.reshape(B * W, N))
             targets = self._theta_to_channel(true_theta_windows).reshape(B * W)
             ce_per_elem = F.cross_entropy(logits, targets, reduction='none')  # [B*W]
-            ce_per_sample = ce_per_elem.reshape(B, W).mean(dim=1)             # [B]
-            l_sens = (ce_per_sample * w_sensory).mean()
+            ce_bw = ce_per_elem.reshape(B, W)                                  # [B, W]
+            l_sens = (ce_bw * w_sensory_bw).mean()
 
-            # --- Routed energy cost: r_l23 component per-sample, others global ---
+            # --- Routed energy cost: r_l23 term per-presentation, others global ---
+            # r_l23 has shape [B, T_total, N] where T_total = W * steps_per.
+            # Reshape to [B, W, steps_per, N] and mean over (steps_per, N) to
+            # get a per-presentation scalar energy [B, W]. For 2D legacy
+            # task_state (constant weight across W), this reduction is
+            # bit-equivalent to the pre-simple-dual per-sample form (see
+            # derivation in loss tests).
             r_l23_out = outputs["r_l23"]
+            T_total = r_l23_out.shape[1]
+            assert T_total % W == 0, (
+                f"r_l23 T_total={T_total} must divide evenly by W={W} "
+                f"for per-presentation energy reshape."
+            )
+            steps_per = T_total // W
+            r_l23_reshape = r_l23_out.reshape(B, W, steps_per, N)
             if self.l2_energy:
-                r_l23_per_sample = r_l23_out.pow(2).mean(dim=(1, 2))   # [B]
+                r_l23_bw = r_l23_reshape.pow(2).mean(dim=(2, 3))   # [B, W]
             else:
-                r_l23_per_sample = r_l23_out.abs().mean(dim=(1, 2))    # [B]
-            r_l23_routed = (r_l23_per_sample * w_energy).mean() * self.l23_energy_weight
+                r_l23_bw = r_l23_reshape.abs().mean(dim=(2, 3))    # [B, W]
+            r_l23_routed = (r_l23_bw * w_energy_bw).mean() * self.l23_energy_weight
             e_exc = (
                 outputs["r_l4"].abs().mean()
                 + r_l23_routed
@@ -636,6 +672,7 @@ class CompositeLoss(nn.Module):
             w_local_disc = None
             w_pred_suppress = None
             w_routine_shape = None
+            w_mismatch_bw = None  # Non-routed path: mismatch stays scalar.
 
         total = (
             self.lambda_sensory * l_sens
@@ -696,9 +733,39 @@ class CompositeLoss(nn.Module):
 
         # L2/3 mismatch detection loss (deviance objective)
         if self.lambda_mismatch > 0 and mismatch_labels is not None:
-            l_mismatch = self.mismatch_detection_loss(
-                r_l23_windows, mismatch_labels, mismatch_mask
-            )
+            if routing_active:
+                # Per-presentation BCE gated by w_mismatch_bw [B, W].
+                #
+                # We inline the BCE computation here (rather than calling
+                # mismatch_detection_loss) so the [B, W] shape survives the
+                # gating multiplication. Reduction follows the user's literal
+                # per-(b,s) spec:
+                #     loss(b,s) = task_state[b,s,0] * ...
+                #               + task_state[b,s,1] * (1.0 * mismatch + ...)
+                # averaged over all (b, s) → `.mean()` over B*W. For a
+                # balanced half-routine batch the effective mismatch weight
+                # is 0.5 * lambda_mismatch * routine_mm_mean.
+                B_m, W_m, N_m = r_l23_windows.shape
+                mm_logits = self.mismatch_head(
+                    r_l23_windows.reshape(B_m * W_m, N_m)
+                )  # [B*W, 1]
+                mm_targets = mismatch_labels.reshape(B_m * W_m, 1).float()
+                n_pos = mm_targets.sum().clamp(min=1.0)
+                n_neg = (1.0 - mm_targets).sum().clamp(min=1.0)
+                pos_weight = n_neg / n_pos
+                raw_bce = F.binary_cross_entropy_with_logits(
+                    mm_logits, mm_targets, pos_weight=pos_weight, reduction='none'
+                )  # [B*W, 1]
+                raw_bw = raw_bce.squeeze(-1).reshape(B_m, W_m)     # [B, W]
+                if mismatch_mask is not None:
+                    mask_bw = mismatch_mask.reshape(B_m, W_m).float()
+                else:
+                    mask_bw = torch.ones_like(raw_bw)
+                l_mismatch = (raw_bw * w_mismatch_bw * mask_bw).mean()
+            else:
+                l_mismatch = self.mismatch_detection_loss(
+                    r_l23_windows, mismatch_labels, mismatch_mask
+                )
             total = total + self.lambda_mismatch * l_mismatch
             loss_dict["mismatch"] = l_mismatch.item()
         else:

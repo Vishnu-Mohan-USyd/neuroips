@@ -305,6 +305,7 @@ class HMMSequenceGenerator:
         cue_dim: int = 2,
         n_states: int = 3,
         cue_valid_fraction: float = 0.0,
+        task_p_switch: float = 0.0,
     ):
         self.n_orientations = n_orientations
         self.p_self = p_self
@@ -322,6 +323,10 @@ class HMMSequenceGenerator:
         self.cue_dim = cue_dim
         self.n_states = n_states
         self.cue_valid_fraction = cue_valid_fraction
+        # Per-presentation Markov task_state. 0.0 = legacy per-sequence Bernoulli
+        # (task_state constant across the seq). >0 = Markov flip probability
+        # per presentation.
+        self.task_p_switch = task_p_switch
 
     def generate(
         self,
@@ -376,11 +381,40 @@ class HMMSequenceGenerator:
         # For ambiguous stimuli, reduce contrast to low level
         contrasts[is_ambiguous] = torch.clamp(contrasts[is_ambiguous], max=0.20)
 
-        # Task states: vectorized (no per-batch loop)
-        task_relevant = torch.rand(B, generator=generator) < 0.5  # [B]
-        task_states = torch.zeros(B, seq_length, 2)
-        task_states[task_relevant, :, 0] = 1.0
-        task_states[~task_relevant, :, 1] = 1.0
+        # Task states: Markov per-presentation if task_p_switch > 0, else
+        # legacy per-sequence Bernoulli (constant across the sequence).
+        #
+        # Encoding (one-hot [B, S, 2]):
+        #   column 0 = focused / "relevant"   (Markov state bit = 1)
+        #   column 1 = routine / "irrelevant" (Markov state bit = 0)
+        #
+        # Legacy path (task_p_switch == 0): draw Bernoulli(0.5) per batch
+        # element once, broadcast across all S presentations.
+        # Markov path (task_p_switch > 0): initial state ~ Bernoulli(0.5),
+        # per-step flip with probability task_p_switch. Vectorized via
+        # cumulative XOR of the transition bitmask starting from the initial
+        # state.
+        if self.task_p_switch > 0.0 and seq_length > 1:
+            initial_bit = (torch.rand(B, generator=generator) < 0.5).long()       # [B]
+            # Transition mask: 1 = flip at step s, 0 = stay. Shape [B, S-1].
+            transitions = (
+                torch.rand(B, seq_length - 1, generator=generator) < self.task_p_switch
+            ).long()
+            # Cumulative XOR along time axis: states[s] = initial XOR cumxor(trans[:s])
+            # Equivalently, cumulative SUM mod 2 of transitions prepended with 0.
+            flips_cum = torch.cumsum(transitions, dim=1) % 2                       # [B, S-1]
+            states_bits = torch.cat(
+                [initial_bit.unsqueeze(1), (initial_bit.unsqueeze(1) ^ flips_cum)],
+                dim=1,
+            )  # [B, S]
+            task_states = torch.zeros(B, seq_length, 2)
+            task_states[..., 0] = (states_bits == 1).float()  # focused
+            task_states[..., 1] = (states_bits == 0).float()  # routine
+        else:
+            task_relevant = torch.rand(B, generator=generator) < 0.5  # [B]
+            task_states = torch.zeros(B, seq_length, 2)
+            task_states[task_relevant, :, 0] = 1.0
+            task_states[~task_relevant, :, 1] = 1.0
 
         # Cue input: population-coded orientation bumps if cue_valid_fraction > 0
         cues = torch.zeros(B, seq_length, self.n_orientations)

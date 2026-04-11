@@ -190,6 +190,11 @@ class StimulusConfig:
     # ambiguous presentation as `ori + ambiguous_offset`.
     ambiguous_offset: float = 15.0
     cue_valid_fraction: float = 0.75
+    # Simple-dual-regime: per-presentation Markov task_state switch probability.
+    # P(regime flip at next presentation | current regime). 0.0 reproduces the
+    # pre-simple-dual "per-sequence Bernoulli" behavior (task_state constant
+    # across a sequence). 0.2 = user target spec.
+    task_p_switch: float = 0.0
 
 
 def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig, TrainingConfig, StimulusConfig]:

@@ -41,19 +41,23 @@ logger = logging.getLogger(__name__)
 def compute_mismatch_labels(
     metadata,
     transition_step: float = 15.0,
-    threshold: float = 10.0,
+    mismatch_threshold_deg: float = 3.0,
     orientation_range: float = 180.0,
 ) -> tuple[Tensor, Tensor]:
     """Compute binary mismatch labels from generator ground truth.
 
     A presentation is "mismatch" if the actual orientation deviates from
     the expected orientation (given previous orientation and current state)
-    by more than `threshold` degrees, or if the state is NEUTRAL.
+    by more than ``mismatch_threshold_deg`` degrees, or if the state is
+    NEUTRAL.
 
     Args:
         metadata: SequenceMetadata with .orientations [B, S] and .states [B, S].
         transition_step: Expected step size in degrees for CW/CCW.
-        threshold: Circular distance threshold for mismatch (degrees).
+        mismatch_threshold_deg: Circular distance threshold for mismatch
+            (degrees). Default 3.0 — tight enough to catch the 5° jitter
+            scale used in the simple-dual-regime sweep. Lower than the old
+            10° default (which was calibrated against a 15° transition_step).
         orientation_range: Period of orientation space (degrees).
 
     Returns:
@@ -76,7 +80,7 @@ def compute_mismatch_labels(
     is_neutral = (curr_state >= 2)
 
     circ_dist = circular_distance_abs(curr_theta, expected, orientation_range)
-    mismatch = ((circ_dist > threshold) | is_neutral).float()
+    mismatch = ((circ_dist > mismatch_threshold_deg) | is_neutral).float()
 
     # Pad first presentation (no valid prediction for t=0)
     B = orientations.shape[0]
@@ -183,6 +187,7 @@ def run_stage2(
         ambiguous_offset=stim_cfg.ambiguous_offset,
         n_states=stim_cfg.n_states,
         cue_valid_fraction=stim_cfg.cue_valid_fraction,
+        task_p_switch=stim_cfg.task_p_switch,
     )
 
     # Readout indices (last 3 steps of ON period — L2/3 needs time to settle)
@@ -432,7 +437,7 @@ def run_stage2(
             mm_labels, mm_mask = compute_mismatch_labels(
                 metadata,
                 transition_step=stim_cfg.transition_step,
-                threshold=10.0,
+                mismatch_threshold_deg=3.0,
                 orientation_range=model_cfg.orientation_range,
             )
             mm_labels_windows = mm_labels.to(dev)
@@ -462,12 +467,14 @@ def run_stage2(
         # In oracle/freeze_v2 mode, p_cw is a placeholder (0.5) — skip state BCE loss
         states_for_loss = None if train_cfg.freeze_v2 else true_states
         p_cw_for_loss = None if train_cfg.freeze_v2 else p_cw_windows
-        # Phase 1A: per-sample loss routing by task_state. task_seq is
-        # [B, T_total, 2] and constant across T (one-hot sequence-level
-        # regime). Take the first timestep → [B, 2]. When
-        # train_cfg.task_routing is None (legacy), CompositeLoss.forward()
-        # falls through to the bit-identical non-routed path.
-        task_state_batch = task_seq[:, 0, :]  # [B, 2]
+        # Simple-dual-regime: per-presentation Markov task_state.
+        # metadata.task_states is [B, S, 2] — one-hot regime for each
+        # presentation. S == seq_length == W (the number of readout
+        # windows). We pass this directly to CompositeLoss for per-
+        # presentation gating of sensory / energy / mismatch.
+        # CompositeLoss accepts either [B, 2] (legacy sequence-level) or
+        # [B, W, 2] (simple-dual per-presentation) — detected by ndim.
+        task_state_bw = metadata.task_states.to(dev, non_blocking=True)  # [B, W, 2]
         total_loss, loss_dict = loss_fn(
             outputs, true_thetas, true_next_thetas,
             r_l23_windows, q_pred_windows,
@@ -481,7 +488,7 @@ def run_stage2(
             r_l4_windows=r_l4_windows,
             mismatch_labels=mm_labels_windows,
             mismatch_mask=mm_mask_windows,
-            task_state=task_state_batch,
+            task_state=task_state_bw,
             task_routing=train_cfg.task_routing,
         )
 
@@ -498,14 +505,31 @@ def run_stage2(
         # Logging
         if (step + 1) % log_interval == 0:
             with torch.no_grad():
-                # Sensory accuracy
+                # Sensory accuracy (global + per-regime)
                 logits = loss_fn.orientation_decoder(r_l23_windows)
                 B_W = logits.shape[0] * logits.shape[1]
-                sensory_acc = (
+                sens_correct = (
                     logits.reshape(B_W, N).argmax(dim=-1)
                     == loss_fn._theta_to_channel(true_thetas).reshape(-1)
-                ).float().mean().item()
+                ).float()  # [B*W]
+                sensory_acc = sens_correct.mean().item()
                 last_sensory_acc = sensory_acc
+
+                # Per-regime sensory accuracy using per-presentation task_state.
+                # task_state_bw is [B, W, 2]; col 0 = focused/relevant,
+                # col 1 = routine/irrelevant. Flatten to [B*W] masks.
+                rel_mask = task_state_bw[..., 0].reshape(-1)  # [B*W] focused
+                irr_mask = task_state_bw[..., 1].reshape(-1)  # [B*W] routine
+                s_acc_rel = (
+                    (sens_correct * rel_mask).sum() / rel_mask.sum().clamp(min=1.0)
+                ).item()
+                s_acc_irr = (
+                    (sens_correct * irr_mask).sum() / irr_mask.sum().clamp(min=1.0)
+                ).item()
+                # Defaults for per-regime mismatch (populated in emergent-mode
+                # branch below if mismatch head is enabled).
+                mm_acc_rel = 0.0
+                mm_acc_irr = 0.0
 
                 # Gradient norms
                 total_norm = 0.0
@@ -548,7 +572,7 @@ def run_stage2(
                         ).float().mean().item()
                         l4_info = f"l4_acc={l4_acc:.3f}, "
 
-                    # Mismatch accuracy (when enabled)
+                    # Mismatch accuracy (global + per-regime) when enabled
                     mm_info = ""
                     if mm_labels_windows is not None and hasattr(loss_fn, 'mismatch_head'):
                         mm_logits = loss_fn.mismatch_head(
@@ -558,7 +582,15 @@ def run_stage2(
                         mm_targets = mm_labels_windows.reshape(-1)
                         mm_valid = mm_mask_windows.reshape(-1).bool() if mm_mask_windows is not None else torch.ones_like(mm_targets).bool()
                         if mm_valid.any():
-                            mm_acc = (mm_preds[mm_valid] == mm_targets[mm_valid]).float().mean().item()
+                            mm_correct = (mm_preds == mm_targets).float()  # [B*W]
+                            mm_acc = mm_correct[mm_valid].mean().item()
+                            # Per-regime: valid & relevant, valid & irrelevant
+                            rel_valid = (rel_mask.bool() & mm_valid)
+                            irr_valid = (irr_mask.bool() & mm_valid)
+                            if rel_valid.any():
+                                mm_acc_rel = mm_correct[rel_valid].mean().item()
+                            if irr_valid.any():
+                                mm_acc_irr = mm_correct[irr_valid].mean().item()
                             mm_info = f"mm_acc={mm_acc:.3f}, "
 
                     logger.info(
@@ -570,6 +602,8 @@ def run_stage2(
                         f"energy={loss_dict['energy_total']:.4f}, "
                         f"homeo={loss_dict['homeostasis']:.4f}, "
                         f"s_acc={sensory_acc:.3f}, p_acc={pred_acc:.3f}, "
+                        f"s_acc_rel={s_acc_rel:.3f}, s_acc_irr={s_acc_irr:.3f}, "
+                        f"mm_acc_rel={mm_acc_rel:.3f}, mm_acc_irr={mm_acc_irr:.3f}, "
                         f"ang_err={angular_error:.1f}, "
                         f"{fb_info}{l4_info}{mm_info}"
                         f"grad_norm={total_norm:.3f}, "
@@ -637,6 +671,11 @@ def run_stage2(
                         's_acc': round(sensory_acc, 3),
                         'p_acc': round(pred_acc if 'pred_acc' in dir() else last_pred_acc, 3),
                         'state_acc': round(state_acc, 3),
+                        # Simple-dual-regime: per-regime monitored metrics.
+                        's_acc_rel': round(s_acc_rel, 3),
+                        's_acc_irr': round(s_acc_irr, 3),
+                        'mm_acc_rel': round(mm_acc_rel, 3),
+                        'mm_acc_irr': round(mm_acc_irr, 3),
                         'ang_err': round(angular_error, 1),
                         'grad_norm': round(total_norm, 3),
                         'pi_ceil': round(pi_ceiling_frac, 3),

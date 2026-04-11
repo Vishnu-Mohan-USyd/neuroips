@@ -1543,3 +1543,257 @@ class TestPhase24RoutineShape:
             "A non-negative value means the loss direction is wrong — "
             "gradient descent would move AWAY from the perfect gate."
         )
+
+
+class TestSimpleDualRegimeGating:
+    """Simple-dual-regime per-presentation loss gating.
+
+    Target spec (user's literal form):
+        loss(b, s) = task_state[b,s,0] * (3.0 * sensory + 0.0 * mm + 1.0 * e)
+                   + task_state[b,s,1] * (0.3 * sensory + 1.0 * mm + 1.0 * e)
+
+    task_state is one-hot per (b, s). CompositeLoss.forward() accepts
+    either [B, 2] (legacy sequence-level) or [B, W, 2] (per-presentation)
+    and detects by ndim.
+    """
+
+    def _make_outputs_for_energy(
+        self, B: int, W: int, N: int, steps_per: int, r_l23_mag: float
+    ) -> dict:
+        """Synthetic outputs dict with uniform r_l23 (abs magnitude r_l23_mag)
+        of shape [B, T_total=W*steps_per, N]. All other populations zero.
+        """
+        T_total = W * steps_per
+        return {
+            "r_l4":          torch.zeros(B, T_total, N),
+            "r_l23":         torch.full((B, T_total, N), r_l23_mag),
+            "r_pv":          torch.zeros(B, T_total, 1),
+            "r_som":         torch.zeros(B, T_total, N),
+            "deep_template": torch.zeros(B, T_total, N),
+            "center_exc":    torch.zeros(B, T_total, N),
+            "som_drive_fb":  torch.zeros(B, T_total, N),
+        }
+
+    def test_per_presentation_sensory_gating_balanced(self, model_cfg):
+        """Half focused (w=3.0) + half routine (w=0.3) presentations.
+
+        Uses a 3D [B, W, 2] task_state. With uniform r_l23_windows the CE
+        is identical across (b, s). The expected sensory loss is then:
+            l_sens = (3.0 * ce + 0.3 * ce) * 0.5  = 1.65 * ce
+        where ce is the single per-presentation CE value.
+        """
+        tc = TrainingConfig(
+            lambda_sensory=1.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            task_routing={
+                "focused": {"sensory": 3.0, "mismatch": 0.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+                "routine": {"sensory": 0.3, "mismatch": 1.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 4, 36
+        steps_per = 2
+        outputs = self._make_outputs_for_energy(B, W, N, steps_per, r_l23_mag=0.0)
+        # Uniform r_l23_windows so decoder CE is the same for every (b, s).
+        r_l23_w = torch.ones(B, W, N) * 0.1
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        # Build [B, W, 2]: first half presentations focused, second half routine.
+        task_state_bw = torch.zeros(B, W, 2)
+        task_state_bw[:, :W // 2, 0] = 1.0  # focused
+        task_state_bw[:, W // 2:, 1] = 1.0  # routine
+
+        # Compute the per-presentation CE directly from the decoder (since the
+        # target class is 0 and r_l23_windows is uniform, the CE is the same
+        # for every (b, s) — equal to the scalar `ref_ce` below).
+        ref_ce = loss_fn.sensory_readout_loss(r_l23_w, true_theta).item()
+
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state_bw, task_routing=tc.task_routing,
+        )
+        expected = (3.0 * ref_ce + 0.3 * ref_ce) * 0.5
+        assert abs(ld["sensory"] - expected) < 1e-5, (
+            f"l_sens={ld['sensory']:.6f}, expected {expected:.6f} "
+            f"(ref_ce={ref_ce:.6f})"
+        )
+
+    def test_per_presentation_sensory_gating_all_focused(self, model_cfg):
+        """3D task_state with all-focused should equal 3.0 * ref_ce."""
+        tc = TrainingConfig(
+            lambda_sensory=1.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            task_routing={
+                "focused": {"sensory": 3.0, "mismatch": 0.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+                "routine": {"sensory": 0.3, "mismatch": 1.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 4, 36
+        steps_per = 2
+        outputs = self._make_outputs_for_energy(B, W, N, steps_per, r_l23_mag=0.0)
+        r_l23_w = torch.ones(B, W, N) * 0.1
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state_bw = torch.zeros(B, W, 2)
+        task_state_bw[..., 0] = 1.0  # all focused
+
+        ref_ce = loss_fn.sensory_readout_loss(r_l23_w, true_theta).item()
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state_bw, task_routing=tc.task_routing,
+        )
+        assert abs(ld["sensory"] - 3.0 * ref_ce) < 1e-5
+
+    def test_sensory_2d_backward_compatible(self, model_cfg):
+        """2D [B, 2] task_state path should produce identical sensory loss
+        as the equivalent broadcast 3D [B, W, 2] task_state."""
+        tc = TrainingConfig(
+            lambda_sensory=1.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            task_routing={
+                "focused": {"sensory": 3.0, "mismatch": 0.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+                "routine": {"sensory": 0.3, "mismatch": 1.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 4, 36
+        steps_per = 2
+        outputs = self._make_outputs_for_energy(B, W, N, steps_per, r_l23_mag=0.0)
+        r_l23_w = torch.randn(B, W, N).abs()
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        # 2D all-routine
+        ts_2d = torch.tensor([[0.0, 1.0]] * B)
+        # 3D broadcast of same
+        ts_3d = ts_2d.unsqueeze(1).expand(B, W, 2).contiguous()
+
+        _, ld_2d = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=ts_2d, task_routing=tc.task_routing,
+        )
+        _, ld_3d = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=ts_3d, task_routing=tc.task_routing,
+        )
+        assert abs(ld_2d["sensory"] - ld_3d["sensory"]) < 1e-6
+
+    def test_per_presentation_mismatch_gating(self, model_cfg):
+        """Half focused (w=0) + half routine (w=1) — mismatch contribution
+        comes only from routine presentations; the focused half is zeroed.
+        """
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            lambda_mismatch=1.0,
+            task_routing={
+                "focused": {"sensory": 3.0, "mismatch": 0.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+                "routine": {"sensory": 0.3, "mismatch": 1.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 4, 36
+        steps_per = 2
+        outputs = self._make_outputs_for_energy(B, W, N, steps_per, r_l23_mag=0.0)
+        r_l23_w = torch.ones(B, W, N) * 0.1
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        # Half mismatch=1, half mismatch=0 (arbitrary — we just need a
+        # non-degenerate label distribution so pos_weight is finite).
+        mm_labels = torch.zeros(B, W)
+        mm_labels[:, ::2] = 1.0
+        mm_mask = torch.ones(B, W)
+
+        # 3D task_state: half focused, half routine (aligned with mm labels).
+        task_state_bw = torch.zeros(B, W, 2)
+        task_state_bw[:, :W // 2, 0] = 1.0  # focused
+        task_state_bw[:, W // 2:, 1] = 1.0  # routine
+
+        # Reference: run with all-routine 3D, then compare.
+        all_routine_bw = torch.zeros(B, W, 2)
+        all_routine_bw[..., 1] = 1.0
+        _, ld_all_rout = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            mismatch_labels=mm_labels, mismatch_mask=mm_mask,
+            task_state=all_routine_bw, task_routing=tc.task_routing,
+        )
+        # All-routine: every (b, s) gets w_mismatch=1.0, so l_mismatch is the
+        # straight mean of per-presentation BCE.
+        all_rout_mm = ld_all_rout["mismatch"]
+
+        _, ld_half = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            mismatch_labels=mm_labels, mismatch_mask=mm_mask,
+            task_state=task_state_bw, task_routing=tc.task_routing,
+        )
+        # Half-routine: focused w=0, routine w=1. The gated mean over B*W
+        # should equal 0.5 * (per-presentation BCE mean over routine half).
+        # Since r_l23_w is uniform, the BCE is the same per presentation, so
+        # routine_half_bce_mean == all_rout_mm. Therefore:
+        #     ld_half['mismatch'] ≈ 0.5 * all_rout_mm
+        assert abs(ld_half["mismatch"] - 0.5 * all_rout_mm) < 1e-5, (
+            f"half-batch mismatch={ld_half['mismatch']:.6f}, "
+            f"expected 0.5 * {all_rout_mm:.6f} = {0.5 * all_rout_mm:.6f}"
+        )
+
+    def test_per_presentation_energy_gating(self, model_cfg):
+        """Half focused + half routine with equal energy weight 1.0.
+
+        With r_l23 uniform, the per-presentation r_l23 scalar is constant, so
+        the routed energy cost equals the un-routed r_l23.abs().mean().
+        """
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=1.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            task_routing={
+                "focused": {"sensory": 3.0, "mismatch": 0.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+                "routine": {"sensory": 0.3, "mismatch": 1.0, "energy": 1.0,
+                            "fb_energy": 0.0},
+            },
+        )
+        loss_fn = CompositeLoss(tc, model_cfg)
+        B, W, N = 4, 4, 36
+        steps_per = 3
+        r_l23_mag = 0.2
+        outputs = self._make_outputs_for_energy(B, W, N, steps_per, r_l23_mag)
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        task_state_bw = torch.zeros(B, W, 2)
+        task_state_bw[:, :W // 2, 0] = 1.0
+        task_state_bw[:, W // 2:, 1] = 1.0
+
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            task_state=task_state_bw, task_routing=tc.task_routing,
+        )
+        # With w_energy=1.0 everywhere and r_l23 uniform at magnitude 0.2,
+        # the r_l23 term contributes exactly 0.2 * 1.0 = 0.2 to e_exc.
+        # Other populations are zero. So energy_exc == 0.2 and energy_total == 0.2.
+        assert abs(ld["energy_exc"] - r_l23_mag) < 1e-6, (
+            f"energy_exc={ld['energy_exc']:.6f}, expected {r_l23_mag}"
+        )

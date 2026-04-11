@@ -483,3 +483,55 @@ class TestHMMSequenceGenerator:
         hmm = HMMSequenceGenerator(cue_valid_fraction=0.0)
         meta = hmm.generate(batch_size=4, seq_length=20, generator=gen_rng)
         assert (meta.cues == 0).all()
+
+    def test_markov_task_state_legacy_constant_when_p_switch_zero(self):
+        """task_p_switch=0 (default) preserves per-sequence Bernoulli task_state:
+        every presentation in a sequence shares the same regime.
+        """
+        gen_rng = torch.Generator().manual_seed(42)
+        hmm = HMMSequenceGenerator(task_p_switch=0.0)
+        meta = hmm.generate(batch_size=32, seq_length=20, generator=gen_rng)
+        # All presentations in a sequence should be identical to the first.
+        first = meta.task_states[:, 0:1, :].expand_as(meta.task_states)
+        assert torch.allclose(meta.task_states, first), (
+            "With task_p_switch=0 the per-sequence task_state must be constant."
+        )
+
+    def test_markov_task_state_one_hot(self):
+        """Each (b, s) entry must be one-hot: sums to 1, each value in {0, 1}."""
+        gen_rng = torch.Generator().manual_seed(42)
+        hmm = HMMSequenceGenerator(task_p_switch=0.2)
+        meta = hmm.generate(batch_size=64, seq_length=50, generator=gen_rng)
+        row_sums = meta.task_states.sum(dim=-1)
+        assert torch.allclose(row_sums, torch.ones_like(row_sums))
+        assert ((meta.task_states == 0.0) | (meta.task_states == 1.0)).all()
+
+    def test_markov_task_state_transition_rate(self):
+        """Empirical per-presentation flip rate ≈ task_p_switch (±0.02).
+
+        Uses a large sample (B=256, S=500) so the 95% CI on the flip rate
+        is ~±0.004. We check against a 0.02 band for robustness.
+        """
+        p_switch = 0.2
+        gen_rng = torch.Generator().manual_seed(123)
+        hmm = HMMSequenceGenerator(task_p_switch=p_switch)
+        meta = hmm.generate(batch_size=256, seq_length=500, generator=gen_rng)
+        # task_states[..., 0] is the focused bit per (b, s).
+        bit = meta.task_states[..., 0]  # [B, S]
+        # Count flips between consecutive presentations.
+        flips = (bit[:, 1:] != bit[:, :-1]).float()
+        emp_rate = flips.mean().item()
+        assert abs(emp_rate - p_switch) < 0.02, (
+            f"Empirical transition rate {emp_rate:.4f} deviates from "
+            f"task_p_switch={p_switch} by more than 0.02."
+        )
+        # Initial state roughly 50/50 focused vs routine.
+        init_focused = bit[:, 0].mean().item()
+        assert 0.42 < init_focused < 0.58, (
+            f"Initial state imbalance: {init_focused:.3f} focused (expected ~0.5)."
+        )
+
+    def test_stimulus_config_task_p_switch_default_is_zero(self):
+        """StimulusConfig.task_p_switch defaults to 0.0 (legacy behavior)."""
+        sc = StimulusConfig()
+        assert sc.task_p_switch == 0.0
