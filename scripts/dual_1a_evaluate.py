@@ -146,29 +146,38 @@ def channel_profile(
     device: torch.device,
     task_state: tuple[float, float],
     window: str,
+    stim_offset: float = 0.0,
 ) -> dict:
     """Per-channel r_l23 magnitudes + E:I diagnostics per (regime, window).
 
-    For each of the 8 anchors used elsewhere, runs a deterministic trajectory
-    (stim == oracle == anchor) under the specified ``task_state``. From the
-    windowed r_l23 response, extracts:
+    For each of the 8 anchors, runs a deterministic trajectory where
+    ``stim_theta = anchor + stim_offset (mod period)`` and
+    ``oracle_theta = anchor``. When ``stim_offset == 0`` this is the
+    matched condition (stim == oracle); when non-zero it probes the
+    *mismatch* case — the cortical response to an unexpected stimulus.
 
-    * ``peak``       — r_l23 at the channel whose preferred orientation is
-                       nearest the anchor.
-    * ``near_flank`` — mean r_l23 at peak±2 channels (±10° in the 36-channel
-                       / 180° layout — the ±10° locations where the debugger
-                       showed sensory CE pulling up and sharp pushing down).
-    * ``far_flank``  — mean r_l23 at peak±10 channels (±50° — the FWHM waist
-                       where sharp+l23_energy would cancel sensory).
-    * ``c_exc_peak`` — mean ``|center_exc|`` at the peak channel (apical
-                       excitation magnitude).
-    * ``som_peak``   — mean ``|r_som|`` at the peak channel (SOM inhibitory
-                       magnitude — this is the nearest single-channel
-                       inhibitory signal).
+    From the windowed r_l23 response, extracts (all at the ORACLE-indexed
+    channel, i.e., the channel the network's prior was pointing at):
 
-    All quantities are averaged across the 8 anchors. The resulting numbers
-    are regime-specific, window-specific, and fully deterministic (no
-    stimulus noise).
+    * ``peak``       — r_l23 at the oracle channel.
+    * ``near_flank`` — mean r_l23 at oracle±2 channels (±10°).
+    * ``far_flank``  — mean r_l23 at oracle±10 channels (±50°).
+    * ``c_exc_peak`` — mean ``|center_exc|`` at the oracle channel.
+    * ``som_peak``   — mean ``|r_som|`` at the oracle channel.
+
+    Additionally, under mismatch we return the STIM-indexed counterparts:
+
+    * ``peak_at_stim``  — r_l23 at the channel nearest the actual stimulus.
+    * ``c_exc_at_stim`` — ``|center_exc|`` at the stimulus channel.
+    * ``som_at_stim``   — ``|r_som|`` at the stimulus channel.
+
+    For ``stim_offset == 0`` these collapse to the oracle-indexed values
+    (bit-identical). For non-zero offsets, the ratio
+    ``peak_at_stim / peak`` directly quantifies whether r_l23 is encoding
+    bottom-up sensory reality or the top-down expectation.
+
+    All quantities are averaged across the 8 anchors. Fully deterministic
+    (no stimulus noise).
     """
     N = net.cfg.n_orientations
     period = net.cfg.orientation_range
@@ -186,9 +195,13 @@ def channel_profile(
     far_flanks: list[float] = []
     c_exc_peaks: list[float] = []
     som_peaks: list[float] = []
+    peaks_at_stim: list[float] = []
+    c_exc_at_stim_list: list[float] = []
+    som_at_stim_list: list[float] = []
 
     for anchor in _ANCHORS:
-        stim = torch.full((1,), anchor, device=device)
+        stim_theta = (anchor + stim_offset) % period
+        stim = torch.full((1,), stim_theta, device=device)
         oracle = torch.full((1,), anchor, device=device)
         r_l23_traj, aux = run_full_trajectory_with_aux(
             net, stim, oracle, device, task_state=task_state,
@@ -200,7 +213,8 @@ def channel_profile(
         r_som_win = _window_mean(r_som_traj, window).squeeze(0)  # [N]
         c_exc_win = _window_mean(c_exc_traj, window).squeeze(0)  # [N]
 
-        peak_idx = int(round(anchor / step)) % N
+        peak_idx = int(round(anchor / step)) % N                # oracle-indexed
+        stim_idx = int(round(stim_theta / step)) % N            # stim-indexed
         near_ccw = (peak_idx - near_off) % N
         near_cw = (peak_idx + near_off) % N
         far_ccw = (peak_idx - far_off) % N
@@ -218,14 +232,22 @@ def channel_profile(
         c_exc_peaks.append(float(c_exc_win[peak_idx].abs().item()))
         som_peaks.append(float(r_som_win[peak_idx].abs().item()))
 
+        peaks_at_stim.append(float(r_l23_win[stim_idx].item()))
+        c_exc_at_stim_list.append(float(c_exc_win[stim_idx].abs().item()))
+        som_at_stim_list.append(float(r_som_win[stim_idx].abs().item()))
+
     return {
         "task_state": list(task_state),
         "window": window,
+        "stim_offset": float(stim_offset),
         "peak":         float(np.mean(peaks)),
         "near_flank":   float(np.mean(near_flanks)),
         "far_flank":    float(np.mean(far_flanks)),
         "c_exc_peak":   float(np.mean(c_exc_peaks)),
         "som_peak":     float(np.mean(som_peaks)),
+        "peak_at_stim":  float(np.mean(peaks_at_stim)),
+        "c_exc_at_stim": float(np.mean(c_exc_at_stim_list)),
+        "som_at_stim":   float(np.mean(som_at_stim_list)),
         "near_off_channels": near_off,
         "far_off_channels":  far_off,
     }
@@ -235,14 +257,21 @@ def gate_diagnostics(
     net,
     device: torch.device,
     task_state: tuple[float, float],
+    stim_offset: float = 0.0,
 ) -> dict:
     """alpha_net gate-output distribution per regime (Phase 2 E/I gate probe).
 
-    Runs the standard 8-anchor matched-stim trajectory (stim==oracle, no
-    noise) under the specified ``task_state`` and extracts all per-timestep
-    samples of g_E and g_I from the ``gains_all`` aux tensor ([B=1, T, 2]).
-    Gains are already post-``2*sigmoid`` in network.py (line 156), so
-    ``g ≈ 1.0`` means the gate is at its identity init.
+    Runs the standard 8-anchor trajectory with
+    ``stim_theta = anchor + stim_offset (mod period)`` and
+    ``oracle_theta = anchor`` (matched when ``stim_offset == 0``, mismatch
+    otherwise) and extracts all per-timestep samples of g_E and g_I from the
+    ``gains_all`` aux tensor ([B=1, T, 2]).  Gains are already
+    post-``2*sigmoid`` in network.py (line 156), so ``g ≈ 1.0`` means the
+    gate is at its identity init.
+
+    The mismatch path matters: alpha_net can be stim-conditional, so its
+    output distribution under unexpected input is a direct probe of how
+    the gate responds to surprise within each regime.
 
     Each anchor contributes T samples (one per timestep). With 8 anchors and
     T=25, that's 200 samples per regime — enough to compute a meaningful
@@ -258,6 +287,7 @@ def gate_diagnostics(
     if not hasattr(net, "alpha_net"):
         return {
             "task_state": list(task_state),
+            "stim_offset": float(stim_offset),
             "use_ei_gate": False,
             "g_E_mean": None, "g_E_std": None,
             "g_E_min": None, "g_E_max": None, "g_E_median": None,
@@ -266,13 +296,15 @@ def gate_diagnostics(
             "g_E": None, "g_I": None,
         }
 
+    period = net.cfg.orientation_range
     g_E_samples: list[float] = []     # flattened over anchors × T
     g_I_samples: list[float] = []
     g_E_anchor_means: list[float] = []   # backward compat (1 scalar per anchor)
     g_I_anchor_means: list[float] = []
 
     for anchor in _ANCHORS:
-        stim = torch.full((1,), anchor, device=device)
+        stim_theta = (anchor + stim_offset) % period
+        stim = torch.full((1,), stim_theta, device=device)
         oracle = torch.full((1,), anchor, device=device)
         _, aux = run_full_trajectory_with_aux(
             net, stim, oracle, device, task_state=task_state,
@@ -290,6 +322,7 @@ def gate_diagnostics(
 
     return {
         "task_state": list(task_state),
+        "stim_offset": float(stim_offset),
         "use_ei_gate": True,
         "n_samples": int(g_E_arr.size),
         # Primary distribution stats (over anchors × T)
@@ -316,8 +349,9 @@ def ei_ratio(
     device: torch.device,
     task_state: tuple[float, float],
     window: str,
+    stim_offset: float = 0.0,
 ) -> dict:
-    """Canonical E:I ratio per (regime, window) on a matched-stim batch.
+    """Canonical E:I ratio per (regime, window) with optional stim mismatch.
 
     Uses the definition from ``src/analysis/energy.py``:
         E = mean(|r_l4|) + mean(|r_l23|)
@@ -325,10 +359,12 @@ def ei_ratio(
         E:I = E / I
 
     All means are taken over the windowed slice of the trajectory, across
-    the 8 anchors (stim == oracle == anchor, deterministic). Used to test
-    the Phase 1C hypothesis that L2 energy + higher focused energy routing
-    will pull focused E:I below 1.1 (debugger measured 1.31 in Phase 1B).
+    the 8 anchors with ``stim_theta = anchor + stim_offset (mod period)``
+    and ``oracle_theta = anchor``. When ``stim_offset == 0`` this is the
+    matched case (identical to the historical behavior). When non-zero it
+    probes E/I balance under unexpected stimuli.
     """
+    period = net.cfg.orientation_range
     exc_list = []
     inh_list = []
     e_l4_list = []
@@ -337,7 +373,8 @@ def ei_ratio(
     i_som_list = []
 
     for anchor in _ANCHORS:
-        stim = torch.full((1,), anchor, device=device)
+        stim_theta = (anchor + stim_offset) % period
+        stim = torch.full((1,), stim_theta, device=device)
         oracle = torch.full((1,), anchor, device=device)
         r_l23_traj, aux = run_full_trajectory_with_aux(
             net, stim, oracle, device, task_state=task_state,
@@ -385,6 +422,7 @@ def decoder_accuracy(
     window: str,
     n_trials: int = 256,
     seed: int = 42,
+    stim_offset: float = 0.0,
 ) -> dict:
     """Trained-decoder top-1 accuracy + confidence per (regime, window).
 
@@ -392,20 +430,19 @@ def decoder_accuracy(
     ``decoder_state``) on the windowed r_l23 activity for FB-ON and FB-OFF
     separately. This matches the training-time ``sensory_acc`` definition
     verbatim (``logits = orientation_decoder(r_l23_windows); argmax == label``
-    from ``src/training/stage2_feedback.py`` ~line 502), giving a direct
-    cross-check of whether the network's own sensory read-out still reads
-    out orientation correctly in each (regime, window) slice of the
-    trajectory. Critically, this is NOT a probe fit from scratch — we use
-    the frozen decoder the network actually learned, so the per-regime
-    numbers are directly comparable to the aggregate s_acc in metrics.jsonl.
+    from ``src/training/stage2_feedback.py`` ~line 502).
 
-    Sampling: ``n_trials`` random orientations uniformly in ``[0, period)``,
-    with ``stim == oracle`` (matched condition, no stimulus noise). Matched
-    condition keeps the probe focused on bottom-up read-out fidelity rather
-    than prediction / ambiguity handling. Noiseless because the other
-    per-regime probes in this script (M10, FWHM, channel_profile, ei_ratio,
-    gate_diagnostics) are also noiseless — keeps the whole diagnostic block
-    comparable.
+    Sampling: ``n_trials`` random ``oracle_theta`` (= sampled_theta) uniformly
+    in ``[0, period)``. The stimulus is
+    ``stim_theta = oracle_theta + stim_offset (mod period)``.
+
+    * ``stim_offset == 0``: matched condition (historical behavior, bit
+      identical). ``s_acc_stim == s_acc_oracle``.
+    * ``stim_offset != 0``: mismatch condition. ``s_acc_stim`` asks "does
+      the decoder recover the *actual* stimulus from r_l23?" (i.e., did
+      bottom-up reality win?); ``s_acc_oracle`` asks "does it recover the
+      *expected* orientation?" (i.e., did top-down prior win?). The ratio
+      of the two quantifies expectation-vs-reality balance in each regime.
 
     Args:
         net: loaded network (eval mode).
@@ -416,10 +453,15 @@ def decoder_accuracy(
         window: ``'default' | 'early' | 'mid' | 'late'`` — time slice of r_l23.
         n_trials: number of random orientations (256 → stderr ≲ 0.03 @ acc 0.5).
         seed: RNG seed for theta sampling reproducibility.
+        stim_offset: degrees added to stim vs oracle (0 = matched).
 
     Returns:
-        dict with ``fb_on``/``fb_off`` sub-dicts (top1_acc, confidence),
-        plus ``delta_top1_acc`` and ``delta_confidence`` (on − off).
+        dict with ``fb_on``/``fb_off`` sub-dicts. Each sub-dict carries
+        ``top1_acc`` (legacy key, alias for ``top1_acc_stim``),
+        ``top1_acc_stim``, ``top1_acc_oracle``, and ``confidence`` (max
+        softmax prob, label-agnostic). Top-level keys ``delta_top1_acc``
+        and ``delta_confidence`` are kept as (stim-label) on−off for
+        backward compat.
     """
     N = net.cfg.n_orientations
     period = net.cfg.orientation_range
@@ -428,17 +470,20 @@ def decoder_accuracy(
     # Deterministic theta sampling — numpy RNG, not torch, so it's
     # independent of any global torch seed state the network may have set.
     rng = np.random.RandomState(seed)
-    thetas_np = rng.uniform(0.0, period, size=n_trials).astype(np.float32)
-    stim = torch.from_numpy(thetas_np).to(device)
-    oracle = stim.clone()  # matched (stim == oracle)
+    oracle_np = rng.uniform(0.0, period, size=n_trials).astype(np.float32)
+    stim_np = np.mod(oracle_np + stim_offset, period).astype(np.float32)
+    stim = torch.from_numpy(stim_np).to(device)
+    oracle = torch.from_numpy(oracle_np).to(device)
 
-    # True channel labels — matches CompositeLoss._theta_to_channel:
-    #   (theta / step).round().long() % N
-    labels = torch.from_numpy(
-        (np.round(thetas_np / step).astype(np.int64) % N)
+    # Channel labels — matches CompositeLoss._theta_to_channel.
+    labels_stim = torch.from_numpy(
+        (np.round(stim_np / step).astype(np.int64) % N)
+    ).to(device)
+    labels_oracle = torch.from_numpy(
+        (np.round(oracle_np / step).astype(np.int64) % N)
     ).to(device)
 
-    def _run_and_score(fb_on: bool) -> tuple[float, float]:
+    def _run_and_score(fb_on: bool) -> tuple[float, float, float]:
         if fb_on:
             r_l23_traj = run_full_trajectory(
                 net, stim, oracle, device, task_state=task_state,
@@ -453,21 +498,34 @@ def decoder_accuracy(
             logits = orientation_decoder(r_l23_win)   # [B, N]
             probs = torch.softmax(logits, dim=-1)     # [B, N]
             preds = probs.argmax(dim=-1)              # [B]
-            top1 = (preds == labels).float().mean().item()
+            top1_stim   = (preds == labels_stim).float().mean().item()
+            top1_oracle = (preds == labels_oracle).float().mean().item()
             # Confidence: mean of the max softmax probability across the batch.
             conf = probs.max(dim=-1).values.mean().item()
-        return float(top1), float(conf)
+        return float(top1_stim), float(top1_oracle), float(conf)
 
-    acc_on, conf_on = _run_and_score(fb_on=True)
-    acc_off, conf_off = _run_and_score(fb_on=False)
+    acc_on_stim, acc_on_oracle, conf_on = _run_and_score(fb_on=True)
+    acc_off_stim, acc_off_oracle, conf_off = _run_and_score(fb_on=False)
 
     return {
         "task_state": list(task_state),
         "window": window,
+        "stim_offset": float(stim_offset),
         "n_trials": int(n_trials),
-        "fb_on":  {"top1_acc": acc_on,  "confidence": conf_on},
-        "fb_off": {"top1_acc": acc_off, "confidence": conf_off},
-        "delta_top1_acc":   acc_on  - acc_off,
+        "fb_on":  {
+            "top1_acc": acc_on_stim,            # legacy alias
+            "top1_acc_stim":   acc_on_stim,
+            "top1_acc_oracle": acc_on_oracle,
+            "confidence": conf_on,
+        },
+        "fb_off": {
+            "top1_acc": acc_off_stim,           # legacy alias
+            "top1_acc_stim":   acc_off_stim,
+            "top1_acc_oracle": acc_off_oracle,
+            "confidence": conf_off,
+        },
+        "delta_top1_acc":   acc_on_stim  - acc_off_stim,     # legacy (stim-label)
+        "delta_top1_acc_oracle": acc_on_oracle - acc_off_oracle,
         "delta_confidence": conf_on - conf_off,
     }
 
@@ -482,14 +540,19 @@ def extended_m7_single_window(
     noise_std: float = 0.3,
     readout_noise_std: float = 0.3,
     seed: int = 42,
+    stim_offset: float = 0.0,
 ) -> dict:
-    """Single task_state × single time-window M7.
+    """Single task_state × single time-window M7, optionally under mismatch.
 
     Returns the same ``delta_{int}`` structure as
-    ``metric_match_vs_near_miss_decoding`` but with the readout slice
-    set by ``window``. Computes trajectories once per (task_state, anchor,
-    delta) pair and reuses them across windows is deferred to the outer
-    caller — this function is the inner per-window decoder.
+    ``metric_match_vs_near_miss_decoding`` but with the readout slice set
+    by ``window``. When ``stim_offset == 0``, both classes are centered on
+    the oracle (``class0 = anchor``, ``class1 = anchor + delta``,
+    ``oracle = anchor``). When ``stim_offset != 0``, both classes are
+    shifted by ``stim_offset`` while the oracle stays at the anchor, so
+    the decoder is asked to discriminate ``delta``-separated stimuli that
+    are jointly off the network's prior — a direct probe of whether
+    bottom-up discrimination survives surprise.
     """
     period = net.cfg.orientation_range
     n_total = n_train + n_test
@@ -502,8 +565,10 @@ def extended_m7_single_window(
         anchor_accs_off: list[float] = []
         per_anchor: dict = {}
         for anchor in _ANCHORS:
-            thetas_match = torch.full((n_half,), anchor, device=device)
-            thetas_miss = torch.full((n_half,), (anchor + delta) % period, device=device)
+            class0_theta = (anchor + stim_offset) % period
+            class1_theta = (anchor + stim_offset + delta) % period
+            thetas_match = torch.full((n_half,), class0_theta, device=device)
+            thetas_miss = torch.full((n_half,), class1_theta, device=device)
             stim = torch.cat([thetas_match, thetas_miss], dim=0)
             oracle_arr = torch.full_like(stim, anchor)
             labels = np.concatenate([
@@ -562,6 +627,7 @@ def extended_m7_single_window(
     results["n_train"] = n_train
     results["n_test"] = n_test
     results["window"] = window
+    results["stim_offset"] = float(stim_offset)
     return results
 
 
@@ -575,18 +641,24 @@ def m10_amplitude_ratio(
     n_trials: int = 80,
     seed: int = 42,
     window: str = "default",
+    stim_offset: float = 0.0,
 ) -> dict:
-    """Compute FB-ON/FB-OFF amplitude ratio at matched (stim==oracle) condition.
+    """Compute FB-ON/FB-OFF amplitude ratio with optional stim mismatch.
 
-    For 8 anchor orientations × (n_trials/8) trials, stim_theta == oracle_theta,
-    run deterministic (no noise) trajectories, take the mean |r_l23| over the
-    specified readout window for both FB-ON and FB-OFF, compute the ratio
-    per anchor, then average.
+    For 8 anchor orientations × (n_trials/8) trials,
+    ``stim_theta = anchor + stim_offset (mod period)``,
+    ``oracle_theta = anchor``. Run deterministic (no noise) trajectories,
+    take the mean |r_l23| over the specified readout window for both FB-ON
+    and FB-OFF, compute the ratio per anchor, then average.
+
+    ``stim_offset == 0`` is bit-identical to the historical matched-stim
+    behavior.
 
     Args:
-        window: one of 'default', 'early', 'late' — passed through to
+        window: one of 'default', 'early', 'mid', 'late' — passed through to
             ``_window_mean``. The default-window value is the one used by the
-            preregistered M10 gate; early/late are diagnostic.
+            preregistered M10 gate; early/mid/late are diagnostic.
+        stim_offset: degrees of stim-vs-oracle mismatch (0 = matched).
     """
     period = net.cfg.orientation_range
     per_trial = max(1, n_trials // len(_ANCHORS))
@@ -595,7 +667,8 @@ def m10_amplitude_ratio(
     on_mags = []
     off_mags = []
     for anchor in _ANCHORS:
-        stim = torch.full((per_trial,), anchor, device=device)
+        stim_theta = (anchor + stim_offset) % period
+        stim = torch.full((per_trial,), stim_theta, device=device)
         oracle = torch.full((per_trial,), anchor, device=device)
         r_on_traj = run_full_trajectory(net, stim, oracle, device,
                                         task_state=task_state)
@@ -610,6 +683,7 @@ def m10_amplitude_ratio(
     return {
         "task_state": list(task_state),
         "window": window,
+        "stim_offset": float(stim_offset),
         "mean_ratio": float(np.mean(anchor_ratios)),
         "per_anchor_ratios": anchor_ratios,
         "mean_on_magnitude": float(np.mean(on_mags)),
@@ -625,14 +699,19 @@ def fwhm_delta(
     device: torch.device,
     task_state: tuple[float, float],
     window: str = "default",
+    stim_offset: float = 0.0,
 ) -> dict:
     """Mean FWHM (over 8 anchors) for FB-ON and FB-OFF in a time window.
 
+    Supports optional stim-vs-oracle mismatch via ``stim_offset``. When
+    non-zero, stim_theta = anchor + stim_offset (mod period),
+    oracle_theta = anchor. The FWHM is computed from the response curve
+    around the actual stimulus peak (``fwhm_from_curve`` locates the
+    population peak itself, so it follows wherever r_l23 actually peaks).
+
     Args:
-        window: one of 'default', 'early', 'late' — which time-slice of the
-            L2/3 trajectory to reduce before fitting the FWHM. The default
-            window is what the verdict table historically reports; early/late
-            are diagnostic for the Phase 1B FWHM paradox follow-up.
+        window: one of 'default', 'early', 'mid', 'late'.
+        stim_offset: degrees of stim-vs-oracle mismatch (0 = matched).
     """
     period = net.cfg.orientation_range
     N = net.cfg.n_orientations
@@ -641,7 +720,8 @@ def fwhm_delta(
     fwhm_on_list = []
     fwhm_off_list = []
     for anchor in _ANCHORS:
-        stim = torch.full((1,), anchor, device=device)
+        stim_theta = (anchor + stim_offset) % period
+        stim = torch.full((1,), stim_theta, device=device)
         oracle = torch.full((1,), anchor, device=device)
         r_on = run_full_trajectory(net, stim, oracle, device, task_state=task_state)
         with feedback_disabled(net):
@@ -655,6 +735,7 @@ def fwhm_delta(
     return {
         "task_state": list(task_state),
         "window": window,
+        "stim_offset": float(stim_offset),
         "fwhm_on": fwhm_on,
         "fwhm_off": fwhm_off,
         "fwhm_delta": fwhm_on - fwhm_off,
@@ -686,6 +767,17 @@ def main() -> None:
     ap.add_argument("--noise-std", type=float, default=0.3)
     ap.add_argument("--readout-noise-std", type=float, default=0.3)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument(
+        "--stim-offsets",
+        default="0",
+        help=(
+            "Comma-separated list of stim-vs-oracle offsets in degrees "
+            "for the mismatch grid. Default '0' runs only the matched "
+            "condition (bit-identical to the pre-mismatch evaluator). "
+            "Pass e.g. '0,15,-15,30,-30,45,-45' for the full expected-vs-"
+            "unexpected grid requested by Task #17."
+        ),
+    )
     args = ap.parse_args()
 
     device = torch.device(args.device)
@@ -821,6 +913,92 @@ def main() -> None:
                     f"conf_on={d['fb_on']['confidence']:.3f}"
                 )
 
+    # --- Mismatch grid: repeat metrics at stim != oracle (Task #17) ------
+    # For the expected-vs-unexpected stimulus contrast. When the default
+    # --stim-offsets "0" is used, this block is a no-op beyond the matched
+    # numbers already computed above (same 0.0 offset is not recomputed).
+    # Pass e.g. "0,15,-15,30,-30,45,-45" for the full grid.
+    offset_list = [float(x.strip()) for x in args.stim_offsets.split(",") if x.strip()]
+    nonzero_offsets = [o for o in offset_list if abs(o) > 1e-9]
+
+    mismatch_grid: dict = {
+        "requested_offsets": offset_list,
+        "nonzero_offsets":    nonzero_offsets,
+        "by_offset": {},
+    }
+
+    for off in nonzero_offsets:
+        print()
+        print(f"=== Mismatch grid: stim_offset = {off:+.1f}° ===", flush=True)
+        off_block: dict = {
+            "m7": {}, "m10": {}, "fwhm": {},
+            "channel_profile": {}, "ei_ratio": {},
+            "decoder_accuracy": {}, "gate_diagnostics": {},
+        }
+        for rname, rstate in regimes.items():
+            # Gate diagnostics is regime-only (no window dimension)
+            off_block["gate_diagnostics"][rname] = gate_diagnostics(
+                net, device, rstate, stim_offset=off,
+            )
+            g = off_block["gate_diagnostics"][rname]
+            if g["use_ei_gate"]:
+                print(
+                    f"  gate {rname:8s} off={off:+.1f}  "
+                    f"g_E={g['g_E_mean']:.4f}  g_I={g['g_I_mean']:.4f}"
+                )
+            off_block["m7"][rname] = {}
+            off_block["m10"][rname] = {}
+            off_block["fwhm"][rname] = {}
+            off_block["channel_profile"][rname] = {}
+            off_block["ei_ratio"][rname] = {}
+            off_block["decoder_accuracy"][rname] = {}
+            for w in windows:
+                print(
+                    f"  {rname:8s} off={off:+.1f}  window={w:7s} "
+                    f"M7+M10+FWHM+chan+E/I+dec ...",
+                    flush=True,
+                )
+                off_block["m7"][rname][w] = extended_m7_single_window(
+                    net, device, rstate, w,
+                    n_train=args.n_train, n_test=args.n_test,
+                    noise_std=args.noise_std,
+                    readout_noise_std=args.readout_noise_std,
+                    seed=args.seed, stim_offset=off,
+                )
+                off_block["m10"][rname][w] = m10_amplitude_ratio(
+                    net, device, rstate, n_trials=80, seed=args.seed,
+                    window=w, stim_offset=off,
+                )
+                off_block["fwhm"][rname][w] = fwhm_delta(
+                    net, device, rstate, window=w, stim_offset=off,
+                )
+                off_block["channel_profile"][rname][w] = channel_profile(
+                    net, device, rstate, window=w, stim_offset=off,
+                )
+                off_block["ei_ratio"][rname][w] = ei_ratio(
+                    net, device, rstate, window=w, stim_offset=off,
+                )
+                if decoder_available:
+                    off_block["decoder_accuracy"][rname][w] = decoder_accuracy(
+                        net, orientation_decoder, device, rstate, w,
+                        n_trials=256, seed=args.seed, stim_offset=off,
+                    )
+        mismatch_grid["by_offset"][f"{off:+.1f}"] = off_block
+
+    # Also store the matched (offset=0) results under the same structure
+    # so downstream consumers can iterate over a uniform grid including 0.
+    if 0.0 in offset_list or any(abs(o) < 1e-9 for o in offset_list):
+        matched_block: dict = {
+            "m7": m7_results,
+            "m10": m10_results,
+            "fwhm": fwhm_results,
+            "channel_profile": channel_results,
+            "ei_ratio": ei_results,
+            "decoder_accuracy": decoder_results if decoder_available else {},
+            "gate_diagnostics": gate_results,
+        }
+        mismatch_grid["by_offset"]["+0.0"] = matched_block
+
     # --- Preregistered gates (Phase 1A) — all must hold for PASS ---
     # Primary metric for gates: default-window δ=10° on baseline/focused/routine.
     m7_focused = m7_results["focused"]["default"]["delta_10"]["delta_acc"]
@@ -877,6 +1055,7 @@ def main() -> None:
         "n_test": args.n_test,
         "noise_std": args.noise_std,
         "readout_noise_std": args.readout_noise_std,
+        "stim_offsets": offset_list,
         "m7_by_regime_by_window": m7_results,
         "m10_amplitude_ratio_by_regime": m10_results,
         "fwhm_by_regime": fwhm_results,
@@ -885,6 +1064,7 @@ def main() -> None:
         "gate_diagnostics_by_regime": gate_results,
         "decoder_accuracy_by_regime": decoder_results,
         "early_minus_late_by_regime": early_minus_late,
+        "mismatch_grid": mismatch_grid,
         "gates": gates,
         "gate_values": {
             "m7_focused": m7_focused,
@@ -1046,6 +1226,163 @@ def main() -> None:
     lines.append(f"  |focused-routine| = {abs(m7_diff):+.4f}  (need > +0.06)  {'PASS' if gates['m7_diff_gt_p06'] else 'FAIL'}")
     lines.append(f"  m10_amp_routine   = {m10_amp_routine:.4f}  (need < 0.9)   {'PASS' if gates['m10_amp_routine_lt_0p9'] else 'FAIL'}")
     lines.append("")
+
+    # --- Mismatch grid text report (Task #17) ---
+    if nonzero_offsets:
+        lines.append("=" * 78)
+        lines.append("MISMATCH GRID — expected vs unexpected stimulus")
+        lines.append("=" * 78)
+        lines.append(
+            "For each offset Δ (stim = oracle + Δ), all metrics are recomputed."
+        )
+        lines.append(
+            "Matched (Δ=0) values are the ones already printed above."
+        )
+        lines.append("")
+
+        # Table 1: alpha_net gate per (regime, offset)
+        if any(
+            mismatch_grid["by_offset"][f"{o:+.1f}"]["gate_diagnostics"][r]["use_ei_gate"]
+            for o in nonzero_offsets for r in regimes
+        ):
+            lines.append("alpha_net gate outputs by (regime, stim_offset):")
+            ghdr = (
+                f"{'regime':10s} {'offset':>8s} "
+                f"{'g_E':>9s} {'g_I':>9s}"
+            )
+            lines.append(ghdr)
+            lines.append("-" * len(ghdr))
+            # include matched Δ=0 row from the cached gate_results
+            for rname in regimes:
+                if gate_results[rname]["use_ei_gate"]:
+                    lines.append(
+                        f"{rname:10s} {0.0:+8.1f} "
+                        f"{gate_results[rname]['g_E_mean']:9.4f} "
+                        f"{gate_results[rname]['g_I_mean']:9.4f}"
+                    )
+                for off in nonzero_offsets:
+                    g = mismatch_grid["by_offset"][f"{off:+.1f}"]["gate_diagnostics"][rname]
+                    if g["use_ei_gate"]:
+                        lines.append(
+                            f"{rname:10s} {off:+8.1f} "
+                            f"{g['g_E_mean']:9.4f} {g['g_I_mean']:9.4f}"
+                        )
+            lines.append("")
+
+        # Table 2: channel profile — peak at ORACLE vs peak at STIM
+        # (default window only; key expected-vs-unexpected contrast)
+        lines.append(
+            "Channel profile — default window — peak at ORACLE vs peak at STIM:"
+        )
+        lines.append(
+            "  peak_oracle = r_l23 at the expected channel"
+        )
+        lines.append(
+            "  peak_stim   = r_l23 at the actual-stimulus channel"
+        )
+        lines.append(
+            "  ratio peak_stim / peak_oracle > 1 → bottom-up wins; < 1 → prior wins"
+        )
+        cp_hdr = (
+            f"{'regime':10s} {'offset':>8s} "
+            f"{'peak_ora':>10s} {'peak_stim':>10s} "
+            f"{'ratio':>8s} {'c_exc_ora':>10s} {'c_exc_stm':>10s}"
+        )
+        lines.append(cp_hdr)
+        lines.append("-" * len(cp_hdr))
+        for rname in regimes:
+            # matched Δ=0 row (from already-computed channel_results)
+            c0 = channel_results[rname]["default"]
+            p0 = c0["peak"]
+            ps0 = c0.get("peak_at_stim", p0)  # = peak when offset=0
+            r0 = (ps0 / p0) if abs(p0) > 1e-8 else float("nan")
+            lines.append(
+                f"{rname:10s} {0.0:+8.1f} "
+                f"{p0:10.4f} {ps0:10.4f} {r0:8.3f} "
+                f"{c0['c_exc_peak']:10.4f} {c0.get('c_exc_at_stim', c0['c_exc_peak']):10.4f}"
+            )
+            for off in nonzero_offsets:
+                c = mismatch_grid["by_offset"][f"{off:+.1f}"]["channel_profile"][rname]["default"]
+                p_ora = c["peak"]
+                p_stm = c["peak_at_stim"]
+                ratio = (p_stm / p_ora) if abs(p_ora) > 1e-8 else float("nan")
+                lines.append(
+                    f"{rname:10s} {off:+8.1f} "
+                    f"{p_ora:10.4f} {p_stm:10.4f} {ratio:8.3f} "
+                    f"{c['c_exc_peak']:10.4f} {c['c_exc_at_stim']:10.4f}"
+                )
+        lines.append("")
+
+        # Table 3: decoder accuracy — s_acc_stim vs s_acc_oracle (default window)
+        if decoder_available:
+            lines.append(
+                "Decoder accuracy — default window — "
+                "s_acc_stim vs s_acc_oracle (FB-ON):"
+            )
+            lines.append(
+                "  s_acc_stim   = decoder predicts the ACTUAL stimulus channel"
+            )
+            lines.append(
+                "  s_acc_oracle = decoder predicts the EXPECTED (oracle) channel"
+            )
+            dhdr = (
+                f"{'regime':10s} {'offset':>8s} "
+                f"{'acc_stim':>10s} {'acc_oracle':>12s} "
+                f"{'conf_on':>9s}"
+            )
+            lines.append(dhdr)
+            lines.append("-" * len(dhdr))
+            for rname in regimes:
+                d0 = decoder_results[rname]["default"]
+                s0 = d0["fb_on"].get("top1_acc_stim", d0["fb_on"]["top1_acc"])
+                o0 = d0["fb_on"].get("top1_acc_oracle", d0["fb_on"]["top1_acc"])
+                c0 = d0["fb_on"]["confidence"]
+                lines.append(
+                    f"{rname:10s} {0.0:+8.1f} "
+                    f"{s0:10.4f} {o0:12.4f} {c0:9.4f}"
+                )
+                for off in nonzero_offsets:
+                    d = mismatch_grid["by_offset"][f"{off:+.1f}"]["decoder_accuracy"][rname]["default"]
+                    s = d["fb_on"]["top1_acc_stim"]
+                    o = d["fb_on"]["top1_acc_oracle"]
+                    c = d["fb_on"]["confidence"]
+                    lines.append(
+                        f"{rname:10s} {off:+8.1f} "
+                        f"{s:10.4f} {o:12.4f} {c:9.4f}"
+                    )
+            lines.append("")
+
+        # Table 4: M7 δ=10° and M10 amp_ratio by (regime, offset) — default window
+        lines.append(
+            "M7 δ=10° and M10 amp_ratio — default window — by (regime, offset):"
+        )
+        mhdr = (
+            f"{'regime':10s} {'offset':>8s} "
+            f"{'m7_δ10':>10s} {'m10_amp':>10s} {'fwhm_Δ':>10s} {'E/I':>9s}"
+        )
+        lines.append(mhdr)
+        lines.append("-" * len(mhdr))
+        for rname in regimes:
+            # matched Δ=0 row
+            lines.append(
+                f"{rname:10s} {0.0:+8.1f} "
+                f"{m7_results[rname]['default']['delta_10']['delta_acc']:+10.4f} "
+                f"{m10_results[rname]['default']['mean_ratio']:10.4f} "
+                f"{fwhm_results[rname]['default']['fwhm_delta']:+10.4f} "
+                f"{ei_results[rname]['default']['EI_ratio']:9.4f}"
+            )
+            for off in nonzero_offsets:
+                block = mismatch_grid["by_offset"][f"{off:+.1f}"]
+                m7v = block["m7"][rname]["default"]["delta_10"]["delta_acc"]
+                m10v = block["m10"][rname]["default"]["mean_ratio"]
+                fwv = block["fwhm"][rname]["default"]["fwhm_delta"]
+                eiv = block["ei_ratio"][rname]["default"]["EI_ratio"]
+                lines.append(
+                    f"{rname:10s} {off:+8.1f} "
+                    f"{m7v:+10.4f} {m10v:10.4f} {fwv:+10.4f} {eiv:9.4f}"
+                )
+        lines.append("")
+
     lines.append(f"VERDICT: {verdict}")
     lines.append("=" * 78)
 
