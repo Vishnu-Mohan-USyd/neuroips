@@ -34,6 +34,7 @@ class V2ContextModule(nn.Module):
         self.hidden_dim = cfg.v2_hidden_dim
         self.pi_max = cfg.pi_max
         self.feedback_mode = cfg.feedback_mode
+        self.use_per_regime_feedback = cfg.use_per_regime_feedback
 
         # Input dimension depends on mode
         if self.v2_input_mode == 'l23':
@@ -51,8 +52,39 @@ class V2ContextModule(nn.Module):
         if self.feedback_mode == 'emergent':
             # Learned prior: full orientation distribution
             self.head_mu = nn.Linear(cfg.v2_hidden_dim, n)  # -> softmax -> mu_pred [B, N]
-            # Direct feedback signal: V2 outputs raw additive feedback to L2/3
-            self.head_feedback = nn.Linear(cfg.v2_hidden_dim, n)  # -> raw [B, N]
+            if self.use_per_regime_feedback:
+                # Task #9 / Fix 2 / Network_both: per-regime feedback heads.
+                # One Linear per task regime (focused vs routine), gated at
+                # forward time by `task_state[:, 0]` (focused) and
+                # `task_state[:, 1]` (routine). The blended feedback signal is
+                #     fb = task_state[:,0:1] * head_feedback_focused(h_v2)
+                #        + task_state[:,1:2] * head_feedback_routine(h_v2)
+                # so when task_state is one-hot exactly one head supplies the
+                # signal; under a mixture (e.g. soft per-presentation routing)
+                # the blend is convex. Motivation, per debugger evidence for
+                # Fix 2: a single shared head must serve two opposing
+                # objectives (focused: amplify sensory; routine: suppress
+                # sensory) — separating the heads removes that conflict and
+                # lets each regime learn its own additive feedback projection.
+                #
+                # We deliberately do NOT also construct `self.head_feedback`
+                # here so that any stale code path referencing the legacy
+                # name fails loudly instead of silently using random init.
+                self.head_feedback_focused = nn.Linear(cfg.v2_hidden_dim, n)  # [B, N] raw
+                self.head_feedback_routine = nn.Linear(cfg.v2_hidden_dim, n)  # [B, N] raw
+                # Init for symmetry: copy focused weights into routine so
+                # both heads start identical. The optimizer then pushes them
+                # apart under the per-presentation Markov task_state routing.
+                with torch.no_grad():
+                    self.head_feedback_routine.weight.copy_(
+                        self.head_feedback_focused.weight
+                    )
+                    self.head_feedback_routine.bias.copy_(
+                        self.head_feedback_focused.bias
+                    )
+            else:
+                # Legacy (Network_mm): single shared feedback head.
+                self.head_feedback = nn.Linear(cfg.v2_hidden_dim, n)  # [B, N] raw
         else:
             # Legacy: full orientation distribution + state logits
             self.head_q = nn.Linear(cfg.v2_hidden_dim, n)        # -> softmax -> q_pred
@@ -103,7 +135,20 @@ class V2ContextModule(nn.Module):
 
         if self.feedback_mode == 'emergent':
             mu_pred = F.softmax(self.head_mu(h_v2), dim=-1)  # [B, N]
-            feedback_signal = self.head_feedback(h_v2)        # [B, N] raw, no activation
+            if self.use_per_regime_feedback:
+                # Per-regime feedback gated by task_state. task_state is [B, 2]
+                # with column 0 = focused, column 1 = routine (one-hot under
+                # the Markov per-presentation routing used by simple_dual,
+                # but the convex-combination form supports soft mixtures).
+                fb_focused = self.head_feedback_focused(h_v2)     # [B, N] raw
+                fb_routine = self.head_feedback_routine(h_v2)     # [B, N] raw
+                feedback_signal = (
+                    task_state[:, 0:1] * fb_focused
+                    + task_state[:, 1:2] * fb_routine
+                )                                                  # [B, N] raw
+            else:
+                # Legacy (Network_mm): single shared head, ignores task_state.
+                feedback_signal = self.head_feedback(h_v2)         # [B, N] raw
             return mu_pred, pi_pred, feedback_signal, h_v2
         else:
             q_pred = F.softmax(self.head_q(h_v2), dim=-1)  # [B, N]

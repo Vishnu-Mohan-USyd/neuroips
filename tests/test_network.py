@@ -129,6 +129,153 @@ class TestV2Context:
             assert h.shape == (B, H)
 
 
+# ── V2 Per-Regime Feedback (Task #9 / Fix 2) ─────────────────────────────
+
+class TestV2PerRegimeFeedback:
+    """Regression tests for the per-regime head_feedback in V2ContextModule.
+
+    When `cfg.use_per_regime_feedback=False` (default, Network_mm), V2 uses
+    a single shared `head_feedback`. When `cfg.use_per_regime_feedback=True`
+    (Network_both, Task #9 / Fix 2), V2 instantiates `head_feedback_focused`
+    and `head_feedback_routine`, gates them by `task_state[:, 0:1]` and
+    `task_state[:, 1:2]`, and the legacy `head_feedback` attribute MUST NOT
+    exist (so any stale code path fails loudly).
+    """
+
+    def test_per_regime_feedback_off_is_legacy(self):
+        """Default: only the legacy `head_feedback` exists; per-regime heads do not."""
+        cfg = ModelConfig(use_per_regime_feedback=False)
+        v2 = V2ContextModule(cfg)
+        assert hasattr(v2, "head_feedback")
+        assert isinstance(v2.head_feedback, torch.nn.Linear)
+        assert not hasattr(v2, "head_feedback_focused")
+        assert not hasattr(v2, "head_feedback_routine")
+
+        # Forward shape check (legacy mode ignores task_state for fb).
+        B, N, H = 4, cfg.n_orientations, cfg.v2_hidden_dim
+        r_l4 = torch.randn(B, N)
+        r_l23 = torch.randn(B, N)
+        cue = torch.zeros(B, N)
+        task_state = torch.zeros(B, 2)
+        h_v2 = torch.zeros(B, H)
+        _, _, fb, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        assert fb.shape == (B, N)
+
+    def test_per_regime_feedback_on_constructs(self):
+        """Fix 2 ON: per-regime heads exist; legacy `head_feedback` does NOT."""
+        cfg = ModelConfig(use_per_regime_feedback=True)
+        v2 = V2ContextModule(cfg)
+        N, H = cfg.n_orientations, cfg.v2_hidden_dim
+
+        assert hasattr(v2, "head_feedback_focused")
+        assert hasattr(v2, "head_feedback_routine")
+        assert isinstance(v2.head_feedback_focused, torch.nn.Linear)
+        assert isinstance(v2.head_feedback_routine, torch.nn.Linear)
+        assert v2.head_feedback_focused.in_features == H
+        assert v2.head_feedback_focused.out_features == N
+        assert v2.head_feedback_routine.in_features == H
+        assert v2.head_feedback_routine.out_features == N
+
+        # Stale-name guard: legacy `head_feedback` MUST NOT exist when
+        # per-regime is on, so any stale code path fails loudly instead of
+        # silently using random uninitialized weights.
+        assert not hasattr(v2, "head_feedback")
+
+        # Init symmetry: focused and routine heads start identical.
+        assert torch.allclose(
+            v2.head_feedback_focused.weight, v2.head_feedback_routine.weight
+        )
+        assert torch.allclose(
+            v2.head_feedback_focused.bias, v2.head_feedback_routine.bias
+        )
+
+    def test_per_regime_feedback_gating(self):
+        """task_state one-hot routes feedback to the matching head exactly."""
+        torch.manual_seed(0)
+        cfg = ModelConfig(use_per_regime_feedback=True)
+        v2 = V2ContextModule(cfg)
+        # Push the heads apart so the gating is observable.
+        with torch.no_grad():
+            v2.head_feedback_routine.weight.add_(torch.randn_like(
+                v2.head_feedback_routine.weight) * 0.5)
+            v2.head_feedback_routine.bias.add_(torch.randn_like(
+                v2.head_feedback_routine.bias) * 0.5)
+
+        B, N, H = 4, cfg.n_orientations, cfg.v2_hidden_dim
+        r_l4 = torch.randn(B, N)
+        r_l23 = torch.randn(B, N)
+        cue = torch.zeros(B, N)
+        h_v2_prev = torch.randn(B, H)
+
+        # Run the GRU once to recover the same h_v2 the v2 forward will use.
+        # Build the same input the v2 forward would build under l23 mode.
+        v2_input = torch.cat([r_l23, cue, torch.zeros(B, 2)], dim=-1)
+        # We can't easily reproduce the GRU output without running v2 once,
+        # so instead drive v2 three times (focused / routine / mixed) with
+        # the SAME h_v2_prev and SAME inputs and check the produced fb
+        # against direct linear application on the produced h_v2.
+
+        # 1. Focused-only: fb must equal head_feedback_focused(h_v2).
+        ts_focused = torch.tensor([[1.0, 0.0]] * B)
+        _, _, fb_focused, h_v2 = v2(r_l4, r_l23, cue, ts_focused, h_v2_prev)
+        expected_focused = v2.head_feedback_focused(h_v2)
+        assert torch.allclose(fb_focused, expected_focused, atol=1e-6)
+
+        # 2. Routine-only: fb must equal head_feedback_routine(h_v2).
+        ts_routine = torch.tensor([[0.0, 1.0]] * B)
+        _, _, fb_routine, h_v2_r = v2(r_l4, r_l23, cue, ts_routine, h_v2_prev)
+        expected_routine = v2.head_feedback_routine(h_v2_r)
+        assert torch.allclose(fb_routine, expected_routine, atol=1e-6)
+
+        # 3. Mixed batch: half focused, half routine — gating is per-sample.
+        ts_mixed = torch.tensor([[1.0, 0.0], [1.0, 0.0],
+                                 [0.0, 1.0], [0.0, 1.0]])
+        _, _, fb_mixed, h_v2_m = v2(r_l4, r_l23, cue, ts_mixed, h_v2_prev)
+        expected_mixed = torch.cat([
+            v2.head_feedback_focused(h_v2_m[:2]),
+            v2.head_feedback_routine(h_v2_m[2:]),
+        ], dim=0)
+        assert torch.allclose(fb_mixed, expected_mixed, atol=1e-6)
+
+        # Sanity: focused and routine outputs must differ (heads have been
+        # pushed apart by the random perturbation above).
+        assert not torch.allclose(fb_focused, fb_routine, atol=1e-3)
+
+    def test_per_regime_feedback_gradient_flow(self):
+        """Both per-regime heads receive non-zero gradients on a mixed batch."""
+        torch.manual_seed(0)
+        cfg = ModelConfig(use_per_regime_feedback=True)
+        v2 = V2ContextModule(cfg)
+        B, N, H = 4, cfg.n_orientations, cfg.v2_hidden_dim
+        r_l4 = torch.randn(B, N)
+        r_l23 = torch.randn(B, N)
+        cue = torch.zeros(B, N)
+        h_v2_prev = torch.randn(B, H)
+
+        # Mixed batch: half focused, half routine — both heads must see grad.
+        ts = torch.tensor([[1.0, 0.0], [1.0, 0.0],
+                           [0.0, 1.0], [0.0, 1.0]])
+        _, _, fb, _ = v2(r_l4, r_l23, cue, ts, h_v2_prev)
+        loss = fb.sum()
+        loss.backward()
+
+        assert v2.head_feedback_focused.weight.grad is not None
+        assert v2.head_feedback_routine.weight.grad is not None
+        assert v2.head_feedback_focused.weight.grad.abs().sum().item() > 0.0
+        assert v2.head_feedback_routine.weight.grad.abs().sum().item() > 0.0
+
+        # And: a focused-only batch must NOT route gradient into the routine
+        # head (and vice versa) — gating is hard.
+        v2.zero_grad()
+        ts_focused_only = torch.tensor([[1.0, 0.0]] * B)
+        _, _, fb_f, _ = v2(r_l4, r_l23, cue, ts_focused_only, h_v2_prev)
+        fb_f.sum().backward()
+        assert v2.head_feedback_focused.weight.grad.abs().sum().item() > 0.0
+        # routine head receives no gradient from this batch
+        if v2.head_feedback_routine.weight.grad is not None:
+            assert v2.head_feedback_routine.weight.grad.abs().sum().item() == 0.0
+
+
 # ── Full Network Tests ────────────────────────────────────────────────────
 
 class TestNetworkForward:

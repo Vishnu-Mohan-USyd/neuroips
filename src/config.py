@@ -62,6 +62,14 @@ class ModelConfig:
     # pre-Phase-2 configs bit-identical.
     use_ei_gate: bool = False
 
+    # Task #9 / Fix 2 / Network_both: per-regime head_feedback in V2ContextModule.
+    # When True, V2 instantiates two independent feedback heads
+    # (`head_feedback_focused`, `head_feedback_routine`) and gates them by
+    # `task_state[:, 0:1]` / `task_state[:, 1:2]`. When False (default),
+    # V2 uses the legacy single shared `head_feedback`. Default False keeps
+    # the Network_mm configuration bit-identical.
+    use_per_regime_feedback: bool = False
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations
