@@ -78,6 +78,18 @@ class ModelConfig:
     # already has its own feedback head). Default False = legacy single V2.
     use_dual_v2: bool = False
 
+    # Rescue 2: precision-gated feedback. When True, V2's learned precision
+    # multiplicatively gates the feedback signal in the forward dynamics:
+    #     precision_gate = pi_pred_raw / pi_max   # [0, 1]
+    #     scaled_fb = feedback_signal * feedback_scale * precision_gate
+    # At max precision (pi_pred_raw = pi_max), feedback is unchanged.
+    # At zero precision, feedback is silenced. The [0, 1] range means
+    # precision can only ATTENUATE feedback, never amplify it.
+    # Requires lambda_state > 0 so the prior KL loss trains V2 to produce
+    # meaningful precision values. Default False = legacy (feedback_signal
+    # scaled only by feedback_scale, precision unused in dynamics).
+    use_precision_gating: bool = False
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations

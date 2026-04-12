@@ -814,3 +814,79 @@ class TestSimpleFeedback:
         off_peak_mass_default = bumps.sum(dim=-1) - bumps.max(dim=-1).values
         off_peak_mass_narrow = bumps_narrow.sum(dim=-1) - bumps_narrow.max(dim=-1).values
         assert (off_peak_mass_narrow < off_peak_mass_default).all()
+
+
+class TestPrecisionGating:
+    """Tests for Rescue 2: use_precision_gating config flag.
+
+    When True, pi_pred multiplicatively gates the feedback signal:
+        precision_gate = pi_pred_raw / pi_max  (range [0, 1])
+        scaled_fb = feedback_signal * feedback_scale * precision_gate
+    so that V2's learned precision directly controls feedback strength.
+    """
+
+    def test_precision_gating_scales_feedback(self):
+        """Zero precision zeros feedback; max precision leaves it unchanged."""
+        cfg = ModelConfig(use_precision_gating=True)
+        net = LaminarV1V2Network(cfg)
+        net.feedback_scale.fill_(1.0)
+
+        B, N = 2, cfg.n_orientations
+        stim = torch.randn(B, N).abs()
+        cue = torch.zeros(B, N)
+        task_state = torch.tensor([[1.0, 0.0]] * B)
+        state0 = initial_state(B, N, cfg.v2_hidden_dim)
+
+        # Set head_pi bias very negative → softplus ≈ 0 → pi_pred_raw ≈ 0
+        with torch.no_grad():
+            net.v2.head_pi.bias.fill_(-10.0)
+            net.v2.head_pi.weight.fill_(0.0)
+        state_lo, aux_lo = net.step(stim, cue, task_state, state0)
+        assert aux_lo.center_exc.abs().max() < 1e-4, (
+            f"Zero precision should zero out feedback, got max={aux_lo.center_exc.abs().max():.6f}"
+        )
+        assert aux_lo.som_drive_fb.abs().max() < 1e-4, (
+            f"Zero precision should zero out SOM drive, got max={aux_lo.som_drive_fb.abs().max():.6f}"
+        )
+
+        # Set head_pi bias very positive → softplus → clamp at pi_max → gate=1.0
+        with torch.no_grad():
+            net.v2.head_pi.bias.fill_(10.0)
+        state_hi, aux_hi = net.step(stim, cue, task_state, state0)
+        # At max precision, gate=1.0, so scaled_fb = feedback_signal * feedback_scale.
+        # Compare with legacy (gate-off) to confirm they match.
+        cfg_legacy = ModelConfig(use_precision_gating=False)
+        net_legacy = LaminarV1V2Network(cfg_legacy)
+        net_legacy.feedback_scale.fill_(1.0)
+        # Copy all weights from net → net_legacy
+        net_legacy.load_state_dict(net.state_dict(), strict=False)
+        with torch.no_grad():
+            net_legacy.v2.head_pi.bias.fill_(10.0)
+            net_legacy.v2.head_pi.weight.fill_(0.0)
+        _, aux_leg = net_legacy.step(stim, cue, task_state, state0)
+        # center_exc should be approximately equal (gate≈1.0)
+        assert torch.allclose(aux_hi.center_exc, aux_leg.center_exc, atol=1e-4), (
+            "Max precision should match legacy feedback"
+        )
+
+    def test_precision_gating_off_is_legacy(self):
+        """With use_precision_gating=False, forward pass completes (legacy)."""
+        cfg = ModelConfig(use_precision_gating=False)
+        net = LaminarV1V2Network(cfg)
+        net.feedback_scale.fill_(1.0)
+
+        B, N = 2, cfg.n_orientations
+        stim = torch.randn(B, N).abs()
+        cue = torch.zeros(B, N)
+        task_state = torch.tensor([[1.0, 0.0]] * B)
+        state0 = initial_state(B, N, cfg.v2_hidden_dim)
+
+        # With oracle pi=0 and legacy mode, feedback should NOT be zeroed
+        net.oracle_mode = True
+        net.oracle_q_pred = torch.ones(B, N) / N
+        net.oracle_pi_pred = torch.zeros(B, 1)
+        state_legacy, aux_legacy = net.step(stim, cue, task_state, state0)
+        net.oracle_mode = False
+
+        # Legacy mode doesn't use pi in feedback path — just verify it runs
+        assert aux_legacy.center_exc.shape == (B, N)

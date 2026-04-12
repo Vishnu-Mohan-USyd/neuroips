@@ -2081,3 +2081,65 @@ class TestExpectedSuppressLoss:
             mismatch_labels=mismatch_labels, task_state=task_state,
         )
         assert ld["expected_suppress"] == 0.0
+
+
+class TestExpectedSuppressFeatureSpecific:
+    """Tests for Rescue 1: expected_suppress is now feature-specific.
+
+    The expected_suppress_loss now uses dot(r_l23, q_pred) instead of
+    global |r_l23|. Loss is HIGHER when r_l23 aligns with q_pred (channel 0)
+    than when r_l23 is orthogonal (channel 18). Same gating: routine-expected only.
+    """
+
+    def test_expected_suppress_is_feature_specific(self):
+        """Loss higher when r_l23 aligns with q_pred than when orthogonal."""
+        from src.training.losses import CompositeLoss
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0, lambda_energy=0.0, lambda_homeo=0.0,
+            lambda_mismatch=0.0, lambda_expected_suppress=1.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 4, 10
+        true_theta = torch.rand(B, W) * 180.0
+        true_next = torch.rand(B, W) * 180.0
+        outputs = {
+            "r_l23": torch.randn(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+        mismatch_labels = torch.zeros(B, W)  # all expected
+        task_state = torch.zeros(B, W, 2)
+        task_state[:, :, 1] = 1.0  # all routine
+
+        # q_pred peaked at channel 0
+        q_pred_w = torch.zeros(B, W, N)
+        q_pred_w[:, :, 0] = 1.0  # all mass at channel 0
+
+        # Case A: r_l23 ALIGNED with q_pred (active at channel 0)
+        r_l23_aligned = torch.zeros(B, W, N)
+        r_l23_aligned[:, :, 0] = 0.5
+        _, ld_aligned = loss_fn(
+            outputs, true_theta, true_next, r_l23_aligned, q_pred_w,
+            mismatch_labels=mismatch_labels, task_state=task_state,
+        )
+
+        # Case B: r_l23 ORTHOGONAL to q_pred (active at channel 18)
+        r_l23_ortho = torch.zeros(B, W, N)
+        r_l23_ortho[:, :, 18] = 0.5
+        _, ld_ortho = loss_fn(
+            outputs, true_theta, true_next, r_l23_ortho, q_pred_w,
+            mismatch_labels=mismatch_labels, task_state=task_state,
+        )
+
+        assert ld_aligned["expected_suppress"] > ld_ortho["expected_suppress"], (
+            f"Aligned loss ({ld_aligned['expected_suppress']:.4f}) should be > "
+            f"orthogonal loss ({ld_ortho['expected_suppress']:.4f})"
+        )
+        # Orthogonal case should be essentially zero
+        assert abs(ld_ortho["expected_suppress"]) < 1e-6, (
+            f"Orthogonal loss should be ~0, got {ld_ortho['expected_suppress']}"
+        )

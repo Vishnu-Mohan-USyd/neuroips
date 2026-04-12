@@ -43,7 +43,9 @@ class CompositeLoss(nn.Module):
         self.lambda_local_disc = cfg.lambda_local_disc  # 0.0 (disabled by default)
         self.lambda_pred_suppress = cfg.lambda_pred_suppress  # 0.0 (disabled by default)
         self.lambda_fb_energy = cfg.lambda_fb_energy          # 0.0 (disabled by default)
-        # Fix 3: expected-suppress loss. 0.0 = disabled → legacy.
+        # Fix 3 / Rescue 1: expected-suppress loss. 0.0 = disabled → legacy.
+        # Rescue 1 changed the body from |r_l23| (global) to dot(r_l23, q_pred)
+        # (feature-specific) — same lambda, same gating.
         self.lambda_expected_suppress = cfg.lambda_expected_suppress
         # Phase 2.4: routine E/I symmetry-break loss. 0.0 = disabled → legacy.
         self.lambda_routine_shape = cfg.lambda_routine_shape
@@ -502,28 +504,33 @@ class CompositeLoss(nn.Module):
     def expected_suppress_loss(
         self,
         r_l23_windows: Tensor,
+        q_pred_windows: Tensor,
         mismatch_labels: Tensor,
         task_state_bw: Tensor,
     ) -> Tensor:
-        """Penalize |r_l23| on routine presentations where prediction was correct.
+        """Penalize L2/3 activity aligned with V2's prediction on routine-expected.
 
-        Only fires on routine-expected presentations: task_state[:,1]=1 AND
-        mismatch_label=0 (stimulus matched prediction). On routine-unexpected
-        and all focused presentations: zero penalty.
+        Rescue 1 change: replaced global |r_l23| with feature-specific
+        dot(r_l23, q_pred). This penalizes the component of L2/3 activity
+        that ALIGNS with V2's predicted orientation distribution, leaving
+        deviant (unpredicted) features untouched — the predictive coding
+        objective. Only fires on routine-expected presentations:
+        task_state[:,1]=1 AND mismatch_label=0 (stimulus matched prediction).
 
         Args:
             r_l23_windows: [B, W, N] L2/3 at readout windows.
+            q_pred_windows: [B, W, N] V2 predicted orientation prior (softmax).
             mismatch_labels: [B, W] binary (1=mismatch, 0=expected).
             task_state_bw: [B, W, 2] per-presentation task state.
 
         Returns:
-            Scalar loss: mean |r_l23| over expected-routine presentations.
+            Scalar loss: mean dot(r_l23, q_pred) over expected-routine.
         """
         # expected_routine_mask: [B, W], nonzero only where expected AND routine
         expected_routine_mask = (1.0 - mismatch_labels) * task_state_bw[..., 1]
-        # Per-presentation energy: mean |r_l23| across orientation channels
-        r_l23_energy = r_l23_windows.abs().mean(dim=-1)  # [B, W]
-        return (r_l23_energy * expected_routine_mask).sum() / expected_routine_mask.sum().clamp(min=1)
+        # Per-presentation alignment: dot product across orientation channels
+        alignment = (r_l23_windows * q_pred_windows).sum(dim=-1)  # [B, W]
+        return (alignment * expected_routine_mask).sum() / expected_routine_mask.sum().clamp(min=1)
 
     def detection_confirmation_loss(
         self, r_l23_windows: Tensor, is_expected: Tensor
@@ -873,9 +880,10 @@ class CompositeLoss(nn.Module):
         else:
             loss_dict["fb_energy"] = 0.0
 
-        # Fix 3: expected-suppress loss — penalize |r_l23| on routine-expected
-        # presentations (mismatch_label=0 AND task_state[:,1]=1). Requires
-        # both mismatch_labels and task_state to be provided.
+        # Rescue 1 (was Fix 3): expected-suppress loss — dot(r_l23, q_pred) on
+        # routine-expected presentations (mismatch_label=0 AND task_state[:,1]=1).
+        # Feature-specific: penalizes L2/3 activity aligned with V2's predicted
+        # orientation, leaving deviant features untouched.
         if self.lambda_expected_suppress > 0 and mismatch_labels is not None and task_state is not None:
             B_es, W_es, N_es = r_l23_windows.shape
             if task_state.dim() == 2:
@@ -883,7 +891,7 @@ class CompositeLoss(nn.Module):
             else:
                 ts_bw_es = task_state
             l_expected_suppress = self.expected_suppress_loss(
-                r_l23_windows, mismatch_labels, ts_bw_es
+                r_l23_windows, q_pred_windows, mismatch_labels, ts_bw_es
             )
             total = total + self.lambda_expected_suppress * l_expected_suppress
             loss_dict["expected_suppress"] = l_expected_suppress.item()

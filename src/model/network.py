@@ -191,7 +191,18 @@ class LaminarV1V2Network(nn.Module):
 
         # 4. V2 direct feedback with E/I split (Dale's law):
         # positive → excitation to L2/3, negative → drives SOM interneurons
-        scaled_fb = feedback_signal * self.feedback_scale
+        if self.cfg.use_precision_gating:
+            # Rescue 2: precision multiplicatively gates feedback strength.
+            # precision_gate = pi_pred_raw / pi_max ∈ [0, 1].
+            # At max precision (pi_pred_raw = pi_max), gate = 1.0 → feedback
+            # unchanged. At zero precision, gate = 0 → feedback silenced.
+            # The [0, 1] range means precision can only ATTENUATE, never
+            # amplify. During burn-in (feedback_scale≈0), scaled_fb≈0
+            # regardless, preserving the curriculum.
+            precision_gate = pi_pred_raw / self.cfg.pi_max  # [B, 1], [0, 1]
+            scaled_fb = feedback_signal * self.feedback_scale * precision_gate
+        else:
+            scaled_fb = feedback_signal * self.feedback_scale
         if self.use_ei_gate:
             # Phase 2 causal gate: multiplicative per-sample E/I scaling.
             # Gate input uses pi_pred_raw (not pi_pred_eff) so the gate can
