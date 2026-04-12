@@ -63,6 +63,10 @@ def unfreeze_stage2(net: LaminarV1V2Network) -> None:
     """
     for p in net.v2.parameters():
         p.requires_grad_(True)
+    # Fix 1: dual V2 — also unfreeze v2_routine (v2 alias points to v2_focused)
+    if hasattr(net, "v2_routine"):
+        for p in net.v2_routine.parameters():
+            p.requires_grad_(True)
     # W_rec stays trainable in Stage 2
     net.l23.sigma_rec_raw.requires_grad_(True)
     net.l23.gain_rec_raw.requires_grad_(True)
@@ -84,8 +88,12 @@ def create_stage2_optimizer(
     Group 2: W_rec (lr_feedback)
     Group 3: Decoder (stage1_lr)
     """
+    # Fix 1: dual V2 — include v2_routine params alongside v2 (=v2_focused).
+    v2_params = list(net.v2.parameters())
+    if hasattr(net, "v2_routine"):
+        v2_params += list(net.v2_routine.parameters())
     param_groups = [
-        {"params": list(net.v2.parameters()), "lr": cfg.stage2_lr_v2},
+        {"params": v2_params, "lr": cfg.stage2_lr_v2},
         {
             "params": [
                 net.l23.sigma_rec_raw,

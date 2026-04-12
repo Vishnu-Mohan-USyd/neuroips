@@ -43,6 +43,8 @@ class CompositeLoss(nn.Module):
         self.lambda_local_disc = cfg.lambda_local_disc  # 0.0 (disabled by default)
         self.lambda_pred_suppress = cfg.lambda_pred_suppress  # 0.0 (disabled by default)
         self.lambda_fb_energy = cfg.lambda_fb_energy          # 0.0 (disabled by default)
+        # Fix 3: expected-suppress loss. 0.0 = disabled → legacy.
+        self.lambda_expected_suppress = cfg.lambda_expected_suppress
         # Phase 2.4: routine E/I symmetry-break loss. 0.0 = disabled → legacy.
         self.lambda_routine_shape = cfg.lambda_routine_shape
         self.l2_energy = cfg.l2_energy                        # False (L1 by default)
@@ -497,6 +499,32 @@ class CompositeLoss(nn.Module):
         logits = self.error_decoder(r_l23_windows.reshape(B * W, N))  # [B*W, 12]
         return F.cross_entropy(logits, error_channel.reshape(B * W))
 
+    def expected_suppress_loss(
+        self,
+        r_l23_windows: Tensor,
+        mismatch_labels: Tensor,
+        task_state_bw: Tensor,
+    ) -> Tensor:
+        """Penalize |r_l23| on routine presentations where prediction was correct.
+
+        Only fires on routine-expected presentations: task_state[:,1]=1 AND
+        mismatch_label=0 (stimulus matched prediction). On routine-unexpected
+        and all focused presentations: zero penalty.
+
+        Args:
+            r_l23_windows: [B, W, N] L2/3 at readout windows.
+            mismatch_labels: [B, W] binary (1=mismatch, 0=expected).
+            task_state_bw: [B, W, 2] per-presentation task state.
+
+        Returns:
+            Scalar loss: mean |r_l23| over expected-routine presentations.
+        """
+        # expected_routine_mask: [B, W], nonzero only where expected AND routine
+        expected_routine_mask = (1.0 - mismatch_labels) * task_state_bw[..., 1]
+        # Per-presentation energy: mean |r_l23| across orientation channels
+        r_l23_energy = r_l23_windows.abs().mean(dim=-1)  # [B, W]
+        return (r_l23_energy * expected_routine_mask).sum() / expected_routine_mask.sum().clamp(min=1)
+
     def detection_confirmation_loss(
         self, r_l23_windows: Tensor, is_expected: Tensor
     ) -> Tensor:
@@ -844,6 +872,23 @@ class CompositeLoss(nn.Module):
             loss_dict["fb_energy"] = l_fb_energy.item()
         else:
             loss_dict["fb_energy"] = 0.0
+
+        # Fix 3: expected-suppress loss — penalize |r_l23| on routine-expected
+        # presentations (mismatch_label=0 AND task_state[:,1]=1). Requires
+        # both mismatch_labels and task_state to be provided.
+        if self.lambda_expected_suppress > 0 and mismatch_labels is not None and task_state is not None:
+            B_es, W_es, N_es = r_l23_windows.shape
+            if task_state.dim() == 2:
+                ts_bw_es = task_state.unsqueeze(1).expand(B_es, W_es, 2)
+            else:
+                ts_bw_es = task_state
+            l_expected_suppress = self.expected_suppress_loss(
+                r_l23_windows, mismatch_labels, ts_bw_es
+            )
+            total = total + self.lambda_expected_suppress * l_expected_suppress
+            loss_dict["expected_suppress"] = l_expected_suppress.item()
+        else:
+            loss_dict["expected_suppress"] = 0.0
 
         # Phase 2.4: routine E/I symmetry-break loss.
         #

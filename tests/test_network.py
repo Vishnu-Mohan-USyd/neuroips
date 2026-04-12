@@ -276,6 +276,98 @@ class TestV2PerRegimeFeedback:
             assert v2.head_feedback_routine.weight.grad.abs().sum().item() == 0.0
 
 
+# ── Fix 1: Dual V2 Architecture ──────────────────────────────────────────
+
+class TestDualV2:
+    """Tests for Fix 1: dual V2 GRU architecture (use_dual_v2=True)."""
+
+    def test_dual_v2_constructs_two_modules(self):
+        """use_dual_v2=True creates v2_focused and v2_routine."""
+        cfg = ModelConfig(use_dual_v2=True)
+        net = LaminarV1V2Network(cfg)
+        assert hasattr(net, "v2_focused")
+        assert hasattr(net, "v2_routine")
+        # Legacy v2 alias points to v2_focused
+        assert net.v2 is net.v2_focused
+        # Both are V2ContextModule with independent params
+        foc_ids = {id(p) for p in net.v2_focused.parameters()}
+        rou_ids = {id(p) for p in net.v2_routine.parameters()}
+        assert foc_ids.isdisjoint(rou_ids), "v2_focused and v2_routine share params"
+
+    def test_dual_v2_off_is_legacy(self):
+        """use_dual_v2=False produces single v2, no v2_focused/v2_routine."""
+        cfg = ModelConfig(use_dual_v2=False)
+        net = LaminarV1V2Network(cfg)
+        assert hasattr(net, "v2")
+        assert not hasattr(net, "v2_focused")
+        assert not hasattr(net, "v2_routine")
+
+    def test_dual_v2_forward_runs(self):
+        """Forward pass with dual V2 completes without error."""
+        cfg = ModelConfig(use_dual_v2=True)
+        net = LaminarV1V2Network(cfg)
+        B, T, N = 4, 20, cfg.n_orientations
+        stim = torch.randn(B, T, N).abs()
+        task = torch.zeros(B, T, 2)
+        task[:2, :, 0] = 1.0  # first 2 samples focused
+        task[2:, :, 1] = 1.0  # last 2 samples routine
+        packed = net.pack_inputs(stim, task_state_seq=task)
+        r_l23_all, final, aux = net(packed)
+        assert r_l23_all.shape == (B, T, N)
+        # h_v2 should be [B, 2*H] for dual V2
+        assert final.h_v2.shape == (B, 2 * cfg.v2_hidden_dim)
+
+    def test_dual_v2_routing_by_task_state(self):
+        """Focused-only and routine-only batches use different V2 modules."""
+        cfg = ModelConfig(use_dual_v2=True)
+        net = LaminarV1V2Network(cfg)
+        B, N = 4, cfg.n_orientations
+        # Perturb v2_routine to differ from v2_focused
+        with torch.no_grad():
+            for p in net.v2_routine.parameters():
+                p.add_(torch.randn_like(p) * 0.5)
+        stim = torch.randn(B, N).abs()
+        cue = torch.zeros(B, N)
+        H = cfg.v2_hidden_dim
+        h_v2_init = torch.zeros(B, 2 * H)
+        from src.state import NetworkState
+        state = NetworkState(
+            r_l4=torch.zeros(B, N), r_l23=torch.zeros(B, N),
+            r_pv=torch.zeros(B, 1), r_som=torch.zeros(B, N),
+            r_vip=torch.zeros(B, N), adaptation=torch.zeros(B, N),
+            h_v2=h_v2_init, deep_template=torch.zeros(B, N),
+        )
+        # Focused-only
+        ts_foc = torch.tensor([[1.0, 0.0]]).expand(B, 2)
+        _, aux_foc = net.step(stim, cue, ts_foc, state)
+        # Routine-only
+        ts_rou = torch.tensor([[0.0, 1.0]]).expand(B, 2)
+        _, aux_rou = net.step(stim, cue, ts_rou, state)
+        # Outputs must differ since modules have different weights
+        assert not torch.allclose(aux_foc.q_pred, aux_rou.q_pred), \
+            "Focused and routine V2 outputs should differ after perturbation"
+
+    def test_dual_v2_gradient_independence(self):
+        """Gradient flows to the correct V2 module based on task_state."""
+        cfg = ModelConfig(use_dual_v2=True)
+        net = LaminarV1V2Network(cfg)
+        B, T, N = 4, 8, cfg.n_orientations
+        # All-focused batch
+        stim = torch.randn(B, T, N).abs()
+        task = torch.zeros(B, T, 2)
+        task[:, :, 0] = 1.0  # all focused
+        packed = net.pack_inputs(stim, task_state_seq=task)
+        r_l23, _, _ = net(packed)
+        loss = r_l23.sum()
+        loss.backward()
+        # v2_focused should have gradients
+        foc_grad = sum(p.grad.abs().sum().item() for p in net.v2_focused.parameters() if p.grad is not None)
+        # v2_routine should have ZERO gradients (not used)
+        rou_grad = sum(p.grad.abs().sum().item() for p in net.v2_routine.parameters() if p.grad is not None)
+        assert foc_grad > 0, "v2_focused should receive gradient for focused batch"
+        assert rou_grad == 0.0, "v2_routine should receive zero gradient for focused batch"
+
+
 # ── Full Network Tests ────────────────────────────────────────────────────
 
 class TestNetworkForward:

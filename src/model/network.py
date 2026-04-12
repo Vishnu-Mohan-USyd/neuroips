@@ -35,7 +35,24 @@ class LaminarV1V2Network(nn.Module):
         self.pv = PVPool(cfg)
         self.l23 = V1L23Ring(cfg)
         self.som = SOMRing(cfg)
-        self.v2 = V2ContextModule(cfg)
+
+        # Fix 1: dual V2 architecture — two independent V2 modules.
+        self.use_dual_v2 = getattr(cfg, "use_dual_v2", False)
+        if self.use_dual_v2:
+            # Each regime gets its own V2 with independent GRU, head_mu,
+            # head_pi, head_feedback. use_per_regime_feedback is irrelevant
+            # since each V2 has exactly one head_feedback.
+            cfg_single = ModelConfig(**{
+                k: getattr(cfg, k) for k in cfg.__dataclass_fields__
+                if k not in ('use_dual_v2', 'use_per_regime_feedback')
+            }, use_dual_v2=False, use_per_regime_feedback=False)
+            self.v2_focused = V2ContextModule(cfg_single)
+            self.v2_routine = V2ContextModule(cfg_single)
+            # Legacy self.v2 alias for code that references it (e.g. freeze_v2
+            # in trainer.py). Points to v2_focused for parameter freezing.
+            self.v2 = self.v2_focused
+        else:
+            self.v2 = V2ContextModule(cfg)
 
         # Feedback warmup scale: registered as buffer so torch.compile can see it
         self.register_buffer("feedback_scale", torch.tensor(1.0))
@@ -133,6 +150,34 @@ class LaminarV1V2Network(nn.Module):
             _, _, feedback_signal, h_v2 = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
             )
+        elif self.use_dual_v2:
+            # Fix 1: run both V2 modules, blend outputs by task_state.
+            # Each V2 gets its own h_v2 hidden state (packed in the first/second
+            # half of state.h_v2, which is [B, 2*H] for dual V2).
+            H = self.cfg.v2_hidden_dim
+            h_v2_foc_prev = state.h_v2[:, :H]
+            h_v2_rou_prev = state.h_v2[:, H:]
+            mu_foc, pi_foc, fb_foc, h_v2_foc = self.v2_focused(
+                r_l4, state.r_l23, cue, task_state, h_v2_foc_prev
+            )
+            mu_rou, pi_rou, fb_rou, h_v2_rou = self.v2_routine(
+                r_l4, state.r_l23, cue, task_state, h_v2_rou_prev
+            )
+            # Blend by task_state: focused samples → v2_focused, routine → v2_routine.
+            # For baseline (0,0), both contribute zero → falls back to zeros.
+            w_foc = task_state[:, 0:1]  # [B, 1]
+            w_rou = task_state[:, 1:2]  # [B, 1]
+            # Normalise weights so pure focused/routine select exactly one module.
+            # Baseline (0,0): both weights are 0 → use focused as default.
+            w_sum = (w_foc + w_rou).clamp(min=1e-8)
+            w_foc_n = w_foc / w_sum
+            w_rou_n = w_rou / w_sum
+            q_pred = w_foc_n * mu_foc + w_rou_n * mu_rou
+            pi_pred_raw = w_foc_n * pi_foc + w_rou_n * pi_rou
+            feedback_signal = w_foc_n * fb_foc + w_rou_n * fb_rou
+            h_v2 = torch.cat([h_v2_foc, h_v2_rou], dim=-1)  # [B, 2*H]
+            p_cw = torch.full((B, 1), 0.5, device=device)
+            state_logits = torch.zeros(B, 3, device=device)
         else:
             mu_pred, pi_pred_raw, feedback_signal, h_v2 = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
@@ -258,8 +303,10 @@ class LaminarV1V2Network(nn.Module):
             task_state_seq = packed_input[:, :, 2*N:]
 
         if state is None:
+            # Fix 1: dual V2 packs both hidden states into h_v2 → [B, 2*H]
+            h_dim = self.cfg.v2_hidden_dim * 2 if self.use_dual_v2 else self.cfg.v2_hidden_dim
             state = initial_state(
-                B, self.cfg.n_orientations, self.cfg.v2_hidden_dim, device=device
+                B, self.cfg.n_orientations, h_dim, device=device
             )
 
         # Preallocate output tensors (avoids list appends + torch.stack overhead)

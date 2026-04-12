@@ -199,7 +199,7 @@ class TestCompositeLoss:
 
         assert isinstance(total_loss, torch.Tensor)
         assert total_loss.shape == ()
-        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy", "routine_shape"}
+        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy", "expected_suppress", "routine_shape"}
         assert set(loss_dict.keys()) == expected_keys
         for k, v in loss_dict.items():
             assert isinstance(v, float), f"{k} should be float, got {type(v)}"
@@ -1946,3 +1946,138 @@ class TestSimpleDualRegimeGating:
         assert abs(ld["energy_exc"] - r_l23_mag) < 1e-6, (
             f"energy_exc={ld['energy_exc']:.6f}, expected {r_l23_mag}"
         )
+
+
+# ── Fix 3: Expected-Suppress Loss Tests ─────────────────────────────────
+
+class TestExpectedSuppressLoss:
+    """Tests for Fix 3: lambda_expected_suppress loss term.
+
+    Penalizes |r_l23| ONLY on routine presentations where prediction was
+    correct (mismatch_label=0 AND task_state[:,1]=1).
+    """
+
+    def test_expected_suppress_only_on_routine_expected(self):
+        """Loss fires only on routine-expected presentations."""
+        from src.training.losses import CompositeLoss
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0, lambda_energy=0.0, lambda_homeo=0.0,
+            lambda_mismatch=0.0, lambda_expected_suppress=1.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 4, 10
+        r_l23_w = torch.randn(B, W, N).abs() * 0.5
+        q_pred_w = torch.randn(B, W, N).softmax(dim=-1)
+        true_theta = torch.rand(B, W) * 180.0
+        true_next = torch.rand(B, W) * 180.0
+        outputs = {
+            "r_l23": torch.randn(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+        # All expected (mismatch=0), half focused, half routine
+        mismatch_labels = torch.zeros(B, W)
+        task_state = torch.zeros(B, W, 2)
+        task_state[:, :W // 2, 0] = 1.0   # focused
+        task_state[:, W // 2:, 1] = 1.0    # routine
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            mismatch_labels=mismatch_labels, task_state=task_state,
+        )
+        assert ld["expected_suppress"] > 0, "Loss should fire on routine-expected"
+
+    def test_expected_suppress_zero_on_unexpected(self):
+        """Loss is zero when all presentations are unexpected (mismatch=1)."""
+        from src.training.losses import CompositeLoss
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0, lambda_energy=0.0, lambda_homeo=0.0,
+            lambda_mismatch=0.0, lambda_expected_suppress=1.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 4, 10
+        r_l23_w = torch.randn(B, W, N).abs() * 0.5
+        q_pred_w = torch.randn(B, W, N).softmax(dim=-1)
+        true_theta = torch.rand(B, W) * 180.0
+        true_next = torch.rand(B, W) * 180.0
+        outputs = {
+            "r_l23": torch.randn(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+        # All unexpected (mismatch=1), all routine
+        mismatch_labels = torch.ones(B, W)
+        task_state = torch.zeros(B, W, 2)
+        task_state[:, :, 1] = 1.0  # all routine
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            mismatch_labels=mismatch_labels, task_state=task_state,
+        )
+        assert ld["expected_suppress"] == 0.0, "Loss should be zero on all-unexpected"
+
+    def test_expected_suppress_zero_on_focused(self):
+        """Loss is zero when all presentations are focused (regardless of mismatch)."""
+        from src.training.losses import CompositeLoss
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0, lambda_energy=0.0, lambda_homeo=0.0,
+            lambda_mismatch=0.0, lambda_expected_suppress=1.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 4, 10
+        r_l23_w = torch.randn(B, W, N).abs() * 0.5
+        q_pred_w = torch.randn(B, W, N).softmax(dim=-1)
+        true_theta = torch.rand(B, W) * 180.0
+        true_next = torch.rand(B, W) * 180.0
+        outputs = {
+            "r_l23": torch.randn(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+        # All expected (mismatch=0), all focused
+        mismatch_labels = torch.zeros(B, W)
+        task_state = torch.zeros(B, W, 2)
+        task_state[:, :, 0] = 1.0  # all focused
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            mismatch_labels=mismatch_labels, task_state=task_state,
+        )
+        assert ld["expected_suppress"] == 0.0, "Loss should be zero on all-focused"
+
+    def test_expected_suppress_disabled_when_zero(self):
+        """lambda_expected_suppress=0 produces expected_suppress=0 in loss_dict."""
+        from src.training.losses import CompositeLoss
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(lambda_expected_suppress=0.0)
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 4, 10
+        r_l23_w = torch.randn(B, W, N).abs()
+        q_pred_w = torch.randn(B, W, N).softmax(dim=-1)
+        true_theta = torch.rand(B, W) * 180.0
+        true_next = torch.rand(B, W) * 180.0
+        outputs = {
+            "r_l23": torch.randn(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+        mismatch_labels = torch.zeros(B, W)
+        task_state = torch.zeros(B, W, 2)
+        task_state[:, :, 1] = 1.0
+        _, ld = loss_fn(
+            outputs, true_theta, true_next, r_l23_w, q_pred_w,
+            mismatch_labels=mismatch_labels, task_state=task_state,
+        )
+        assert ld["expected_suppress"] == 0.0

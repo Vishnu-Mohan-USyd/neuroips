@@ -152,6 +152,10 @@ def run_stage2(
     if train_cfg.freeze_v2:
         for p in net.v2.parameters():
             p.requires_grad_(False)
+        # Fix 1: also freeze v2_routine if present
+        if hasattr(net, "v2_routine"):
+            for p in net.v2_routine.parameters():
+                p.requires_grad_(False)
         logger.info("V2 frozen (oracle/freeze mode): V2 parameters excluded from training")
 
     # Freeze orientation decoder for mechanistic analysis (must be before optimizer creation)
@@ -255,6 +259,22 @@ def run_stage2(
         true_thetas = true_thetas.to(dev, non_blocking=True)
         true_next_thetas = true_next_thetas.to(dev, non_blocking=True)
         true_states = true_states.to(dev, non_blocking=True)
+
+        # Fix 2: gradient isolation — override task_state so that each
+        # isolation_period block sees only one regime. First half = focused
+        # (1,0), second half = routine (0,1). HMM stimulus statistics are
+        # unchanged; only the task_state routing is overridden.
+        if train_cfg.gradient_isolation:
+            period = train_cfg.isolation_period
+            phase = (step // period) % 2  # 0 = focused, 1 = routine
+            if phase == 0:
+                override_ts = torch.tensor([1.0, 0.0])
+            else:
+                override_ts = torch.tensor([0.0, 1.0])
+            # Override temporal task_seq [B, T_total, 2]
+            task_seq = override_ts.expand_as(task_seq).clone().to(dev)
+            # Override metadata.task_states [B, S, 2] for loss computation
+            metadata.task_states = override_ts.expand_as(metadata.task_states).clone()
 
         # Oracle / freeze V2 mode: bypass V2 with ground-truth predictions
         if train_cfg.freeze_v2:
@@ -433,7 +453,7 @@ def run_stage2(
         # Compute mismatch labels from ground truth
         mm_labels_windows = None
         mm_mask_windows = None
-        if train_cfg.lambda_mismatch > 0:
+        if train_cfg.lambda_mismatch > 0 or train_cfg.lambda_expected_suppress > 0:
             mm_labels, mm_mask = compute_mismatch_labels(
                 metadata,
                 transition_step=stim_cfg.transition_step,
@@ -686,6 +706,11 @@ def run_stage2(
                         metrics['l4_sensory'] = round(loss_dict['l4_sensory'], 4)
                     if loss_dict.get('mismatch', 0.0) > 0:
                         metrics['mismatch'] = round(loss_dict['mismatch'], 4)
+                    if loss_dict.get('expected_suppress', 0.0) > 0:
+                        metrics['expected_suppress'] = round(loss_dict['expected_suppress'], 4)
+                    if train_cfg.gradient_isolation:
+                        phase = (step // train_cfg.isolation_period) % 2
+                        metrics['grad_iso_phase'] = 'focused' if phase == 0 else 'routine'
                     metrics_path = os.path.join(output_dir, 'metrics.jsonl')
                     with open(metrics_path, 'a') as f:
                         f.write(json.dumps(metrics) + '\n')

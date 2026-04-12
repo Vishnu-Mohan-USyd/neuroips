@@ -70,6 +70,14 @@ class ModelConfig:
     # the Network_mm configuration bit-identical.
     use_per_regime_feedback: bool = False
 
+    # Fix 1: dual V2 architecture. When True, LaminarV1V2Network constructs
+    # two independent V2ContextModules (v2_focused and v2_routine), selected
+    # by task_state at each timestep. Each has its own GRU, head_mu, head_pi,
+    # head_feedback. Everything else (L4, PV, L2/3, SOM) remains shared.
+    # use_per_regime_feedback is ignored when use_dual_v2=True (each V2
+    # already has its own feedback head). Default False = legacy single V2.
+    use_dual_v2: bool = False
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations
@@ -120,6 +128,11 @@ class TrainingConfig:
     lambda_local_disc: float = 0.0  # Phase 4: local 5-way discrimination (expected vs ±1, ±2 neighbors). 0 = disabled.
     lambda_pred_suppress: float = 0.0  # Prediction suppression: penalize L2/3 activity matching V2 prediction. 0 = disabled.
     lambda_fb_energy: float = 0.0      # Feedback energy: penalize magnitude of excitatory feedback (center_exc). 0 = disabled.
+    # Fix 3: expected-suppress loss. Penalizes mean |r_l23| ONLY on routine
+    # presentations where mismatch_label=0 (stimulus matched prediction).
+    # Provides direct gradient toward Kok-style expectation suppression.
+    # 0.0 = disabled → legacy bit-identical.
+    lambda_expected_suppress: float = 0.0
     # Phase 2.4: routine E/I symmetry-break loss.
     #   shape_per_sample = |center_exc|.mean(T,N) - 0.5 * |som_drive_fb|.mean(T,N)
     # Weighted per-sample by task_routing[*]['routine_shape'] (0 for focused,
@@ -169,6 +182,13 @@ class TrainingConfig:
 
     # Stimulus noise (std of Gaussian noise added to population-coded stimulus in Stage 2)
     stimulus_noise: float = 0.0
+
+    # Fix 2: gradient isolation. When True, alternate between focused-only and
+    # routine-only task_state overrides every `isolation_period` steps.
+    # Stimulus statistics (HMM) still run normally; only task_state is overridden.
+    # False = legacy (Markov per-presentation task_state, no override).
+    gradient_isolation: bool = False
+    isolation_period: int = 100
 
     # Batching
     batch_size: int = 32
@@ -252,6 +272,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_local_disc=train_raw.get("lambda_local_disc", 0.0),
         lambda_pred_suppress=train_raw.get("lambda_pred_suppress", 0.0),
         lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
+        lambda_expected_suppress=train_raw.get("lambda_expected_suppress", 0.0),
         lambda_routine_shape=train_raw.get("lambda_routine_shape", 0.0),
         l2_energy=train_raw.get("l2_energy", False),
         l23_energy_weight=train_raw.get("l23_energy_weight", 1.0),
@@ -263,6 +284,8 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         oracle_template=train_raw.get("oracle_template", "oracle_true"),
         oracle_sigma=train_raw.get("oracle_sigma", 12.0),
         stimulus_noise=train_raw.get("stimulus_noise", 0.0),
+        gradient_isolation=train_raw.get("gradient_isolation", False),
+        isolation_period=train_raw.get("isolation_period", 100),
         batch_size=train_raw.get("batch_size", 32),
         seq_length=train_raw.get("seq_length", 50),
         steps_on=train_raw.get("steps_on", 8),
