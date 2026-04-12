@@ -82,9 +82,9 @@ def run_ablation(
 
         def patched_forward(*args, **kwargs):
             outputs = orig_forward(*args, **kwargs)
-            # Emergent mode: (mu_pred, pi_pred, feedback_signal, h_v2)
-            mu_pred, pi_pred, feedback_signal, h_v2 = outputs
-            return mu_pred, torch.ones_like(pi_pred), feedback_signal, h_v2
+            # Emergent mode: (mu_pred, pi_pred, feedback_signal, h_v2, vip_drive)
+            mu_pred, pi_pred, feedback_signal, h_v2, vip_drive = outputs
+            return mu_pred, torch.ones_like(pi_pred), feedback_signal, h_v2, vip_drive
 
         net.v2.forward = patched_forward
         try:

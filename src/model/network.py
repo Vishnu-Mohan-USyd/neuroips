@@ -11,7 +11,7 @@ from torch import Tensor
 
 from src.config import ModelConfig
 from src.state import NetworkState, StepAux, initial_state
-from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing
+from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing
 from src.model.v2_context import V2ContextModule
 
 
@@ -35,6 +35,15 @@ class LaminarV1V2Network(nn.Module):
         self.pv = PVPool(cfg)
         self.l23 = V1L23Ring(cfg)
         self.som = SOMRing(cfg)
+
+        # Rescue 3: VIP-SOM disinhibition circuit.
+        if getattr(cfg, 'use_vip', False):
+            self.vip = VIPRing(cfg)
+            # Learnable scalar gain for VIP→SOM subtractive connection.
+            # Effective weight = softplus(w_vip_som_raw). Init at 0.5.
+            self.w_vip_som_raw = nn.Parameter(torch.tensor(
+                math.log(math.exp(0.5) - 1.0)  # inverse softplus of 0.5
+            ))
 
         # Fix 1: dual V2 architecture — two independent V2 modules.
         self.use_dual_v2 = getattr(cfg, "use_dual_v2", False)
@@ -147,7 +156,7 @@ class LaminarV1V2Network(nn.Module):
             state_logits = torch.zeros(B, 3, device=device)
             p_cw = torch.full((B, 1), 0.5, device=device)
             # V2's head_feedback must still run to produce the feedback signal
-            _, _, feedback_signal, h_v2 = self.v2(
+            _, _, feedback_signal, h_v2, vip_drive = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
             )
         elif self.use_dual_v2:
@@ -157,10 +166,10 @@ class LaminarV1V2Network(nn.Module):
             H = self.cfg.v2_hidden_dim
             h_v2_foc_prev = state.h_v2[:, :H]
             h_v2_rou_prev = state.h_v2[:, H:]
-            mu_foc, pi_foc, fb_foc, h_v2_foc = self.v2_focused(
+            mu_foc, pi_foc, fb_foc, h_v2_foc, vip_foc = self.v2_focused(
                 r_l4, state.r_l23, cue, task_state, h_v2_foc_prev
             )
-            mu_rou, pi_rou, fb_rou, h_v2_rou = self.v2_routine(
+            mu_rou, pi_rou, fb_rou, h_v2_rou, vip_rou = self.v2_routine(
                 r_l4, state.r_l23, cue, task_state, h_v2_rou_prev
             )
             # Blend by task_state: focused samples → v2_focused, routine → v2_routine.
@@ -175,11 +184,16 @@ class LaminarV1V2Network(nn.Module):
             q_pred = w_foc_n * mu_foc + w_rou_n * mu_rou
             pi_pred_raw = w_foc_n * pi_foc + w_rou_n * pi_rou
             feedback_signal = w_foc_n * fb_foc + w_rou_n * fb_rou
+            # Blend VIP drive if both V2s produce it
+            if vip_foc is not None and vip_rou is not None:
+                vip_drive = w_foc_n * vip_foc + w_rou_n * vip_rou
+            else:
+                vip_drive = None
             h_v2 = torch.cat([h_v2_foc, h_v2_rou], dim=-1)  # [B, 2*H]
             p_cw = torch.full((B, 1), 0.5, device=device)
             state_logits = torch.zeros(B, 3, device=device)
         else:
-            mu_pred, pi_pred_raw, feedback_signal, h_v2 = self.v2(
+            mu_pred, pi_pred_raw, feedback_signal, h_v2, vip_drive = self.v2(
                 r_l4, state.r_l23, cue, task_state, state.h_v2
             )
             q_pred = mu_pred  # V2 directly outputs the prior distribution
@@ -218,7 +232,18 @@ class LaminarV1V2Network(nn.Module):
             gains = None
             center_exc = torch.relu(scaled_fb)           # positive part → excitation
             som_drive_fb = torch.relu(-scaled_fb)        # negative part → SOM drive
-        r_som = self.som(som_drive_fb, state.r_som)  # SOM integrates with tau_som
+        # Rescue 3: VIP-SOM disinhibition circuit.
+        # VIP suppresses SOM at specific channels → disinhibition of L2/3.
+        if hasattr(self, 'vip') and vip_drive is not None:
+            r_vip = self.vip(vip_drive, state.r_vip)
+            # Subtractive: VIP suppresses SOM drive, rectified to prevent
+            # negative som_drive (inhibitory population can't have negative drive).
+            w_vip = F.softplus(self.w_vip_som_raw)
+            effective_som_drive = torch.relu(som_drive_fb - w_vip * r_vip)
+            r_som = self.som(effective_som_drive, state.r_som)
+        else:
+            r_vip = torch.zeros(B, N, device=device)
+            r_som = self.som(som_drive_fb, state.r_som)  # SOM integrates with tau_som
 
         # 5. L2/3 update
         r_l23 = self.l23(r_l4, state.r_l23, center_exc, r_som, r_pv)
@@ -231,7 +256,7 @@ class LaminarV1V2Network(nn.Module):
             r_l23=r_l23,
             r_pv=r_pv,
             r_som=r_som,
-            r_vip=torch.zeros(B, N, device=device),
+            r_vip=r_vip,
             adaptation=adaptation,
             h_v2=h_v2,
             deep_template=deep_tmpl,

@@ -1,4 +1,4 @@
-"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, SOMRing."""
+"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing."""
 
 from __future__ import annotations
 
@@ -293,7 +293,12 @@ class SOMRing(nn.Module):
     Feature-specific inhibition with its own rate dynamics.
     Drive is mechanism-dependent (provided externally by feedback module).
 
+    When use_vip is True, a fixed circular Gaussian surround kernel spreads
+    the inhibitory drive spatially before integration (sigma_som_surround°,
+    broader than L2/3 recurrent sigma_rec → inhibition is wider than excitation).
+
     Equation:
+        if surround_kernel: som_drive = som_drive @ surround_kernel
         r_som += dt/τ_som * (-r_som + rectified_softplus(som_drive))
     """
 
@@ -301,6 +306,19 @@ class SOMRing(nn.Module):
         super().__init__()
         self.dt = cfg.dt
         self.tau_som = cfg.tau_som
+
+        # Rescue 3: structured surround kernel for spatial spreading.
+        # Fixed (non-learnable) circular Gaussian registered as a buffer.
+        # Overall inhibition strength is still controlled by w_som in L2/3.
+        if getattr(cfg, 'use_vip', False):
+            from src.utils import make_circular_gaussian_kernel
+            kernel = make_circular_gaussian_kernel(
+                n=cfg.n_orientations, sigma=cfg.sigma_som_surround,
+                period=cfg.orientation_range, row_normalise=True,
+            )
+            self.register_buffer('surround_kernel', kernel)  # [N, N]
+        else:
+            self.surround_kernel = None
 
     def forward(self, som_drive: Tensor, r_som_prev: Tensor) -> Tensor:
         """One Euler step for SOM ring.
@@ -312,9 +330,43 @@ class SOMRing(nn.Module):
         Returns:
             r_som: Updated SOM rates [B, N].
         """
+        if self.surround_kernel is not None:
+            # Spread drive spatially via surround kernel: [B, N] @ [N, N] → [B, N]
+            som_drive = som_drive @ self.surround_kernel
         r_som = r_som_prev + (self.dt / self.tau_som) * (
             -r_som_prev + rectified_softplus(som_drive)
         )
         return r_som
+
+
+class VIPRing(nn.Module):
+    """VIP inhibitory ring population (disinhibitory circuit).
+
+    Driven by V2 context (head_vip). VIP suppresses SOM at specific
+    orientation channels, creating feature-specific disinhibition of L2/3.
+
+    Same dynamics as SOMRing:
+        r_vip += dt/τ_vip * (-r_vip + rectified_softplus(vip_drive))
+    """
+
+    def __init__(self, cfg: ModelConfig):
+        super().__init__()
+        self.dt = cfg.dt
+        self.tau_vip = cfg.tau_vip
+
+    def forward(self, vip_drive: Tensor, r_vip_prev: Tensor) -> Tensor:
+        """One Euler step for VIP ring.
+
+        Args:
+            vip_drive: [B, N] — drive from V2 head_vip.
+            r_vip_prev: [B, N] — previous VIP rates.
+
+        Returns:
+            r_vip: Updated VIP rates [B, N].
+        """
+        r_vip = r_vip_prev + (self.dt / self.tau_vip) * (
+            -r_vip_prev + rectified_softplus(vip_drive)
+        )
+        return r_vip
 
 

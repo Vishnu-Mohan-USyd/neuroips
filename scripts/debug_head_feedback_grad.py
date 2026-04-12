@@ -81,7 +81,7 @@ def investigate(config_path, ckpt_path, label):
         for t in range(train_cfg.steps_on):
             state, aux = net.step(stim, cue, task, state)
             # Capture feedback_signal by running V2 manually
-            mu, pi_raw, fb_sig, h = net.v2(
+            mu, pi_raw, fb_sig, h, _ = net.v2(
                 state.r_l4, state.r_l23, cue, task, state.h_v2
             )
             fb_outputs.append(fb_sig[0].clone())
@@ -228,7 +228,7 @@ def investigate(config_path, ckpt_path, label):
             r_pv = net.pv(r_l4, state.r_l23, state.r_pv)
 
             # Get V2 output
-            mu_pred, pi_raw, fb_sig, h_v2 = net.v2(
+            mu_pred, pi_raw, fb_sig, h_v2, _ = net.v2(
                 r_l4, state.r_l23, cue, task, state.h_v2
             )
             center_exc = fb_sig * net.feedback_scale

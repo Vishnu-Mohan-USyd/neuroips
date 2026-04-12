@@ -94,6 +94,12 @@ class V2ContextModule(nn.Module):
         self.head_pi = nn.Linear(cfg.v2_hidden_dim, 1)       # -> softplus + clamp
         nn.init.constant_(self.head_pi.bias, 0.0)
 
+        # Rescue 3: VIP drive head. Drives VIP interneurons from V2 context.
+        # Only instantiated when use_vip=True. Output is raw (no activation),
+        # VIPRing applies rectified_softplus internally.
+        if getattr(cfg, 'use_vip', False):
+            self.head_vip = nn.Linear(cfg.v2_hidden_dim, n)  # [B, N]
+
     def forward(
         self,
         r_l4: Tensor,
@@ -101,7 +107,7 @@ class V2ContextModule(nn.Module):
         cue: Tensor,
         task_state: Tensor,
         h_v2_prev: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor] | tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor | None]:
         """One step of V2 context inference.
 
         Args:
@@ -116,12 +122,14 @@ class V2ContextModule(nn.Module):
             pi_pred: [B, 1] -- prediction precision in [0, pi_max].
             feedback_signal: [B, N] -- raw additive feedback signal (no activation).
             h_v2: [B, H] -- updated GRU hidden state.
+            vip_drive: [B, N] or None -- raw VIP drive (only when use_vip=True).
 
         Returns (feedback_mode == 'fixed'):
             q_pred: [B, N] -- predicted orientation distribution (sums to 1).
             pi_pred: [B, 1] -- prediction precision in [0, pi_max].
             state_logits: [B, 3] -- raw logits for CW/CCW/neutral.
             h_v2: [B, H] -- updated GRU hidden state.
+            vip_drive: [B, N] or None -- raw VIP drive (only when use_vip=True).
         """
         if self.v2_input_mode == 'l23':
             v2_input = torch.cat([r_l23_prev, cue, task_state], dim=-1)
@@ -132,6 +140,9 @@ class V2ContextModule(nn.Module):
         h_v2 = self.gru(v2_input, h_v2_prev)  # [B, H]
 
         pi_pred = torch.clamp(F.softplus(self.head_pi(h_v2)), max=self.pi_max)  # [B, 1]
+
+        # Rescue 3: VIP drive from head_vip (None when use_vip=False).
+        vip_drive = self.head_vip(h_v2) if hasattr(self, 'head_vip') else None
 
         if self.feedback_mode == 'emergent':
             mu_pred = F.softmax(self.head_mu(h_v2), dim=-1)  # [B, N]
@@ -149,8 +160,8 @@ class V2ContextModule(nn.Module):
             else:
                 # Legacy (Network_mm): single shared head, ignores task_state.
                 feedback_signal = self.head_feedback(h_v2)         # [B, N] raw
-            return mu_pred, pi_pred, feedback_signal, h_v2
+            return mu_pred, pi_pred, feedback_signal, h_v2, vip_drive
         else:
             q_pred = F.softmax(self.head_q(h_v2), dim=-1)  # [B, N]
             state_logits = self.head_state(h_v2)             # [B, 3]
-            return q_pred, pi_pred, state_logits, h_v2
+            return q_pred, pi_pred, state_logits, h_v2, vip_drive

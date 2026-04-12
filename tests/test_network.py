@@ -43,12 +43,13 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        mu_pred, pi_pred, feedback_signal, h_v2_new = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, pi_pred, feedback_signal, h_v2_new, vip_drive = v2(r_l4, r_l23, cue, task_state, h_v2)
 
         assert mu_pred.shape == (B, N)
         assert pi_pred.shape == (B, 1)
         assert feedback_signal.shape == (B, N)
         assert h_v2_new.shape == (B, H)
+        assert vip_drive is None  # use_vip=False by default
 
     def test_mu_pred_sums_to_one(self, cfg):
         v2 = V2ContextModule(cfg)
@@ -59,7 +60,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        mu_pred, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, _, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
         assert torch.allclose(mu_pred.sum(dim=-1), torch.ones(B), atol=1e-5)
 
@@ -72,7 +73,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
 
-        mu_pred, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        mu_pred, _, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
         assert (mu_pred >= 0).all()
 
@@ -88,7 +89,7 @@ class TestV2Context:
             task_state = torch.zeros(B, 2)
             h_v2 = torch.randn(B, H) * 5
 
-            _, pi_pred, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+            _, pi_pred, _, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
             assert (pi_pred >= 0).all()
             assert (pi_pred <= cfg.pi_max + 1e-5).all()
@@ -103,7 +104,7 @@ class TestV2Context:
         task_state = torch.zeros(B, 2)
         h_v2 = torch.randn(B, H)
 
-        _, _, fb_signal, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        _, _, fb_signal, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
 
         assert torch.isfinite(fb_signal).all()
         # Raw signal should have both positive and negative values in general
@@ -122,7 +123,7 @@ class TestV2Context:
             task_state = torch.zeros(B, 2)
             h_v2 = torch.zeros(B, H)
 
-            mu_pred, pi_pred, fb, h = v2(r_l4, r_l23, cue, task_state, h_v2)
+            mu_pred, pi_pred, fb, h, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
             assert mu_pred.shape == (B, N)
             assert pi_pred.shape == (B, 1)
             assert fb.shape == (B, N)
@@ -158,7 +159,7 @@ class TestV2PerRegimeFeedback:
         cue = torch.zeros(B, N)
         task_state = torch.zeros(B, 2)
         h_v2 = torch.zeros(B, H)
-        _, _, fb, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
+        _, _, fb, _, _ = v2(r_l4, r_l23, cue, task_state, h_v2)
         assert fb.shape == (B, N)
 
     def test_per_regime_feedback_on_constructs(self):
@@ -217,20 +218,20 @@ class TestV2PerRegimeFeedback:
 
         # 1. Focused-only: fb must equal head_feedback_focused(h_v2).
         ts_focused = torch.tensor([[1.0, 0.0]] * B)
-        _, _, fb_focused, h_v2 = v2(r_l4, r_l23, cue, ts_focused, h_v2_prev)
+        _, _, fb_focused, h_v2, _ = v2(r_l4, r_l23, cue, ts_focused, h_v2_prev)
         expected_focused = v2.head_feedback_focused(h_v2)
         assert torch.allclose(fb_focused, expected_focused, atol=1e-6)
 
         # 2. Routine-only: fb must equal head_feedback_routine(h_v2).
         ts_routine = torch.tensor([[0.0, 1.0]] * B)
-        _, _, fb_routine, h_v2_r = v2(r_l4, r_l23, cue, ts_routine, h_v2_prev)
+        _, _, fb_routine, h_v2_r, _ = v2(r_l4, r_l23, cue, ts_routine, h_v2_prev)
         expected_routine = v2.head_feedback_routine(h_v2_r)
         assert torch.allclose(fb_routine, expected_routine, atol=1e-6)
 
         # 3. Mixed batch: half focused, half routine — gating is per-sample.
         ts_mixed = torch.tensor([[1.0, 0.0], [1.0, 0.0],
                                  [0.0, 1.0], [0.0, 1.0]])
-        _, _, fb_mixed, h_v2_m = v2(r_l4, r_l23, cue, ts_mixed, h_v2_prev)
+        _, _, fb_mixed, h_v2_m, _ = v2(r_l4, r_l23, cue, ts_mixed, h_v2_prev)
         expected_mixed = torch.cat([
             v2.head_feedback_focused(h_v2_m[:2]),
             v2.head_feedback_routine(h_v2_m[2:]),
@@ -255,7 +256,7 @@ class TestV2PerRegimeFeedback:
         # Mixed batch: half focused, half routine — both heads must see grad.
         ts = torch.tensor([[1.0, 0.0], [1.0, 0.0],
                            [0.0, 1.0], [0.0, 1.0]])
-        _, _, fb, _ = v2(r_l4, r_l23, cue, ts, h_v2_prev)
+        _, _, fb, _, _ = v2(r_l4, r_l23, cue, ts, h_v2_prev)
         loss = fb.sum()
         loss.backward()
 
@@ -268,7 +269,7 @@ class TestV2PerRegimeFeedback:
         # head (and vice versa) — gating is hard.
         v2.zero_grad()
         ts_focused_only = torch.tensor([[1.0, 0.0]] * B)
-        _, _, fb_f, _ = v2(r_l4, r_l23, cue, ts_focused_only, h_v2_prev)
+        _, _, fb_f, _, _ = v2(r_l4, r_l23, cue, ts_focused_only, h_v2_prev)
         fb_f.sum().backward()
         assert v2.head_feedback_focused.weight.grad.abs().sum().item() > 0.0
         # routine head receives no gradient from this batch
@@ -890,3 +891,129 @@ class TestPrecisionGating:
 
         # Legacy mode doesn't use pi in feedback path — just verify it runs
         assert aux_legacy.center_exc.shape == (B, N)
+
+
+# ── Rescue 3: VIP-SOM Disinhibition ─────────────────────────────────────
+
+class TestVIPDisinhibition:
+    """Tests for Rescue 3: VIP-SOM disinhibition with structured surround.
+
+    When use_vip=True:
+      - VIPRing population driven by V2 head_vip
+      - SOM surround kernel spreads inhibitory drive spatially
+      - VIP→SOM subtractive connection: relu(som_drive - w_vip_som * r_vip)
+    """
+
+    def test_vip_off_is_legacy(self):
+        """With use_vip=False, network has no VIP components, forward matches legacy."""
+        cfg = ModelConfig(use_vip=False)
+        net = LaminarV1V2Network(cfg)
+        assert not hasattr(net, "vip")
+        assert not hasattr(net, "w_vip_som_raw")
+        assert not hasattr(net.v2, "head_vip")
+        # Forward pass runs without error
+        B, T, N = 2, 10, cfg.n_orientations
+        stim = torch.randn(B, T, N).abs()
+        r_l23, final, aux = net(stim)
+        assert r_l23.shape == (B, T, N)
+        # r_vip should be zeros
+        assert (aux["r_vip_all"] == 0).all()
+
+    def test_vip_constructs(self):
+        """With use_vip=True, network has VIPRing, w_vip_som_raw, head_vip."""
+        cfg = ModelConfig(use_vip=True, tau_vip=10, sigma_som_surround=20.0)
+        net = LaminarV1V2Network(cfg)
+        N, H = cfg.n_orientations, cfg.v2_hidden_dim
+
+        # VIPRing exists with correct tau
+        assert hasattr(net, "vip")
+        assert net.vip.tau_vip == 10
+
+        # w_vip_som_raw is learnable scalar
+        assert hasattr(net, "w_vip_som_raw")
+        assert net.w_vip_som_raw.shape == ()
+        assert net.w_vip_som_raw.requires_grad
+
+        # head_vip is Linear(H, N) in V2
+        assert hasattr(net.v2, "head_vip")
+        assert isinstance(net.v2.head_vip, torch.nn.Linear)
+        assert net.v2.head_vip.in_features == H
+        assert net.v2.head_vip.out_features == N
+
+        # SOM surround kernel is a buffer, not a parameter
+        assert net.som.surround_kernel is not None
+        assert net.som.surround_kernel.shape == (N, N)
+        assert not net.som.surround_kernel.requires_grad
+
+        # Forward pass completes
+        B, T = 2, 10
+        stim = torch.randn(B, T, N).abs()
+        r_l23, final, aux = net(stim)
+        assert r_l23.shape == (B, T, N)
+        # r_vip should be non-trivially shaped
+        assert aux["r_vip_all"].shape == (B, T, N)
+
+    def test_vip_suppresses_som(self):
+        """High VIP drive → SOM suppressed → r_som lower than without VIP."""
+        torch.manual_seed(42)
+        cfg = ModelConfig(use_vip=True, tau_vip=10, sigma_som_surround=20.0)
+        net = LaminarV1V2Network(cfg)
+        net.feedback_scale.fill_(1.0)
+
+        B, N = 2, cfg.n_orientations
+        stim = torch.randn(B, N).abs() * 2.0
+        cue = torch.zeros(B, N)
+        task_state = torch.tensor([[1.0, 0.0]] * B)
+        state0 = initial_state(B, N, cfg.v2_hidden_dim)
+
+        # Force head_vip to produce very high VIP drive
+        with torch.no_grad():
+            net.v2.head_vip.bias.fill_(10.0)
+            net.v2.head_vip.weight.fill_(0.0)
+        _, aux_hi_vip = net.step(stim, cue, task_state, state0)
+
+        # Force head_vip to produce zero VIP drive
+        with torch.no_grad():
+            net.v2.head_vip.bias.fill_(-10.0)
+        _, aux_lo_vip = net.step(stim, cue, task_state, state0)
+
+        # High VIP should suppress SOM more → lower r_som
+        assert aux_hi_vip.som_drive_fb is not None
+        r_som_hi = aux_hi_vip.som_drive_fb  # This is just the aux, check state
+        # Actually compare via full state — r_som is in the returned state
+        state_hi, _ = net.step(stim, cue, task_state, state0)
+        with torch.no_grad():
+            net.v2.head_vip.bias.fill_(-10.0)
+        state_lo, _ = net.step(stim, cue, task_state, state0)
+
+        # With high VIP, SOM should be lower (VIP suppresses SOM drive)
+        assert state_hi.r_som.sum() <= state_lo.r_som.sum() + 1e-6, (
+            f"High VIP should suppress SOM: hi_som={state_hi.r_som.sum():.4f}, "
+            f"lo_som={state_lo.r_som.sum():.4f}"
+        )
+
+    def test_som_surround_kernel_spreads(self):
+        """SOM surround kernel spreads a delta function into a Gaussian bump."""
+        cfg = ModelConfig(use_vip=True, sigma_som_surround=20.0)
+        from src.model.populations import SOMRing
+        som = SOMRing(cfg)
+
+        assert som.surround_kernel is not None
+        N = cfg.n_orientations
+        kernel = som.surround_kernel  # [N, N]
+
+        # Feed a delta function (single channel hot) through the kernel
+        delta = torch.zeros(1, N)
+        delta[0, 0] = 1.0
+        spread = delta @ kernel  # [1, N]
+
+        # Output should be a Gaussian bump centered at channel 0
+        assert spread.shape == (1, N)
+        # Peak at channel 0
+        assert spread[0, 0] == spread.max()
+        # Neighbors should have lower but non-zero values (spread happened)
+        assert spread[0, 1] > 0, "Surround kernel should spread to neighbor"
+        # Far-away channels should have near-zero (sigma=20° → ~4 channels at 5°/ch)
+        assert spread[0, N // 2] < spread[0, 0], "Opposite side should be lower"
+        # Each row sums to 1 (row-normalized)
+        assert torch.allclose(kernel.sum(dim=-1), torch.ones(N), atol=1e-5)

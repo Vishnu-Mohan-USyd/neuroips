@@ -90,6 +90,18 @@ class ModelConfig:
     # scaled only by feedback_scale, precision unused in dynamics).
     use_precision_gating: bool = False
 
+    # Rescue 3: VIP-SOM disinhibition circuit. When True, adds:
+    #   - VIPRing population driven by V2 head_vip (Linear H→N)
+    #   - Structured SOM surround kernel (fixed circular Gaussian)
+    #   - VIP→SOM subtractive connection: relu(som_drive - w_vip_som * r_vip)
+    # Two modes from one circuit:
+    #   Routine (low VIP): SOM uninhibited → surround active → dampening
+    #   Focused (high VIP at center): SOM suppressed at center → sharpening
+    # Default False = legacy (SOM receives raw som_drive_fb, no VIP).
+    use_vip: bool = False
+    tau_vip: int = 10
+    sigma_som_surround: float = 20.0
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations

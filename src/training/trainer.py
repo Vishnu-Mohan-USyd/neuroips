@@ -75,6 +75,15 @@ def unfreeze_stage2(net: LaminarV1V2Network) -> None:
     if hasattr(net, "alpha_net"):
         for p in net.alpha_net.parameters():
             p.requires_grad_(True)
+    # Rescue 3: VIP-SOM disinhibition params are Stage-2.
+    if hasattr(net, "vip"):
+        for p in net.vip.parameters():
+            p.requires_grad_(True)
+    if hasattr(net, "w_vip_som_raw"):
+        net.w_vip_som_raw.requires_grad_(True)
+    if hasattr(net.v2, "head_vip"):
+        for p in net.v2.head_vip.parameters():
+            p.requires_grad_(True)
 
 
 def create_stage2_optimizer(
@@ -112,6 +121,18 @@ def create_stage2_optimizer(
         alpha_lr = cfg.stage2_lr_v2 * cfg.lr_mult_alpha
         param_groups.append(
             {"params": list(net.alpha_net.parameters()), "lr": alpha_lr}
+        )
+    # Rescue 3: VIP-SOM disinhibition params (same LR as V2 heads).
+    # head_vip is already included in v2_params above; only need
+    # network-level VIP params (VIPRing + w_vip_som_raw).
+    vip_params: list[nn.Parameter] = []
+    if hasattr(net, "vip"):
+        vip_params.extend(net.vip.parameters())
+    if hasattr(net, "w_vip_som_raw"):
+        vip_params.append(net.w_vip_som_raw)
+    if vip_params:
+        param_groups.append(
+            {"params": vip_params, "lr": cfg.stage2_lr_v2}
         )
     # Add optional readout head params
     for head_name in ('surprise_detector', 'error_decoder', 'detection_head', 'l4_decoder', 'mismatch_head', 'local_disc_head'):
