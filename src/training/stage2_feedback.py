@@ -164,6 +164,33 @@ def run_stage2(
             p.requires_grad_(False)
         logger.info("Froze orientation decoder for mechanistic analysis")
 
+    # Rescue 5: calibrate T_stage1 BEFORE torch.compile so the step() call
+    # inside calibration runs in plain eager mode (avoids compile warmup for
+    # an N=36 × K=128 × t≤10 no_grad loop). The calibration writes the
+    # [N, N] tuning profile into net.T_stage1. Once populated (nonzero),
+    # stage2_feedback projects q_pred through it to produce q_match_windows
+    # for expected_suppress_loss. No-op when the flag is off.
+    if getattr(model_cfg, 'use_shape_matched_prediction', False):
+        assert hasattr(net, 'T_stage1'), (
+            "use_shape_matched_prediction=True but net.T_stage1 buffer was not "
+            "registered — check LaminarV1V2Network.__init__ conditional."
+        )
+        logger.info(
+            "Calibrating Stage 1 tuning profile T_stage1 "
+            "(FB=0, N=%d orientations, K=128 trials each)...",
+            model_cfg.n_orientations,
+        )
+        T_stage1 = net.calibrate_stage1_tuning_profile(device=dev, K=128)
+        net.T_stage1.copy_(T_stage1)
+        row_peaks = T_stage1.max(dim=-1).values
+        row_sums = T_stage1.sum(dim=-1)
+        logger.info(
+            "T_stage1 calibrated: row peak mean=%.3f, row sum mean=%.3f, "
+            "max=%.3f, min=%.3f",
+            row_peaks.mean().item(), row_sums.mean().item(),
+            T_stage1.max().item(), T_stage1.min().item(),
+        )
+
     # Step-level compile: fast (~13s), low RAM (~1.2GB), same throughput at T=600.
     net.step = torch.compile(net.step, mode='max-autotune-no-cudagraphs')
     compiled_net = net
@@ -419,6 +446,18 @@ def run_stage2(
             steps_on=train_cfg.steps_on, steps_isi=train_cfg.steps_isi,
         )
 
+        # Rescue 5: shape-matched prediction — project q_pred into the sensory
+        # basis via the calibrated T_stage1 matrix. q_match = q_pred @ T_stage1
+        # is a broad bump that matches Stage-1 L2/3 tuning shape, avoiding the
+        # central-clipping pattern where the near-one-hot softmax q_pred
+        # over-subtracted the peak of r_l23 in R1-R4.
+        q_match_windows = None
+        if (getattr(model_cfg, 'use_shape_matched_prediction', False)
+                and hasattr(net, 'T_stage1')
+                and net.T_stage1.abs().sum() > 0):
+            # [B, W, N] @ [N, N] → [B, W, N]
+            q_match_windows = q_pred_windows @ net.T_stage1
+
         # Extract p_cw windows for emergent mode (placeholder — p_cw is 0.5 in
         # learned-prior mode; retained for backward compat with loss_fn signature)
         p_cw_windows = None
@@ -531,6 +570,7 @@ def run_stage2(
             task_state=task_state_bw,
             task_routing=train_cfg.task_routing,
             r_error_windows=r_error_windows,
+            q_match_windows=q_match_windows,
         )
 
         total_loss.backward()

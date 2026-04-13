@@ -52,6 +52,17 @@ class LaminarV1V2Network(nn.Module):
         if getattr(cfg, 'use_deep_template', False):
             self.deep_template_pop = DeepTemplate(cfg)
 
+        # Rescue 5: shape-matched predictive suppression. T_stage1 is a fixed,
+        # non-learnable buffer populated once by `calibrate_stage1_tuning_profile`
+        # at the Stage 1 → Stage 2 boundary. Row j = mean L2/3 response at
+        # orientation j with FB=0 (the sensory-basis tuning curve). When the
+        # flag is off the buffer is not registered, so older checkpoints load
+        # cleanly (strict=True). See `use_shape_matched_prediction` in ModelConfig.
+        if getattr(cfg, 'use_shape_matched_prediction', False):
+            self.register_buffer(
+                'T_stage1', torch.zeros(cfg.n_orientations, cfg.n_orientations)
+            )
+
         # Fix 1: dual V2 architecture — two independent V2 modules.
         self.use_dual_v2 = getattr(cfg, "use_dual_v2", False)
         if self.use_dual_v2:
@@ -121,6 +132,87 @@ class LaminarV1V2Network(nn.Module):
         pref = torch.arange(N, dtype=torch.float32, device=thetas.device) * step
         diff = (pref.unsqueeze(0) - thetas.unsqueeze(1) + period / 2) % period - period / 2
         return torch.exp(-diff ** 2 / (2 * sigma ** 2))
+
+    @torch.no_grad()
+    def calibrate_stage1_tuning_profile(
+        self,
+        device: torch.device | None = None,
+        K: int = 128,
+        t_readout: int = 9,
+        t_steps: int = 12,
+        contrast: float = 0.5,
+    ) -> Tensor:
+        """Rescue 5 calibration: build T_stage1[j, :] = mean L2/3 response to
+        orientation j with feedback OFF (sensory-basis tuning curve).
+
+        Runs the full network step dynamics at a fixed orientation j with
+        `feedback_scale = 0`, K trials in parallel, for t_steps timesteps, and
+        averages r_l23 at t=t_readout across the K trials. Task state is set
+        to focused so L2/3 is fully driven. Cue is zero. Contrast is fixed at
+        the mid-range so the profile captures the typical Stage-1 response
+        shape.
+
+        The method saves and restores `feedback_scale` and `training` mode so
+        it is a pure read on the network state. The returned [N, N] tensor is
+        what the caller should `.copy_()` into `self.T_stage1`.
+
+        Args:
+            device: Torch device; defaults to the net's parameter device.
+            K: Trials per orientation (averaged to reduce noise). 128 default.
+            t_readout: Timestep at which to record the response. 9 ≈ late-ON
+                with the default steps_on=12.
+            t_steps: Maximum timesteps to run per trial. Loop breaks as soon
+                as t_readout is reached.
+            contrast: Fixed stimulus contrast. 0.5 = mid of Stage-1 range.
+
+        Returns:
+            T: [N, N] tensor where row j = mean r_l23 response to orientation
+               j at t=t_readout with FB off. Does not write to self.T_stage1
+               — that is the caller's responsibility.
+        """
+        # Local imports to avoid a circular import at module load time
+        # (network.py → ... → stimulus/gratings.py is fine, but state is
+        # already imported at the top).
+        from src.stimulus.gratings import generate_grating
+        from src.state import initial_state
+
+        was_training = self.training
+        self.eval()
+        dev = device or next(self.parameters()).device
+        N = self.cfg.n_orientations
+        step_deg = self.cfg.orientation_range / N
+
+        T_out = torch.zeros(N, N, device=dev)
+        fb_save = self.feedback_scale.clone()
+        self.feedback_scale.zero_()
+        # Dual-V2 packs two hidden states into h_v2 → [B, 2*H]
+        h_dim = self.cfg.v2_hidden_dim * 2 if self.use_dual_v2 else self.cfg.v2_hidden_dim
+        try:
+            for j in range(N):
+                theta_j = torch.full((K,), j * step_deg, dtype=torch.float32)
+                contrasts = torch.full((K,), contrast, dtype=torch.float32)
+                stim = generate_grating(
+                    theta_j, contrasts,
+                    n_orientations=N,
+                    sigma=self.cfg.sigma_ff,
+                    n=self.cfg.naka_rushton_n,
+                    c50=self.cfg.naka_rushton_c50,
+                    period=self.cfg.orientation_range,
+                ).to(dev)  # [K, N]
+                cue = torch.zeros(K, N, device=dev)
+                task = torch.zeros(K, 2, device=dev)
+                task[:, 0] = 1.0  # focused, so L2/3 is fully driven by sensory input
+                state = initial_state(K, N, h_dim, device=dev)
+                for t in range(t_steps):
+                    state, _ = self.step(stim, cue, task, state)
+                    if t == t_readout:
+                        T_out[j, :] = state.r_l23.mean(dim=0)
+                        break
+        finally:
+            self.feedback_scale.copy_(fb_save)
+            if was_training:
+                self.train()
+        return T_out
 
     def step(
         self,

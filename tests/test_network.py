@@ -1124,3 +1124,135 @@ class TestRescue4DeepTemplate:
         r_error = torch.relu(r_on - aux_on['deep_template_all'])
         assert r_error.shape == (B, T, N)
         assert (r_error >= 0).all()
+
+
+class TestRescue5ShapeMatched:
+    """Tests for Rescue 5: shape-matched predictive suppression.
+
+    When use_shape_matched_prediction=False (default):
+      - No T_stage1 buffer on the network (conditional registration).
+      - Network forward + aux outputs are bit-identical to an R1+2 baseline
+        at the same seed (i.e. R5-off does not perturb any computation).
+
+    When use_shape_matched_prediction=True:
+      - T_stage1 buffer is registered as a [N, N] zero tensor at init.
+      - calibrate_stage1_tuning_profile fills it with the sensory-basis
+        tuning curves (row j = mean L2/3 response at orientation j, FB=0).
+      - q_match = q_pred @ T_stage1 produces a broad shape-matched bump.
+        For a one-hot q_pred at channel j, q_match equals T_stage1[j, :].
+    """
+
+    def test_rescue5_off_bit_identical_to_r1_2(self):
+        """With use_shape_matched_prediction=False, the network must be
+        numerically identical to an R1+2-configured baseline (use_precision_gating=True)
+        built with the same seed. No T_stage1 buffer on either net.
+        """
+        r12_cfg_kwargs = dict(use_precision_gating=True)
+
+        torch.manual_seed(2024)
+        net_r12 = LaminarV1V2Network(ModelConfig(**r12_cfg_kwargs))
+        torch.manual_seed(2024)
+        net_r5_off = LaminarV1V2Network(ModelConfig(
+            use_shape_matched_prediction=False,
+            **r12_cfg_kwargs,
+        ))
+
+        # Conditional registration: neither should have T_stage1
+        assert not hasattr(net_r12, 'T_stage1'), (
+            "R1+2 baseline must not register T_stage1 buffer"
+        )
+        assert not hasattr(net_r5_off, 'T_stage1'), (
+            "use_shape_matched_prediction=False must not register T_stage1"
+        )
+
+        # Forward pass on a fixed input — bit-identical
+        torch.manual_seed(77)
+        B, T, N = 3, 8, ModelConfig().n_orientations
+        stim = torch.randn(B, T, N).abs()
+        r_a, _, aux_a = net_r12(stim)
+        r_b, _, aux_b = net_r5_off(stim)
+
+        assert torch.equal(r_a, r_b), (
+            "r_l23 must be bit-identical when R5 is off (vs R1+2)"
+        )
+        for key in aux_a:
+            assert torch.equal(aux_a[key], aux_b[key]), (
+                f"{key} mismatch between R1+2 baseline and R5-off"
+            )
+
+    def test_rescue5_calibration_and_q_match_shape(self):
+        """With use_shape_matched_prediction=True:
+          * T_stage1 buffer is registered as a zero [N, N] tensor.
+          * calibrate_stage1_tuning_profile returns a nontrivial [N, N]
+            tensor (row peaks and sums are strictly positive).
+          * For a one-hot q_pred at channel j, q_match = q_pred @ T_stage1
+            equals T_stage1[j, :] exactly.
+        """
+        cfg = ModelConfig(
+            use_precision_gating=True,
+            use_shape_matched_prediction=True,
+        )
+        torch.manual_seed(2024)
+        net = LaminarV1V2Network(cfg)
+
+        # Buffer is registered and starts at zero
+        assert hasattr(net, 'T_stage1'), (
+            "use_shape_matched_prediction=True must register T_stage1 buffer"
+        )
+        N = cfg.n_orientations
+        assert net.T_stage1.shape == (N, N), (
+            f"T_stage1 expected [{N}, {N}], got {tuple(net.T_stage1.shape)}"
+        )
+        assert torch.equal(net.T_stage1, torch.zeros(N, N)), (
+            "T_stage1 must start zero-initialised before calibration"
+        )
+
+        # Run calibration with a smaller K to keep the test fast; t_readout=9
+        # with the default steps_on=12 matches the production call.
+        T = net.calibrate_stage1_tuning_profile(
+            device=torch.device('cpu'), K=32, t_readout=9, t_steps=12,
+        )
+
+        # Shape and positivity. NOTE: on an untrained (random-weight) network
+        # the grating response is uniformly weak across orientations — strong
+        # row peaks / selective tuning only emerge after Stage 1 training.
+        # Here we test the calibration *mechanism*: shape, finiteness, and a
+        # non-trivial (strictly positive) response for every orientation.
+        assert T.shape == (N, N), f"T shape {tuple(T.shape)} != ({N}, {N})"
+        row_peaks = T.max(dim=-1).values      # [N]
+        row_sums = T.sum(dim=-1)              # [N]
+        assert row_peaks.min().item() > 1e-4, (
+            f"T_stage1 row peaks must be strictly positive (>1e-4), "
+            f"got min={row_peaks.min().item():.6f}"
+        )
+        assert row_sums.min().item() > 1e-4, (
+            f"T_stage1 row sums must be strictly positive (>1e-4), "
+            f"got min={row_sums.min().item():.6f}"
+        )
+        assert torch.isfinite(T).all(), "T_stage1 must be all finite"
+
+        # Calibration did NOT auto-write to the buffer (caller's job)
+        assert torch.equal(net.T_stage1, torch.zeros(N, N)), (
+            "calibrate_stage1_tuning_profile must not mutate self.T_stage1"
+        )
+        net.T_stage1.copy_(T)
+        assert net.T_stage1.abs().sum().item() > 0.0, (
+            "After .copy_(T), net.T_stage1 must be populated"
+        )
+
+        # q_match projection: one-hot q_pred at channel j → q_match = T[j, :]
+        j = 7
+        q_pred = torch.zeros(1, N)
+        q_pred[0, j] = 1.0
+        q_match = q_pred @ net.T_stage1   # [1, N] @ [N, N] = [1, N]
+        assert q_match.shape == (1, N)
+        assert torch.allclose(q_match[0], net.T_stage1[j, :]), (
+            "For one-hot q_pred at channel j, q_match must equal T_stage1[j, :]"
+        )
+
+        # And it is genuinely a broader bump than q_pred: peak of q_match is
+        # strictly less than q_pred's peak of 1.0 IF T_stage1 is not an
+        # identity (i.e. calibration produced realistic tuning curves).
+        assert q_match[0].max().item() < 1.0, (
+            "Shape-matched q_match peak must be below the one-hot q_pred peak"
+        )

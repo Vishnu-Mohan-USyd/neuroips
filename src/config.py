@@ -118,6 +118,17 @@ class ModelConfig:
     tau_template: int = 10
     use_error_mismatch: bool = False
 
+    # Rescue 5: shape-matched predictive suppression. When True, the Stage-2
+    # calibration builds T_stage1 ∈ R^{N x N}, where T_stage1[j, :] is the mean
+    # Stage-1 L2/3 response profile at orientation j with FB=0 (i.e. the
+    # sensory-basis tuning curve). At loss time, q_match = q_pred @ T_stage1
+    # projects the softmax V2 prediction into the sensory basis before it is
+    # used in expected_suppress_loss. This addresses the central-clipping
+    # pattern in R1-R4 where the narrow softmax q_pred over-subtracted the
+    # peak of r_l23 (broad tuning curve), leaving expected < unexpected on
+    # both activity and decoding. Default False = legacy bit-identical.
+    use_shape_matched_prediction: bool = False
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations

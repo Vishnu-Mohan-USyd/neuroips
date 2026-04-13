@@ -62,6 +62,16 @@ class CompositeLoss(nn.Module):
         # Default False → legacy bit-identical.
         self.use_error_mismatch = getattr(model_cfg, 'use_error_mismatch', False)
 
+        # Rescue 5: when True, the expected_suppress_loss body prefers
+        # q_match_windows (q_pred projected through T_stage1) over raw
+        # q_pred_windows. The flag is read here for introspection; the actual
+        # swap happens at the loss call site, guarded on whether
+        # q_match_windows was passed (stage2_feedback plumbs it when the
+        # buffer is populated).
+        self.use_shape_matched_prediction = getattr(
+            model_cfg, 'use_shape_matched_prediction', False
+        )
+
         # Trainable linear decoder: L2/3 activity -> orientation logits
         self.orientation_decoder = nn.Linear(N, N)
 
@@ -512,6 +522,7 @@ class CompositeLoss(nn.Module):
         q_pred_windows: Tensor,
         mismatch_labels: Tensor,
         task_state_bw: Tensor,
+        q_match_windows: Tensor | None = None,
     ) -> Tensor:
         """Penalize L2/3 activity aligned with V2's prediction on routine-expected.
 
@@ -522,19 +533,34 @@ class CompositeLoss(nn.Module):
         objective. Only fires on routine-expected presentations:
         task_state[:,1]=1 AND mismatch_label=0 (stimulus matched prediction).
 
+        Rescue 5 change: when ``q_match_windows`` is provided (q_pred projected
+        through T_stage1 = Stage-1 sensory-basis tuning profile), the dot
+        product is taken against that shape-matched bump instead of the raw
+        softmax q_pred. This addresses the central-clipping pattern in R1-R4
+        where the narrow q_pred over-subtracted the peak of r_l23. Falls back
+        to raw q_pred when q_match_windows is None (legacy behavior).
+
         Args:
             r_l23_windows: [B, W, N] L2/3 at readout windows.
             q_pred_windows: [B, W, N] V2 predicted orientation prior (softmax).
             mismatch_labels: [B, W] binary (1=mismatch, 0=expected).
             task_state_bw: [B, W, 2] per-presentation task state.
+            q_match_windows: [B, W, N] or None. Rescue 5: q_pred projected
+                through T_stage1 (sensory-basis bump). When supplied, replaces
+                q_pred_windows in the alignment dot product.
 
         Returns:
-            Scalar loss: mean dot(r_l23, q_pred) over expected-routine.
+            Scalar loss: mean dot(r_l23, target) over expected-routine, where
+            target = q_match_windows if provided else q_pred_windows.
         """
         # expected_routine_mask: [B, W], nonzero only where expected AND routine
         expected_routine_mask = (1.0 - mismatch_labels) * task_state_bw[..., 1]
+        # Rescue 5: prefer shape-matched bump q_match when supplied by the
+        # Stage-2 training loop. Otherwise fall back to raw softmax q_pred
+        # (Rescue 1 legacy).
+        target_basis = q_match_windows if q_match_windows is not None else q_pred_windows
         # Per-presentation alignment: dot product across orientation channels
-        alignment = (r_l23_windows * q_pred_windows).sum(dim=-1)  # [B, W]
+        alignment = (r_l23_windows * target_basis).sum(dim=-1)  # [B, W]
         return (alignment * expected_routine_mask).sum() / expected_routine_mask.sum().clamp(min=1)
 
     def detection_confirmation_loss(
@@ -575,6 +601,7 @@ class CompositeLoss(nn.Module):
         task_state: Tensor | None = None,
         task_routing: dict | None = None,
         r_error_windows: Tensor | None = None,
+        q_match_windows: Tensor | None = None,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -907,7 +934,8 @@ class CompositeLoss(nn.Module):
             else:
                 ts_bw_es = task_state
             l_expected_suppress = self.expected_suppress_loss(
-                r_l23_windows, q_pred_windows, mismatch_labels, ts_bw_es
+                r_l23_windows, q_pred_windows, mismatch_labels, ts_bw_es,
+                q_match_windows=q_match_windows,
             )
             total = total + self.lambda_expected_suppress * l_expected_suppress
             loss_dict["expected_suppress"] = l_expected_suppress.item()
