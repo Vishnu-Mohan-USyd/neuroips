@@ -84,6 +84,13 @@ def unfreeze_stage2(net: LaminarV1V2Network) -> None:
     if hasattr(net.v2, "head_vip"):
         for p in net.v2.head_vip.parameters():
             p.requires_grad_(True)
+    # Rescue 4: learnable deep V1 template — Stage-2 module. Same failure
+    # mode applies as for alpha_net / VIP: the blanket Stage-1 freeze turns
+    # off gain_raw, and create_stage2_optimizer filters by requires_grad.
+    # Explicitly re-enable so the optimizer actually steps on it.
+    if hasattr(net, "deep_template_pop"):
+        for p in net.deep_template_pop.parameters():
+            p.requires_grad_(True)
 
 
 def create_stage2_optimizer(
@@ -133,6 +140,14 @@ def create_stage2_optimizer(
     if vip_params:
         param_groups.append(
             {"params": vip_params, "lr": cfg.stage2_lr_v2}
+        )
+    # Rescue 4: deep V1 template gain_raw — given its own group at the V2 LR
+    # so it can be tuned independently if needed. Guarded so R4-off runs
+    # don't register an empty group.
+    if hasattr(net, "deep_template_pop"):
+        param_groups.append(
+            {"params": list(net.deep_template_pop.parameters()),
+             "lr": cfg.stage2_lr_v2}
         )
     # Add optional readout head params
     for head_name in ('surprise_detector', 'error_decoder', 'detection_head', 'l4_decoder', 'mismatch_head', 'local_disc_head'):

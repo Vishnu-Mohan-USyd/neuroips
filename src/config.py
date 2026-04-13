@@ -102,6 +102,22 @@ class ModelConfig:
     tau_vip: int = 10
     sigma_som_surround: float = 20.0
 
+    # Rescue 4: learnable deep V1 template + error-based mismatch readout.
+    # When use_deep_template=True, LaminarV1V2Network constructs a DeepTemplate
+    # leaky integrator driven by (q_pred * pi_pred_eff) with a single learnable
+    # scalar gain (softplus-positive). State lives in NetworkState.deep_template
+    # (already present as a placeholder in state.py). Time constant tau_template
+    # defaults to 10 steps for parity with tau_l23/tau_som/tau_vip.
+    # When use_error_mismatch=True, the mismatch_head in CompositeLoss receives
+    # r_error_windows = relu(r_l23 - r_template) instead of r_l23_windows, i.e.
+    # mismatch is detected from the positive prediction error rather than the
+    # raw representation. Default False on both = legacy bit-identical (the
+    # placeholder `deep_tmpl = q_pred * pi_pred_eff` path is preserved).
+    use_deep_template: bool = False
+    template_gain: float = 1.0
+    tau_template: int = 10
+    use_error_mismatch: bool = False
+
     @property
     def orientation_step(self) -> float:
         return self.orientation_range / self.n_orientations
@@ -257,7 +273,7 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
     model_raw = raw.get("model", {})
     # Remove legacy keys that may exist in old YAML configs
     for legacy_key in ('mechanism', 'n_basis', 'max_apical_gain', 'tau_vip',
-                       'simple_feedback', 'template_gain'):
+                       'simple_feedback'):
         model_raw.pop(legacy_key, None)
     # Extract feedback_mode with default
     feedback_mode = model_raw.pop("feedback_mode", "emergent")

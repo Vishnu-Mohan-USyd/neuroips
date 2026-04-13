@@ -450,6 +450,26 @@ def run_stage2(
                 .mean(dim=2)
             )
 
+        # Rescue 4: extract r_error = relu(r_l23 - r_template) readout windows
+        # when the error-based mismatch readout is enabled. Mirrors the
+        # r_l4_windows extraction above. The subtraction and ReLU are applied
+        # on the raw [B, T, N] trajectory before the per-window time-average
+        # so the positive-error gate acts timestep-by-timestep.
+        r_error_windows = None
+        if getattr(model_cfg, 'use_error_mismatch', False):
+            steps_per = train_cfg.steps_on + train_cfg.steps_isi
+            _, ts_first = readout_indices[0]
+            w_start = ts_first[0]
+            w_end = ts_first[-1] + 1
+            B_batch = r_l23_all.shape[0]
+            S = len(readout_indices)
+            r_err_traj = torch.relu(r_l23_all - aux["deep_template_all"])  # [B, T, N]
+            r_error_windows = (
+                r_err_traj
+                .reshape(B_batch, S, steps_per, N)[:, :, w_start:w_end]
+                .mean(dim=2)
+            )
+
         # Compute mismatch labels from ground truth
         mm_labels_windows = None
         mm_mask_windows = None
@@ -510,6 +530,7 @@ def run_stage2(
             mismatch_mask=mm_mask_windows,
             task_state=task_state_bw,
             task_routing=train_cfg.task_routing,
+            r_error_windows=r_error_windows,
         )
 
         total_loss.backward()

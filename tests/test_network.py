@@ -1017,3 +1017,110 @@ class TestVIPDisinhibition:
         assert spread[0, N // 2] < spread[0, 0], "Opposite side should be lower"
         # Each row sums to 1 (row-normalized)
         assert torch.allclose(kernel.sum(dim=-1), torch.ones(N), atol=1e-5)
+
+
+# ── Rescue 4: Deep V1 Template + Error-based Mismatch Readout ────────────
+
+class TestRescue4DeepTemplate:
+    """Tests for Rescue 4: learnable deep V1 template + r_error mismatch head.
+
+    When use_deep_template=False (default):
+      - No DeepTemplate module constructed.
+      - deep_template trajectory equals the placeholder q_pred * pi_pred_eff.
+      - Outputs are bit-identical to a pre-R4 tree on the same seed.
+
+    When use_deep_template=True:
+      - DeepTemplate is a leaky integrator with a learnable softplus-positive
+        scalar gain. Output differs from the placeholder.
+      - Sensory readout (decoder on r_l23) is unaffected because r_template
+        is not wired into r_l23 within a step.
+    """
+
+    def test_rescue4_off_is_bit_identical_to_current(self):
+        """use_deep_template=False and use_error_mismatch=False should leave
+        the network's forward pass numerically identical to a run that
+        constructs a second, matched-seed baseline network with the same
+        default config. Confirms the R4 changes are no-ops when gated off.
+        """
+        # Two nets, identical seed → identical params → identical forward
+        torch.manual_seed(1234)
+        net_a = LaminarV1V2Network(ModelConfig())
+        torch.manual_seed(1234)
+        net_b = LaminarV1V2Network(ModelConfig(
+            use_deep_template=False, use_error_mismatch=False,
+        ))
+
+        # No deep_template_pop on either net
+        assert not hasattr(net_a, 'deep_template_pop')
+        assert not hasattr(net_b, 'deep_template_pop')
+
+        # Forward on fixed input
+        torch.manual_seed(99)
+        B, T, N = 3, 8, ModelConfig().n_orientations
+        stim = torch.randn(B, T, N).abs()
+        r_a, st_a, aux_a = net_a(stim)
+        r_b, st_b, aux_b = net_b(stim)
+
+        # Every aux tensor must agree bit-for-bit
+        assert (r_a == r_b).all(), "r_l23 must be bit-identical when R4 is off"
+        for key in aux_a:
+            assert (aux_a[key] == aux_b[key]).all(), f"{key} mismatch under R4-off"
+
+        # Legacy deep_template placeholder contract: q_pred * pi_pred_eff.
+        # With use_precision_gating=False, pi_pred_eff = pi_pred_raw * feedback_scale.
+        expected_dt = aux_a['q_pred_all'] * aux_a['pi_pred_eff_all']
+        assert torch.allclose(aux_a['deep_template_all'], expected_dt), (
+            "R4-off deep_template trajectory must be q_pred * pi_pred_eff"
+        )
+
+    def test_rescue4_on_changes_template_but_not_sensory_decoder(self):
+        """With use_deep_template=True, the template integrator is active
+        (output differs from q_pred * pi_pred_eff), but r_l23 is unchanged
+        because r_template does not feed back into L2/3 within a step.
+        """
+        # Construct both nets with matched seeds so params are identical
+        # apart from the extra gain_raw scalar (which is deterministic init).
+        torch.manual_seed(7)
+        net_off = LaminarV1V2Network(ModelConfig(use_deep_template=False))
+        torch.manual_seed(7)
+        net_on = LaminarV1V2Network(ModelConfig(
+            use_deep_template=True, template_gain=1.0, tau_template=10,
+        ))
+
+        assert not hasattr(net_off, 'deep_template_pop')
+        assert hasattr(net_on, 'deep_template_pop')
+        # gain = softplus(gain_raw) recovers the target template_gain=1.0
+        assert torch.isclose(
+            net_on.deep_template_pop.gain, torch.tensor(1.0), atol=1e-6,
+        )
+        # gain_raw is trainable
+        assert net_on.deep_template_pop.gain_raw.requires_grad
+
+        # Run identical forward on both
+        torch.manual_seed(11)
+        B, T, N = 2, 12, ModelConfig().n_orientations
+        stim = torch.randn(B, T, N).abs()
+        r_off, _, aux_off = net_off(stim)
+        r_on, _, aux_on = net_on(stim)
+
+        # r_l23 must match: template is consumed only downstream, not within step
+        assert torch.allclose(r_off, r_on, atol=1e-6), (
+            "r_l23 must be unchanged by use_deep_template (no within-step coupling)"
+        )
+        # q_pred and pi must also match (V2 is parameter-identical by seed)
+        assert torch.allclose(aux_off['q_pred_all'], aux_on['q_pred_all'])
+        assert torch.allclose(aux_off['pi_pred_all'], aux_on['pi_pred_all'])
+
+        # Deep template trajectory MUST differ: R4 is a leaky integrator,
+        # legacy is the instantaneous product. At t=0 with r_prev=0 they
+        # differ by the (drive/tau - 0) step vs. raw drive, so the max-abs
+        # deviation is strictly positive.
+        dt_diff = (aux_off['deep_template_all'] - aux_on['deep_template_all']).abs().max()
+        assert dt_diff > 1e-4, (
+            f"DeepTemplate must change deep_template_all (max-abs diff = {dt_diff:.2e})"
+        )
+
+        # r_error = relu(r_l23 - r_template) is non-negative and well-shaped
+        r_error = torch.relu(r_on - aux_on['deep_template_all'])
+        assert r_error.shape == (B, T, N)
+        assert (r_error >= 0).all()

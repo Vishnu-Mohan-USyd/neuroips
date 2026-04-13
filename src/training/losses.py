@@ -57,6 +57,11 @@ class CompositeLoss(nn.Module):
         self.n_orient = N
         self.period = model_cfg.orientation_range  # 180.0
 
+        # Rescue 4: when True, the mismatch_head is applied to
+        # r_error_windows = relu(r_l23 - r_template) instead of r_l23_windows.
+        # Default False → legacy bit-identical.
+        self.use_error_mismatch = getattr(model_cfg, 'use_error_mismatch', False)
+
         # Trainable linear decoder: L2/3 activity -> orientation logits
         self.orientation_decoder = nn.Linear(N, N)
 
@@ -569,6 +574,7 @@ class CompositeLoss(nn.Module):
         mismatch_mask: Tensor | None = None,
         task_state: Tensor | None = None,
         task_routing: dict | None = None,
+        r_error_windows: Tensor | None = None,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -777,6 +783,16 @@ class CompositeLoss(nn.Module):
 
         # L2/3 mismatch detection loss (deviance objective)
         if self.lambda_mismatch > 0 and mismatch_labels is not None:
+            # Rescue 4: when use_error_mismatch=True and r_error_windows was
+            # provided, route the mismatch_head over the positive prediction
+            # error r_error = relu(r_l23 - r_template) instead of r_l23.
+            # Shape contract is identical ([B, W, N]) so the head signature
+            # is unchanged. Falls back to r_l23_windows when R4 is off or the
+            # caller did not plumb r_error through, preserving legacy behavior.
+            if self.use_error_mismatch and r_error_windows is not None:
+                mm_features = r_error_windows
+            else:
+                mm_features = r_l23_windows
             if routing_active:
                 # Per-presentation BCE gated by w_mismatch_bw [B, W].
                 #
@@ -789,9 +805,9 @@ class CompositeLoss(nn.Module):
                 # averaged over all (b, s) → `.mean()` over B*W. For a
                 # balanced half-routine batch the effective mismatch weight
                 # is 0.5 * lambda_mismatch * routine_mm_mean.
-                B_m, W_m, N_m = r_l23_windows.shape
+                B_m, W_m, N_m = mm_features.shape
                 mm_logits = self.mismatch_head(
-                    r_l23_windows.reshape(B_m * W_m, N_m)
+                    mm_features.reshape(B_m * W_m, N_m)
                 )  # [B*W, 1]
                 mm_targets = mismatch_labels.reshape(B_m * W_m, 1).float()
                 n_pos = mm_targets.sum().clamp(min=1.0)
@@ -808,7 +824,7 @@ class CompositeLoss(nn.Module):
                 l_mismatch = (raw_bw * w_mismatch_bw * mask_bw).mean()
             else:
                 l_mismatch = self.mismatch_detection_loss(
-                    r_l23_windows, mismatch_labels, mismatch_mask
+                    mm_features, mismatch_labels, mismatch_mask
                 )
             total = total + self.lambda_mismatch * l_mismatch
             loss_dict["mismatch"] = l_mismatch.item()

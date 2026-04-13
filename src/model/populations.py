@@ -1,4 +1,4 @@
-"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing."""
+"""V1 neural populations: V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing, DeepTemplate."""
 
 from __future__ import annotations
 
@@ -368,5 +368,58 @@ class VIPRing(nn.Module):
             -r_vip_prev + rectified_softplus(vip_drive)
         )
         return r_vip
+
+
+class DeepTemplate(nn.Module):
+    """Rescue 4: learnable deep V1 expectation template (leaky integrator).
+
+    Driven by the feature-specific V2 prediction q_pred weighted by precision
+    pi_pred_eff, with a single softplus-positive scalar gain. Shares τ with the
+    other ring populations by default (tau_template=10 steps).
+
+    Equation:
+        drive = gain * q_pred * pi_pred_eff        # [B, N]
+        r_t   = r_{t-1} + (drive - r_{t-1}) / τ    # leaky integrator
+
+    Notes
+    -----
+    - Output is not rectified: q_pred is a softmax (non-negative) and gain is
+      softplus-positive, so the drive is already non-negative. Keeping the
+      template linear in the prediction avoids double-rectification and makes
+      r_error = relu(r_l23 - r_template) the only gate that can zero out
+      locations where the representation is below expectation.
+    - State lives in NetworkState.deep_template (shape [B, N]), already
+      plumbed through the trajectory buffer and analysis pipeline.
+    """
+
+    def __init__(self, cfg: "ModelConfig"):
+        super().__init__()
+        self.tau = cfg.tau_template
+        raw_init = math.log(math.exp(cfg.template_gain) - 1.0)
+        self.gain_raw = nn.Parameter(torch.tensor(raw_init))
+
+    @property
+    def gain(self) -> Tensor:
+        """Softplus-positive scalar gain on the prediction drive."""
+        return F.softplus(self.gain_raw)
+
+    def forward(
+        self,
+        q_pred: Tensor,
+        pi_pred_eff: Tensor,
+        r_prev: Tensor,
+    ) -> Tensor:
+        """One Euler step for the deep-V1 template integrator.
+
+        Args:
+            q_pred: [B, N] — V2 feature-specific prediction (softmax).
+            pi_pred_eff: [B, 1] — effective precision (pi_pred_raw * feedback_scale).
+            r_prev: [B, N] — previous template state.
+
+        Returns:
+            r_t: Updated template state [B, N].
+        """
+        drive = self.gain * q_pred * pi_pred_eff
+        return r_prev + (drive - r_prev) / self.tau
 
 

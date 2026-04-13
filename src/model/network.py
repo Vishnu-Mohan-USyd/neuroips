@@ -11,7 +11,7 @@ from torch import Tensor
 
 from src.config import ModelConfig
 from src.state import NetworkState, StepAux, initial_state
-from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing
+from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing, DeepTemplate
 from src.model.v2_context import V2ContextModule
 
 
@@ -44,6 +44,13 @@ class LaminarV1V2Network(nn.Module):
             self.w_vip_som_raw = nn.Parameter(torch.tensor(
                 math.log(math.exp(0.5) - 1.0)  # inverse softplus of 0.5
             ))
+
+        # Rescue 4: learnable deep V1 template (leaky integrator driven by
+        # q_pred * pi_pred_eff). When disabled, network.step() keeps the
+        # bounded placeholder `deep_tmpl = q_pred * pi_pred_eff` so downstream
+        # consumers (energy cost, analysis) are bit-identical to pre-R4.
+        if getattr(cfg, 'use_deep_template', False):
+            self.deep_template_pop = DeepTemplate(cfg)
 
         # Fix 1: dual V2 architecture — two independent V2 modules.
         self.use_dual_v2 = getattr(cfg, "use_dual_v2", False)
@@ -248,8 +255,15 @@ class LaminarV1V2Network(nn.Module):
         # 5. L2/3 update
         r_l23 = self.l23(r_l4, state.r_l23, center_exc, r_som, r_pv)
 
-        # Deep template placeholder (q_pred * pi_eff, retained for energy cost compatibility)
-        deep_tmpl = q_pred * pi_pred_eff
+        # Deep template:
+        #   Rescue 4 (use_deep_template=True): learnable leaky integrator
+        #     driven by q_pred * pi_pred_eff, state = NetworkState.deep_template.
+        #   Legacy (default): bounded placeholder q_pred * pi_pred_eff so the
+        #     downstream energy cost and analysis consumers are bit-identical.
+        if hasattr(self, 'deep_template_pop'):
+            deep_tmpl = self.deep_template_pop(q_pred, pi_pred_eff, state.deep_template)
+        else:
+            deep_tmpl = q_pred * pi_pred_eff
 
         new_state = NetworkState(
             r_l4=r_l4,
