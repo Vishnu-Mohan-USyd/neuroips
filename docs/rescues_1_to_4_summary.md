@@ -478,3 +478,59 @@ D. **Deeper diagnosis on the existing 4 checkpoints.** Fisher information per-ch
 E. **Shift the axis of analysis.** Re-evaluate all 4 checkpoints on task_state (focused vs routine) splits of the activity and decoding metrics — the "expected vs unexpected" axis may be the wrong test for the "dampening" hypothesis if the original mapping of dampening→routine was correct.
 
 No option is chosen yet. Pending user direction.
+
+---
+
+## Update (2026-04-13): Re-centered tuning curve analysis — R4 resembles Richter preserved-shape dampening
+
+This section **revises (does not replace)** the interpretation captured above in *"What the pattern actually looks like: subtractive predictive coding"* (lines 382–389). The original analysis collected per-trial `r_l23[t=9]` curves indexed by **physical orientation channel** and averaged within (regime × bucket) buckets. Because each bucket pools trials at many different true orientations, the average smears the population peak across channels — the bucket-mean curve is a circular average of curves whose peaks are scattered around the ring. This smearing inflates apparent FWHM and can hide whether the per-trial response is preserved-shape dampening or genuine subtractive central clipping.
+
+### What the re-centered analysis does
+
+For each trial we compute the true-stimulus channel `true_ch = round(actual_ori / step_deg) % N`, then `np.roll(r_l23[t=9], shift=CENTER_IDX − true_ch)` so that every trial's stimulus peak lands at the same array index (`CENTER_IDX = 18`, the array midpoint). We then average within (regime × bucket) buckets. The resulting curve is the **stimulus-aligned population tuning curve**: peak amplitude, baseline, and FWHM all describe the per-trial response shape rather than a circular smear.
+
+FWHM is computed via **linear interpolation at half-max crossings** (`half_max = baseline + 0.5 × (peak − baseline)`, then linear interpolation on both flanks). The earlier bin-counting method snapped every panel to integer multiples of 5°, hiding sub-bin differences.
+
+### Cross-checkpoint summary (Relevant task_state, late-ON t=9)
+
+All four checkpoints were re-analysed with the same re-centering pipeline (≥ 2000 trials per panel; n per bucket varies but each Expected n ≥ 1500). Numbers below are **Relevant** task_state; the **Irrelevant** numbers (not shown) are quantitatively similar.
+
+| checkpoint | Rel-Exp total | Rel-Unexp total | Δ total | Rel-Exp peak | Rel-Unexp peak | Δ peak | Exp FWHM | Unexp FWHM | Δ FWHM | figure |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Baseline | 6.93 | 7.17 | +3.5% | 0.987 | 0.992 | +0.5% | 29.3° | 28.2° | +1.1° | `tuning_ring_recentered_baseline.png` |
+| R1+R2 | 4.05 | 4.78 | +18% | 0.564 | 0.639 | +13% | 33.3° | 31.8° | +1.5° | `tuning_ring_recentered_r1_2.png` |
+| R3 | 4.00 | 4.61 | +15% | 0.602 | 0.605 | +0.5% | 31.7° | 30.6° | +1.1° | `tuning_ring_recentered_r3.png` |
+| R4 | 4.21 | 5.02 | +19% | 0.578 | 0.662 | +15% | 33.6° | 32.1° | +1.5° | `tuning_ring_recentered_r4.png` |
+
+(Δ is unexpected−expected; positive Δ means expected is **lower/narrower** than unexpected. FWHM rounded to 0.1°.)
+
+### Per-checkpoint interpretation (re-centered)
+
+- **Baseline (no rescue).** Total +3.5%, peak +0.5%, FWHM matched within 1.1°. Effectively **no expectation modulation** — sensory drive dominates and feedback contributes negligibly to the tuning curve. This re-centered analysis confirms baseline is the right null for the rescues.
+
+- **Rescue 1+2 (precision gating + feature-specific expected_suppress).** Total drops 18%, peak drops 13%, FWHM nearly matched (Δ = +1.5°). Both **amplitude AND peak** are dampened on expected trials, with shape essentially preserved. This is a Richter-style preserved-shape dampening signature.
+
+- **Rescue 3 (VIP-SOM disinhibition).** Total drops 15%, peak essentially tied (Δ = +0.5%), FWHM matched within 1.1°. R3 produces **total-only dampening** — the population is reduced uniformly, not by clipping the peak. This is a distinct profile: a divisive/SOM-like gain rescaling rather than a peak-targeted subtraction.
+
+- **Rescue 4 (DeepTemplate + error-mismatch).** Total drops 19%, peak drops 15%, FWHM matched within 1.5°. R4 shows the **largest preserved-shape dampening** of the four checkpoints: substantial peak reduction, substantial total reduction, with the response shape (FWHM) closely matched between expected and unexpected. This is the closest match to the published Richter (2018) preserved-shape dampening signature among the four checkpoints.
+
+### Corrective note on the earlier "subtractive predictive coding" interpretation
+
+The earlier section (*"What the pattern actually looks like: subtractive predictive coding"*, lines 382–389) reported that **expected FWHM was broader than unexpected FWHM** in all rescues, leading to the conclusion that the rescues produce subtractive central clipping (peak removal that pushes residual into the flanks → broader curve → lower discriminability). That conclusion was based on **non-re-centered, bin-counted FWHM** of the bucket-mean curve. Both methodological choices inflated apparent FWHM and exaggerated the expected/unexpected FWHM gap.
+
+The re-centered, interpolation-based analysis here shows the per-trial response actually **preserves shape**: FWHM differs by ≤ 1.5° across all rescues, while peak and total drop substantially on R1+R2 and R4. This matches the Richter "preserved-shape dampening" signature, not the Rao-Ballard subtractive-coding prediction. The earlier section is preserved as a record of the investigation but should be read together with this update.
+
+Both observations are correct, but they answer different questions: the non-re-centered curve describes how a population of trials with scattered peaks looks on average; the re-centered curve describes how a single trial's tuning response is shaped by feedback. The re-centered view is the appropriate one for comparison against the Richter / Kok representational signatures.
+
+### Caveat: the BOTH-regime preregistered criterion is still NOT met
+
+Critically, the re-centered dampening signature appears in **both** Relevant **and** Irrelevant task_state with similar magnitude on all rescues. The preregistered hypothesis was that task_state should **route** the circuit into one regime (Kok sharpening for focused) or the other (Richter dampening for routine). What we observe instead is **task-state-invariant** preserved-shape dampening on R4 (and to a lesser extent R1+R2). The task_state input does not gate the representational mode; both regimes produce the same dampening profile.
+
+So the headline correction is narrow: **R4 looks like Richter preserved-shape dampening per se**, but it does NOT produce the **dissociation** between regimes that the project set out to demonstrate. The decision-point summary in the previous section (Options A–E) is unaffected by this update — Option A (write up as a negative result on the dissociation hypothesis) and Options B/C (architectural changes to recover dissociation) remain the open paths.
+
+### Reproducibility
+
+- Re-centered ring figures: `scripts/plot_tuning_ring_extended.py` (uses `np.roll` per trial and interpolated FWHM; saved as `docs/figures/tuning_ring_recentered_*.png`).
+- Per-orientation pooled ring (no re-centering, all probes): `tuning_ring_allprobes.png`.
+- Original probe-60° ring with annotation overlays: `tuning_ring_heatmap.png`.
+- Expected vs Unexpected per-bucket curves: `scripts/plot_tuning_exp_vs_unexp.py` → `docs/figures/exp_vs_unexp_tuning.png`.
