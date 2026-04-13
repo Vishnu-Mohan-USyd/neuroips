@@ -280,3 +280,55 @@ The model's parameter space maps onto the normalization framework:
 2. Full M1-M14 analysis battery on e1 and c2
 3. Quantitative comparison to Kok (2012) and Richter (2018) effect sizes
 4. Fine-tuning l23w around 2.5-3.5 at lambda_sensory=0.3
+
+---
+
+## 9. Rescue chain results (failed-dual-regime-experiments branch)
+
+The 25-run sweep above maps the 3 feedback regimes that emerge from the
+**baseline** single-network architecture by varying loss weights alone.
+Subsequent work on branch `failed-dual-regime-experiments` attempted to
+recover **task-state-selective** sharpening AND dampening from a single
+checkpoint by adding architectural rescues (R1+R2 / R3 / R4 / R5).
+
+### Cross-checkpoint summary (re-centered tuning, Relevant task_state, late-ON t=9)
+
+Per-trial `r_l23` curves are stimulus-aligned (`np.roll` so true_ch lands
+at the array midpoint), then averaged within (regime × bucket) buckets.
+FWHM uses linear interpolation at half-max crossings. ≥ 1500 trials per
+panel.
+
+| Checkpoint | Rel-Exp total | Rel-Unexp total | Δ total | Rel-Exp peak | Rel-Unexp peak | Δ peak | Exp FWHM | Unexp FWHM | Δ FWHM |
+|---|---|---|---|---|---|---|---|---|---|
+| Baseline (simple_dual) | 6.93 | 7.17 | +3.5% | 0.987 | 0.992 | +0.5% | 29.3° | 28.2° | +1.1° |
+| Rescue 1+2 | 4.05 | 4.78 | +18%  | 0.564 | 0.639 | +13%  | 33.3° | 31.8° | +1.5° |
+| Rescue 3   | 4.00 | 4.61 | +15%  | 0.602 | 0.605 | +0.5% | 31.7° | 30.6° | +1.1° |
+| Rescue 4   | 4.21 | 5.02 | +19%  | 0.578 | 0.662 | +15%  | 33.6° | 32.1° | +1.5° |
+
+(Δ is unexpected − expected; positive Δ means expected is **lower / narrower** than unexpected.)
+
+### Take-away
+
+**R4 (DeepTemplate + error-mismatch) exhibits the cleanest preserved-shape
+dampening signature** (peak −15%, total −19%, FWHM matched within 1.5°
+between expected and unexpected trials). This is the closest match to
+Richter (2018) preserved-shape dampening among the four checkpoints. R1+R2
+shows similar peak+total dampening. R3 (VIP) shows total-only dampening
+(divisive). Baseline shows essentially no expectation modulation.
+
+The dampening signature appears in **both** Relevant and Irrelevant
+task_state with similar magnitude. The preregistered BOTH-regime criterion
+(focused → Kok sharpening, routine → Richter dampening from one network)
+is **not** met — task_state does not gate the representational mode.
+
+### Figures
+
+- `docs/figures/tuning_ring_recentered_baseline.png`
+- `docs/figures/tuning_ring_recentered_r1_2.png`
+- `docs/figures/tuning_ring_recentered_r3.png`
+- `docs/figures/tuning_ring_recentered_r4.png` ← main visual result
+
+### Full writeup
+
+`docs/rescues_1_to_4_summary.md` (and its 2026-04-13 update section
+correcting the earlier "subtractive predictive coding" interpretation).

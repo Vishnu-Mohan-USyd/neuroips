@@ -142,3 +142,25 @@ Stimulus -> L4 -> PV (normalization)
 245 tests covering V1 circuit, V2 learned prior, feedback pathway,
 training pipeline, config parsing, experimental paradigms, analysis suite,
 and regression tests. Run with `python3 -m pytest tests/ -v`.
+
+## Optional rescue-chain modules (failed-dual-regime-experiments branch)
+
+The architecture above describes the **baseline** model on `main` /
+`single-network-dual-regime`. On branch `failed-dual-regime-experiments`,
+five optional config flags add rescue-chain mechanisms layered on top of
+the baseline. Each rescue isolates a specific architectural change in an
+attempt to recover task-state-selective sharpening AND dampening.
+
+| Flag | Rescue | Mechanism |
+|---|---|---|
+| `use_precision_gating` | R2 | Scales feedback by `pi_pred / pi_max` so V2-uncertain feedback is attenuated. |
+| `use_vip` | R3 | Adds VIPRing population + structured center-surround SOM disinhibition kernel. |
+| `use_deep_template` | R4 | Adds DeepTemplate leaky-integrator population maintaining a V1-side expectation template. |
+| `use_error_mismatch` | R4 | Routes the mismatch head from `r_error = relu(r_l23 - r_template)` instead of raw `r_l23`. |
+| `use_shape_matched_prediction` | R5 | Projects `q_pred` through a fixed Stage-1-calibrated buffer `T_stage1` before subtractive suppression. |
+
+R1 is `lambda_expected_suppress > 0` (loss-only; no architectural flag). All
+five flags default to `false` so the baseline architecture is unchanged when
+they are absent. See `docs/rescues_1_to_4_summary.md` for the full
+per-rescue rationale, results, and the 2026-04-13 re-centered analysis
+correcting the earlier "subtractive predictive coding" interpretation.

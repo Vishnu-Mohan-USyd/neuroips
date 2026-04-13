@@ -1,6 +1,8 @@
 # Training Pipeline, Experimental Paradigms, and Analysis Suite
 ## Comprehensive Design Document for V1-V2 Expectation Suppression Model
 
+> **Scope note (2026-04-13):** This document specifies the **baseline** training pipeline + paradigms + analyses on `main` / `single-network-dual-regime`. It does not describe the architectural rescues (R1+R2, R3, R4, R5) added on branch `failed-dual-regime-experiments`. Those rescues use the same Stage 1 + Stage 2 protocol but enable additional optional config flags (`use_precision_gating`, `use_vip`, `use_deep_template`, `use_error_mismatch`, `use_shape_matched_prediction`) and add `lambda_expected_suppress` to the loss. See `docs/rescues_1_to_4_summary.md` for the full rescue taxonomy and results, and `ARCHITECTURE.md` § "Optional rescue-chain modules" for the per-flag mechanism summary.
+
 ---
 
 ## Table of Contents

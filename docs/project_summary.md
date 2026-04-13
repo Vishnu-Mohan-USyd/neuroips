@@ -412,3 +412,37 @@ The focused-regime gradient (3.0× sensory) dominates the V2 optimization landsc
 | Fix 4 | `fix4_recipe/.../checkpoint.pt` | `sweep_fix4_match_recipe.yaml` | Single V2, routine sens=0 energy=2× | s_acc_rel=0.654, s_acc_irr=0.600, mm_acc_irr=0.890 |
 
 All checkpoints at: `/home/vishnu/neuroips/{tag}/freshstart/results/simple_dual/emergent_seed42/checkpoint.pt`
+
+---
+
+## 13. Rescue chain (failed-dual-regime-experiments branch)
+
+**Branch:** `failed-dual-regime-experiments` (analysis figures + updated docs on `dampening-analysis`).
+
+After training the baseline single-network-dual-regime checkpoints (Section 5), four architectural rescues — **R1+R2, R3, R4, R5** — were attempted to recover the preregistered task-state-selective sharpening AND dampening from one architecture. Each rescue is gated by config flags so the baseline is unchanged when the flags are absent.
+
+| Rescue | Config flags added | Mechanism in one line |
+|---|---|---|
+| R1 | `lambda_expected_suppress > 0` (loss-only) | Subtract a feature-specific predicted-orientation profile from L2/3 activity. |
+| R2 | `use_precision_gating: true` | Scale feedback by `pi_pred / pi_max` so V2-uncertain feedback is attenuated. |
+| R3 | `use_vip: true` | Add VIPRing population + structured center-surround SOM disinhibition kernel. |
+| R4 | `use_deep_template: true`, `use_error_mismatch: true` | DeepTemplate leaky integrator for the V1 expectation template; mismatch head reads `r_error = relu(r_l23 - r_template)`. |
+| R5 | `use_shape_matched_prediction: true` | Project `q_pred` through a fixed Stage-1-calibrated buffer `T_stage1` before subtractive suppression. |
+
+### Headline result
+
+The rescues produce increasingly strong expectation suppression (Expected L2/3 activity < Unexpected) but the dampening is **task-state-invariant**, not regime-selective. **R4 (DeepTemplate + error-mismatch)** shows the cleanest Richter (2018) preserved-shape dampening pattern (peak −15%, total −19%, FWHM matched within 1.5° between expected and unexpected). Main visual: `docs/figures/tuning_ring_recentered_r4.png`.
+
+The preregistered BOTH-regime criterion (focused → Kok sharpening, routine → Richter dampening from one checkpoint) is **not** met by any of the four rescues. The dampening signature appears in both Relevant and Irrelevant task_state with similar magnitude — task_state does not gate the representational mode.
+
+### Branch / artefact map
+
+- **Baseline (Section 5):** branch `single-network-dual-regime`, original simple_dual checkpoints.
+- **Rescues R1+R2, R3, R4, R5:** branch `failed-dual-regime-experiments`. Configs: `config/sweep/sweep_rescue_{1_2,3,4,5}.yaml`.
+- **Re-centered analysis + figures:** branch `dampening-analysis`. Scripts: `scripts/plot_tuning_ring_extended.py`, `scripts/plot_tuning_ring_heatmap.py`, `scripts/plot_tuning_exp_vs_unexp.py`. Figures in `docs/figures/`.
+
+### Where to read the details
+
+`docs/rescues_1_to_4_summary.md` — full per-rescue rationale, metrics, and the 2026-04-13 update section that corrects the earlier "subtractive predictive coding" interpretation (which was based on non-re-centered, bin-counted FWHM and exaggerated the expected/unexpected FWHM gap).
+
+`RESULTS.md` § 9 — cross-checkpoint summary table and headline take-away.
