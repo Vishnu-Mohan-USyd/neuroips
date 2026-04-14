@@ -332,3 +332,30 @@ is **not** met — task_state does not gate the representational mode.
 
 `docs/rescues_1_to_4_summary.md` (and its 2026-04-13 update section
 correcting the earlier "subtractive predictive coding" interpretation).
+
+### 2026-04-14 dampening-analysis follow-up (aligned pure R1+2 only)
+
+The `dampening-analysis` branch now also carries a narrower follow-up on the
+aligned pure-R1+2 checkpoint
+`r12_fb24_sharp_050_width_075_rec11_aligned`. This is **not** a new all-rescue
+comparison; it adds raw/delta/baseline surfaces plus paired-state
+branch-counterfactual analysis for that one aligned checkpoint only.
+
+Source-of-truth artefacts:
+- `results/r12_fb24_sharp_050_width_075_rec11_aligned/tuning_ring_recentered_raw_branch_counterfactual.json`
+- `results/r12_fb24_sharp_050_width_075_rec11_aligned/tuning_ring_recentered_delta_branch_counterfactual.json`
+- `results/r12_fb24_sharp_050_width_075_rec11_aligned/tuning_ring_recentered_baseline_branch_counterfactual.json`
+
+Relevant branch-counterfactual summary:
+- `baseline`: expected and unexpected are identical after the centering fix
+  (`total=3.517256`, `peak=0.375691`, `FWHM=39.389691°` for both).
+- `raw`: expected is lower and slightly narrower than unexpected
+  (`peak 0.449558 vs 0.507532`, `FWHM 33.237447° vs 33.515513°`).
+- `delta`: expected is much lower and much narrower than unexpected
+  (`peak 0.072438 vs 0.491614`, `FWHM 27.581737° vs 45.064195°`).
+
+The baseline-centering bug was analysis-only. Branch-counterfactual baseline
+mode returned the same pre-probe tensor for both branches, but the collector
+used different recentering channels, rotating identical baselines into
+artificially opposite shapes. Baseline mode now uses the shared
+predicted/expected channel for both branches.

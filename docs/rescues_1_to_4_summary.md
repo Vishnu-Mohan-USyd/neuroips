@@ -10,6 +10,35 @@
 
 The goal of these rescues was to make a single trained checkpoint of the V1–V2 laminar network exhibit **both** sharpening-like behaviour (Kok 2012) in focused/relevant task mode **and** dampening-like behaviour (Alink 2010 / Richter 2018) in routine/irrelevant task mode. Three successive architectural rescues were trained on top of the `simple_dual` emergent baseline. None of the three rescues produced a Richter-style dampening signature (activity reduction with preserved decoding). Instead, all three rescues (and baseline weakly) show a **subtractive predictive-coding** pattern: expected stimuli produce lower L2/3 activity AND lower decoding accuracy, with a broader (not narrower) tuning curve. The expectation-suppression effect is feedback-driven (FB-OFF control collapses the effect) and grows with each rescue (R1+2: +33%, R3: +19%, R4: +34% L2/3 activity gap). Sharpening metrics (M7 match-vs-near-miss, FWHM narrowing under FB ON) are present across all three rescues, but they reflect feedback-on-vs-off comparisons, not expected-vs-unexpected comparisons. The mismatch accuracy dissociation (mm_acc_irr vs mm_acc_rel) was actually strongest in **R1+2** (Δ=+0.220), weakened in R3 (+0.155) and R4 (+0.168). No single checkpoint cleanly satisfies the preregistered BOTH-regime criterion.
 
+### 2026-04-14 dampening-analysis addendum
+
+The current `dampening-analysis` branch carries a narrower follow-up that is
+easy to confuse with this document's cross-checkpoint rescue summary. To keep
+scope honest: that follow-up is **aligned pure-R1+2 only** on checkpoint
+`r12_fb24_sharp_050_width_075_rec11_aligned`; it is **not** a fresh all-rescue
+reanalysis.
+
+That follow-up adds:
+- `raw`, `delta`, and `baseline` response surfaces
+- paired-state `branch_counterfactual` analysis from identical frozen
+  pre-probe recurrent states
+- an analysis-only baseline-centering fix
+
+Relevant branch-counterfactual outcome for the aligned pure-R1+2 checkpoint:
+- `baseline`: identical after the fix
+  (`peak=0.375691`, `FWHM=39.389691°` for both expected and unexpected).
+- `raw`: expected lower and slightly narrower than unexpected
+  (`peak 0.449558 vs 0.507532`, `FWHM 33.237447° vs 33.515513°`).
+- `delta`: expected much lower and much narrower than unexpected
+  (`peak 0.072438 vs 0.491614`, `FWHM 27.581737° vs 45.064195°`).
+
+Baseline-centering bug and fix, briefly:
+the branch-counterfactual baseline path already returned the same pre-probe
+tensor for both branches, but it used different branch probe channels for
+re-centering. That rotated identical baselines into artificially opposite
+shapes. Baseline mode now uses the shared predicted/expected channel for both
+branches.
+
 ---
 
 ## Context

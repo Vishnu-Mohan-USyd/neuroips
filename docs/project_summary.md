@@ -1,7 +1,7 @@
 # Project Summary: Laminar V1-V2 Expectation Suppression Model
 
-**Last updated:** 2026-04-12
-**Branch:** `single-network-dual-regime`
+**Last updated:** 2026-04-14
+**Branch:** `dampening-analysis`
 **Repository:** `/mnt/c/Users/User/codingproj/freshstart`
 **Remote GPU:** `vishnu@100.123.25.88` (reuben-ml, Tailscale)
 
@@ -439,10 +439,39 @@ The preregistered BOTH-regime criterion (focused → Kok sharpening, routine →
 
 - **Baseline (Section 5):** branch `single-network-dual-regime`, original simple_dual checkpoints.
 - **Rescues R1+R2, R3, R4, R5:** branch `failed-dual-regime-experiments`. Configs: `config/sweep/sweep_rescue_{1_2,3,4,5}.yaml`.
-- **Re-centered analysis + figures:** branch `dampening-analysis`. Scripts: `scripts/plot_tuning_ring_extended.py`, `scripts/plot_tuning_ring_heatmap.py`, `scripts/plot_tuning_exp_vs_unexp.py`. Figures in `docs/figures/`.
+- **Re-centered analysis + figures:** branch `dampening-analysis`. Scripts: `scripts/plot_tuning_ring_extended.py`, `scripts/plot_tuning_ring_heatmap.py`, `scripts/plot_tuning_exp_vs_unexp.py`. This branch now also carries raw/delta/baseline surfaces and paired-state branch-counterfactual analysis. Figures in `docs/figures/`.
 
 ### Where to read the details
 
 `docs/rescues_1_to_4_summary.md` — full per-rescue rationale, metrics, and the 2026-04-13 update section that corrects the earlier "subtractive predictive coding" interpretation (which was based on non-re-centered, bin-counted FWHM and exaggerated the expected/unexpected FWHM gap).
 
 `RESULTS.md` § 9 — cross-checkpoint summary table and headline take-away.
+
+### 2026-04-14 aligned pure-R1+2 branch-counterfactual follow-up
+
+The current `dampening-analysis` branch also contains a targeted follow-up on
+the aligned pure-R1+2 checkpoint
+`r12_fb24_sharp_050_width_075_rec11_aligned`. This is deliberately narrower
+than the cross-checkpoint rescue summary: it does **not** re-rank R1–R4, and
+it does not broaden into a full all-rescue reanalysis.
+
+The added analysis surfaces are:
+- `raw`: the legacy late-ON `r_l23[t_readout]`
+- `delta`: the evoked response `r_l23[t_readout] - r_l23[t_isi_last]`
+- `baseline`: the inherited pre-probe state `r_l23[t_isi_last]`
+- `branch_counterfactual`: branch the exact same frozen pre-probe recurrent
+  state into an expected probe and an unexpected probe
+
+On the paired-state **Relevant** surface for the aligned checkpoint:
+- `baseline` is identical after the centering fix
+  (`peak=0.375691`, `FWHM=39.389691°` for both expected and unexpected).
+- `raw` shows expected lower and slightly narrower than unexpected
+  (`peak 0.449558 vs 0.507532`, `FWHM 33.237447° vs 33.515513°`).
+- `delta` shows expected much lower and much narrower than unexpected
+  (`peak 0.072438 vs 0.491614`, `FWHM 27.581737° vs 45.064195°`).
+
+The baseline-centering fix is analysis-only. Before the fix, the
+branch-counterfactual baseline path returned the same pre-probe tensor for
+both branches but re-centered them by different branch probe channels, which
+made identical baselines look artificially opposite. Baseline mode now uses
+the shared predicted/expected channel for both branches.
