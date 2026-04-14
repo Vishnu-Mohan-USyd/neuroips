@@ -90,6 +90,13 @@ class ModelConfig:
     # scaled only by feedback_scale, precision unused in dynamics).
     use_precision_gating: bool = False
 
+    # R1+2-only surround option: spread the inhibitory feedback drive
+    # (`som_drive_fb`) with a fixed circular Gaussian kernel before SOM
+    # integration. This leaves `center_exc` unchanged and does not instantiate
+    # any Rescue-3 VIP machinery.
+    use_fb_surround: bool = False
+    sigma_fb_surround: float = 20.0
+
     # Rescue 3: VIP-SOM disinhibition circuit. When True, adds:
     #   - VIPRing population driven by V2 head_vip (Linear H→N)
     #   - Structured SOM surround kernel (fixed circular Gaussian)
@@ -184,6 +191,19 @@ class TrainingConfig:
     # Provides direct gradient toward Kok-style expectation suppression.
     # 0.0 = disabled → legacy bit-identical.
     lambda_expected_suppress: float = 0.0
+    # Expected-only width loss: penalize shoulder activity above a per-trial
+    # half-max reference. The center dead zone remains protected; the shoulder
+    # mask can now be controlled explicitly via lower/upper bounds. When those
+    # bounds are omitted, the legacy shoulder geometry is preserved:
+    #   lower = expected_width_deadzone_deg
+    #   upper = expected_width_deadzone_deg + 10.0
+    # so the default 10 deg dead zone still yields the original 10-20 deg band.
+    # Unlike expected_suppress, this term is applied on all expected
+    # presentations regardless of task state. 0.0 = disabled → clean no-op.
+    lambda_expected_width: float = 0.0
+    expected_width_deadzone_deg: float = 10.0
+    expected_width_shoulder_lower_deg: float | None = None
+    expected_width_shoulder_upper_deg: float | None = None
     # Phase 2.4: routine E/I symmetry-break loss.
     #   shape_per_sample = |center_exc|.mean(T,N) - 0.5 * |som_drive_fb|.mean(T,N)
     # Weighted per-sample by task_routing[*]['routine_shape'] (0 for focused,
@@ -324,6 +344,10 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         lambda_pred_suppress=train_raw.get("lambda_pred_suppress", 0.0),
         lambda_fb_energy=train_raw.get("lambda_fb_energy", 0.0),
         lambda_expected_suppress=train_raw.get("lambda_expected_suppress", 0.0),
+        lambda_expected_width=train_raw.get("lambda_expected_width", 0.0),
+        expected_width_deadzone_deg=train_raw.get("expected_width_deadzone_deg", 10.0),
+        expected_width_shoulder_lower_deg=train_raw.get("expected_width_shoulder_lower_deg", None),
+        expected_width_shoulder_upper_deg=train_raw.get("expected_width_shoulder_upper_deg", None),
         lambda_routine_shape=train_raw.get("lambda_routine_shape", 0.0),
         l2_energy=train_raw.get("l2_energy", False),
         l23_energy_weight=train_raw.get("l23_energy_weight", 1.0),
@@ -343,6 +367,9 @@ def load_config(path: str | Path = "config/defaults.yaml") -> tuple[ModelConfig,
         steps_isi=train_raw.get("steps_isi", 4),
         n_seeds=train_raw.get("n_seeds", 5),
     )
+
+    # ModelConfig carries the optional R1+2-only inhibitory surround fields
+    # directly, so they load automatically from model_raw when present.
 
     stim_raw = raw.get("stimulus", {})
     stim_cfg = StimulusConfig(**stim_raw)

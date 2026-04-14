@@ -13,6 +13,7 @@ from src.config import ModelConfig
 from src.state import NetworkState, StepAux, initial_state
 from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing, VIPRing, DeepTemplate
 from src.model.v2_context import V2ContextModule
+from src.utils import make_circular_gaussian_kernel
 
 
 class LaminarV1V2Network(nn.Module):
@@ -35,6 +36,26 @@ class LaminarV1V2Network(nn.Module):
         self.pv = PVPool(cfg)
         self.l23 = V1L23Ring(cfg)
         self.som = SOMRing(cfg)
+
+        # R1+2-only fixed surround on the inhibitory feedback branch. This is
+        # intentionally separate from Rescue 3: it spreads som_drive_fb before
+        # SOM integration without constructing VIP or changing center_exc.
+        # When VIP is enabled, SOMRing already owns its own surround kernel, so
+        # we leave this path off to avoid double spreading across branches.
+        self.use_fb_surround = bool(
+            getattr(cfg, "use_fb_surround", False)
+            and not getattr(cfg, "use_vip", False)
+        )
+        if self.use_fb_surround:
+            self.register_buffer(
+                "fb_surround_kernel",
+                make_circular_gaussian_kernel(
+                    n=cfg.n_orientations,
+                    sigma=cfg.sigma_fb_surround,
+                    period=cfg.orientation_range,
+                    row_normalise=True,
+                ),
+            )
 
         # Rescue 3: VIP-SOM disinhibition circuit.
         if getattr(cfg, 'use_vip', False):
@@ -331,6 +352,10 @@ class LaminarV1V2Network(nn.Module):
             gains = None
             center_exc = torch.relu(scaled_fb)           # positive part → excitation
             som_drive_fb = torch.relu(-scaled_fb)        # negative part → SOM drive
+        if self.use_fb_surround:
+            som_drive_fb_for_som = som_drive_fb @ self.fb_surround_kernel
+        else:
+            som_drive_fb_for_som = som_drive_fb
         # Rescue 3: VIP-SOM disinhibition circuit.
         # VIP suppresses SOM at specific channels → disinhibition of L2/3.
         if hasattr(self, 'vip') and vip_drive is not None:
@@ -338,11 +363,11 @@ class LaminarV1V2Network(nn.Module):
             # Subtractive: VIP suppresses SOM drive, rectified to prevent
             # negative som_drive (inhibitory population can't have negative drive).
             w_vip = F.softplus(self.w_vip_som_raw)
-            effective_som_drive = torch.relu(som_drive_fb - w_vip * r_vip)
+            effective_som_drive = torch.relu(som_drive_fb_for_som - w_vip * r_vip)
             r_som = self.som(effective_som_drive, state.r_som)
         else:
             r_vip = torch.zeros(B, N, device=device)
-            r_som = self.som(som_drive_fb, state.r_som)  # SOM integrates with tau_som
+            r_som = self.som(som_drive_fb_for_som, state.r_som)  # SOM integrates with tau_som
 
         # 5. L2/3 update
         r_l23 = self.l23(r_l4, state.r_l23, center_exc, r_som, r_pv)

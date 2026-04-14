@@ -47,6 +47,10 @@ class CompositeLoss(nn.Module):
         # Rescue 1 changed the body from |r_l23| (global) to dot(r_l23, q_pred)
         # (feature-specific) — same lambda, same gating.
         self.lambda_expected_suppress = cfg.lambda_expected_suppress
+        self.lambda_expected_width = cfg.lambda_expected_width
+        self.expected_width_deadzone_deg = cfg.expected_width_deadzone_deg
+        self.expected_width_shoulder_lower_deg = cfg.expected_width_shoulder_lower_deg
+        self.expected_width_shoulder_upper_deg = cfg.expected_width_shoulder_upper_deg
         # Phase 2.4: routine E/I symmetry-break loss. 0.0 = disabled → legacy.
         self.lambda_routine_shape = cfg.lambda_routine_shape
         self.l2_energy = cfg.l2_energy                        # False (L1 by default)
@@ -520,18 +524,25 @@ class CompositeLoss(nn.Module):
         self,
         r_l23_windows: Tensor,
         q_pred_windows: Tensor,
-        mismatch_labels: Tensor,
-        task_state_bw: Tensor,
+        mismatch_labels: Tensor | None = None,
+        task_state_bw: Tensor | None = None,
         q_match_windows: Tensor | None = None,
+        expected_mask: Tensor | None = None,
     ) -> Tensor:
-        """Penalize L2/3 activity aligned with V2's prediction on routine-expected.
+        """Penalize L2/3 activity aligned with V2's prediction on expected trials.
 
         Rescue 1 change: replaced global |r_l23| with feature-specific
         dot(r_l23, q_pred). This penalizes the component of L2/3 activity
         that ALIGNS with V2's predicted orientation distribution, leaving
         deviant (unpredicted) features untouched — the predictive coding
-        objective. Only fires on routine-expected presentations:
-        task_state[:,1]=1 AND mismatch_label=0 (stimulus matched prediction).
+        objective.
+
+        When ``expected_mask`` is provided, it is used directly. This is the
+        aligned Stage-2 path: the caller can supply the eval-style focused
+        expected mask and an evoked-response input surface without disturbing
+        mismatch or unrelated objectives. When ``expected_mask`` is absent, the
+        legacy routine-expected gating is preserved for backward compatibility:
+        task_state[:,1]=1 AND mismatch_label=0.
 
         Rescue 5 change: when ``q_match_windows`` is provided (q_pred projected
         through T_stage1 = Stage-1 sensory-basis tuning profile), the dot
@@ -543,25 +554,118 @@ class CompositeLoss(nn.Module):
         Args:
             r_l23_windows: [B, W, N] L2/3 at readout windows.
             q_pred_windows: [B, W, N] V2 predicted orientation prior (softmax).
-            mismatch_labels: [B, W] binary (1=mismatch, 0=expected).
-            task_state_bw: [B, W, 2] per-presentation task state.
+            mismatch_labels: [B, W] binary (1=mismatch, 0=expected), used only
+                on the legacy fallback path.
+            task_state_bw: [B, W, 2] per-presentation task state, used only on
+                the legacy fallback path.
             q_match_windows: [B, W, N] or None. Rescue 5: q_pred projected
                 through T_stage1 (sensory-basis bump). When supplied, replaces
                 q_pred_windows in the alignment dot product.
+            expected_mask: [B, W] or None. Explicit mask for the aligned path.
 
         Returns:
-            Scalar loss: mean dot(r_l23, target) over expected-routine, where
+            Scalar loss: mean dot(r_l23, target) over the active expected mask, where
             target = q_match_windows if provided else q_pred_windows.
         """
-        # expected_routine_mask: [B, W], nonzero only where expected AND routine
-        expected_routine_mask = (1.0 - mismatch_labels) * task_state_bw[..., 1]
+        if expected_mask is None:
+            assert mismatch_labels is not None and task_state_bw is not None, (
+                "Legacy expected_suppress path requires mismatch_labels and task_state_bw "
+                "when expected_mask is not supplied."
+            )
+            expected_mask = (1.0 - mismatch_labels.float()) * task_state_bw[..., 1].float()
+        else:
+            expected_mask = expected_mask.float()
         # Rescue 5: prefer shape-matched bump q_match when supplied by the
         # Stage-2 training loop. Otherwise fall back to raw softmax q_pred
         # (Rescue 1 legacy).
         target_basis = q_match_windows if q_match_windows is not None else q_pred_windows
         # Per-presentation alignment: dot product across orientation channels
         alignment = (r_l23_windows * target_basis).sum(dim=-1)  # [B, W]
-        return (alignment * expected_routine_mask).sum() / expected_routine_mask.sum().clamp(min=1)
+        return (alignment * expected_mask).sum() / expected_mask.sum().clamp(min=1.0)
+
+    def expected_width_loss(
+        self,
+        r_l23_windows: Tensor,
+        true_theta_windows: Tensor,
+        mismatch_labels: Tensor | None,
+        mismatch_mask: Tensor | None = None,
+        expected_mask: Tensor | None = None,
+    ) -> Tensor:
+        """Penalize expected-trial shoulder activity above a half-max reference.
+
+        The prior surrogate penalized all activity outside the center dead zone,
+        which spread gradient pressure over the whole ring and did not line up
+        with the accepted re-centered FWHM metric. This replacement keeps the
+        same expected-only gating but only targets an explicit shoulder band
+        outside the protected center. When no shoulder bounds are configured,
+        the legacy geometry is preserved: lower = dead zone, upper = dead zone
+        + 10 deg.
+
+        For each trial, the reference is half of the maximum L2/3 activity
+        inside the protected center dead zone. Only shoulder activity above
+        that per-trial half-max contributes to the loss. This makes the term a
+        direct surrogate for narrowing the half-max crossing without pushing on
+        the center peak or distant flanks.
+
+        Args:
+            r_l23_windows: [B, W, N] L2/3 activity at readout windows.
+            true_theta_windows: [B, W] true stimulus orientations in degrees.
+            mismatch_labels: [B, W] binary (1=mismatch, 0=expected), used only
+                on the legacy fallback path.
+            mismatch_mask: [B, W] optional validity mask. When supplied, invalid
+                presentations such as the first item in each sequence are
+                excluded even if ``mismatch_labels`` is zero there. Ignored when
+                ``expected_mask`` is provided.
+            expected_mask: [B, W] or None. Explicit mask for the aligned path.
+
+        Returns:
+            Scalar expected-only shoulder penalty.
+        """
+        B, W, N = r_l23_windows.shape
+        step = self.orient_step
+        prefs = torch.arange(N, device=r_l23_windows.device).float() * step  # [N]
+        true_degs = true_theta_windows.unsqueeze(-1)  # [B, W, 1]
+        dists = torch.min(
+            torch.abs(prefs.unsqueeze(0).unsqueeze(0) - true_degs),
+            self.period - torch.abs(prefs.unsqueeze(0).unsqueeze(0) - true_degs),
+        )  # [B, W, N]
+
+        deadzone = float(self.expected_width_deadzone_deg)
+        shoulder_lower = (
+            deadzone
+            if self.expected_width_shoulder_lower_deg is None
+            else float(self.expected_width_shoulder_lower_deg)
+        )
+        shoulder_upper = (
+            shoulder_lower + 10.0
+            if self.expected_width_shoulder_upper_deg is None
+            else float(self.expected_width_shoulder_upper_deg)
+        )
+        center_mask = dists <= deadzone
+        shoulder_mask = (
+            (dists > deadzone)
+            & (dists >= shoulder_lower)
+            & (dists <= shoulder_upper)
+        )
+
+        center_peak = r_l23_windows.masked_fill(~center_mask, 0.0).amax(dim=-1)  # [B, W]
+        half_max_ref = 0.5 * center_peak.unsqueeze(-1)  # [B, W, 1]
+        shoulder_excess = F.relu(r_l23_windows - half_max_ref) * shoulder_mask.float()
+        shoulder_count = shoulder_mask.float().sum(dim=-1).clamp(min=1.0)
+        shoulder_penalty = shoulder_excess.sum(dim=-1) / shoulder_count  # [B, W]
+
+        if expected_mask is None:
+            assert mismatch_labels is not None, (
+                "Legacy expected_width path requires mismatch_labels when "
+                "expected_mask is not supplied."
+            )
+            expected_mask = 1.0 - mismatch_labels.float()
+            if mismatch_mask is not None:
+                expected_mask = expected_mask * mismatch_mask.float()
+        else:
+            expected_mask = expected_mask.float()
+
+        return (shoulder_penalty * expected_mask).sum() / expected_mask.sum().clamp(min=1.0)
 
     def detection_confirmation_loss(
         self, r_l23_windows: Tensor, is_expected: Tensor
@@ -602,6 +706,8 @@ class CompositeLoss(nn.Module):
         task_routing: dict | None = None,
         r_error_windows: Tensor | None = None,
         q_match_windows: Tensor | None = None,
+        expected_mask: Tensor | None = None,
+        expected_response_windows: Tensor | None = None,
     ) -> tuple[Tensor, dict[str, float]]:
         """Compute composite loss.
 
@@ -634,6 +740,12 @@ class CompositeLoss(nn.Module):
                 keep the legacy global mean. homeostasis / prior_kl /
                 mismatch / sharp / local_disc / pred_suppress terms are
                 **not** routed.
+            expected_mask: [B, W] explicit aligned expected mask for the
+                expected-linked objectives. When omitted, those objectives fall
+                back to their legacy mismatch/task-state gating.
+            expected_response_windows: [B, W, N] explicit response surface for
+                expected-linked objectives. When omitted, they use
+                ``r_l23_windows`` (legacy raw-window behavior).
 
         Returns:
             (total_loss, loss_dict) where loss_dict has .item() scalar values.
@@ -923,24 +1035,51 @@ class CompositeLoss(nn.Module):
         else:
             loss_dict["fb_energy"] = 0.0
 
+        expected_features = (
+            expected_response_windows if expected_response_windows is not None else r_l23_windows
+        )
+
         # Rescue 1 (was Fix 3): expected-suppress loss — dot(r_l23, q_pred) on
         # routine-expected presentations (mismatch_label=0 AND task_state[:,1]=1).
         # Feature-specific: penalizes L2/3 activity aligned with V2's predicted
         # orientation, leaving deviant features untouched.
-        if self.lambda_expected_suppress > 0 and mismatch_labels is not None and task_state is not None:
-            B_es, W_es, N_es = r_l23_windows.shape
-            if task_state.dim() == 2:
-                ts_bw_es = task_state.unsqueeze(1).expand(B_es, W_es, 2)
-            else:
-                ts_bw_es = task_state
+        if self.lambda_expected_suppress > 0 and (
+            expected_mask is not None or (mismatch_labels is not None and task_state is not None)
+        ):
+            ts_bw_es = None
+            if task_state is not None:
+                B_es, W_es, _ = expected_features.shape
+                if task_state.dim() == 2:
+                    ts_bw_es = task_state.unsqueeze(1).expand(B_es, W_es, 2)
+                else:
+                    ts_bw_es = task_state
             l_expected_suppress = self.expected_suppress_loss(
-                r_l23_windows, q_pred_windows, mismatch_labels, ts_bw_es,
+                expected_features, q_pred_windows, mismatch_labels, ts_bw_es,
                 q_match_windows=q_match_windows,
+                expected_mask=expected_mask,
             )
             total = total + self.lambda_expected_suppress * l_expected_suppress
             loss_dict["expected_suppress"] = l_expected_suppress.item()
         else:
             loss_dict["expected_suppress"] = 0.0
+
+        # Expected-only width control: penalize flank activity outside a
+        # center dead zone around the true stimulus channel, irrespective of
+        # task_state. This complements expected_suppress rather than replacing it.
+        if self.lambda_expected_width > 0 and (
+            expected_mask is not None or mismatch_labels is not None
+        ):
+            l_expected_width = self.expected_width_loss(
+                expected_features,
+                true_theta_windows,
+                mismatch_labels,
+                mismatch_mask=mismatch_mask,
+                expected_mask=expected_mask,
+            )
+            total = total + self.lambda_expected_width * l_expected_width
+            loss_dict["expected_width"] = l_expected_width.item()
+        else:
+            loss_dict["expected_width"] = 0.0
 
         # Phase 2.4: routine E/I symmetry-break loss.
         #

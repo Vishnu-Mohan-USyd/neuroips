@@ -893,6 +893,38 @@ class TestPrecisionGating:
         assert aux_legacy.center_exc.shape == (B, N)
 
 
+class TestFeedbackSurround:
+    """Tests for the R1+2-only fixed inhibitory surround path."""
+
+    def test_fb_surround_off_is_legacy(self):
+        """Explicitly disabling the surround path should preserve legacy output."""
+        torch.manual_seed(123)
+        cfg_base = ModelConfig(use_precision_gating=True)
+        net_base = LaminarV1V2Network(cfg_base)
+
+        torch.manual_seed(123)
+        cfg_off = ModelConfig(use_precision_gating=True, use_fb_surround=False)
+        net_off = LaminarV1V2Network(cfg_off)
+
+        assert net_base.use_fb_surround is False
+        assert net_off.use_fb_surround is False
+        assert not hasattr(net_off, "fb_surround_kernel")
+
+        B, N = 2, cfg_base.n_orientations
+        stim = torch.randn(B, N).abs()
+        cue = torch.zeros(B, N)
+        task_state = torch.tensor([[1.0, 0.0]] * B)
+        state0 = initial_state(B, N, cfg_base.v2_hidden_dim)
+
+        state_base, aux_base = net_base.step(stim, cue, task_state, state0)
+        state_off, aux_off = net_off.step(stim, cue, task_state, state0)
+
+        assert torch.allclose(state_base.r_som, state_off.r_som, atol=0, rtol=0)
+        assert torch.allclose(state_base.r_l23, state_off.r_l23, atol=0, rtol=0)
+        assert torch.allclose(aux_base.center_exc, aux_off.center_exc, atol=0, rtol=0)
+        assert torch.allclose(aux_base.som_drive_fb, aux_off.som_drive_fb, atol=0, rtol=0)
+
+
 # ── Rescue 3: VIP-SOM Disinhibition ─────────────────────────────────────
 
 class TestVIPDisinhibition:

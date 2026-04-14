@@ -199,7 +199,7 @@ class TestCompositeLoss:
 
         assert isinstance(total_loss, torch.Tensor)
         assert total_loss.shape == ()
-        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy", "expected_suppress", "routine_shape"}
+        expected_keys = {"total", "sensory", "prediction", "energy_exc", "energy_total", "homeostasis", "state", "fb_sparsity", "surprise", "error_readout", "detection", "l4_sensory", "mismatch", "sharp", "local_disc", "pred_suppress", "fb_energy", "expected_suppress", "expected_width", "routine_shape"}
         assert set(loss_dict.keys()) == expected_keys
         for k, v in loss_dict.items():
             assert isinstance(v, float), f"{k} should be float, got {type(v)}"
@@ -796,6 +796,42 @@ class TestRegressionBugs:
         assert train_default.lambda_sharp == 0.0, (
             f"Expected lambda_sharp=0.0 from defaults.yaml, got {train_default.lambda_sharp}"
         )
+
+    def test_load_config_reads_expected_width_and_fb_surround_fields(self):
+        """New expected-width and R1+2 surround fields round-trip through YAML."""
+        from src.config import load_config
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "expected_width.yaml"
+            cfg_path.write_text(
+                """
+model:
+  use_fb_surround: true
+  sigma_fb_surround: 24.0
+training:
+  lambda_expected_width: 0.75
+  expected_width_deadzone_deg: 15.0
+  expected_width_shoulder_lower_deg: 12.5
+  expected_width_shoulder_upper_deg: 17.5
+""".strip()
+            )
+            model_cfg, train_cfg, _ = load_config(cfg_path)
+
+        assert model_cfg.use_fb_surround is True
+        assert model_cfg.sigma_fb_surround == 24.0
+        assert train_cfg.lambda_expected_width == 0.75
+        assert train_cfg.expected_width_deadzone_deg == 15.0
+        assert train_cfg.expected_width_shoulder_lower_deg == 12.5
+        assert train_cfg.expected_width_shoulder_upper_deg == 17.5
+
+        _, default_train, _ = load_config("config/defaults.yaml")
+        default_model = ModelConfig()
+        assert default_model.use_fb_surround is False
+        assert default_model.sigma_fb_surround == 20.0
+        assert default_train.lambda_expected_width == 0.0
+        assert default_train.expected_width_deadzone_deg == 10.0
+        assert default_train.expected_width_shoulder_lower_deg is None
+        assert default_train.expected_width_shoulder_upper_deg is None
 
     def test_oracle_uses_shifted_states(self):
         """Bug: oracle q_pred was built from metadata.states (current-step state)
@@ -2143,3 +2179,295 @@ class TestExpectedSuppressFeatureSpecific:
         assert abs(ld_ortho["expected_suppress"]) < 1e-6, (
             f"Orthogonal loss should be ~0, got {ld_ortho['expected_suppress']}"
         )
+
+
+class TestExpectedWidthLoss:
+    """Tests for expected-only flank-width control."""
+
+    def test_expected_width_disabled_is_clean_noop(self):
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(lambda_expected_width=0.0)
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 2, 4
+        r_l23_w = torch.ones(B, W, N)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        mismatch_labels = torch.zeros(B, W)
+        outputs = {
+            "r_l23": torch.zeros(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+
+        _, ld = loss_fn(
+            outputs,
+            true_theta,
+            true_next,
+            r_l23_w,
+            q_pred_w,
+            mismatch_labels=mismatch_labels,
+        )
+        assert ld["expected_width"] == 0.0
+
+    def test_expected_width_targets_expected_shoulder_above_halfmax_only(self):
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_expected_width=1.0,
+            expected_width_deadzone_deg=10.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 2, 1
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        r_l23_w = torch.zeros(B, W, N)
+        r_l23_w[:, :, 0] = 1.0   # center peak -> half-max reference 0.5
+        r_l23_w[:, :, 3] = 0.75  # 15° shoulder: contributes 0.25 on expected trials
+        r_l23_w[:, :, 5] = 3.0   # 25° outer flank: ignored by the shoulder band
+        mismatch_labels = torch.tensor([[0.0], [1.0]])  # expected, unexpected
+        mismatch_mask = torch.ones(B, W)
+        task_state = torch.zeros(B, W, 2)
+        task_state[:, :, 0] = 1.0  # all focused; width loss should still fire
+        outputs = {
+            "r_l23": torch.zeros(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+
+        _, ld = loss_fn(
+            outputs,
+            true_theta,
+            true_next,
+            r_l23_w,
+            q_pred_w,
+            mismatch_labels=mismatch_labels,
+            mismatch_mask=mismatch_mask,
+            task_state=task_state,
+        )
+
+        assert math.isfinite(ld["expected_width"])
+        # Shoulder band is ±15° and ±20° for theta=0, so one active 15° channel
+        # contributes (0.75 - 0.5) / 4 = 0.0625 on the single expected sample.
+        assert ld["expected_width"] == pytest.approx(0.0625, abs=1e-7)
+
+    def test_expected_width_ignores_center_deadzone_and_outer_flanks(self):
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_expected_width=1.0,
+            expected_width_deadzone_deg=10.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 1, 1
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        r_l23_w = torch.zeros(B, W, N)
+        r_l23_w[:, :, 2] = 4.0   # 10° boundary, still inside the protected dead zone
+        r_l23_w[:, :, 3] = 1.0   # 15° shoulder, but below half-max reference (=2.0)
+        r_l23_w[:, :, 5] = 3.0   # 25° outer flank: outside the targeted shoulder band
+        mismatch_labels = torch.zeros(B, W)
+        mismatch_mask = torch.ones(B, W)
+        outputs = {
+            "r_l23": torch.zeros(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+
+        _, ld = loss_fn(
+            outputs,
+            true_theta,
+            true_next,
+            r_l23_w,
+            q_pred_w,
+            mismatch_labels=mismatch_labels,
+            mismatch_mask=mismatch_mask,
+        )
+
+        assert ld["expected_width"] == pytest.approx(0.0, abs=1e-7)
+
+    def test_expected_width_explicit_band_can_isolate_15deg_shoulder(self):
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_expected_width=1.0,
+            expected_width_deadzone_deg=10.0,
+            expected_width_shoulder_lower_deg=12.5,
+            expected_width_shoulder_upper_deg=17.5,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 1, 1
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        r_l23_w = torch.zeros(B, W, N)
+        r_l23_w[:, :, 0] = 1.0   # center peak -> half-max reference 0.5
+        r_l23_w[:, :, 2] = 0.9   # 10° bin stays protected by the dead zone
+        r_l23_w[:, :, 3] = 0.75  # 15° shoulder is the only targeted bin here
+        r_l23_w[:, :, 4] = 2.0   # 20° bin lies outside the explicit 15°-only band
+        mismatch_labels = torch.zeros(B, W)
+        mismatch_mask = torch.ones(B, W)
+        outputs = {
+            "r_l23": torch.zeros(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+
+        _, ld = loss_fn(
+            outputs,
+            true_theta,
+            true_next,
+            r_l23_w,
+            q_pred_w,
+            mismatch_labels=mismatch_labels,
+            mismatch_mask=mismatch_mask,
+        )
+
+        # The explicit 12.5-17.5° band includes only the ±15° channels.
+        # With one active 15° shoulder at 0.75 over a 0.5 half-max reference,
+        # the loss is (0.75 - 0.5) / 2 = 0.125.
+        assert ld["expected_width"] == pytest.approx(0.125, abs=1e-7)
+
+
+class TestAlignedExpectedTrainingPath:
+    """Focused tests for the aligned expected-mask and delta-response path."""
+
+    def test_aligned_expected_mask_matches_eval_semantics(self):
+        from src.training.stage2_feedback import compute_aligned_expected_mask
+
+        B, S, N = 1, 5, 36
+        steps_on, steps_isi = 12, 4
+        steps_per = steps_on + steps_isi
+        q_pred_seq = torch.zeros(B, S, steps_per, N)
+
+        # Presentation 1 sees the previous ISI prediction from presentation 0.
+        q_pred_seq[:, 0, steps_per - 1, 2] = 1.0   # predicts 10°
+        q_pred_seq[:, 1, steps_per - 1, 6] = 1.0   # predicts 30° -> 20° error
+        q_pred_seq[:, 2, steps_per - 1, 4] = 1.0   # predicts 20° but routine
+        q_pred_seq[:, 3, steps_per - 1, 8] = 1.0   # predicts 40° but ambiguous
+
+        true_thetas = torch.tensor([[0.0, 10.0, 10.0, 20.0, 40.0]])
+        is_ambiguous = torch.tensor([[False, False, False, False, True]])
+        task_state = torch.zeros(B, S, 2)
+        task_state[:, :, 0] = 1.0
+        task_state[:, 3, 0] = 0.0
+        task_state[:, 3, 1] = 1.0
+
+        aligned = compute_aligned_expected_mask(
+            q_pred_seq.reshape(B, S * steps_per, N),
+            true_thetas,
+            is_ambiguous,
+            task_state,
+            steps_on=steps_on,
+            steps_isi=steps_isi,
+            orientation_range=180.0,
+            expected_threshold_deg=10.0,
+        )
+
+        expected = torch.tensor([[0.0, 1.0, 0.0, 0.0, 0.0]])
+        torch.testing.assert_close(aligned, expected)
+
+    def test_expected_suppress_uses_explicit_mask_and_evoked_input(self):
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            lambda_expected_suppress=1.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 2, 1
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        q_pred_w = torch.zeros(B, W, N)
+        q_pred_w[:, :, 0] = 1.0
+        raw_r_l23_w = torch.zeros(B, W, N)
+        raw_r_l23_w[:, :, 18] = 9.0  # should be ignored by the explicit path
+        expected_response_windows = torch.zeros(B, W, N)
+        expected_response_windows[0, 0, 0] = 0.5
+        expected_response_windows[1, 0, 0] = 2.0  # masked out
+        expected_mask = torch.tensor([[1.0], [0.0]])
+        outputs = {
+            "r_l23": torch.zeros(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+
+        _, ld = loss_fn(
+            outputs,
+            true_theta,
+            true_next,
+            raw_r_l23_w,
+            q_pred_w,
+            expected_mask=expected_mask,
+            expected_response_windows=expected_response_windows,
+        )
+
+        assert ld["expected_suppress"] == pytest.approx(0.5, abs=1e-7)
+
+    def test_expected_width_uses_explicit_mask_and_evoked_input(self):
+        N = 36
+        mc = ModelConfig()
+        tc = TrainingConfig(
+            lambda_sensory=0.0,
+            lambda_energy=0.0,
+            lambda_homeo=0.0,
+            lambda_state=0.0,
+            lambda_expected_width=1.0,
+            expected_width_deadzone_deg=10.0,
+        )
+        loss_fn = CompositeLoss(tc, mc)
+        B, W = 2, 1
+        true_theta = torch.zeros(B, W)
+        true_next = torch.zeros(B, W)
+        q_pred_w = torch.full((B, W, N), 1.0 / N)
+        raw_r_l23_w = torch.zeros(B, W, N)
+        raw_r_l23_w[:, :, 3] = 5.0  # should be ignored by the explicit path
+        expected_response_windows = torch.zeros(B, W, N)
+        expected_response_windows[:, :, 0] = 1.0
+        expected_response_windows[0, 0, 3] = 0.75
+        expected_response_windows[1, 0, 3] = 2.0  # masked out
+        expected_mask = torch.tensor([[1.0], [0.0]])
+        outputs = {
+            "r_l23": torch.zeros(B, W * 16, N),
+            "r_l4": torch.zeros(B, W * 16, N),
+            "r_pv": torch.zeros(B, W * 16, 1),
+            "r_som": torch.zeros(B, W * 16, N),
+            "deep_template": torch.zeros(B, W * 16, N),
+        }
+
+        _, ld = loss_fn(
+            outputs,
+            true_theta,
+            true_next,
+            raw_r_l23_w,
+            q_pred_w,
+            expected_mask=expected_mask,
+            expected_response_windows=expected_response_windows,
+        )
+
+        assert ld["expected_width"] == pytest.approx(0.0625, abs=1e-7)

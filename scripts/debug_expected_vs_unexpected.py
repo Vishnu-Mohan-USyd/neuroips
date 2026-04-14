@@ -15,14 +15,28 @@ Then measures L2/3 and L4 activity during the ON period of that stimulus.
 import sys
 import os
 import argparse
+import json
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import torch
 import numpy as np
 from src.config import load_config
 from src.model.network import LaminarV1V2Network
+from src.state import NetworkState, initial_state
 from src.stimulus.sequences import HMMSequenceGenerator
 from src.training.trainer import build_stimulus_sequence
+from src.training.stage2_feedback import compute_mismatch_labels
+
+
+METRIC_KEYS = [
+    "l23_total",
+    "l23_peak",
+    "l23_fwhm",
+    "l4_total",
+    "l4_peak",
+    "pred_error",
+    "center_exc_total",
+]
 
 
 def circular_distance(a, b, period=180.0):
@@ -43,6 +57,138 @@ def compute_fwhm(response, period=180.0):
     return above.sum().item() * step
 
 
+def summarize_metric(values):
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return {"n": 0, "mean": None, "std": None, "median": None}
+    return {
+        "n": int(arr.size),
+        "mean": float(arr.mean()),
+        "std": float(arr.std()),
+        "median": float(np.median(arr)),
+    }
+
+
+def init_metric_store():
+    return {k: [] for k in METRIC_KEYS}
+
+
+def append_metric_sample(store, sample):
+    for k in METRIC_KEYS:
+        store[k].append(sample[k])
+
+
+def summarize_store(store):
+    return {k: summarize_metric(store[k]) for k in METRIC_KEYS}
+
+
+def forward_with_feedback_ablation(
+    net: LaminarV1V2Network,
+    stim_seq: torch.Tensor,
+    cue_seq: torch.Tensor,
+    ts_seq: torch.Tensor,
+    *,
+    zero_center_exc: bool = False,
+    zero_som_drive: bool = False,
+) -> tuple[torch.Tensor, NetworkState, dict[str, torch.Tensor]]:
+    """Run the network with optional analysis-time feedback pathway ablations.
+
+    The ablations are restricted to the current R1+2-style single-V2 path:
+    they zero the excitatory (`center_exc`) and/or inhibitory (`som_drive_fb`)
+    feedback branch before the SOM/L2/3 updates. Training code is untouched.
+    """
+    if not (zero_center_exc or zero_som_drive):
+        packed = net.pack_inputs(stim_seq, cue_seq, ts_seq)
+        return net.forward(packed)
+
+    if net.oracle_mode or net.use_dual_v2 or hasattr(net, "vip"):
+        raise ValueError(
+            "--zero-center-exc/--zero-som-drive support only non-oracle, "
+            "single-V2, non-VIP analysis runs."
+        )
+
+    B, T, N = stim_seq.shape
+    device = stim_seq.device
+    state = initial_state(B, N, net.cfg.v2_hidden_dim, device=device)
+
+    r_l23_all = torch.empty(B, T, N, device=device)
+    r_l4_all = torch.empty(B, T, N, device=device)
+    q_pred_all = torch.empty(B, T, N, device=device)
+    center_exc_all = torch.empty(B, T, N, device=device)
+
+    net.l23.cache_kernels()
+    try:
+        for t in range(T):
+            stimulus = stim_seq[:, t]
+            cue = cue_seq[:, t]
+            task_state = ts_seq[:, t]
+
+            r_l4, adaptation = net.l4(stimulus, state.r_l4, state.r_pv, state.adaptation)
+            r_pv = net.pv(r_l4, state.r_l23, state.r_pv)
+            mu_pred, pi_pred_raw, feedback_signal, h_v2, _ = net.v2(
+                r_l4, state.r_l23, cue, task_state, state.h_v2
+            )
+            q_pred = mu_pred
+            pi_pred_eff = pi_pred_raw * net.feedback_scale
+
+            if net.cfg.use_precision_gating:
+                precision_gate = pi_pred_raw / net.cfg.pi_max
+                scaled_fb = feedback_signal * net.feedback_scale * precision_gate
+            else:
+                scaled_fb = feedback_signal * net.feedback_scale
+
+            if net.use_ei_gate:
+                gate_input = torch.cat([task_state, pi_pred_raw], dim=-1)
+                gains = 2.0 * torch.sigmoid(net.alpha_net(gate_input))
+                center_exc = gains[:, 0:1] * torch.relu(scaled_fb)
+                som_drive_fb = gains[:, 1:2] * torch.relu(-scaled_fb)
+            else:
+                center_exc = torch.relu(scaled_fb)
+                som_drive_fb = torch.relu(-scaled_fb)
+
+            if zero_center_exc:
+                center_exc = torch.zeros_like(center_exc)
+            if zero_som_drive:
+                som_drive_fb = torch.zeros_like(som_drive_fb)
+
+            if getattr(net, "use_fb_surround", False):
+                som_drive_for_som = som_drive_fb @ net.fb_surround_kernel
+            else:
+                som_drive_for_som = som_drive_fb
+
+            r_som = net.som(som_drive_for_som, state.r_som)
+            r_l23 = net.l23(r_l4, state.r_l23, center_exc, r_som, r_pv)
+
+            if hasattr(net, "deep_template_pop"):
+                deep_tmpl = net.deep_template_pop(q_pred, pi_pred_eff, state.deep_template)
+            else:
+                deep_tmpl = q_pred * pi_pred_eff
+
+            state = NetworkState(
+                r_l4=r_l4,
+                r_l23=r_l23,
+                r_pv=r_pv,
+                r_som=r_som,
+                r_vip=torch.zeros(B, N, device=device),
+                adaptation=adaptation,
+                h_v2=h_v2,
+                deep_template=deep_tmpl,
+            )
+            r_l23_all[:, t] = r_l23
+            r_l4_all[:, t] = r_l4
+            q_pred_all[:, t] = q_pred
+            center_exc_all[:, t] = center_exc
+    finally:
+        net.l23.uncache_kernels()
+
+    aux = {
+        "r_l4_all": r_l4_all,
+        "q_pred_all": q_pred_all,
+        "center_exc_all": center_exc_all,
+    }
+    return r_l23_all, state, aux
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Expected vs unexpected stimulus analysis")
     parser.add_argument("--config", type=str, default="config/exp_v2_ei_highenergy.yaml",
@@ -54,6 +200,14 @@ def parse_args():
                         help="Label for output header")
     parser.add_argument("--rng-seed", type=int, default=42,
                         help="RNG seed for stimulus generation")
+    parser.add_argument("--json-out", type=str, default=None,
+                        help="Optional path for machine-readable metrics JSON.")
+    parser.add_argument("--zero-center-exc", action="store_true",
+                        help="Analysis-only ablation: zero the excitatory feedback branch.")
+    parser.add_argument("--zero-som-drive", action="store_true",
+                        help="Analysis-only ablation: zero the inhibitory SOM feedback branch.")
+    parser.add_argument("--bucket-audit", action="store_true",
+                        help="Compare current eval buckets to truth-based expected/unexpected labels from training semantics.")
     return parser.parse_args()
 
 
@@ -109,6 +263,8 @@ def main():
     print(f"Checkpoint: {ckpt_path}")
     print(f"feedback_scale: {net.feedback_scale.item():.3f}")
     print(f"steps_on={steps_on}, steps_isi={steps_isi}, seq_length={seq_length}")
+    print(f"zero_center_exc={args.zero_center_exc}, zero_som_drive={args.zero_som_drive}")
+    print(f"bucket_audit={args.bucket_audit}")
     print()
     print("Method: V2 prediction taken at LAST ISI timestep (pre-stimulus)")
     print("        Stimulus response measured at late ON timestep (t=9 of 12)")
@@ -127,17 +283,89 @@ def main():
     metrics_middle = {'l23_total': [], 'l23_peak': [], 'l23_fwhm': [],
                       'l4_total': [], 'l4_peak': [], 'pred_error': [],
                       'center_exc_total': []}
+    json_payload = {
+        "config": config_path,
+        "checkpoint": ckpt_path,
+        "label": label,
+        "rng_seed": args.rng_seed,
+        "feedback_scale": float(net.feedback_scale.item()),
+        "zero_center_exc": bool(args.zero_center_exc),
+        "zero_som_drive": bool(args.zero_som_drive),
+        "groups": {},
+        "comparison": {},
+        "feedback_off_control": {},
+        "prediction_quality": {},
+        "binned_l23": [],
+    }
+    if args.bucket_audit:
+        regimes = ("relevant", "irrelevant")
+        labelings = ("eval", "truth")
+        buckets = ("expected", "unexpected")
+        audit_metrics = {
+            labeling: {
+                regime: {bucket: init_metric_store() for bucket in buckets}
+                for regime in regimes
+            }
+            for labeling in labelings
+        }
+        audit_overlap = {
+            regime: {
+                "truth_expected_eval_expected": 0,
+                "truth_expected_eval_unexpected": 0,
+                "truth_expected_eval_middle": 0,
+                "truth_unexpected_eval_expected": 0,
+                "truth_unexpected_eval_unexpected": 0,
+                "truth_unexpected_eval_middle": 0,
+                "truth_expected_total": 0,
+                "truth_unexpected_total": 0,
+                "eval_expected_total": 0,
+                "eval_unexpected_total": 0,
+                "eval_middle_total": 0,
+                "valid_non_ambiguous_total": 0,
+            }
+            for regime in ("overall", "relevant", "irrelevant")
+        }
+        json_payload["bucket_audit"] = {
+            "enabled": True,
+            "semantics": {
+                "eval_expected": "pred_err <= 10 deg, non-ambiguous",
+                "eval_unexpected": "pred_err > 20 deg, non-ambiguous",
+                "truth_expected": "compute_mismatch_labels == 0, valid mask == 1, non-ambiguous",
+                "truth_unexpected": "compute_mismatch_labels == 1, valid mask == 1, non-ambiguous",
+            },
+        }
+    else:
+        audit_metrics = None
+        audit_overlap = None
 
     rng = torch.Generator().manual_seed(args.rng_seed)
 
     with torch.no_grad():
         for batch_i in range(n_batches):
             metadata = gen.generate(batch_size, seq_length, generator=rng)
+            truth_mismatch_labels = None
+            truth_mismatch_mask = None
+            if args.bucket_audit:
+                truth_mismatch_labels, truth_mismatch_mask = compute_mismatch_labels(
+                    metadata,
+                    transition_step=stim_cfg.transition_step,
+                    mismatch_threshold_deg=3.0,
+                    orientation_range=period,
+                )
             stim_seq, cue_seq, ts_seq, true_thetas, _, _ = build_stimulus_sequence(
                 metadata, model_cfg, train_cfg, stim_cfg
             )
-            packed = net.pack_inputs(stim_seq, cue_seq, ts_seq)
-            r_l23_all, _, aux = net.forward(packed)
+            stim_seq = stim_seq.to(net.feedback_scale.device)
+            cue_seq = cue_seq.to(net.feedback_scale.device)
+            ts_seq = ts_seq.to(net.feedback_scale.device)
+            r_l23_all, _, aux = forward_with_feedback_ablation(
+                net,
+                stim_seq,
+                cue_seq,
+                ts_seq,
+                zero_center_exc=args.zero_center_exc,
+                zero_som_drive=args.zero_som_drive,
+            )
             r_l4_all = aux['r_l4_all']
             q_pred_all = aux['q_pred_all']
             center_exc_all = aux['center_exc_all']
@@ -162,6 +390,7 @@ def main():
                 # Actual stimulus orientation for this presentation
                 actual_ori = metadata.orientations[:, pres_i]  # [B]
                 is_amb = metadata.is_ambiguous[:, pres_i]      # [B]
+                task_state_this = metadata.task_states[:, pres_i]  # [B, 2]
 
                 # Prediction error
                 pred_error = circular_distance(pred_ori, actual_ori, period)  # [B]
@@ -175,6 +404,13 @@ def main():
                 expected_mask = (pred_error <= 10.0) & (~is_amb)
                 unexpected_mask = (pred_error > 20.0) & (~is_amb)
                 middle_mask = (pred_error > 10.0) & (pred_error <= 20.0) & (~is_amb)
+                if args.bucket_audit:
+                    truth_valid = (
+                        (truth_mismatch_mask[:, pres_i] > 0.5)
+                        & (~is_amb)
+                    )
+                    truth_expected_mask = truth_valid & (truth_mismatch_labels[:, pres_i] == 0)
+                    truth_unexpected_mask = truth_valid & (truth_mismatch_labels[:, pres_i] == 1)
 
                 for b in range(batch_size):
                     m = {
@@ -197,6 +433,36 @@ def main():
                         for k, v in m.items():
                             metrics_middle[k].append(v)
 
+                    if args.bucket_audit:
+                        regime_name = "relevant" if task_state_this[b, 0].item() >= 0.5 else "irrelevant"
+                        if truth_valid[b]:
+                            for overlap_key in ("overall", regime_name):
+                                audit_overlap[overlap_key]["valid_non_ambiguous_total"] += 1
+
+                            if truth_expected_mask[b]:
+                                truth_label = "expected"
+                            else:
+                                truth_label = "unexpected"
+                            for overlap_key in ("overall", regime_name):
+                                audit_overlap[overlap_key][f"truth_{truth_label}_total"] += 1
+                            append_metric_sample(audit_metrics["truth"][regime_name][truth_label], m)
+
+                            if expected_mask[b]:
+                                eval_label = "expected"
+                            elif unexpected_mask[b]:
+                                eval_label = "unexpected"
+                            else:
+                                eval_label = "middle"
+
+                            for overlap_key in ("overall", regime_name):
+                                audit_overlap[overlap_key][f"eval_{eval_label}_total"] += 1
+                                audit_overlap[overlap_key][f"truth_{truth_label}_eval_{eval_label}"] += 1
+
+                        if expected_mask[b]:
+                            append_metric_sample(audit_metrics["eval"][regime_name]["expected"], m)
+                        elif unexpected_mask[b]:
+                            append_metric_sample(audit_metrics["eval"][regime_name]["unexpected"], m)
+
             print(f"  Batch {batch_i+1}/{n_batches}: "
                   f"expected={len(metrics_expected['l23_total'])}, "
                   f"unexpected={len(metrics_unexpected['l23_total'])}, "
@@ -216,11 +482,13 @@ def main():
             print(f"\n{label}: no presentations")
             continue
         print(f"\n{label} (n={n}):")
+        json_payload["groups"][label] = {}
         for k in ['l23_total', 'l23_peak', 'l23_fwhm', 'l4_total', 'l4_peak',
                    'pred_error', 'center_exc_total']:
             vals = np.array(data[k])
             print(f"  {k:20s}: mean={vals.mean():.4f}, std={vals.std():.4f}, "
                   f"median={np.median(vals):.4f}")
+            json_payload["groups"][label][k] = summarize_metric(vals)
 
     # --- Key comparison ---
     print()
@@ -250,6 +518,16 @@ def main():
 
             print(f"  {metric:20s}: Exp={exp_mean:.4f}, Unexp={unexp_mean:.4f}, "
                   f"Δ={diff:+.4f} ({pct:+.1f}%), t={t_stat:.2f}, p={p_val:.2e} {sig} → {direction}")
+            json_payload["comparison"][metric] = {
+                "expected_mean": float(exp_mean),
+                "unexpected_mean": float(unexp_mean),
+                "delta_unexpected_minus_expected": float(diff),
+                "percent_vs_expected": float(pct),
+                "t_stat": float(t_stat),
+                "p_value": float(p_val),
+                "significance": sig,
+                "direction": direction,
+            }
 
         # Interpretation
         print()
@@ -262,14 +540,26 @@ def main():
         if l23_exp < l23_unexp:
             supp = (l23_unexp - l23_exp) / l23_unexp * 100
             print(f"  L2/3 total: LOWER for expected → PREDICTIVE SUPPRESSION ({supp:.1f}% reduction)")
+            json_payload["comparison"]["interpretation"] = {
+                "l23_total_effect": "predictive_suppression",
+                "magnitude_percent_reduction_vs_unexpected": float(supp),
+            }
         elif l23_exp > l23_unexp:
             enh = (l23_exp - l23_unexp) / l23_unexp * 100
             print(f"  L2/3 total: HIGHER for expected → PREDICTIVE ENHANCEMENT ({enh:.1f}% increase)")
+            json_payload["comparison"]["interpretation"] = {
+                "l23_total_effect": "predictive_enhancement",
+                "magnitude_percent_increase_vs_unexpected": float(enh),
+            }
         else:
             print(f"  L2/3 total: no difference")
+            json_payload["comparison"]["interpretation"] = {
+                "l23_total_effect": "no_difference",
+            }
 
         l4_diff = abs(l4_exp - l4_unexp) / max(l4_exp, l4_unexp, 1e-8) * 100
         print(f"  L4 control: |diff| = {l4_diff:.1f}% {'(small → L4 NOT affected)' if l4_diff < 5 else '(large → confound: L4 differs too)'}")
+        json_payload["comparison"]["l4_control_percent_diff"] = float(l4_diff)
 
     else:
         print("  Insufficient data")
@@ -333,8 +623,17 @@ def main():
             stim_seq, cue_seq, ts_seq, true_thetas, _, _ = build_stimulus_sequence(
                 metadata, model_cfg, train_cfg, stim_cfg
             )
-            packed = net_off.pack_inputs(stim_seq, cue_seq, ts_seq)
-            r_l23_all, _, aux = net_off.forward(packed)
+            stim_seq = stim_seq.to(net_off.feedback_scale.device)
+            cue_seq = cue_seq.to(net_off.feedback_scale.device)
+            ts_seq = ts_seq.to(net_off.feedback_scale.device)
+            r_l23_all, _, aux = forward_with_feedback_ablation(
+                net_off,
+                stim_seq,
+                cue_seq,
+                ts_seq,
+                zero_center_exc=args.zero_center_exc,
+                zero_som_drive=args.zero_som_drive,
+            )
             r_l4_all = aux['r_l4_all']
             q_pred_all = aux['q_pred_all']
 
@@ -384,16 +683,36 @@ def main():
         print(f"\n  FB-ON gap  (unexp - exp): {on_diff:+.4f}")
         print(f"  FB-OFF gap (unexp - exp): {off_diff:+.4f}")
         print(f"  Feedback contribution:     {fb_contribution:+.4f}")
+        json_payload["feedback_off_control"] = {
+            "expected_l23_mean": float(exp_m),
+            "unexpected_l23_mean": float(unexp_m),
+            "expected_l4_mean": float(np.mean(off_expected_l4)),
+            "unexpected_l4_mean": float(np.mean(off_unexpected_l4)),
+            "delta_unexpected_minus_expected": float(unexp_m - exp_m),
+            "t_stat": float(t_off),
+            "p_value": float(p_off),
+            "fb_on_gap": float(on_diff),
+            "fb_off_gap": float(off_diff),
+            "feedback_contribution": float(fb_contribution),
+        }
 
         if fb_contribution > 0:
             print("  → Feedback WIDENS the gap (enhances predictive suppression)")
+            json_payload["feedback_off_control"]["interpretation"] = "feedback_widens_gap"
         elif fb_contribution < 0:
             print("  → Feedback NARROWS the gap (opposes predictive coding)")
+            json_payload["feedback_off_control"]["interpretation"] = "feedback_narrows_gap"
         else:
             print("  → Feedback has no differential effect")
+            json_payload["feedback_off_control"]["interpretation"] = "no_differential_effect"
     else:
         print(f"  FB OFF: expected={len(off_expected_l23)}, unexpected={len(off_unexpected_l23)}")
         print("  Insufficient data for comparison")
+        json_payload["feedback_off_control"] = {
+            "expected_n": int(len(off_expected_l23)),
+            "unexpected_n": int(len(off_unexpected_l23)),
+            "status": "insufficient_data",
+        }
 
     # --- Additional diagnostic: V2 prediction quality during ISI ---
     print()
@@ -418,6 +737,92 @@ def main():
     print(f"  Beyond 20°: {beyond_20:>5d} ({beyond_20/total_pres*100:.1f}%)")
     print(f"  Mean prediction error: {all_pred_errors_flat.mean():.2f}°")
     print(f"  Median prediction error: {np.median(all_pred_errors_flat):.2f}°")
+    json_payload["prediction_quality"] = {
+        "total_non_ambiguous_presentations": int(total_pres),
+        "within_5": int(within_5),
+        "within_10": int(within_10),
+        "within_15": int(within_15),
+        "within_20": int(within_20),
+        "beyond_20": int(beyond_20),
+        "mean_prediction_error_deg": float(all_pred_errors_flat.mean()),
+        "median_prediction_error_deg": float(np.median(all_pred_errors_flat)),
+    }
+
+    for lo, hi in bins:
+        mask = (all_errors >= lo) & (all_errors < hi)
+        n = int(mask.sum())
+        bucket = {"lo_deg": int(lo), "hi_deg": int(hi), "n": n}
+        if n > 0:
+            bucket.update({
+                "l23_mean": float(all_l23[mask].mean()),
+                "l4_mean": float(all_l4[mask].mean()),
+                "center_exc_mean": float(all_ce[mask].mean()),
+            })
+        json_payload["binned_l23"].append(bucket)
+
+    if args.bucket_audit:
+        print()
+        print("=" * 70)
+        print("BUCKET AUDIT: EVAL BUCKETS VS TRAINING-SEMANTIC TRUTH LABELS")
+        print("=" * 70)
+        for regime_name in ("overall", "relevant", "irrelevant"):
+            counts = audit_overlap[regime_name]
+            print(f"\n{regime_name.upper()}:")
+            print(
+                "  valid_non_ambiguous={valid_non_ambiguous_total}  "
+                "truth_expected={truth_expected_total}  truth_unexpected={truth_unexpected_total}  "
+                "eval_expected={eval_expected_total}  eval_unexpected={eval_unexpected_total}  "
+                "eval_middle={eval_middle_total}".format(**counts)
+            )
+            print(
+                "  overlaps: "
+                f"TE∩EE={counts['truth_expected_eval_expected']}  "
+                f"TE∩EU={counts['truth_expected_eval_unexpected']}  "
+                f"TE∩EM={counts['truth_expected_eval_middle']}  "
+                f"TU∩EE={counts['truth_unexpected_eval_expected']}  "
+                f"TU∩EU={counts['truth_unexpected_eval_unexpected']}  "
+                f"TU∩EM={counts['truth_unexpected_eval_middle']}"
+            )
+
+        audit_summary = {
+            "counts": audit_overlap,
+            "summaries": {
+                labeling: {
+                    regime: {
+                        bucket: summarize_store(audit_metrics[labeling][regime][bucket])
+                        for bucket in ("expected", "unexpected")
+                    }
+                    for regime in ("relevant", "irrelevant")
+                }
+                for labeling in ("eval", "truth")
+            },
+        }
+        json_payload["bucket_audit"].update(audit_summary)
+
+        print()
+        print("AUDIT SUMMARIES BY REGIME")
+        for labeling in ("eval", "truth"):
+            print(f"\n  {labeling.upper()} LABELS")
+            for regime in ("relevant", "irrelevant"):
+                exp_n = audit_summary["summaries"][labeling][regime]["expected"]["l23_total"]["n"]
+                unexp_n = audit_summary["summaries"][labeling][regime]["unexpected"]["l23_total"]["n"]
+                print(f"    {regime}: expected_n={exp_n}, unexpected_n={unexp_n}")
+                if exp_n > 0:
+                    exp_l23 = audit_summary["summaries"][labeling][regime]["expected"]["l23_total"]["mean"]
+                    exp_fwhm = audit_summary["summaries"][labeling][regime]["expected"]["l23_fwhm"]["mean"]
+                    print(f"      expected:   l23_total={exp_l23:.4f}, fwhm={exp_fwhm:.2f}")
+                if unexp_n > 0:
+                    unexp_l23 = audit_summary["summaries"][labeling][regime]["unexpected"]["l23_total"]["mean"]
+                    unexp_fwhm = audit_summary["summaries"][labeling][regime]["unexpected"]["l23_fwhm"]["mean"]
+                    print(f"      unexpected: l23_total={unexp_l23:.4f}, fwhm={unexp_fwhm:.2f}")
+
+    if args.json_out:
+        out_dir = os.path.dirname(os.path.abspath(args.json_out))
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump(json_payload, f, indent=2)
+        print(f"\n[json] {args.json_out}")
 
     print("\nDone.")
 

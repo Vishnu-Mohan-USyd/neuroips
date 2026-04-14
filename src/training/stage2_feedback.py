@@ -91,6 +91,88 @@ def compute_mismatch_labels(
     return mismatch_labels, mismatch_mask
 
 
+def compute_aligned_expected_mask(
+    q_pred_all: Tensor,
+    true_thetas: Tensor,
+    is_ambiguous: Tensor,
+    task_state: Tensor,
+    *,
+    steps_on: int,
+    steps_isi: int,
+    orientation_range: float,
+    expected_threshold_deg: float = 10.0,
+) -> Tensor:
+    """Build the eval-style focused expected mask from previous-ISI q_pred.
+
+    This mirrors the acceptance semantics in
+    ``scripts/plot_tuning_ring_extended.py`` as closely as possible inside
+    Stage 2:
+      - presentation 0 is always invalid (no prior prediction)
+      - prediction comes from the previous presentation's final ISI timestep
+      - ambiguous presentations are excluded
+      - only focused/relevant presentations are eligible
+      - expected means circular prediction error <= expected_threshold_deg
+
+    Returns:
+        Float mask [B, S] with 1.0 on aligned expected presentations.
+    """
+    B, T_total, N = q_pred_all.shape
+    S = true_thetas.shape[1]
+    steps_per = steps_on + steps_isi
+    assert T_total == S * steps_per, (
+        f"q_pred_all has T_total={T_total}, expected {S}*{steps_per} from "
+        f"true_thetas.shape[1]={S}, steps_on={steps_on}, steps_isi={steps_isi}."
+    )
+
+    q_pred_seq = q_pred_all.reshape(B, S, steps_per, N)
+    prev_isi_q = torch.zeros(B, S, N, device=q_pred_all.device, dtype=q_pred_all.dtype)
+    prev_isi_q[:, 1:, :] = q_pred_seq[:, :-1, steps_per - 1, :]
+
+    step_deg = orientation_range / N
+    pred_peak_idx = prev_isi_q.argmax(dim=-1)
+    pred_theta = pred_peak_idx.float() * step_deg
+    pred_error = circular_distance_abs(pred_theta, true_thetas, orientation_range)
+
+    valid = torch.zeros(B, S, device=q_pred_all.device, dtype=q_pred_all.dtype)
+    valid[:, 1:] = 1.0
+    non_ambiguous = (~is_ambiguous.to(device=q_pred_all.device, dtype=torch.bool)).float()
+    focused = task_state.to(device=q_pred_all.device, dtype=q_pred_all.dtype)[..., 0]
+    is_expected = (pred_error <= expected_threshold_deg).to(q_pred_all.dtype)
+    return valid * non_ambiguous * focused * is_expected
+
+
+def compute_evoked_response_windows(
+    r_l23_all: Tensor,
+    *,
+    seq_length: int,
+    steps_on: int,
+    steps_isi: int,
+) -> Tensor:
+    """Compute late-ON minus previous-ISI L2/3 responses per presentation.
+
+    The late-ON index matches the accepted analysis surface relative to the ON
+    period: ``steps_on - 3`` (e.g. 9 for the 12-on / 4-off routine). The ISI
+    baseline is the previous presentation's final ISI timestep.
+
+    Returns:
+        Tensor [B, S, N] where presentation 0 uses a zero baseline and is
+        expected to be masked out by ``compute_aligned_expected_mask``.
+    """
+    B, T_total, N = r_l23_all.shape
+    steps_per = steps_on + steps_isi
+    assert T_total == seq_length * steps_per, (
+        f"r_l23_all has T_total={T_total}, expected {seq_length}*{steps_per} "
+        f"from seq_length={seq_length}, steps_on={steps_on}, steps_isi={steps_isi}."
+    )
+
+    late_on_idx = max(0, steps_on - 3)
+    r_seq = r_l23_all.reshape(B, seq_length, steps_per, N)
+    late_on = r_seq[:, :, late_on_idx, :]
+    prev_isi = torch.zeros_like(late_on)
+    prev_isi[:, 1:, :] = r_seq[:, :-1, steps_per - 1, :]
+    return late_on - prev_isi
+
+
 @dataclass
 class Stage2Result:
     """Result of Stage 2 training."""
@@ -509,6 +591,26 @@ def run_stage2(
                 .mean(dim=2)
             )
 
+        aligned_expected_mask = None
+        expected_response_windows = None
+        if train_cfg.lambda_expected_suppress > 0 or train_cfg.lambda_expected_width > 0:
+            aligned_expected_mask = compute_aligned_expected_mask(
+                aux["q_pred_all"],
+                true_thetas,
+                metadata.is_ambiguous,
+                metadata.task_states,
+                steps_on=train_cfg.steps_on,
+                steps_isi=train_cfg.steps_isi,
+                orientation_range=model_cfg.orientation_range,
+                expected_threshold_deg=10.0,
+            )
+            expected_response_windows = compute_evoked_response_windows(
+                r_l23_all,
+                seq_length=seq_length,
+                steps_on=train_cfg.steps_on,
+                steps_isi=train_cfg.steps_isi,
+            )
+
         # Compute mismatch labels from ground truth
         mm_labels_windows = None
         mm_mask_windows = None
@@ -571,6 +673,8 @@ def run_stage2(
             task_routing=train_cfg.task_routing,
             r_error_windows=r_error_windows,
             q_match_windows=q_match_windows,
+            expected_mask=aligned_expected_mask,
+            expected_response_windows=expected_response_windows,
         )
 
         total_loss.backward()
