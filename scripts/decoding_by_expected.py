@@ -6,7 +6,7 @@ classifies each post-first presentation as EXPECTED or UNEXPECTED using
 the V2 prediction from the last ISI timestep (same classifier as
 `scripts/debug_expected_vs_unexpected.py`). Then runs the trained
 orientation decoder on r_l23 averaged over the Stage-2 training readout
-window [4, 7] and records top-1 correctness + softmax top-1 margin per
+window [9, 11] and records top-1 correctness + softmax top-1 margin per
 trial. Aggregates overall accuracy and per-task_state (focused vs
 routine) breakdown, plus a two-proportion z-test on Δ accuracy.
 
@@ -24,7 +24,7 @@ Output JSON schema
   "checkpoint": <str>,
   "config": <str>,
   "feedback_scale": 1.0,
-  "readout_window": {"start": 4, "end": 7, "inclusive": true},
+  "readout_window": {"start": 9, "end": 11, "inclusive": true},
   "buckets": {
       "expected":   {"n": int, "acc": float, "top1_margin": float},
       "unexpected": {"n": int, "acc": float, "top1_margin": float},
@@ -40,10 +40,9 @@ Output JSON schema
 
 Design notes
 ------------
-* Uses the Stage-2 trained readout window [t=4, t=7] inclusive, averaged
-  — same window the orientation_decoder was trained on. Using a different
-  timestep (e.g. t=9) would introduce distribution shift and penalize
-  the decoder unfairly.
+* Uses the Stage-2 trained readout window [t=9, t=11] inclusive, averaged
+  — same window the orientation_decoder was trained on (last 3 ON steps
+  of the 12-step ON period, from stage2_feedback.py:225-226).
 * `feedback_scale = 1.0` matches the user's "FB ON only" constraint.
 * Ambiguous trials excluded (same as debug_expected_vs_unexpected).
 * Seed 42 (matches `debug_expected_vs_unexpected.py` default), 10 batches
@@ -174,9 +173,10 @@ def main() -> None:
     steps_on = train_cfg.steps_on
     steps_isi = train_cfg.steps_isi
     steps_per = steps_on + steps_isi
-    # Stage-2 training readout window, from compute_readout_indices defaults
-    # in src/training/trainer.py: window_start=4, window_end=7 (inclusive).
-    W_START, W_END = 4, 7
+    # Stage-2 training readout window: last 3 ON steps (matching
+    # stage2_feedback.py:225-226: window_start=max(0, steps_on-3)=9,
+    # window_end=steps_on-1=11, inclusive).
+    W_START, W_END = 9, 11
     assert W_END < steps_on, (
         f"Readout window [{W_START}, {W_END}] must fall inside steps_on={steps_on}"
     )
