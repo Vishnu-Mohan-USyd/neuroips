@@ -164,3 +164,26 @@ five flags default to `false` so the baseline architecture is unchanged when
 they are absent. See `docs/rescues_1_to_4_summary.md` for the full
 per-rescue rationale, results, and the 2026-04-13 re-centered analysis
 correcting the earlier "subtractive predictive coding" interpretation.
+
+## Decoders (orientation readout from L2/3)
+
+Three orientation decoders exist in this project. Only Decoder A is part of
+the trained network; B and C are post-hoc analysis tools.
+
+| Decoder | Type | Training data | Where used |
+|---|---|---|---|
+| **A** | `Linear(36, 36)` saved with each Stage-1 checkpoint, frozen in Stage 2. | The natural HMM-march distribution that Stage 1 trains on (real `r_l23` activations during training). | Original sensory loss head; default decoder for representation analyses through 2026-04-13. |
+| **B** | 5-fold nearest-centroid CV, computed on demand per analysis. | The same `r_l23` activations being analysed (no separate training). | Decoder-template robustness check. |
+| **C** | Standalone `Linear(36, 36)` with bias. | 100k synthetic orientation-bump patterns (50k single-orientation σ=3 ch, amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02). Trained with Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. Saved at `checkpoints/decoder_c.pt`. | **Preferred decoder for expectation-suppression analyses on the `dampening-analysis` branch (set 2026-04-17).** |
+
+**Decoder A artefact (2026-04-17).** On R1+R2, the matched-probe-3pass
+Δdec(ex−unex)=+0.32 measured under Decoder A collapses to Δ≈+0.04 (within
+per-fold noise) under Decoder B. Root cause: Decoder A's fixed templates,
+trained on the natural-march distribution, are out-of-distribution for the
+synthetic Pass B compound bumps. Network_mm / Network_both / HMM
+Expected-vs-Unexpected numbers that used Decoder A are decoder-dependent
+and should be re-checked under Decoder C before publication.
+
+**Decoder C accuracy.** Held-out synthetic test 0.81 (single 0.98 / multi
+0.65). Real-network natural-HMM R1+R2 0.66 (non-ambiguous trials) / 0.53
+(all trials).

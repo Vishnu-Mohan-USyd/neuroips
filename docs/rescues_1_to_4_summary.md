@@ -522,6 +522,58 @@ The re-centered, interpolation-based analysis here shows the per-trial response 
 
 Both observations are correct, but they answer different questions: the non-re-centered curve describes how a population of trials with scattered peaks looks on average; the re-centered curve describes how a single trial's tuning response is shaped by feedback. The re-centered view is the appropriate one for comparison against the Richter / Kok representational signatures.
 
+---
+
+## Update (2026-04-17): R1+R2 set as canonical default + Decoder A artefact note
+
+### R1+R2 is the canonical default checkpoint on `dampening-analysis`
+
+From 2026-04-17 onward, **R1+R2 simple_dual emergent_seed42**
+(`results/simple_dual/emergent_seed42/checkpoint.pt` on the remote) is the
+canonical default checkpoint for all expectation-suppression /
+dampening-vs-sharpening analyses on the `dampening-analysis` branch.
+Network_mm and Network_both remain valid for the per-regime feedback
+question (mismatch dissociation, focused/routine head_feedback split) but
+are no longer the default model for ex-vs-unex / tuning-shape analysis.
+
+### Decoder A artefact note
+
+The Δdec(ex−unex) numbers reported above for matched-probe-3pass and the
+HMM Expected-vs-Unexpected slices were computed with **Decoder A** — the
+linear sensory readout that was trained alongside the network in Stage 2
+and frozen thereafter. On R1+R2, the matched-probe-3pass
+**Δdec(ex−unex) = +0.32 under Decoder A collapses to Δ ≈ +0.04 (within
+per-fold noise) under Decoder B** (5-fold nearest-centroid CV evaluated on
+the same `r_l23` activations). Root cause: Decoder A's fixed templates,
+trained on the natural-march distribution, are out-of-distribution for the
+synthetic Pass B compound bumps used in matched-probe-3pass. The natural
+march at high contrast produces sharp single-orientation bumps; Pass B
+introduces a +90° probe on top of a partially decayed predicted-orientation
+component, producing a compound-bump shape that Decoder A's fixed templates
+score in a way that exaggerates the ex/unex gap.
+
+**Implication.** Network_mm, Network_both, and HMM Expected-vs-Unexpected
+numbers in earlier sections that were measured with Decoder A are
+**decoder-dependent** and should be re-checked under Decoder C before
+being used as evidence for or against Kok / Richter / dampening signatures.
+The cross-rescue summary tables (Tables 1–6 in the original section) that
+report Decoder-A accuracy slices fall in this category.
+
+### Decoder C is the preferred decoder going forward
+
+A new decoder, **Decoder C**, was trained for the expectation-suppression
+analysis. It is a standalone `Linear(36, 36)` (bias on) trained on 100k
+synthetic orientation-bump patterns (50k single-orientation σ=3 ch with
+amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max
+amplitude as the label; Gaussian noise σ=0.02). Adam lr=1e-3, batch 256,
+≤30 epochs, early-stop patience 3, seed 42. Saved at
+`checkpoints/decoder_c.pt`. Held-out synthetic accuracy 0.81 (single
+0.98 / multi 0.65); real-network natural-HMM R1+R2 accuracy 0.66
+(non-ambiguous trials) / 0.53 (all trials). Decoder A is retained only as
+a reference because of the OOD/SNR-confound behavior described above. See
+`ARCHITECTURE.md` § "Decoders" and `RESULTS.md` § 10 for the new R1+R2
+paired ex/unex eval.
+
 ### Caveat: the BOTH-regime preregistered criterion is still NOT met
 
 Critically, the re-centered dampening signature appears in **both** Relevant **and** Irrelevant task_state with similar magnitude on all rescues. The preregistered hypothesis was that task_state should **route** the circuit into one regime (Kok sharpening for focused) or the other (Richter dampening for routine). What we observe instead is **task-state-invariant** preserved-shape dampening on R4 (and to a lesser extent R1+R2). The task_state input does not gate the representational mode; both regimes produce the same dampening profile.

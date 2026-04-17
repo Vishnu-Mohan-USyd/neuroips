@@ -14,7 +14,30 @@
 | `main` | Stable baseline | `4c57d47` (2026-03-31) |
 | `single-network-dual-regime` | Dual-regime trained baselines (Network_mm, Network_both, Fixes 1–4) | `8e13d69` (2026-04-12) |
 | `failed-dual-regime-experiments` | Architectural rescue chain R1+R2 / R3 / R4 / R5 | `39375ac` (2026-04-13) |
-| `dampening-analysis` | Re-centered tuning analysis + figures + corrective docs | `60bb69b` (2026-04-13) |
+| `dampening-analysis` | Re-centered tuning analysis + figures + corrective docs; R1+R2 set as canonical default; Decoder C ex/unex eval | `37001a1` (2026-04-17) |
+
+---
+
+## 2026-04-17 — Decoder C ex/unex paired eval on R1+R2 (Tasks #11–#13)
+
+**Context:** Decoder A (the linear sensory readout frozen in Stage 2) showed a strong matched-probe Δdec(ex−unex)=+0.32 on R1+R2, but a 5-fold nearest-centroid CV (Decoder B) collapsed the gap to ≈+0.04 — within per-fold noise. Root cause: Decoder A's fixed templates, trained on the natural-march distribution, are out-of-distribution for the synthetic Pass B compound bumps used in matched-probe-3pass. A new decoder was needed for the expectation-suppression analysis.
+
+**What was tried:** **Decoder C** — a standalone `Linear(36, 36)` trained on 100k synthetic orientation-bump patterns (50k single-orientation σ=3 ch with amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02; Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42). Held-out synthetic accuracy 0.81 (single 0.98 / multi 0.65); real-network natural-HMM R1+R2 accuracy 0.66 non-amb / 0.53 all. Then a **paired ex/unex eval** (Tasks #12/#13) was run on R1+R2 simple_dual emergent_seed42: 12 N values (4..15) × 200 trials/N = 2400 paired ex/unex trials. Random S ∈ [0°, 180°), D ∈ [25°, 90°], CW/CCW 50/50 per trial, fixed `task_state=[1,0]` focused, cue at expected-next orientation in BOTH branches, contrast 1.0. Per-trial RNG seed = `42 + trial_idx` (independent of N → bit-identical pre-probe march across N). Readout: probe-ON window steps [9:11] mean-pooled, then per-trial roll-to-center on the true probe channel (peak at ch18) with linear-interp FWHM (same convention as `ce1b34e` / `matched_hmm_ring_sequence.py`).
+
+**Outcome:** Pooled across N (n=2400 paired trials):
+
+| Metric | Expected | Unexpected | Δ (ex − unex) |
+|---|---:|---:|---:|
+| Decoder C accuracy | 0.707 ± 0.009 | 0.581 ± 0.010 | +0.125 |
+| Net L2/3 (sum 36 ch) | 4.99 ± 0.01 | 6.13 ± 0.02 | −1.15 |
+| Peak at true-ch | 0.773 ± 0.003 | 0.626 ± 0.004 | +0.147 |
+| FWHM | 28.4° ± 0.10 | 29.8° ± 0.19 | −1.33° |
+
+All four signs hold at every N from 4 to 15. Pre-probe state bit-identical across branches (max|ex−unex|=0.00). All 2400 trials produced valid FWHM crossings in both branches. Expected trials show **lower net L2/3 activity, higher peak at the stimulus channel, narrower tuning, and higher decoding accuracy** than unexpected trials.
+
+**Interpretation framing (literal).** Under the project's operational dampening definition (lower activity AND lower decoding on expected), this pattern passes on net L2/3 but fails on decoding, peak, and FWHM. Under the Kok 2012 sharpening definition (narrower tuning, higher peak, better decoding, lower total activity), this pattern matches. Under Richter preserved-shape dampening (lower peak, preserved FWHM, preserved decoding), this pattern does not match — the peak goes the wrong direction. **R1+R2 is set as the canonical default checkpoint** for expectation-suppression analyses on the `dampening-analysis` branch from this point forward. Decoder C is the preferred decoder; Decoder A is retained only as a reference due to its OOD/SNR-confound behavior on synthetic probes — Network_mm / Network_both / HMM Expected-vs-Unexpected numbers that used Decoder A are decoder-dependent and should be re-checked under Decoder C before publication.
+
+**Pointers:** `scripts/eval_ex_vs_unex_decC.py` · `results/eval_ex_vs_unex_decC.json` · `scripts/train_decoder_c.py` · `checkpoints/decoder_c.pt` · `docs/figures/eval_ex_vs_unex_decC.png` · `RESULTS.md` § 10 · `docs/rescues_1_to_4_summary.md` § "Decoder A artefact note (2026-04-17)".
 
 ---
 

@@ -1,7 +1,8 @@
 # Project Summary: Laminar V1-V2 Expectation Suppression Model
 
-**Last updated:** 2026-04-12
-**Branch:** `single-network-dual-regime`
+**Last updated:** 2026-04-17
+**Branch:** `dampening-analysis` (active for analysis); `single-network-dual-regime` (training baselines).
+**Default checkpoint for ex-vs-unex / dampening-vs-sharpening analysis (set 2026-04-17):** R1+R2 simple_dual emergent_seed42 (`results/simple_dual/emergent_seed42/checkpoint.pt` on the remote). Network_mm / Network_both remain valid for the per-regime feedback question but are no longer the default model for ex-vs-unex analysis.
 **Repository:** `/mnt/c/Users/User/codingproj/freshstart`
 **Remote GPU:** `vishnu@100.123.25.88` (reuben-ml, Tailscale)
 
@@ -443,6 +444,54 @@ The preregistered BOTH-regime criterion (focused → Kok sharpening, routine →
 
 ### Where to read the details
 
-`docs/rescues_1_to_4_summary.md` — full per-rescue rationale, metrics, and the 2026-04-13 update section that corrects the earlier "subtractive predictive coding" interpretation (which was based on non-re-centered, bin-counted FWHM and exaggerated the expected/unexpected FWHM gap).
+`docs/rescues_1_to_4_summary.md` — full per-rescue rationale, metrics, and the 2026-04-13 update section that corrects the earlier "subtractive predictive coding" interpretation (which was based on non-re-centered, bin-counted FWHM and exaggerated the expected/unexpected FWHM gap). The 2026-04-17 update section adds a Decoder A artefact note and sets R1+R2 as the canonical default checkpoint for ex-vs-unex analysis.
 
 `RESULTS.md` § 9 — cross-checkpoint summary table and headline take-away.
+
+`RESULTS.md` § 10 — R1+R2 paired ex/unex eval under Decoder C (2026-04-17).
+
+---
+
+## 14. R1+R2 paired ex/unex eval — Decoder C (2026-04-17)
+
+**Branch:** `dampening-analysis`. **Checkpoint:** R1+R2 simple_dual emergent_seed42 (now the canonical default).
+
+### Decoder A artefact
+
+Earlier sections of this doc (and `RESULTS.md` § 9) report Δdec(ex−unex) numbers measured with **Decoder A** — the linear sensory readout trained alongside the network in Stage 2 and frozen thereafter. On R1+R2, the matched-probe-3pass **Δdec(ex−unex) = +0.32 under Decoder A collapses to Δ ≈ +0.04 (within per-fold noise) under Decoder B** (5-fold nearest-centroid CV on the same `r_l23` activations). Root cause: Decoder A's fixed templates, trained on the natural-march distribution, are out-of-distribution for the synthetic Pass B compound bumps used in matched-probe-3pass. Network_mm / Network_both / HMM Expected-vs-Unexpected numbers that used Decoder A are decoder-dependent and should be re-checked under Decoder C before being used as evidence for or against Kok / Richter / dampening signatures.
+
+### Decoder C (preferred decoder for ex-vs-unex analyses)
+
+Standalone `Linear(36, 36)` (bias on) trained on 100k synthetic orientation-bump patterns: 50k single-orientation σ=3 ch with amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02. Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. Saved at `checkpoints/decoder_c.pt`. Held-out synthetic accuracy 0.81 (single 0.98 / multi 0.65); real-network natural-HMM R1+R2 accuracy 0.66 non-amb / 0.53 all. Source: `scripts/train_decoder_c.py`.
+
+### Paired ex/unex eval design (Tasks #12/#13)
+
+12 N values (4..15) × 200 trials/N = 2400 paired ex/unex trials, run on R1+R2. Per-trial RNG seed = `42 + trial_idx` (independent of N → bit-identical pre-probe march for the same trial_idx across N values). Random S ∈ [0°, 180°), D ∈ [25°, 90°], CW/CCW 50/50 per trial. `task_state = [1, 0]` (focused) throughout, contrast 1.0. Cue at the expected-next orientation in **both** branches (so unex cue is "wrong" by D degrees). Pre-probe state shared across branches — only the probe-ON window diverges. Readout: probe-ON window steps `[9:11]` mean-pooled, followed by per-trial roll-to-center on the true probe channel (peak at ch18) with linear-interpolation FWHM (same convention as commit `ce1b34e`).
+
+### Pooled across N (n=2400 paired trials)
+
+| Metric | Expected | Unexpected | Δ (ex − unex) |
+|---|---:|---:|---:|
+| Decoder C top-1 accuracy | 0.707 ± 0.009 | 0.581 ± 0.010 | +0.125 |
+| Net L2/3 (sum 36 channels) | 4.99 ± 0.01 | 6.13 ± 0.02 | −1.15 |
+| Peak at true channel (re-centered ch18) | 0.773 ± 0.003 | 0.626 ± 0.004 | +0.147 |
+| FWHM (linear-interp half-max) | 28.4° ± 0.10 | 29.8° ± 0.19 | −1.33° |
+
+All four signs hold at every N from 4 to 15. Pre-probe state is bit-identical across branches (`pre_probe_max_abs_diff = 0.00e+00`). All 2400 trials produced valid FWHM crossings in both branches. In plain language: expected trials show **lower net L2/3 activity, higher peak at the stimulus channel, narrower tuning, and higher decoding accuracy** than unexpected trials.
+
+### Interpretation framing (literal)
+
+- **Operational dampening (lower activity AND lower decoding on expected):** Passes on net L2/3 (expected lower) but fails on decoding (expected higher), peak (expected higher), and FWHM (expected narrower).
+- **Kok 2012 sharpening (narrower tuning, higher peak, better decoding, lower total activity on expected):** Matches on all four axes.
+- **Richter 2018 preserved-shape dampening (lower peak, preserved FWHM, preserved decoding on expected):** Does not match — the peak goes the wrong direction.
+
+No mechanism interpretation beyond these literal comparisons.
+
+### Reproducibility
+
+- Eval script: `scripts/eval_ex_vs_unex_decC.py`.
+- Decoder training: `scripts/train_decoder_c.py` → `checkpoints/decoder_c.pt`.
+- Result JSON: `results/eval_ex_vs_unex_decC.json` (per-N entries + pooled, including `peak_at_stim_*`, `fwhm_deg_*` with `n_valid` counts, and `delta_*` for each metric).
+- Figure: `docs/figures/eval_ex_vs_unex_decC.png` (4-panel: dec_acc, net_L2/3, peak_at_stim, FWHM vs N).
+- Run log: `logs/eval_ex_vs_unex_decC_t13.log`.
+- See `ARCHITECTURE.md` § "Decoders" for the full A/B/C decoder taxonomy and `docs/rescues_1_to_4_summary.md` § "Update (2026-04-17)" for the Decoder A artefact note.
