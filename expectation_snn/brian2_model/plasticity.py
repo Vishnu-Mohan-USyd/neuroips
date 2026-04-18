@@ -60,6 +60,7 @@ def pair_stdp_with_normalization(
     tau_pre=20 * ms,
     tau_post=20 * ms,
     drive_amp_pA: float = 20.0,
+    target_channel: str = "soma",
     name: str = "pair_stdp",
 ) -> Synapses:
     """Pair-STDP synapses with multiplicative weight-dependent bounds.
@@ -89,6 +90,10 @@ def pair_stdp_with_normalization(
         Amplitude of the postsynaptic current step on each pre-spike, in pA.
         The effective drive is `w * drive_amp_pA` (so a unit-weight synapse
         deposits drive_amp_pA picoamps).
+    target_channel : {"soma", "apical"}
+        Which post-synaptic current variable to write into. "soma" targets
+        ``I_e_post``; "apical" targets ``I_ap_e_post`` (only valid when the
+        target cell has an apical compartment — V1_E).
     name : str
 
     Returns
@@ -106,12 +111,10 @@ def pair_stdp_with_normalization(
     dApre/dt  = -Apre  / tau_pre  : 1 (event-driven)
     dApost/dt = -Apost / tau_post : 1 (event-driven)
     """
-    if "I_rec" in target_group.variables:
-        on_pre_drive = f"I_rec_post += w * {drive_amp_pA}*pA"
-    elif "I_cue" in target_group.variables:
-        on_pre_drive = f"I_cue_post += w * {drive_amp_pA}*pA"
-    elif "I_syn" in target_group.variables:
-        on_pre_drive = f"I_syn_post += w * {drive_amp_pA}*pA"
+    if "I_ap_e" in target_group.variables and target_channel == "apical":
+        on_pre_drive = f"I_ap_e_post += w * {drive_amp_pA}*pA"
+    elif "I_e" in target_group.variables:
+        on_pre_drive = f"I_e_post += w * {drive_amp_pA}*pA"
     else:
         on_pre_drive = "v_post += w * mV"
     on_pre = f"""
@@ -227,10 +230,8 @@ def vogels_istdp(
     dxpre/dt  = -xpre  / tau_vogels : 1 (event-driven)
     dxpost/dt = -xpost / tau_vogels : 1 (event-driven)
     """
-    if "I_syn" in target_e_group.variables:
-        inh_drive_pre = f"I_syn_post -= w * {drive_amp_pA}*pA"
-    elif "I_rec" in target_e_group.variables:
-        inh_drive_pre = f"I_rec_post -= w * {drive_amp_pA}*pA"
+    if "I_i" in target_e_group.variables:
+        inh_drive_pre = f"I_i_post += w * {drive_amp_pA}*pA"
     else:
         inh_drive_pre = "v_post -= w * mV"
     on_pre = f"""
@@ -319,10 +320,8 @@ def eligibility_trace_cue_rule(
     w : 1
     delig/dt = -elig / tau_elig_eff : 1 (event-driven)
     """
-    if "I_cue" in h_e_group.variables:
-        drive_pre = f"I_cue_post += w * {drive_amp_pA}*pA"
-    elif "I_rec" in h_e_group.variables:
-        drive_pre = f"I_rec_post += w * {drive_amp_pA}*pA"
+    if "I_e" in h_e_group.variables:
+        drive_pre = f"I_e_post += w * {drive_amp_pA}*pA"
     else:
         drive_pre = "v_post += w * mV"
     on_pre = f"""
@@ -381,14 +380,15 @@ def _test_pair_stdp() -> bool:
     defaultclock.dt = 0.1 * ms
     b2_seed(0); np.random.seed(0)
 
-    # Minimal single-compartment LIF post with a writable I_syn current.
+    # Minimal single-compartment LIF post with the new I_e/I_i channels.
     post = NeuronGroup(
         1,
-        """dv/dt = (-(v - (-65*mV)) + I_syn/(20*nS))/(10*ms) : volt
-           I_syn : amp""",
+        """dv/dt = (-(v - (-65*mV)) + (I_e - I_i)/(20*nS))/(10*ms) : volt
+           dI_e/dt = -I_e/(5*ms) : amp
+           dI_i/dt = -I_i/(10*ms) : amp""",
         threshold="v > -50*mV",
         reset="v = -65*mV",
-        method="exact",
+        method="euler",
     )
     post.v = -65 * mV
 
@@ -431,19 +431,20 @@ def _test_vogels() -> bool:
     defaultclock.dt = 0.1 * ms
     b2_seed(1); np.random.seed(1)
 
-    # E cell with standard LIF + synaptic current channel.
+    # E cell with new I_e/I_i synaptic channels.
     e = NeuronGroup(
         1,
-        """dv/dt = (-(v - (-65*mV)) + I_syn/(20*nS))/(10*ms) : volt (unless refractory)
-           I_syn : amp""",
+        """dv/dt = (-(v - (-65*mV)) + (I_e - I_i)/(20*nS))/(10*ms) : volt (unless refractory)
+           dI_e/dt = -I_e/(5*ms) : amp
+           dI_i/dt = -I_i/(10*ms) : amp""",
         threshold="v > -50*mV",
         reset="v = -65*mV",
         refractory=2 * ms,
-        method="exact",
+        method="euler",
     )
     e.v = -65 * mV
     exc_src = PoissonGroup(50, rates=50 * Hz)
-    exc_syn = Synapses(exc_src, e, on_pre="I_syn_post += 40*pA")
+    exc_syn = Synapses(exc_src, e, on_pre="I_e_post += 40*pA")
     exc_syn.connect()
     inh_src = PoissonGroup(20, rates=20 * Hz)
     inh_syn = vogels_istdp(
@@ -484,7 +485,7 @@ def _test_eligibility() -> bool:
     h = NeuronGroup(
         1,
         """dv/dt = -v/(10*ms) : 1
-           I_cue : amp""",
+           dI_e/dt = -I_e/(5*ms) : amp""",
         threshold="v > 0.5",
         reset="v = 0",
         method="exact",
@@ -541,7 +542,8 @@ def _test_normalize() -> bool:
     pre = SpikeGeneratorGroup(4, [], np.asarray([]) * ms, name="norm_pre")
     post = NeuronGroup(
         2,
-        "dv/dt = 0*Hz : 1\nI_rec : amp",
+        """dv/dt = 0*Hz : 1
+           dI_e/dt = -I_e/(5*ms) : amp""",
         threshold="v > 9999",
         reset="v = 0",
         method="exact",
