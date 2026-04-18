@@ -1,10 +1,10 @@
 """Brian2 smoke test for expectation_snn Phase 0.
 
 Builds a minimal 100-neuron LIF network driven by Poisson input with pair-STDP on
-the input->LIF synapses, runs for 100 ms, prints spike counts.
+the input->LIF synapses, runs for 100 ms, prints spike counts and weight changes.
 
 Pass criterion: Brian2 imports, simulation runs to completion, at least one neuron
-spikes, STDP updates at least one weight.
+spikes, and STDP updates at least one synaptic weight.
 
 Usage:
     conda activate expectation_snn
@@ -15,16 +15,16 @@ from __future__ import annotations
 import numpy as np
 
 from brian2 import (
+    Hz,
     NeuronGroup,
     PoissonGroup,
-    Synapses,
     SpikeMonitor,
-    run,
+    Synapses,
     defaultclock,
-    prefs,
-    ms,
     mV,
-    Hz,
+    ms,
+    prefs,
+    run,
     seed,
 )
 
@@ -36,10 +36,20 @@ def main() -> int:
     np.random.seed(42)
 
     N = 100
-    eqs = """
-    dv/dt = (-(v - v_rest) + R*I)/tau : volt (unless refractory)
-    I : amp
-    """
+    v_rest = -70 * mV
+    v_th = -50 * mV
+    v_reset = -65 * mV
+    tau = 10 * ms
+
+    tau_pre = 20 * ms
+    tau_post = 20 * ms
+    A_plus = 0.01
+    A_minus = -0.0105
+    w_init = 5.0
+    w_max = 10.0
+
+    eqs = "dv/dt = (v_rest - v) / tau : volt (unless refractory)"
+
     neurons = NeuronGroup(
         N,
         model=eqs,
@@ -47,26 +57,18 @@ def main() -> int:
         reset="v = v_reset",
         refractory=2 * ms,
         method="exact",
-        namespace={
-            "v_rest": -70 * mV,
-            "v_th": -50 * mV,
-            "v_reset": -65 * mV,
-            "tau": 10 * ms,
-            "R": 100e6 * 1.0,
-        },
     )
-    neurons.v = -70 * mV
-    neurons.I = 0.0
+    neurons.v = v_rest
 
-    poisson = PoissonGroup(N, rates=20 * Hz)
+    poisson = PoissonGroup(N, rates=200 * Hz)
 
     stdp_model = """
     w : 1
-    dApre/dt  = -Apre / tau_pre  : 1 (event-driven)
+    dApre/dt  = -Apre / tau_pre   : 1 (event-driven)
     dApost/dt = -Apost / tau_post : 1 (event-driven)
     """
     on_pre = """
-    v_post += w * 1.0 * mV
+    v_post += w * mV
     Apre += A_plus
     w = clip(w + Apost, 0, w_max)
     """
@@ -74,22 +76,10 @@ def main() -> int:
     Apost += A_minus
     w = clip(w + Apre, 0, w_max)
     """
-    syn = Synapses(
-        poisson,
-        neurons,
-        model=stdp_model,
-        on_pre=on_pre,
-        on_post=on_post,
-        namespace={
-            "tau_pre": 20 * ms,
-            "tau_post": 20 * ms,
-            "A_plus": 0.01,
-            "A_minus": -0.012,
-            "w_max": 1.0,
-        },
-    )
+
+    syn = Synapses(poisson, neurons, model=stdp_model, on_pre=on_pre, on_post=on_post)
     syn.connect(j="i")
-    syn.w = 0.5
+    syn.w = w_init
 
     mon_neurons = SpikeMonitor(neurons)
     mon_poisson = SpikeMonitor(poisson)
@@ -108,7 +98,7 @@ def main() -> int:
     print(f"smoke_test: w mean before -> after = {w_before.mean():.6f} -> {w_after.mean():.6f}")
 
     ok = n_neuron_spikes > 0 and n_poisson_spikes > 0 and n_weights_changed > 0
-    print(f"smoke_test: PASS" if ok else "smoke_test: FAIL")
+    print("smoke_test: PASS" if ok else "smoke_test: FAIL")
     return 0 if ok else 1
 
 

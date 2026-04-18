@@ -4,14 +4,19 @@
 
 Commit timestamp + evidence for each gate as phases complete.
 
-### Phase 0 deliverables (this commit)
+### Phase 0 deliverables
 
-- [x] Orphan branch `expectation-snn-v1h` created
-- [x] `env.yml` single Brian2 env
+- [x] Orphan branch `expectation-snn-v1h` created (root-commit 20ee8c1)
+- [x] `env.yml` single Brian2 env (Py 3.12, numpy >=2.0, brian2 2.10.1, brian2tools 0.3)
 - [x] Repo skeleton per plan sec 10
-- [ ] Conda env `expectation_snn` created (pending install)
-- [ ] Brian2 smoke test passes (pending install)
-- [ ] Tang 2023 PDF timing numbers committed (pending WebFetch)
+- [x] Conda env `expectation_snn` created successfully (brian2 2.10.1, brian2tools 0.3,
+      numpy, scipy, matplotlib, h5py, scikit-learn, pytest). brian2cuda deferred — optional,
+      commented out in env.yml pending CUDA toolchain verification.
+- [x] Brian2 smoke test output committed (`scripts/smoke_test.log`).
+- [x] Tang 2023 paradigm numbers verified from PMC full text (PMC9981605) and logged in
+      `docs/research_log.md`. Plan assumptions (30° / 4 Hz / 250 ms / no ISI / 5–9-block)
+      all confirmed. Added rotation direction (CW or CCW) and 50% contrast / 0.034 cpd
+      details to Methods log for stimulus builder reference.
 
 ## Stage 0 gate — pending
 
