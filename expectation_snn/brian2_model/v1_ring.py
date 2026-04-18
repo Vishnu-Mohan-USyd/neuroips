@@ -113,7 +113,7 @@ class V1RingConfig:
         Current amplitude for SOM -> E inhibitory drive.
     """
 
-    sigma_stim_deg: float = DEFAULT_SIGMA_STIM_DEG
+    sigma_stim_deg: float = 22.0
     stim_max_rate_hz: float = DEFAULT_STIM_MAX_RATE_HZ
     n_stim_afferents_per_channel: int = DEFAULT_N_STIM_AFFERENTS_PER_CHANNEL
     w_stim_e: float = 1.0
@@ -122,19 +122,25 @@ class V1RingConfig:
     w_ee_ring: float = 0.05
     drive_amp_ee_pA: float = 5.0
 
-    w_e_pv: float = 0.3
-    p_e_pv: float = 0.25
-    drive_amp_e_pv_pA: float = 15.0
+    w_e_pv: float = 0.5
+    p_e_pv: float = 0.4
+    drive_amp_e_pv_pA: float = 30.0
 
-    w_pv_e_init: float = 0.5
+    w_pv_e_init: float = 0.05
     drive_amp_pv_e_pA: float = 25.0
     pv_rho_hz: float = 5.0
-    pv_eta: float = 5e-3
+    pv_eta: float = 2e-3
 
-    w_e_som: float = 0.3
-    drive_amp_e_som_pA: float = 15.0
+    w_e_som: float = 0.4
+    drive_amp_e_som_pA: float = 25.0
     w_som_e: float = 0.5
     drive_amp_som_e_pA: float = 20.0
+
+    # Tonic bias currents (pA). Stage 0 calibration uses these to bring
+    # PV/SOM into realistic rate bands without requiring unrealistically
+    # strong synaptic recruitment from the sparse bottom-up input.
+    pv_bias_pA: float = 302.0
+    som_bias_pA: float = 130.0
 
 
 @dataclass
@@ -216,6 +222,8 @@ def build_v1_ring(config: Optional[V1RingConfig] = None,
     e = make_v1_e_population(n_e, name=f"{name_prefix}_e")
     som = make_v1_som_population(n_som, name=f"{name_prefix}_som")
     pv = make_v1_pv_population(N_PV_POOL, name=f"{name_prefix}_pv")
+    pv.I_bias = cfg.pv_bias_pA * pA
+    som.I_bias = cfg.som_bias_pA * pA
 
     # Stimulus afferents: `rates` is set by the caller via stimulus.py.
     stim = PoissonGroup(n_stim, rates=0 * Hz, name=f"{name_prefix}_stim")
