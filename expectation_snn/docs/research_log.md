@@ -55,16 +55,22 @@ commit must be documented as an amendment with date + rationale + what it touche
 
 ### Seeds
 
-| Use | Seed set |
-|---|---|
-| Development gate (sprint-level sanity) | {42, 7, 123} |
-| Paper main (reported in tables/figures) | {42, 7, 123, 2024, 11} |
-| Held-out (touched once after all other analyses) | {99, 314} |
+| Stage | Seed set | Status |
+|---|---|---|
+| **Current stage** — all development + first-pass Kok/Richter/Tang assays | **{42}** | **active** |
+| Paper main (reported in tables/figures) | {42, 7, 123, 2024, 11} | **deferred** — only runs once a first-pass finding is worth replicating |
+| Held-out (robustness) | {99, 314} | **deferred** — touched once at end, only if paper-main battery confirms |
 
-Rule: during development we are allowed to re-run {42, 7, 123} freely. Once a
-metric pipeline or training recipe is declared frozen for a hypothesis, the five
-paper seeds get run exactly once for the reportable numbers, and {99, 314} are
-touched once at the end for out-of-sample robustness.
+Rule (amended 2026-04-18): current stage runs seed=42 only. Multi-seed
+replication is pre-registered here so the seed ladder is locked, but the
+decision to execute the {7, 123, 2024, 11} battery is conditional on seed 42
+producing an interpretable first-pass signal on Kok / Richter / Tang. If that
+signal is absent or equivocal, we revisit the architecture / calibration
+before spending additional seed budget. {99, 314} are touched once at the
+end, only if the paper-main battery confirms.
+
+Consequently, the §5 evidence package's held-out-seed replication is
+downgraded from a first-pass gate to a deferred replication check.
 
 ### Trial counts per seed
 
