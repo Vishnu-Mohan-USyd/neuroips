@@ -1,0 +1,10 @@
+data/checkpoints/
+*.pyc
+__pycache__/
+.pytest_cache/
+.idea/
+*.egg-info/
+build/
+dist/
+standalone/
+*.log
