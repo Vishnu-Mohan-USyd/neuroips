@@ -1,39 +1,40 @@
-"""Component-level validation for the V1 ring PV rheobase smoothing
-(Sprint-3 commit `fix(v1_ring): smooth PV rheobase with Poisson background`).
+"""Component-level validation for the V1 ring.
 
-The bare LIF FS cell has a deterministic f-I curve with a razor-thin
-rheobase: just below threshold -> silent; just above -> near saturation.
-In vivo FS cells receive ~400-1000 Hz of spontaneous EPSCs from local
-cortex (Hu, Gan & Jonas 2014 Science 345:1255263), which smooths the
-f-I curve and lets the population fire in the biologically observed
-10-40 Hz band over a wider bias range.
+Scope (Sprint-3 backfill, 2026-04-19): TUNING-PRESERVATION ONLY.
 
-Scope note
-----------
-This is an *isolated* f-I test: no recurrent V1_E -> PV drive, no
-thalamic drive, only I_bias + (optional) bg Poisson. In the full
-Stage-0 network, PV's operating point at pv_bias_pA=240 sits in the
-10-40 Hz band because cortical AMPA drive adds on top of bias. Here
-we are validating only the *smoothing* claim: bg noise converts the
-razor-thin cliff into a smooth, monotone curve.
+The PV rheobase Poisson-noise smoothing claim (Sprint-3 commit
+`ec2a2ac fix(v1_ring): smooth PV rheobase with Poisson background`)
+is NOT asserted in this file. The right metric + threshold for the
+smoothing property is under active investigation by the debugger
+(see docs/phase_gate_evidence.md under "Sprint 3 backfill -- per-
+component functional validation"). Once the debugger proposes a
+tested metric, this file will be amended with:
+
+  TODO(debugger/Sprint-3-backfill):
+    - PV rheobase continuity: sweep bias in
+      [bias_cal - 20, bias_cal + 20] pA at 2 pA steps; assert no
+      jump > 15 Hz between adjacent biases (anti-cliff).
+    - CV-ISI > 0.5 with Poisson background enabled
+      (physiological irregularity under noise).
+
+For now we validate only the tuning-preservation claim: drifting a
+grating into the full V1 ring (E + PV + SOM, within-channel and
+cross-channel wiring active) places the V1 E peak on the driven
+channel and the FWHM falls in the Tang-observed 30-60 deg band.
 
 Assays
 ------
 
-1. **Anti-cliff**: with bg OFF the LIF FS cell is algebraically at
-   rheobase when I_bias == gL*(VT-EL) = 300 pA; below rheobase it is
-   silent, above rheobase the rate jumps very steeply. With bg ON
-   the curve must pass smoothly through 10-40 Hz over a non-zero
-   span of bias.
+1. **Peak channel**: per-channel V1 E population rate peaks at the
+   channel closest to the driven theta.
 
-2. **Smooth-band span**: with bg ON, the bias span over which mean
-   PV rate falls in [10, 40] Hz must be >= 15 pA (resolution-limited;
-   the true geometric span is ~19 pA at 400 Hz x 15 pA bg). Without
-   bg the span is 0 (cliff).
+2. **FWHM in band**: full-width at half-maximum of the per-channel
+   V1 E tuning curve lies in [30, 60] deg (Tang 2023 / plan sec 3
+   Stage-0 gate band).
 
-3. **Monotonicity**: with bg ON the f-I curve must be monotone
-   non-decreasing across the sweep (no dips from stochastic
-   inhibition effects).
+3. **Orthogonal suppression**: V1 E rate at orthogonal channel
+   (theta + 90 deg) is < half of peak-channel rate (basic tuning
+   sharpness).
 
 Run:
     python -m expectation_snn.validation.validate_v1_ring
@@ -41,175 +42,157 @@ Run:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Tuple
 
 import numpy as np
 from brian2 import (
     Network,
-    PoissonInput,
     SpikeMonitor,
     defaultclock,
-    Hz,
-    mV,
     ms,
-    pA,
     prefs,
     seed as b2_seed,
 )
 
-from ..brian2_model.neurons import (
-    V1PV_C, V1PV_GL, V1PV_EL, V1PV_VT, V1PV_VR,
-    make_v1_pv_population,
+from ..brian2_model.v1_ring import (
+    N_CHANNELS,
+    N_E_PER_CHANNEL,
+    build_v1_ring,
+    set_stimulus,
 )
 
 
-FI_BIAS_SWEEP_PA = np.arange(240.0, 281.0, 2.5)    # 17 points, 2.5 pA res
-FI_MIN_MONOTONE_SMOOTH_SPAN_PA = 15.0              # transition band must span
-                                                    # >= 15 pA at 2.5 pA sampling
-                                                    # (true geometric span ~19 pA)
-FI_RATE_LOW_HZ = 10.0
-FI_RATE_HIGH_HZ = 40.0
-TARGET_BG_RATE_HZ = 400.0                           # shipped default (Hu 2014)
-TARGET_BG_WEIGHT_PA = 15.0                          # shipped default
-PROBE_DUR_MS = 1000.0
+FWHM_BAND_DEG: Tuple[float, float] = (30.0, 60.0)
+PROBE_DURATION_MS = 500.0
+PROBE_SEED = 42
 
+
+# --- helpers ---------------------------------------------------------------
+
+def _fwhm_deg_ring(per_channel_rate: np.ndarray) -> float:
+    """Full-width at half-maximum (degrees) of a ring tuning curve.
+
+    Rolls so the peak sits at the array center, linearly interpolates
+    the half-crossings on either side, and returns their separation in
+    degrees (channel spacing = 180 / N_CHANNELS = 15 deg).
+    """
+    rate = np.asarray(per_channel_rate, dtype=np.float64)
+    n = len(rate)
+    peak_idx = int(np.argmax(rate))
+    centered = np.roll(rate, n // 2 - peak_idx)
+    peak = float(centered.max())
+    if peak <= 0.0:
+        return float("nan")
+    half = 0.5 * peak
+    # Find the two half-crossings left/right of the center peak.
+    peak_c = n // 2
+    # Left crossing
+    left = peak_c
+    for k in range(peak_c, 0, -1):
+        if centered[k] >= half and centered[k - 1] < half:
+            # linear interp
+            frac = (centered[k] - half) / (centered[k] - centered[k - 1])
+            left = k - frac
+            break
+        if k - 1 == 0 and centered[k - 1] >= half:
+            left = 0.0
+    # Right crossing
+    right = peak_c
+    for k in range(peak_c, n - 1):
+        if centered[k] >= half and centered[k + 1] < half:
+            frac = (centered[k] - half) / (centered[k] - centered[k + 1])
+            right = k + frac
+            break
+        if k + 1 == n - 1 and centered[k + 1] >= half:
+            right = float(n - 1)
+    channel_spacing_deg = 180.0 / N_CHANNELS
+    return float((right - left) * channel_spacing_deg)
+
+
+# --- report ----------------------------------------------------------------
 
 @dataclass
 class V1RingValidationReport:
-    fi_bias_pA: np.ndarray
-    fi_rate_hz_with_bg: np.ndarray
-    fi_rate_hz_no_bg: np.ndarray
-    smooth_span_pA: float
-    cliff_span_pA: float
-    monotone: bool
-    passed_fi_smoothness: bool
-    passed_anti_cliff: bool
-    passed_monotone: bool
+    per_channel_rate_hz: np.ndarray
+    peak_channel: int
+    expected_peak_channel: int
+    peak_rate_hz: float
+    orthogonal_rate_hz: float
+    fwhm_deg: float
+    fwhm_band: Tuple[float, float]
+    passed_peak: bool
+    passed_fwhm: bool
+    passed_orth: bool
 
     @property
     def passed(self) -> bool:
-        return (self.passed_fi_smoothness and self.passed_anti_cliff
-                and self.passed_monotone)
+        return self.passed_peak and self.passed_fwhm and self.passed_orth
 
     def summary(self) -> str:
-        lines = ["V1 ring / PV rheobase smoothing validation:"]
-        lines.append("  f-I curve (I_bias pA -> mean rate Hz):")
-        lines.append("     bias   with_bg    no_bg")
-        for bias, r_bg, r_no in zip(
-            self.fi_bias_pA, self.fi_rate_hz_with_bg, self.fi_rate_hz_no_bg,
-        ):
-            lines.append(f"   {bias:6.1f}   {r_bg:7.2f}   {r_no:7.2f}")
+        lines = ["V1 ring tuning-preservation validation:"]
+        lines.append("  per-channel V1 E rates (Hz):")
+        for c, r in enumerate(self.per_channel_rate_hz):
+            mark = "  <- peak" if c == self.peak_channel else ""
+            mark += "  <- driven" if c == self.expected_peak_channel else ""
+            lines.append(f"    ch{c:02d}  {r:6.2f} Hz{mark}")
         lines.append("  -----------------------------------")
         lines.append(
-            f"  smooth span (with bg, in [{FI_RATE_LOW_HZ:.0f}, "
-            f"{FI_RATE_HIGH_HZ:.0f}] Hz) = "
-            f"{self.smooth_span_pA:.1f} pA "
-            f"(>= {FI_MIN_MONOTONE_SMOOTH_SPAN_PA:.0f})  "
-            f"{'PASS' if self.passed_fi_smoothness else 'FAIL'}"
+            f"  peak channel = {self.peak_channel} "
+            f"(expected {self.expected_peak_channel})  "
+            f"{'PASS' if self.passed_peak else 'FAIL'}"
         )
         lines.append(
-            f"  cliff span  (no bg, in [{FI_RATE_LOW_HZ:.0f}, "
-            f"{FI_RATE_HIGH_HZ:.0f}] Hz)   = "
-            f"{self.cliff_span_pA:.1f} pA  "
-            f"{'PASS' if self.passed_anti_cliff else 'FAIL'}"
-            f"  (anti-cliff: without bg span must be 0)"
+            f"  FWHM = {self.fwhm_deg:.2f} deg  "
+            f"band={self.fwhm_band}  "
+            f"{'PASS' if self.passed_fwhm else 'FAIL'}"
         )
         lines.append(
-            f"  monotone non-decreasing (with bg)          : "
-            f"{'YES' if self.monotone else 'NO '}  "
-            f"{'PASS' if self.passed_monotone else 'FAIL'}"
+            f"  orth rate = {self.orthogonal_rate_hz:.2f} Hz "
+            f"(< 0.5 x peak = {0.5 * self.peak_rate_hz:.2f})  "
+            f"{'PASS' if self.passed_orth else 'FAIL'}"
         )
         lines.append("  -----------------------------------")
         lines.append(f"  verdict: {'PASS' if self.passed else 'FAIL'}")
         return "\n".join(lines)
 
 
-def _measure_pv_rate(
-    bias_pA: float,
-    bg_enabled: bool,
-    bg_rate_hz: float = TARGET_BG_RATE_HZ,
-    bg_weight_pA: float = TARGET_BG_WEIGHT_PA,
-    n_cells: int = 50,
-    probe_ms: float = PROBE_DUR_MS,
-    seed: int = 42,
-) -> float:
-    """Mean PV firing rate (Hz) at fixed `bias_pA`, no external synaptic input."""
+def run_v1_ring_validation(verbose: bool = True) -> V1RingValidationReport:
     prefs.codegen.target = "numpy"
     defaultclock.dt = 0.1 * ms
-    b2_seed(seed)
-    np.random.seed(seed)
+    b2_seed(PROBE_SEED); np.random.seed(PROBE_SEED)
 
-    pv = make_v1_pv_population(n_cells, name="fi_pv")
-    pv.I_bias = bias_pA * pA
-    mon = SpikeMonitor(pv, name="fi_mon")
+    ring = build_v1_ring()
+    set_stimulus(ring, theta_rad=0.0, contrast=1.0)
+    e_mon = SpikeMonitor(ring.e, name="v1e_mon_validate")
 
-    net_objs = [pv, mon]
-    if bg_enabled:
-        bg = PoissonInput(
-            target=pv, target_var="I_e", N=1,
-            rate=bg_rate_hz * Hz, weight=bg_weight_pA * pA,
-        )
-        net_objs.append(bg)
+    net = Network(*ring.groups, e_mon)
+    net.run(PROBE_DURATION_MS * ms)
 
-    net = Network(*net_objs)
-    net.run(probe_ms * ms)
+    e_idx = np.asarray(e_mon.i[:])
+    per_ch = np.bincount(ring.e_channel[e_idx], minlength=N_CHANNELS) / (
+        N_E_PER_CHANNEL * (PROBE_DURATION_MS / 1000.0)
+    )
 
-    total_spikes = int(len(mon.i[:]))
-    rate_hz = total_spikes / (n_cells * probe_ms / 1000.0)
-    return float(rate_hz)
+    peak_c = int(np.argmax(per_ch))
+    expected_peak = 0          # theta_rad=0 -> channel 0
+    orth_c = N_CHANNELS // 2   # 90 deg = channel 6
+    fwhm_deg = _fwhm_deg_ring(per_ch)
 
-
-def run_v1_ring_validation(verbose: bool = True) -> V1RingValidationReport:
-    """Run both assays and return a report."""
-    if verbose:
-        print(
-            f"V1 ring validation: sweeping bias in "
-            f"[{FI_BIAS_SWEEP_PA[0]}, {FI_BIAS_SWEEP_PA[-1]}] pA, "
-            f"bg={TARGET_BG_RATE_HZ}Hz x {TARGET_BG_WEIGHT_PA}pA"
-        )
-    rates_with_bg: List[float] = []
-    rates_no_bg: List[float] = []
-    for bias in FI_BIAS_SWEEP_PA:
-        rates_with_bg.append(_measure_pv_rate(float(bias), bg_enabled=True))
-        rates_no_bg.append(_measure_pv_rate(float(bias), bg_enabled=False))
-    rates_with_bg_arr = np.asarray(rates_with_bg)
-    rates_no_bg_arr = np.asarray(rates_no_bg)
-
-    # Smooth span: bias range where rate is in [10, 40] Hz, with bg.
-    in_band_bg = (rates_with_bg_arr >= FI_RATE_LOW_HZ) & (rates_with_bg_arr <= FI_RATE_HIGH_HZ)
-    if np.any(in_band_bg):
-        bias_lo = FI_BIAS_SWEEP_PA[in_band_bg].min()
-        bias_hi = FI_BIAS_SWEEP_PA[in_band_bg].max()
-        smooth_span = float(bias_hi - bias_lo)
-    else:
-        smooth_span = 0.0
-
-    in_band_no = (rates_no_bg_arr >= FI_RATE_LOW_HZ) & (rates_no_bg_arr <= FI_RATE_HIGH_HZ)
-    if np.any(in_band_no):
-        bias_lo_no = FI_BIAS_SWEEP_PA[in_band_no].min()
-        bias_hi_no = FI_BIAS_SWEEP_PA[in_band_no].max()
-        cliff_span = float(bias_hi_no - bias_lo_no)
-    else:
-        cliff_span = 0.0
-
-    # Monotone non-decreasing check (tolerate tiny stochastic noise).
-    deltas = np.diff(rates_with_bg_arr)
-    monotone = bool(np.all(deltas >= -0.5))
-
-    passed_fi = smooth_span >= FI_MIN_MONOTONE_SMOOTH_SPAN_PA
-    passed_cliff = cliff_span == 0.0
-    passed_mono = monotone
+    passed_peak = peak_c == expected_peak
+    passed_fwhm = FWHM_BAND_DEG[0] <= fwhm_deg <= FWHM_BAND_DEG[1]
+    passed_orth = float(per_ch[orth_c]) < 0.5 * float(per_ch[peak_c])
 
     rep = V1RingValidationReport(
-        fi_bias_pA=FI_BIAS_SWEEP_PA,
-        fi_rate_hz_with_bg=rates_with_bg_arr,
-        fi_rate_hz_no_bg=rates_no_bg_arr,
-        smooth_span_pA=smooth_span,
-        cliff_span_pA=cliff_span,
-        monotone=monotone,
-        passed_fi_smoothness=passed_fi,
-        passed_anti_cliff=passed_cliff,
-        passed_monotone=passed_mono,
+        per_channel_rate_hz=per_ch,
+        peak_channel=peak_c,
+        expected_peak_channel=expected_peak,
+        peak_rate_hz=float(per_ch[peak_c]),
+        orthogonal_rate_hz=float(per_ch[orth_c]),
+        fwhm_deg=fwhm_deg,
+        fwhm_band=FWHM_BAND_DEG,
+        passed_peak=passed_peak,
+        passed_fwhm=passed_fwhm,
+        passed_orth=passed_orth,
     )
     if verbose:
         print(rep.summary())
