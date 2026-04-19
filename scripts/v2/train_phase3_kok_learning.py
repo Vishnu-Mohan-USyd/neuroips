@@ -246,6 +246,10 @@ def run_kok_trial(
         weights=net.context_memory.W_qm_task,
     )
     net.context_memory.W_qm_task.data.add_(dw_qm)
+    # Runaway safeguard: cap |W_qm_task| at 1.0 per element to prevent
+    # the cue → memory → cue positive-feedback loop from diverging during
+    # early Phase-3 training (Task #58 / debugger Task #49 Claim 4).
+    net.context_memory.W_qm_task.data.clamp_(min=-1.0, max=1.0)
 
     r_l23_probe1_mean = torch.stack(probe1_l23, dim=0).mean(dim=0)  # [1, n_l23]
     probe_error_mh = r_l23_probe1_mean - b_l23_pre_probe         # [1, n_l23]

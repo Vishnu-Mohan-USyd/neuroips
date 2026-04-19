@@ -51,12 +51,55 @@ def test_at_target_theta_unchanged() -> None:
 # ---------------------------------------------------------------------------
 
 def test_update_magnitude_matches_formula() -> None:
-    """Δθ_j = lr · (mean_b(a_j) − ρ) per-unit."""
-    hom = ThresholdHomeostasis(lr=0.1, target_rate=1.0, n_units=3, init_theta=0.0)
+    """Δθ_j = lr · tanh(error/scale) · scale with deadband (Task #54).
+
+    error = mean_b(a_j) − ρ_target; deadband zeroes |error| < 0.2·|ρ|;
+    scale = 0.1·|ρ| + 1e-3.
+    """
+    hom = ThresholdHomeostasis(
+        lr=0.1, target_rate=1.0, n_units=3, init_theta=0.0,
+        deadband_fraction=0.2,
+    )
+    # Means [2.0, 0.5, 1.0]. Errors [1.0, -0.5, 0.0]. Deadband = 0.2.
+    # Unit 2 is at target (error=0, also within deadband) → no update.
+    # Units 0 and 1 outside deadband → tanh-saturating update.
     activity = torch.tensor([[1.5, 0.5, 1.0], [2.5, 0.5, 1.0]])   # means [2.0, 0.5, 1.0]
-    expected = torch.tensor([0.1 * (2.0 - 1.0), 0.1 * (0.5 - 1.0), 0.0])
+    scale = 0.1 * 1.0 + 1e-3
+    expected = torch.tensor([
+        0.1 * torch.tanh(torch.tensor(1.0 / scale)).item() * scale,
+        0.1 * torch.tanh(torch.tensor(-0.5 / scale)).item() * scale,
+        0.0,
+    ])
     hom.update(activity)
     torch.testing.assert_close(hom.theta, expected, atol=1e-7, rtol=0.0)
+
+
+def test_deadband_zeros_small_errors() -> None:
+    """Task #54: |error| < deadband_fraction·|ρ| → no update."""
+    hom = ThresholdHomeostasis(
+        lr=0.5, target_rate=1.0, n_units=2, init_theta=0.25,
+        deadband_fraction=0.2,
+    )
+    theta_before = hom.theta.clone()
+    # Error = 0.1 per unit ⇒ |0.1| < 0.2·1.0 = 0.2 deadband.
+    activity = torch.full((3, 2), 1.1)
+    hom.update(activity)
+    torch.testing.assert_close(hom.theta, theta_before, atol=0.0, rtol=0.0)
+
+
+def test_bounded_response_saturates() -> None:
+    """Task #54: huge error does not produce huge Δθ — tanh saturates at ±lr·scale."""
+    hom = ThresholdHomeostasis(
+        lr=0.1, target_rate=1.0, n_units=2, init_theta=0.0,
+        deadband_fraction=0.2,
+    )
+    scale = 0.1 * 1.0 + 1e-3  # 0.101
+    # Error = 999 (huge). tanh → 1 ⇒ Δθ ≈ lr · scale = 0.0101.
+    activity = torch.full((1, 2), 1000.0)
+    hom.update(activity)
+    saturation_bound = hom.lr * scale
+    assert torch.all(hom.theta.abs() < 1.01 * saturation_bound)
+    assert torch.all(hom.theta > 0.99 * saturation_bound)
 
 
 # ---------------------------------------------------------------------------
@@ -92,12 +135,29 @@ def test_repeated_underactive_updates_are_monotonic() -> None:
 # ---------------------------------------------------------------------------
 
 def test_batch_mean_is_used() -> None:
-    """Per-unit update uses mean over batch, not individual samples."""
-    hom = ThresholdHomeostasis(lr=0.1, target_rate=0.0, n_units=2, init_theta=0.0)
+    """Per-unit update uses mean over batch, not individual samples.
+
+    With the Task #54 bounded rule: at target_rate=0 the deadband degenerates to
+    zero, so any non-zero error drives a tanh-saturating update whose sign
+    equals the sign of the batch mean per unit. The non-zero-mean units should
+    receive a POSITIVE update (both batch means are positive here), and the
+    magnitudes should saturate at ~lr·scale.
+    """
+    hom = ThresholdHomeostasis(
+        lr=0.1, target_rate=0.0, n_units=2, init_theta=0.0,
+        deadband_fraction=0.2,
+    )
     activity = torch.tensor([[1.0, 2.0], [3.0, 4.0]])      # means [2.0, 3.0]
     hom.update(activity)
-    expected = torch.tensor([0.1 * 2.0, 0.1 * 3.0])
-    torch.testing.assert_close(hom.theta, expected, atol=1e-7, rtol=0.0)
+    # scale = 0.1*|0| + 1e-3 = 0.001; tanh(2000) ≈ tanh(3000) ≈ 1 ⇒ both saturate.
+    scale = 1e-3
+    expected = torch.tensor([
+        0.1 * torch.tanh(torch.tensor(2.0 / scale)).item() * scale,
+        0.1 * torch.tanh(torch.tensor(3.0 / scale)).item() * scale,
+    ])
+    torch.testing.assert_close(hom.theta, expected, atol=1e-8, rtol=0.0)
+    # Both units move positively (their batch means are positive).
+    assert torch.all(hom.theta > 0)
 
 
 # ---------------------------------------------------------------------------

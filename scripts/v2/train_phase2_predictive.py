@@ -208,6 +208,18 @@ def _get_weight(net: V2Network, module: str, weight: str) -> Tensor:
     return getattr(getattr(net, module), weight)
 
 
+def _raw_prior(net: V2Network, module: str, weight: str, w: Tensor) -> Tensor:
+    """Return the raw-prior anchor tensor for ``module.weight`` (Task #50).
+
+    Reads ``module.raw_init_means[weight]`` (float), or falls back to ``0.0``
+    if the module does not publish a registry or the weight name is absent.
+    Shape / dtype / device match ``w`` so the plasticity rules can subtract
+    directly without broadcasting surprises.
+    """
+    mean = getattr(getattr(net, module), "raw_init_means", {}).get(weight, 0.0)
+    return torch.full_like(w, float(mean))
+
+
 def _apply_update(
     net: V2Network, module: str, weight: str, dw: Tensor,
     energy: EnergyPenalty, pre: Tensor, mask: Optional[Tensor] = None,
@@ -221,6 +233,7 @@ def _apply_update(
     shrink = energy.current_weight_shrinkage(w, pre, mask=mask)
     total = dw + shrink
     w.data.add_(total)
+    w.data.clamp_(min=-8.0, max=8.0)
     return float(total.abs().mean().item())
 
 
@@ -263,6 +276,7 @@ def apply_plasticity_step(
         dw = rules.urbanczik.delta(
             pre_activity=pre_tensor, apical=apical_l23, basal=basal_l23,
             weights=w, mask=mask,
+            raw_prior=_raw_prior(net, "l23_e", wname, w),
         )
         out[f"l23_e.{wname}"] = _apply_update(
             net, "l23_e", wname, dw, rules.energy, pre_tensor, mask=mask,
@@ -276,6 +290,7 @@ def apply_plasticity_step(
         w = _get_weight(net, "l23_e", wname)
         dw = rules.vogels.delta(
             pre_activity=pre_tensor, post_activity=state2.r_l23, weights=w,
+            raw_prior=_raw_prior(net, "l23_e", wname, w),
         )
         out[f"l23_e.{wname}"] = _apply_update(
             net, "l23_e", wname, dw, rules.energy, pre_tensor,
@@ -290,6 +305,7 @@ def apply_plasticity_step(
         w = _get_weight(net, module, wname)
         dw = rules.vogels.delta(
             pre_activity=pre_tensor, post_activity=post_tensor, weights=w,
+            raw_prior=_raw_prior(net, module, wname, w),
         )
         out[f"{module}.{wname}"] = _apply_update(
             net, module, wname, dw, rules.energy, pre_tensor,
@@ -307,6 +323,7 @@ def apply_plasticity_step(
         dw = rules.hebb.delta(
             pre_activity=pre_tensor, post_activity=post_tensor, weights=w,
             mask=mask,
+            raw_prior=_raw_prior(net, module, wname, w),
         )
         out[f"{module}.{wname}"] = _apply_update(
             net, module, wname, dw, rules.energy, pre_tensor, mask=mask,
@@ -320,12 +337,15 @@ def apply_plasticity_step(
         w = _get_weight(net, module, wname)
         dw = rules.vogels.delta(
             pre_activity=pre_tensor, post_activity=post_tensor, weights=w,
+            raw_prior=_raw_prior(net, module, wname, w),
         )
         out[f"{module}.{wname}"] = _apply_update(
             net, module, wname, dw, rules.energy, pre_tensor,
         )
 
     # ---- Context memory generic weights (Hebbian, target=0) --------------
+    # These inits are normal(mean=0, std=0.1) so raw_prior=0 ≡ legacy decay;
+    # passing raw_prior=None keeps the call site symmetric with other rules.
     for wname, pre_tensor, post_tensor in (
         ("W_hm_gen", state1.r_h, state2.m),
         ("W_mm_gen", state1.m, state2.m),
@@ -334,6 +354,7 @@ def apply_plasticity_step(
         w = _get_weight(net, "context_memory", wname)
         dw = rules.hebb.delta(
             pre_activity=pre_tensor, post_activity=post_tensor, weights=w,
+            raw_prior=_raw_prior(net, "context_memory", wname, w),
         )
         out[f"context_memory.{wname}"] = _apply_update(
             net, "context_memory", wname, dw, rules.energy, pre_tensor,
@@ -351,23 +372,30 @@ def apply_plasticity_step(
         dw = rules.urbanczik.delta(
             pre_activity=pre_tensor, apical=state2.r_l4, basal=x_hat_0,
             weights=w,
+            raw_prior=_raw_prior(net, "prediction_head", wname, w),
         )
         out[f"prediction_head.{wname}"] = _apply_update(
             net, "prediction_head", wname, dw, rules.energy, pre_tensor,
         )
 
     # ---- Prediction-head scalar bias b_pred_raw --------------------------
-    # Closed-form update: db = lr · mean_b(ε) − wd · b_pred_raw. No "pre"
+    # Closed-form update: db = lr · mean_b(ε) − wd · (b − b_prior). No "pre"
     # activity — bias has no pre-synaptic partner — so energy shrinkage is
-    # omitted (its derivation requires pre-activity).
+    # omitted (its derivation requires pre-activity). Task #50: anchor decay
+    # at the init value (-5.0) so decay doesn't push softplus(b) *upward*.
     _assert_plastic(net, "prediction_head", "b_pred_raw")
     b = net.prediction_head.b_pred_raw
     eps_pred = state2.r_l4 - x_hat_0                               # [B, n_l4]
+    b_prior = _raw_prior(net, "prediction_head", "b_pred_raw", b)
     db = (
         rules.urbanczik.lr * eps_pred.mean(dim=0)
-        - rules.urbanczik.weight_decay * b.data
+        - rules.urbanczik.weight_decay * (b.data - b_prior)
     )
     b.data.add_(db)
+    # Task #64: same raw clamp as _apply_update — covers this bias too,
+    # which bypasses the helper because it has no presynaptic partner
+    # (energy shrinkage is pre-activity-dependent and is therefore omitted).
+    b.data.clamp_(min=-8.0, max=8.0)
     out["prediction_head.b_pred_raw"] = float(db.abs().mean().item())
 
     # ---- Threshold homeostasis -------------------------------------------
@@ -418,6 +446,50 @@ def _forward_window(
     return state0, state1, state2, info0, info1, x_hat_0, x_hat_1
 
 
+def _soft_reset_state(state: NetworkStateV2, scale: float = 0.1) -> NetworkStateV2:
+    """Scale rate tensors by ``scale`` and reset plasticity bookkeeping.
+
+    Used at Task #56 segment boundaries — soft reset keeps the circuit
+    warm (non-zero pre-activities for plasticity) but damps accumulated
+    recurrent drift.
+
+    Task #60 fix: in addition to scaling the rate tensors, also damp the
+    eligibility-trace dictionaries (``pre_traces`` / ``post_traces``) by the
+    same ``scale`` and reset the regime posterior to uniform. Without this,
+    traces accumulate across segments — validator Task #57 showed plasticity
+    deltas exploding ~20 orders of magnitude between steps 110-250 even
+    though rate tensors stayed bounded, because ``Δw ∝ pre_trace × post_trace``
+    compounds when either trace is left carrying multi-segment history
+    while the driver resets the "epsilon" reference point at each segment.
+    Scaling traces alongside rates keeps the trace:rate ratio invariant
+    across the boundary, which is the invariant the closed-form plasticity
+    rules were derived under.
+
+    ``regime_posterior`` is explicitly reset to uniform (1/n_regimes) rather
+    than scaled, since a probability distribution must not be rescaled —
+    uniform is the natural "no information" starting point at a boundary.
+    """
+    new_pre = {k: v * scale for k, v in state.pre_traces.items()}
+    new_post = {k: v * scale for k, v in state.post_traces.items()}
+
+    rp = state.regime_posterior
+    n_reg = int(rp.shape[-1])
+    uniform_posterior = torch.full_like(rp, 1.0 / float(n_reg))
+
+    return state._replace(
+        r_l4=state.r_l4 * scale,
+        r_l23=state.r_l23 * scale,
+        r_pv=state.r_pv * scale,
+        r_som=state.r_som * scale,
+        r_h=state.r_h * scale,
+        h_pv=state.h_pv * scale,
+        m=state.m * scale,
+        pre_traces=new_pre,
+        post_traces=new_post,
+        regime_posterior=uniform_posterior,
+    )
+
+
 def run_phase2_training(
     net: V2Network,
     world: ProceduralWorld,
@@ -434,7 +506,9 @@ def run_phase2_training(
     checkpoint_every: int = 0,
     metrics_path: Optional[Path] = None,
     checkpoint_dir: Optional[Path] = None,
-    warmup_steps: int = 10,
+    warmup_steps: int = 30,
+    segment_length: int = 50,
+    soft_reset_scale: float = 0.1,
 ) -> list[TrainStepMetrics]:
     """Run Phase-2 predictive training in-process.
 
@@ -444,21 +518,25 @@ def run_phase2_training(
     configured) are written via :func:`torch.save` to
     ``checkpoint_dir / "step_{N}.pt"``.
 
-    State continuity
-    ----------------
-    Activity propagates through the circuit with a one-step delay per
-    population (LGN/L4 → L2/3 → H → C). From a zero initial state the
-    L2/3, H and C rates are exactly zero for the first forward because
-    ``rectified_softplus(0) = 0``, which would null every learning signal
-    that uses those rates as pre-activity. The driver therefore
-      * runs ``warmup_steps`` forwards with no plasticity to propagate
-        activity through the full circuit before any update fires, and
-      * carries the **end state** of each 2-frame training window forward
-        as the entry state of the next window, so the circuit operates at
-        its natural steady state rather than resetting every step.
-    Set ``warmup_steps=0`` to disable both (tests that construct state
-    themselves rely on the callable units — see
-    ``test_phase2_driver_freeze_manifest.py``).
+    State continuity (Task #56 rolling-window update)
+    -------------------------------------------------
+    Previously the driver reset state to zero every 2-frame window, which
+    destroyed the temporal structure that context memory (m) needs to
+    learn regime dynamics (Task #49 claim 3). The new rolling policy:
+
+      * One initial ``net.initial_state(...)`` call at entry.
+      * Warmup for ``warmup_steps`` forwards with **no plasticity** —
+        lets activity propagate through the circuit and settle into the
+        stimulus-driven operating point.
+      * Main loop carries state forward: each step's exit state becomes
+        the next step's entry state, preserving temporal context.
+      * Every ``segment_length`` main-loop steps, a **soft reset**
+        multiplies all rate tensors by ``soft_reset_scale`` (default 0.1)
+        to damp accumulated drift without losing circuit warmth.
+
+    Set ``warmup_steps=0`` and ``segment_length=0`` to fully disable
+    warmup and soft reset respectively (the latter produces a single
+    unbroken rolling trajectory).
     """
     if n_steps < 1:
         raise ValueError(f"n_steps must be ≥ 1; got {n_steps}")
@@ -466,6 +544,12 @@ def run_phase2_training(
         raise ValueError(f"batch_size must be ≥ 1; got {batch_size}")
     if warmup_steps < 0:
         raise ValueError(f"warmup_steps must be ≥ 0; got {warmup_steps}")
+    if segment_length < 0:
+        raise ValueError(f"segment_length must be ≥ 0; got {segment_length}")
+    if not (0.0 <= soft_reset_scale <= 1.0):
+        raise ValueError(
+            f"soft_reset_scale must be in [0, 1]; got {soft_reset_scale}"
+        )
     if net.phase != "phase2":
         raise PhaseFrozenError(
             f"run_phase2_training requires net.phase == 'phase2'; "
@@ -493,19 +577,36 @@ def run_phase2_training(
     t_start = time.monotonic()
     history: list[TrainStepMetrics] = []
 
-    # Reset state each window — the V2 circuit is unstable under long
-    # no-plasticity rollouts from zero state (E-to-E recurrence amplifies
-    # before homeostasis/iSTDP can react). A two-frame window starting at
-    # state=0 is well within the stable regime.
+    # One initial state at driver entry — carries forward across the
+    # warmup loop and the main training loop (Task #56 rolling-window).
+    state = net.initial_state(batch_size=batch_size)
+
     try:
+        # ---- Warmup: forward-only, no plasticity -----------------------
+        for w in range(warmup_steps):
+            seeds = [
+                seed_offset + w * batch_size + b for b in range(batch_size)
+            ]
+            frames = sample_batch_window(world, seeds, n_steps_per_window=2)
+            _s0, _s1, state, _i0, _i1, _x0, _x1 = _forward_window(
+                net, frames, state,
+            )
+            if not math.isfinite(state.r_l23.abs().max().item()):
+                raise RuntimeError(
+                    f"non-finite r_l23 during warmup step {w} — diverged"
+                )
+
+        # ---- Main loop: forward + plasticity, carrying state forward --
         for step in range(n_steps):
-            seeds = [seed_offset + step * batch_size + b for b in range(batch_size)]
+            seeds = [
+                seed_offset + (warmup_steps + step) * batch_size + b
+                for b in range(batch_size)
+            ]
             frames = sample_batch_window(world, seeds, n_steps_per_window=2)
 
-            state0 = net.initial_state(batch_size=batch_size)
             (
                 state0, state1, state2, info0, info1, x_hat_0, _x_hat_1,
-            ) = _forward_window(net, frames, state0)
+            ) = _forward_window(net, frames, state)
 
             # Update plasticity *before* computing loss for logging — the
             # update depends on the just-observed error and is closed-form,
@@ -513,6 +614,15 @@ def run_phase2_training(
             delta_per_w = apply_plasticity_step(
                 net, rules, state0, state1, state2, info0, info1, x_hat_0,
             )
+
+            # Carry state forward to next step (Task #56 rolling policy).
+            state = state2
+            if (
+                segment_length > 0
+                and (step + 1) % segment_length == 0
+                and (step + 1) < n_steps
+            ):
+                state = _soft_reset_state(state, scale=soft_reset_scale)
 
             if step % log_every == 0 or step == n_steps - 1:
                 eps = state2.r_l4 - x_hat_0
@@ -607,6 +717,10 @@ def _cli() -> argparse.ArgumentParser:
     p.add_argument("--weight-decay", type=float, default=1e-5)
     p.add_argument("--beta-syn", type=float, default=1e-4)
     p.add_argument("--device", type=str, default="cpu")
+    # Task #56: rolling-window state policy.
+    p.add_argument("--warmup-steps", type=int, default=30)
+    p.add_argument("--segment-length", type=int, default=50)
+    p.add_argument("--soft-reset-scale", type=float, default=0.1)
     return p
 
 
@@ -637,6 +751,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         log_every=int(args.log_every),
         checkpoint_every=int(args.checkpoint_every),
         metrics_path=metrics_path,
+        warmup_steps=int(args.warmup_steps),
+        segment_length=int(args.segment_length),
+        soft_reset_scale=float(args.soft_reset_scale),
         checkpoint_dir=seed_dir,
     )
 

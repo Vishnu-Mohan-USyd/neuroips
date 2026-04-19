@@ -170,3 +170,122 @@ PYTHONPATH=. python3 -m scripts.v2.eval_kok \
   - Diagnostic harnesses: `scripts/v2/_debug_phase2_*.py`
 - Incident log: `/tmp/phase2_freeze_*/INCIDENT_LOG.md` (coder-editing-mid-investigation races)
 - 25+ build + validate tasks executed through a multi-agent pipeline (Researcher, Coder, Debugger, Validator, Team Lead).
+
+---
+
+## Update 2026-04-20 — Tasks #48 through #65
+
+Second build cycle: close the critique-step items, stabilize Phase-2, and run the
+full end-to-end pipeline (Phase-2 → Gates 1–7 → Phase-3 Kok + Richter). Pipeline
+now runs to completion NaN-free at the infrastructure level. Expectation
+signatures remain below detection threshold at the current training scale.
+
+### Critique-step fixes landed since commit `727fb32`
+
+| Critique item | Status | Task# |
+|---|---|---|
+| Euler-step scaling consistent across phases | DONE | #48 |
+| Context-memory zero-init contamination (generic vs task weights) | DONE | #49–#50 |
+| L2/3 homeostasis integration bug (θ update path) | DONE | #51–#53 |
+| Phase-2 rolling-window training with warmup + soft reset + segment length | DONE | #54–#56 |
+| Prediction-head b_pred_raw clamp bypass (raw-weight runaway path) | DONE | #64 |
+| Plasticity Δw clamp ±0.01 (Urbanczik-Senn, Vogels, ThreeFactor qm/mh) | DONE | #62 |
+| Raw-weight clamp ±8 on plastic matrices in apply_plasticity_step | DONE | #62 |
+| Energy `current_weight_shrinkage` implicit-Euler form (bounded \|Δw\| ≤ \|w\|) | DONE | #62 |
+
+### Phase-2 stability (Task #62)
+
+Pre-fix Phase-2 1000-step training diverged: `delta_max = 363`, `any_nan = True`
+by step 250. Three stacked fixes landed together:
+
+1. Per-step `Δw` clamp ±0.01 in all four plasticity delta methods
+   (`UrbanczikSennRule.delta`, `VogelsISTDPRule.delta`, `ThreeFactorRule.delta_qm`,
+   `ThreeFactorRule.delta_mh`).
+2. Raw-weight clamp ±8 applied in `apply_plasticity_step._apply_update` after the
+   additive update (and in the b_pred_raw branch, Task #64).
+3. `EnergyPenalty.current_weight_shrinkage` rewritten to implicit-Euler form
+   `Δw = −w · s / (1 + s)` with `s = β · mean_b(a_pre²)`. Guarantees
+   `|Δw| ≤ |w|` for any finite pre-activity, replacing the explicit form that
+   overshot for large `pre²`.
+
+Post-fix Phase-2 1000-step result (scripts/v2/_task62_verify.py):
+
+| Metric | Pre-fix | Post-fix |
+|---|---|---|
+| `delta_max` | 363 | 0.386 |
+| `w_max_final` | NaN | 8.0 (clamped) |
+| `any_nan` | True @ t=250 | False |
+| `|ε|` at t=1000 | NaN | 0.0798 |
+
+Wall-clock for 3000-step Phase-2 at batch=4: 20 s on CPU.
+
+### Test-suite updates (Task #62)
+
+Analytic closed-form tests were re-scaled so their expected updates fall inside
+the ±0.01 clamp window (`lr=0.001`, `weight_decay=0.005` where applicable);
+new `test_delta_clamps_large_updates` added for each rule to assert the clamp is
+active on oversized inputs. `test_energy_current_shrinkage_shapes.py` rewritten
+for implicit-Euler form: `test_higher_pre_magnitude_gives_larger_shrinkage_magnitude`
+asserts the exact implicit ratio, `test_analytic_formula_spot_check` now expects
+`−2/3`, and a new `test_bounded_by_weight_magnitude_for_any_pre` locks in the
+`|Δw| ≤ |w|` bound. Full `pytest tests/v2/` passes.
+
+### End-to-end pipeline run (Task #65)
+
+Sequence: Phase-2 3000 steps → Gates 1–7 → Phase-3 Kok (learning + eval) →
+Phase-3 Richter (learning + eval). All stages NaN-free.
+
+**Phase-2 (seed=42, 3000 steps):** final `|ε| = 0.0798`, `any_nan = False`.
+
+**Gates 1–7:** 3 / 8 pass.
+
+| Gate | Result |
+|---|---|
+| 1 Rate distribution | PASS |
+| 2 Contrast response | PASS |
+| 3 Surround suppression | FAIL (sub-threshold regime) |
+| 4 Prediction beats copy-last | FAIL |
+| 5a Orientation localizer | FAIL |
+| 5b Identity localizer | PASS |
+| 6 Null expectation control | FAIL |
+| 7 C load-bearing check | FAIL |
+
+**Phase-3 Kok (eval):**
+`delta_svm = −0.025`, `delta_amp = +0.002`, `pref/non-pref asymmetry = 6.58e-05`.
+No expected-vs-unexpected sharpening at this training scale.
+
+**Phase-3 Richter (eval):**
+`within-vs-between gap = 3.11e-05`, `preference-rank suppression = 0.0228`,
+pseudo-voxel gain correlations (local / remote / global) = 0.9999975 / 0.9999992 / 0.9999997.
+No Richter-2022 dampening signature at this training scale.
+
+Interpretation: infrastructure is now stable and the full pipeline completes
+without NaN. The outstanding problem is no longer stability but signal
+amplitude — training budget and/or init calibration are insufficient for the
+learning signal to overcome homeostasis drift and produce interpretable Kok /
+Richter signatures. Options (1)–(4) from the "Outstanding work" section above
+remain open; option (1) bounded-response homeostasis is still the minimal
+unblock candidate.
+
+### Files changed since `727fb32`
+
+- `src/v2_model/plasticity.py` — Δw clamp in 4 delta methods (Task #62).
+- `src/v2_model/energy.py` — implicit-Euler `current_weight_shrinkage` (Task #62).
+- `src/v2_model/layers.py`, `src/v2_model/context_memory.py`,
+  `src/v2_model/prediction_head.py`, `src/v2_model/network.py` — Euler-step,
+  zero-init, and homeostasis-integration fixes (Tasks #48–#53).
+- `scripts/v2/train_phase2_predictive.py` — rolling-window training with
+  warmup / soft reset / segment length; raw-weight clamp ±8 in
+  `_apply_update`; b_pred_raw clamp (Tasks #54–#56, #62, #64).
+- `scripts/v2/train_phase3_kok_learning.py`,
+  `scripts/v2/train_phase3_richter_learning.py` — Phase-3 driver fixes.
+- `scripts/v2/_task{56,58,60,62}_verify.py` — task-scoped verification drivers.
+- `tests/v2/test_plasticity_{urbanczik_senn,vogels,three_factor_cue}.py` —
+  analytic tests re-scaled inside clamp window; `delta_clamps_large_updates`
+  added per rule.
+- `tests/v2/test_energy_current_shrinkage_shapes.py` — rewritten for
+  implicit-Euler form; new bound test.
+- `tests/v2/test_context_memory_*.py`, `test_layers_homeostasis_integration.py`,
+  `test_plasticity_homeostasis.py`, `test_prediction_head_deterministic.py` —
+  updates for Tasks #48–#53.
+- `src/config.py` — project-wide config updates.

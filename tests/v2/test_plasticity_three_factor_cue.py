@@ -82,16 +82,40 @@ def test_delta_qm_sign_tracks_memory_error() -> None:
 
 
 def test_delta_qm_analytic_magnitude() -> None:
-    """Scalar check: Δw[j, i] == lr · mean_b(memory[b,j] · memory_error[b,j] · cue[b,i])."""
-    rule = ThreeFactorRule(lr=0.5, weight_decay=0.0)
+    """Scalar check: Δw[j, i] == lr · mean_b(memory[b,j] · memory_error[b,j] · cue[b,i]).
+
+    lr kept small so analytic values stay inside the ±0.01 per-step clamp
+    (Task #62) and the formula is verified unclipped.
+    """
+    rule = ThreeFactorRule(lr=0.001, weight_decay=0.0)
     cue = torch.tensor([[1.0, 2.0]])                       # [B=1, n_cue=2]
     memory = torch.tensor([[3.0]])                         # [B=1, n_m=1]
     memory_error = torch.tensor([[0.5]])
     weights = torch.zeros(1, 2)
     # gated = memory · memory_error = 1.5; hebb[0,0] = 1.5 · 1 = 1.5; hebb[0,1] = 3.0
-    expected = torch.tensor([[0.5 * 1.5, 0.5 * 3.0]])
+    expected = torch.tensor([[0.001 * 1.5, 0.001 * 3.0]])
     dw = rule.delta_qm(cue, memory, memory_error, weights)
     torch.testing.assert_close(dw, expected, atol=1e-6, rtol=0.0)
+
+
+def test_delta_qm_clamps_large_updates() -> None:
+    """Per-step Δw magnitude is clamped to [-0.01, 0.01] (Task #62).
+
+    Rationale: plastic raw weights enter a positive-feedback explosion when
+    individual Δw can reach O(10) — Phase-2 1000-step rolling training
+    diverged by step ~150 before this clamp was introduced.
+    """
+    rule = ThreeFactorRule(lr=0.5, weight_decay=0.0)
+    cue = torch.tensor([[1.0, 2.0]])
+    memory = torch.tensor([[3.0]])
+    memory_error = torch.tensor([[0.5]])
+    weights = torch.zeros(1, 2)
+    dw = rule.delta_qm(cue, memory, memory_error, weights)
+    assert float(dw.abs().max().item()) <= 0.01 + 1e-8
+    # Both entries would analytically be [0.75, 1.5] — both clipped to 0.01.
+    torch.testing.assert_close(
+        dw, torch.tensor([[0.01, 0.01]]), atol=1e-8, rtol=0.0
+    )
 
 
 def test_delta_qm_mask_preservation() -> None:
@@ -130,14 +154,29 @@ def test_delta_mh_sign_flips_with_probe_error() -> None:
 
 
 def test_delta_mh_analytic_magnitude() -> None:
-    rule = ThreeFactorRule(lr=0.5, weight_decay=0.0)
+    """lr kept small so analytic values stay inside the ±0.01 per-step
+    clamp (Task #62) and the formula is verified unclipped."""
+    rule = ThreeFactorRule(lr=0.001, weight_decay=0.0)
     memory = torch.tensor([[1.0, 2.0]])                    # [B=1, n_m=2]
     probe_error = torch.tensor([[3.0]])                    # [B=1, n_h=1]
     weights = torch.zeros(1, 2)
     # hebb[0, 0] = 3 · 1 = 3; hebb[0, 1] = 3 · 2 = 6
-    expected = torch.tensor([[0.5 * 3.0, 0.5 * 6.0]])
+    expected = torch.tensor([[0.001 * 3.0, 0.001 * 6.0]])
     dw = rule.delta_mh(memory, probe_error, weights)
     torch.testing.assert_close(dw, expected, atol=1e-6, rtol=0.0)
+
+
+def test_delta_mh_clamps_large_updates() -> None:
+    """Per-step Δw magnitude is clamped to [-0.01, 0.01] (Task #62)."""
+    rule = ThreeFactorRule(lr=0.5, weight_decay=0.0)
+    memory = torch.tensor([[1.0, 2.0]])
+    probe_error = torch.tensor([[3.0]])
+    weights = torch.zeros(1, 2)
+    dw = rule.delta_mh(memory, probe_error, weights)
+    assert float(dw.abs().max().item()) <= 0.01 + 1e-8
+    torch.testing.assert_close(
+        dw, torch.tensor([[0.01, 0.01]]), atol=1e-8, rtol=0.0
+    )
 
 
 def test_delta_mh_mask_preservation() -> None:
@@ -155,25 +194,30 @@ def test_delta_mh_mask_preservation() -> None:
 # ---------------------------------------------------------------------------
 
 def test_weight_decay_qm() -> None:
-    rule = ThreeFactorRule(lr=0.1, weight_decay=0.05)
+    """weight_decay kept small so the expected analytic value stays inside
+    the ±0.01 per-step clamp (Task #62) and the decay arithmetic is verified
+    unclipped."""
+    rule = ThreeFactorRule(lr=0.1, weight_decay=0.005)
     cue = torch.zeros(2, 3)                                # no Hebbian drive
     memory = torch.zeros(2, 4)
     memory_error = torch.zeros(2, 4)
     weights = torch.ones(4, 3)
     dw = rule.delta_qm(cue, memory, memory_error, weights)
     torch.testing.assert_close(
-        dw, torch.full_like(weights, -0.05), atol=1e-6, rtol=0.0
+        dw, torch.full_like(weights, -0.005), atol=1e-6, rtol=0.0
     )
 
 
 def test_weight_decay_mh() -> None:
-    rule = ThreeFactorRule(lr=0.1, weight_decay=0.05)
+    """weight_decay kept small so the expected analytic value stays inside
+    the ±0.01 per-step clamp (Task #62)."""
+    rule = ThreeFactorRule(lr=0.1, weight_decay=0.005)
     memory = torch.zeros(2, 3)
     probe_error = torch.zeros(2, 4)
     weights = torch.ones(4, 3)
     dw = rule.delta_mh(memory, probe_error, weights)
     torch.testing.assert_close(
-        dw, torch.full_like(weights, -0.05), atol=1e-6, rtol=0.0
+        dw, torch.full_like(weights, -0.005), atol=1e-6, rtol=0.0
     )
 
 

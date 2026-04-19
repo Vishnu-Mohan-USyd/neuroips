@@ -33,7 +33,7 @@ def test_he_has_homeostasis_submodule() -> None:
 # ---------------------------------------------------------------------------
 
 def test_l23e_theta_drifts_with_activity() -> None:
-    """Δθ = lr · (mean_b(activity) − target_rate); verify closed-form."""
+    """Δθ = lr · tanh(error/scale) · scale (Task #54 bounded rule)."""
     pop = L23E(
         n_units=8, n_l4_e=6, n_pv=3, n_som=4, n_h_e=5,
         tau_ms=20.0, dt_ms=5.0, seed=0,
@@ -41,10 +41,15 @@ def test_l23e_theta_drifts_with_activity() -> None:
     )
     activity = torch.ones(4, pop.n_units)
     pop.homeostasis.update(activity)
-    # mean_b = 1.0, target = 0.0, lr = 1.0  ⇒ Δθ = 1.0 per unit.
+    # target=0 ⇒ deadband=0; error=1.0; scale = 0.1·|0| + 1e-3 = 1e-3;
+    # tanh(1.0/1e-3) ≈ 1 ⇒ Δθ ≈ 1.0 · 1 · 1e-3 = 1e-3.
+    scale = 1e-3
+    expected_val = 1.0 * torch.tanh(torch.tensor(1.0 / scale)).item() * scale
     torch.testing.assert_close(
-        pop.theta, torch.ones(pop.n_units), atol=1e-6, rtol=0.0,
+        pop.theta, torch.full((pop.n_units,), expected_val), atol=1e-8, rtol=0.0,
     )
+    # Sign must be positive (overactive ⇒ θ rises).
+    assert torch.all(pop.theta > 0)
 
 
 def test_he_theta_drifts_with_activity() -> None:
@@ -54,10 +59,13 @@ def test_he_theta_drifts_with_activity() -> None:
     )
     activity = torch.full((3, pop.n_units), 2.0)
     pop.homeostasis.update(activity)
-    # Δθ = 0.5 · (2.0 − 0.0) = 1.0 per unit.
+    # target=0 ⇒ deadband=0; scale=1e-3; saturated update 0.5·1·1e-3 = 5e-4.
+    scale = 1e-3
+    expected_val = 0.5 * torch.tanh(torch.tensor(2.0 / scale)).item() * scale
     torch.testing.assert_close(
-        pop.theta, torch.ones(pop.n_units), atol=1e-6, rtol=0.0,
+        pop.theta, torch.full((pop.n_units,), expected_val), atol=1e-8, rtol=0.0,
     )
+    assert torch.all(pop.theta > 0)
 
 
 def test_l23e_theta_under_target_drifts_negative() -> None:
@@ -69,10 +77,15 @@ def test_l23e_theta_under_target_drifts_negative() -> None:
     )
     activity = torch.zeros(4, pop.n_units)                          # mean_b = 0
     pop.homeostasis.update(activity)
-    # Δθ = 0.5 · (0 − 2) = −1 per unit.
+    # error = 0 − 2 = −2. deadband = 0.2·2.0 = 0.4; |−2|>0.4 ⇒ kept.
+    # scale = 0.1·2 + 1e-3 = 0.201. Δθ = 0.5 · tanh(−2/0.201) · 0.201.
+    scale = 0.1 * 2.0 + 1e-3
+    expected_val = 0.5 * torch.tanh(torch.tensor(-2.0 / scale)).item() * scale
     torch.testing.assert_close(
-        pop.theta, torch.full((pop.n_units,), -1.0), atol=1e-6, rtol=0.0,
+        pop.theta, torch.full((pop.n_units,), expected_val), atol=1e-8, rtol=0.0,
     )
+    # Sign check: below-target activity ⇒ θ drops.
+    assert torch.all(pop.theta < 0)
 
 
 # ---------------------------------------------------------------------------

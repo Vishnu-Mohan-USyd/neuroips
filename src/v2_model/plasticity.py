@@ -26,9 +26,15 @@ Shared invariants
 * Every rule accepts an optional boolean `mask` with the same shape as
   `weights`. Entries where `mask` is False are set to exactly zero in ΔW
   (sparse-connectivity preservation).
-* `weight_decay · weights` is subtracted from the *raw* update. Under
-  softplus Dale parameterisation, raw → 0 corresponds to softplus(0) ≈ 0.693,
-  not to zero effective strength. Standard "regularise the parameter" treatment.
+* Weight decay uses a **raw-prior** anchor (Task #50). Passing
+  ``raw_prior=None`` (default) subtracts ``weight_decay · weights`` — raw→0,
+  the legacy behaviour. Passing ``raw_prior=<tensor>`` subtracts
+  ``weight_decay · (weights − raw_prior)`` so raw drifts back toward the
+  weight's init value rather than toward zero. Why this matters: under
+  softplus Dale with strongly negative inits (e.g. raw=-5.85), pulling raw
+  toward 0 *increases* effective softplus(raw) — anti-shrinkage. The
+  raw-prior form restores the intended "keep weights near init magnitude"
+  regularisation regardless of the init sign.
 * Deterministic: identical inputs always produce identical ΔW. No stochastic
   draws inside a rule.
 
@@ -149,6 +155,7 @@ class UrbanczikSennRule(nn.Module):
         basal: Tensor,
         weights: Tensor,
         mask: Optional[Tensor] = None,
+        raw_prior: Optional[Tensor] = None,
     ) -> Tensor:
         """Return the ΔW tensor.
 
@@ -158,6 +165,11 @@ class UrbanczikSennRule(nn.Module):
             basal:        `[B, n_post]` postsynaptic basal current.
             weights:      `[n_post, n_pre]` current raw weights.
             mask:         Optional `[n_post, n_pre]` boolean connectivity mask.
+            raw_prior:    Optional `[n_post, n_pre]` anchor for weight decay.
+                          `None` → decay pulls toward 0 (legacy behaviour).
+                          Tensor → decay pulls toward `raw_prior` — the weight's
+                          init value — avoiding the anti-shrinkage pathology
+                          for strongly negative raw inits.
 
         Returns:
             `[n_post, n_pre]` update tensor. Entries where `mask` is False
@@ -171,7 +183,9 @@ class UrbanczikSennRule(nn.Module):
             )
         epsilon = apical - basal                                      # [B, n_post]
         hebb = _batch_outer_mean(epsilon, pre_activity)               # [n_post, n_pre]
-        dw = self.lr * hebb - self.weight_decay * weights
+        shrink_target = weights if raw_prior is None else (weights - raw_prior)
+        dw = self.lr * hebb - self.weight_decay * shrink_target
+        dw.clamp_(min=-0.01, max=0.01)
         return _apply_mask(dw, mask)
 
 
@@ -212,6 +226,7 @@ class VogelsISTDPRule(nn.Module):
         post_activity: Tensor,
         weights: Tensor,
         mask: Optional[Tensor] = None,
+        raw_prior: Optional[Tensor] = None,
     ) -> Tensor:
         """Return the ΔW tensor.
 
@@ -220,11 +235,15 @@ class VogelsISTDPRule(nn.Module):
             post_activity: `[B, n_post]` postsynaptic rates.
             weights:       `[n_post, n_pre]` current raw weights.
             mask:          Optional `[n_post, n_pre]` boolean mask.
+            raw_prior:     Optional `[n_post, n_pre]` anchor for weight decay;
+                           see module docstring. `None` ⇒ decay toward 0.
         """
         _validate_pair_shapes(pre_activity, post_activity, weights)
         post_dev = post_activity - self.target_rate                  # [B, n_post]
         hebb = _batch_outer_mean(post_dev, pre_activity)             # [n_post, n_pre]
-        dw = self.lr * hebb - self.weight_decay * weights
+        shrink_target = weights if raw_prior is None else (weights - raw_prior)
+        dw = self.lr * hebb - self.weight_decay * shrink_target
+        dw.clamp_(min=-0.01, max=0.01)
         return _apply_mask(dw, mask)
 
 
@@ -248,6 +267,7 @@ class ThresholdHomeostasis(nn.Module):
         target_rate: float,
         n_units: int,
         init_theta: float = 0.0,
+        deadband_fraction: float = 0.2,
     ) -> None:
         super().__init__()
         if lr <= 0.0:
@@ -256,9 +276,14 @@ class ThresholdHomeostasis(nn.Module):
             raise ValueError(f"n_units must be ≥ 1; got {n_units}")
         if target_rate < 0.0:
             raise ValueError(f"target_rate must be ≥ 0; got {target_rate}")
+        if deadband_fraction < 0.0:
+            raise ValueError(
+                f"deadband_fraction must be ≥ 0; got {deadband_fraction}"
+            )
         self.lr = float(lr)
         self.target_rate = float(target_rate)
         self.n_units = int(n_units)
+        self.deadband_fraction = float(deadband_fraction)
         self.register_buffer(
             "theta",
             torch.full((n_units,), float(init_theta), dtype=torch.float32),
@@ -266,13 +291,26 @@ class ThresholdHomeostasis(nn.Module):
 
     @torch.no_grad()
     def update(self, activity: Tensor) -> None:
-        """In-place threshold update from a batch of activity.
+        """In-place bounded threshold update with deadband (Task #54).
+
+        Implements a saturating, deadband-gated homeostatic rule:
+
+            error = mean_b(activity) − ρ_target
+            if |error| < deadband_fraction · |ρ_target|  →  error ≔ 0
+            Δθ = lr · tanh(error / scale) · scale
+                 (scale = 0.1·|ρ_target| + 1e-3)
+
+        The tanh saturates at ±lr·scale, preventing runaway θ during
+        high-activity transients. The deadband prevents monotonic drift
+        when activity is already near the target (complement to the
+        Task #52 operating-point fix — homeostasis is now a gentle
+        maintainer, not an operating-point creator).
 
         Args:
             activity: `[B, n_units]` per-batch unit rates.
 
         Side effects:
-            `self.theta += lr · (mean_b(activity) − ρ_target)`.
+            `self.theta` is updated in place, then clamped to [-10, 10].
         """
         if activity.ndim != 2:
             raise ValueError(f"activity must be 2-D [B, n_units]; got ndim={activity.ndim}")
@@ -282,11 +320,19 @@ class ThresholdHomeostasis(nn.Module):
                 f"constructed with n_units={self.n_units}"
             )
         mean_a = activity.mean(dim=0)                                # [n_units]
-        self.theta.add_(self.lr * (mean_a - self.target_rate))
+        error = mean_a - self.target_rate
+        # Deadband: no update inside ±deadband_fraction · |target_rate|.
+        deadband = self.deadband_fraction * abs(self.target_rate)
+        in_band = torch.abs(error) < deadband
+        error = torch.where(in_band, torch.zeros_like(error), error)
+        # Bounded (saturating) response — tanh prevents runaway drift.
+        scale = 0.1 * abs(self.target_rate) + 1e-3
+        update = self.lr * torch.tanh(error / scale) * scale
+        self.theta.add_(update)
         # Safety clamp — Task #43 widened ±1 → ±10 so θ has room to track
         # large-gain transients during long-trajectory Phase-3 assays.
-        # Normal operation (well-balanced E/I) keeps |θ| well under 1;
-        # the widened bound only kicks in during high-activity bursts.
+        # With the Task #54 tanh saturation, this clamp is rarely reached;
+        # retained as a hard safety net.
         self.theta.clamp_(min=-10.0, max=10.0)
 
 
@@ -326,6 +372,7 @@ class ThreeFactorRule(nn.Module):
         memory_error: Tensor,
         weights: Tensor,
         mask: Optional[Tensor] = None,
+        raw_prior: Optional[Tensor] = None,
     ) -> Tensor:
         """Three-factor update for W_qm^task (cue → memory).
 
@@ -335,6 +382,9 @@ class ThreeFactorRule(nn.Module):
             memory_error: `[B, n_m]`   postsynaptic modulatory / error signal.
             weights:      `[n_m, n_cue]` current raw weights.
             mask:         Optional `[n_m, n_cue]` boolean mask.
+            raw_prior:    Optional `[n_m, n_cue]` anchor for weight decay;
+                          see module docstring. `None` ⇒ decay toward 0
+                          (matches task-weight zero-init default).
         """
         _validate_pair_shapes(cue, memory, weights, pre_name="cue", post_name="m")
         if memory_error.shape != memory.shape:
@@ -344,7 +394,9 @@ class ThreeFactorRule(nn.Module):
             )
         gated = memory * memory_error                                # [B, n_m]
         hebb = _batch_outer_mean(gated, cue)                         # [n_m, n_cue]
-        dw = self.lr * hebb - self.weight_decay * weights
+        shrink_target = weights if raw_prior is None else (weights - raw_prior)
+        dw = self.lr * hebb - self.weight_decay * shrink_target
+        dw.clamp_(min=-0.01, max=0.01)
         return _apply_mask(dw, mask)
 
     @torch.no_grad()
@@ -354,6 +406,7 @@ class ThreeFactorRule(nn.Module):
         probe_error: Tensor,
         weights: Tensor,
         mask: Optional[Tensor] = None,
+        raw_prior: Optional[Tensor] = None,
     ) -> Tensor:
         """Error-driven update for W_mh^task (memory → probe prediction).
 
@@ -362,8 +415,12 @@ class ThreeFactorRule(nn.Module):
             probe_error: `[B, n_h]` postsynaptic probe error.
             weights:     `[n_h, n_m]` current raw weights.
             mask:        Optional `[n_h, n_m]` boolean mask.
+            raw_prior:   Optional `[n_h, n_m]` anchor for weight decay;
+                         see module docstring. `None` ⇒ decay toward 0.
         """
         _validate_pair_shapes(memory, probe_error, weights, pre_name="m", post_name="h")
         hebb = _batch_outer_mean(probe_error, memory)                # [n_h, n_m]
-        dw = self.lr * hebb - self.weight_decay * weights
+        shrink_target = weights if raw_prior is None else (weights - raw_prior)
+        dw = self.lr * hebb - self.weight_decay * shrink_target
+        dw.clamp_(min=-0.01, max=0.01)
         return _apply_mask(dw, mask)

@@ -252,6 +252,9 @@ def run_richter_trial(
         weights=net.context_memory.W_lm_task,
     )
     net.context_memory.W_lm_task.data.add_(dw_lm)
+    # Runaway safeguard: cap |W_lm_task| at 1.0 per element — mirrors the
+    # Kok-side cap (Task #58 / debugger Task #49 Claim 4).
+    net.context_memory.W_lm_task.data.clamp_(min=-1.0, max=1.0)
 
     r_l23_trailer_mean = torch.stack(trailer_l23, dim=0).mean(dim=0)  # [1, n_l23]
     probe_error_mh = r_l23_trailer_mean - b_l23_pre_trailer         # [1, n_l23]

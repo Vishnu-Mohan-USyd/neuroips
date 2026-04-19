@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import List, Tuple
 
 import yaml
+
+
+class MechanismType(str, Enum):
+    """Compat shim for unpickling legacy checkpoints (Task #23).
+
+    Original enum was removed when the mechanism axis was retired.
+    Reinstating only the four legacy member names so torch.load() can
+    reconstruct old ModelConfig objects pickled inside checkpoints.
+    String values match the historical directory naming (snake_case).
+    Not used by any current code path.
+    """
+
+    DAMPENING = "dampening"
+    SHARPENING = "sharpening"
+    CENTER_SURROUND = "center_surround"
+    ADAPTATION_ONLY = "adaptation_only"
 
 
 @dataclass

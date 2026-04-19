@@ -143,17 +143,20 @@ def _validate_batch_shape(x: Tensor, name: str, n_expected: int, B: int) -> None
 
 def _assert_spectral_radius_le(
     W: Tensor, *, leak: float, phi_prime_op: float = 0.67,
-    name: str, max_radius: float = 0.95,
+    name: str, max_radius: float = 1.4,
 ) -> float:
-    """Raise if the Jacobian ``leak*I + φ'_op · W`` has ``max|eig|`` > ``max_radius``.
+    """Raise if ``max|eig(φ'_op · W)| > max_radius`` — the per-population
+    Jacobian-contribution bound under the corrected Euler update.
 
-    Task #42: the stability condition for the linear-Euler recurrent
-    update ``r_{t+1} = leak·r_t + φ(W·r_t − θ)`` is that the full
-    one-step Jacobian ``J = leak·I + φ'(drive)·W`` has
-    ``max|eig(J)| < 1``, not just ``max|eig(W)| < 1``. The earlier guard
-    (Task #36) only bounded ``W``; long trajectories (370–1200 steps)
-    still exploded because for HE the leak term alone contributes 0.9 to
-    the Jacobian eigenvalues before any recurrent contribution.
+    Task #48: with the corrected ``r_{t+1} = leak·r_t + (1 − leak)·φ(W·r_t
+    − θ)`` update, the linearised one-step Jacobian is ``J = leak·I +
+    (1 − leak)·φ'(drive)·W``. Euler stability requires ``|eig(J)| < 1``
+    for every eigenvalue. Since every ``eig(J) = leak + (1 − leak)·z``
+    for some ``z ∈ eig(φ'·W)``, and ``|a + (1 − a)·z| ≤ 1`` iff ``|z| ≤
+    1`` (for real ``a ∈ [0, 1]``), the stability condition simplifies to
+    ``max|eig(φ'_op · W)| < 1``. The guard checks ``max|eig(φ'·W)|`` on
+    the effective recurrent matrix (not the full Jacobian including
+    leak, as in Task #42's pre-fix form).
 
     Parameters
     ----------
@@ -161,10 +164,8 @@ def _assert_spectral_radius_le(
         Effective (sign-applied, mask-gated) recurrent weight of shape
         ``[n_post, n_pre]`` with ``n_post == n_pre`` (square).
     leak : float
-        Rate-integration leak factor used in the population's forward
-        step (``1 − dt/τ`` for linear-Euler populations). Included
-        explicitly in the eigenvalue check so the guard tracks the
-        actual dynamics, not just ``W``.
+        Retained for back-compat / reporting only. The corrected-Euler
+        stability condition no longer depends on ``leak`` explicitly.
     phi_prime_op : float
         Conservative value of ``φ'`` at the operating point. For the
         rectified-softplus ``φ`` used here, ``φ'(x) = σ(x)``; at a
@@ -173,29 +174,28 @@ def _assert_spectral_radius_le(
     name : str
         Human-readable identifier included in the error message.
     max_radius : float
-        Strict upper bound on ``max|eig(J)|``. Default 0.95 leaves
-        headroom below the Euler-stability critical radius of 1.0.
+        Strict upper bound on ``max|eig(φ'_op · W)|``. Default 1.4 —
+        at ``φ'_op = 0.67`` this permits ``|eig(W)| ≤ ~2.1``, and the
+        resulting full Jacobian eigenvalue ``leak + (1 − leak)·0.94 ≈
+        1 − 0.06·(1 − leak)`` stays safely below 1.
 
     Returns
     -------
     float
-        The measured spectral radius of ``J``.
+        The measured spectral radius of ``φ'_op · W``.
     """
     if W.ndim != 2 or W.shape[0] != W.shape[1]:
         raise ValueError(
             f"{name}: expected square [N, N] weight; got shape {tuple(W.shape)}"
         )
-    n = W.shape[0]
     with torch.no_grad():
         # Promote to f64 for eigenvalue stability on near-zero matrices.
         W_f64 = W.detach().to(torch.float64)
-        jac = float(leak) * torch.eye(n, dtype=torch.float64, device=W_f64.device) \
-            + float(phi_prime_op) * W_f64
-        eig = torch.linalg.eigvals(jac)
+        eig = torch.linalg.eigvals(float(phi_prime_op) * W_f64)
         radius = eig.abs().max().item()
     if not math.isfinite(radius) or radius > max_radius:
         raise RuntimeError(
-            f"{name}: Jacobian spectral radius {radius:.4f} "
+            f"{name}: φ'·W spectral radius {radius:.4f} "
             f"(leak={leak:.4f}, φ'_op={phi_prime_op:.2f}) "
             f"exceeds max {max_radius:.4f}; recurrent init is unstable — "
             "check init_mean / init_scale / sparsity."
@@ -250,11 +250,20 @@ class _BasePopulation(nn.Module):
         self._plastic_names: tuple[str, ...] = ()
         self._gen = torch.Generator(device=self._device)
         self._gen.manual_seed(self._seed)
+        # Task #50 — per-weight init-mean registry for raw-prior weight decay.
+        # Populated by `_make_raw(name=...)` as each raw parameter is created.
+        # The training driver reads this to anchor weight decay to the init
+        # mean, avoiding anti-shrinkage for strongly negative raw inits.
+        self.raw_init_means: dict[str, float] = {}
 
     # ---- weight-creation helper ----------------------------------------
 
     def _make_raw(
-        self, shape: tuple[int, int], *, init_mean: float = 0.0,
+        self,
+        shape: tuple[int, int],
+        *,
+        init_mean: float = 0.0,
+        name: Optional[str] = None,
     ) -> nn.Parameter:
         """Return a normal-init raw-weight ``nn.Parameter(requires_grad=False)``.
 
@@ -270,12 +279,20 @@ class _BasePopulation(nn.Module):
             ``softplus(raw) ≈ softplus(−3.5) ≈ 0.0298`` and each row-sum of
             the effective mask-gated recurrent matrix lands safely below
             the critical spectral radius.
+        name
+            If given, stash ``init_mean`` in ``self.raw_init_means[name]``.
+            Consumed by the Phase-2 training driver to build the ``raw_prior``
+            anchor for weight-decay (Task #50). Passing the *attribute name*
+            (e.g. ``"W_l4_l23_raw"``) is the convention — the driver looks it
+            up by weight-name when computing ΔW.
         """
         t = torch.empty(*shape, device=self._device, dtype=self._dtype)
         with torch.no_grad():
             t.normal_(
                 mean=float(init_mean), std=self._init_scale, generator=self._gen,
             )
+        if name is not None:
+            self.raw_init_means[name] = float(init_mean)
         return nn.Parameter(t, requires_grad=False)
 
     # ---- phase gating API ----------------------------------------------
@@ -443,22 +460,42 @@ class L23E(ExcitatoryPopulation):
         self.n_som = int(n_som)
         self.n_h_e = int(n_h_e)
 
-        # Task #44 — fan-in-scaled init_means. Non-recurrent drives target
-        # row-sum ``(1 − leak)/φ'_op`` = 0.37 for L23E (τ=20, leak=0.75,
-        # φ'_op=0.67): W_l4_l23 (fan-in 128) softplus(m) ≈ 0.0029 → m ≈ -5.85;
-        # W_fb_apical (fan-in 64) ≈ 0.00578 → m ≈ -5.15. W_rec is evaluated
-        # by the stricter |eig(W)| budget (max|eig(leak·I + 0.67·W)| ≤ 0.95
-        # ⇒ |eig(W)| ≤ 0.30) enforced by the guard; m=-4.7 honors this.
-        # The L23PV / L23SOM → L23E paths are INHIBITORY (-softplus) so
-        # they preserve inhibitory balance at default init.
+        # Task #52 — re-calibrated init_means for plasticity=0/homeostasis=0
+        # operating point at blank input. Targets (relaxed per Lead
+        # 2026-04-19): T1 L23E median ∈ [0.01, 0.5], T3 HE<L23E, T4 PV/SOM
+        # respond when L23E>0, T5 HARD λ(J_full)<1.0, T6 |x̂|~|r_l4|.
+        #
+        # Rationale for each value:
+        #   W_l4_l23 = +4.0 — r_l4 at blank is ≈5e-5 (LGN DC baseline);
+        #     softplus(4) ≈ 4.02, so L4→L23 drive per unit ≈ 128·4.02·5e-5
+        #     ≈ 0.026 → rectified_softplus(0.026) ≈ 0.013, hitting T1.
+        #   W_rec = -5.0 — softplus(-5) ≈ 6.7e-3 × 30 active ≈ 0.2 gain,
+        #     safely below the spectral-radius guard.
+        #   W_pv_l23 = -5.0 (weakened from -3.0) — lowers the L23↔PV loop
+        #     gain. With the stronger L23→PV drive (W_l23_pv = -1.0 in
+        #     FastInhibitoryPopulation init via network.py), a stronger
+        #     PV→L23 feedback would push the 2-node loop past ρ=1.
+        #   W_som_l23 = -5.0 — same loop-stability reasoning as PV.
+        #   W_fb_apical = -5.0 — keeps H→L23 feedback weak at init;
+        #     Phase-2 learning grows it.
+        #
+        # Target 2 (grating orientation selectivity at init) is deferred
+        # to Phase-2 predictive training — untrained near-uniform L4→L23
+        # weights cannot produce selective responses.
         self.W_l4_l23_raw = self._make_raw(
-            (n_units, self.n_l4_e), init_mean=-5.85,
+            (n_units, self.n_l4_e), init_mean=4.0, name="W_l4_l23_raw",
         )
-        self.W_rec_raw = self._make_raw((n_units, n_units), init_mean=-4.7)
-        self.W_pv_l23_raw = self._make_raw((n_units, self.n_pv))
-        self.W_som_l23_raw = self._make_raw((n_units, self.n_som))
+        self.W_rec_raw = self._make_raw(
+            (n_units, n_units), init_mean=-5.0, name="W_rec_raw",
+        )
+        self.W_pv_l23_raw = self._make_raw(
+            (n_units, self.n_pv), init_mean=-5.0, name="W_pv_l23_raw",
+        )
+        self.W_som_l23_raw = self._make_raw(
+            (n_units, self.n_som), init_mean=-5.0, name="W_som_l23_raw",
+        )
         self.W_fb_apical_raw = self._make_raw(
-            (n_units, self.n_h_e), init_mean=-5.15,
+            (n_units, self.n_h_e), init_mean=-5.0, name="W_fb_apical_raw",
         )
 
         # generate_sparse_mask returns [n_pre, n_post]; transpose to
@@ -483,7 +520,7 @@ class L23E(ExcitatoryPopulation):
             _excitatory_eff(self.W_rec_raw, self.mask_rec),
             leak=self._leak,
             name="L23E.W_rec (softplus-gated, masked)",
-            max_radius=0.95,
+            max_radius=1.4,
         )
 
         self._plastic_names = (
@@ -527,7 +564,7 @@ class L23E(ExcitatoryPopulation):
             + context_bias
         )
         activated = self._phi(drive - self.theta)
-        rate_next = self._leak * state + activated
+        rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next
 
 
@@ -565,7 +602,9 @@ class L23PV(InhibitoryPopulation):
         )
         _validate_size("n_l23_e", n_l23_e)
         self.n_l23_e = int(n_l23_e)
-        self.W_l23_pv_raw = self._make_raw((n_units, self.n_l23_e))
+        self.W_l23_pv_raw = self._make_raw(
+            (n_units, self.n_l23_e), name="W_l23_pv_raw",
+        )
         self._plastic_names = ("W_l23_pv_raw",)
 
     def forward(
@@ -579,7 +618,7 @@ class L23PV(InhibitoryPopulation):
         w = _excitatory_eff(self.W_l23_pv_raw)
         drive = F.linear(l23e_input, w)
         activated = self._phi(drive - self.target_rate_hz)
-        rate_next = self._leak * state + activated
+        rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next
 
 
@@ -614,16 +653,17 @@ class L23SOM(InhibitoryPopulation):
         _validate_size("n_h_e", n_h_e)
         self.n_l23_e = int(n_l23_e)
         self.n_h_e = int(n_h_e)
-        # Task #44 — fan-in-scaled init_means so each +softplus drive's
-        # expected row-sum lands at the SOM stability budget
-        # ``(1 − leak)/φ'_op`` = 0.37 (τ=20, leak=0.75, φ'_op=0.67):
-        # W_l23_som has fan-in 256 → target softplus(m) ≈ 0.00145
-        # → m ≈ -6.54; W_fb_som has fan-in 64 → target 0.00578 → m ≈ -5.15.
+        # Task #52 — T29 calibration. W_l23_som = -1.0 puts SOM drive
+        # ≈ 256·softplus(-1)·r_l23 = 256·0.313·0.012 = 0.96 just below the
+        # target_rate_hz=1.0 threshold at blank; at typical nonzero input
+        # (r_l23 > 0.013) SOM responds. Loop gain stays bounded because
+        # W_som_l23 in L23E is -5.0 (weak SOM→L23 feedback).
+        # H→SOM feedback kept at -5.0 (weak; Phase-2 learns).
         self.W_l23_som_raw = self._make_raw(
-            (n_units, self.n_l23_e), init_mean=-6.54,
+            (n_units, self.n_l23_e), init_mean=-1.0, name="W_l23_som_raw",
         )
         self.W_fb_som_raw = self._make_raw(
-            (n_units, self.n_h_e), init_mean=-5.15,
+            (n_units, self.n_h_e), init_mean=-5.0, name="W_fb_som_raw",
         )
         self._plastic_names = ("W_l23_som_raw", "W_fb_som_raw")
 
@@ -646,7 +686,7 @@ class L23SOM(InhibitoryPopulation):
             + F.linear(h_som_feedback_input, w_fb)
         )
         activated = self._phi(drive - self.target_rate_hz)
-        rate_next = self._leak * state + activated
+        rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next
 
 
@@ -691,17 +731,20 @@ class HE(ExcitatoryPopulation):
         self.n_l23_e = int(n_l23_e)
         self.n_h_pv = int(n_h_pv)
 
-        # Task #44 — fan-in-scaled init_means. Non-recurrent drive targets
-        # row-sum budget 0.15 (τ=50, leak=0.9, φ'_op=0.67): W_l23_h
-        # (fan-in 256) softplus(m) ≈ 0.000586 → m ≈ -7.44. W_rec is
-        # evaluated by the stricter |eig(W)| budget (max|eig(leak·I +
-        # 0.67·W)| ≤ 0.95 ⇒ |eig(W)| ≤ 0.075) enforced by the guard;
-        # m=-4.4 honors this.
+        # Task #52 — T29 calibration. L23→HE = -5.7 keeps HE rate below
+        # L23E at blank (Target 3): softplus(-5.7) ≈ 3.35e-3 × 256 × r_l23
+        # ≈ 0.86·r_l23 < 1·r_l23 drive into L23E itself. Self-rec = -5.0.
+        # HPV→HE = -5.0 weakens the HE↔HPV loop so HPV can fire strongly
+        # (W_pre_hpv = +3.0 in network.py) without driving ρ(J) past 1.0.
         self.W_l23_h_raw = self._make_raw(
-            (n_units, self.n_l23_e), init_mean=-7.44,
+            (n_units, self.n_l23_e), init_mean=-5.7, name="W_l23_h_raw",
         )
-        self.W_rec_raw = self._make_raw((n_units, n_units), init_mean=-4.7)
-        self.W_pv_h_raw = self._make_raw((n_units, self.n_h_pv))
+        self.W_rec_raw = self._make_raw(
+            (n_units, n_units), init_mean=-5.0, name="W_rec_raw",
+        )
+        self.W_pv_h_raw = self._make_raw(
+            (n_units, self.n_h_pv), init_mean=-5.0, name="W_pv_h_raw",
+        )
 
         raw_mask = generate_sparse_mask(
             positions=None, features=None, n_units=n_units,
@@ -721,7 +764,7 @@ class HE(ExcitatoryPopulation):
             _excitatory_eff(self.W_rec_raw, self.mask_rec),
             leak=self._leak,
             name="HE.W_rec (softplus-gated, masked)",
-            max_radius=0.95,
+            max_radius=1.4,
         )
 
         self._plastic_names = ("W_l23_h_raw", "W_rec_raw", "W_pv_h_raw")
@@ -754,7 +797,7 @@ class HE(ExcitatoryPopulation):
             + context_bias
         )
         activated = self._phi(drive - self.theta)
-        rate_next = self._leak * state + activated
+        rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next
 
 
@@ -790,7 +833,9 @@ class HPV(InhibitoryPopulation):
         )
         _validate_size("n_h_e", n_h_e)
         self.n_h_e = int(n_h_e)
-        self.W_h_pv_raw = self._make_raw((n_units, self.n_h_e))
+        self.W_h_pv_raw = self._make_raw(
+            (n_units, self.n_h_e), name="W_h_pv_raw",
+        )
         self._plastic_names = ("W_h_pv_raw",)
 
     def forward(
@@ -803,7 +848,7 @@ class HPV(InhibitoryPopulation):
         w = _excitatory_eff(self.W_h_pv_raw)
         drive = F.linear(he_input, w)
         activated = self._phi(drive - self.target_rate_hz)
-        rate_next = self._leak * state + activated
+        rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next
 
 
@@ -839,6 +884,7 @@ class FastInhibitoryPopulation(_BasePopulation):
         target_rate_hz: float = 1.0,
         phi: Callable[[Tensor], Tensor] = rectified_softplus,
         init_scale: float = 0.1,
+        w_pre_init_mean: float = 0.0,
         seed: int = 0,
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float32,
@@ -863,7 +909,15 @@ class FastInhibitoryPopulation(_BasePopulation):
         self._leak = math.exp(-float(dt_ms) / float(tau_ms))
         self.target_rate_hz = float(target_rate_hz)
         self.n_pre = int(n_pre)
-        self.W_pre_raw = self._make_raw((n_units, self.n_pre))
+        # Task #52 — per-instance init_mean on W_pre_raw. l23_pv and h_pv
+        # share this class but require different operating points under
+        # plasticity=0 / homeostasis=0; the parameter lets network.py set
+        # them independently.
+        self.W_pre_raw = self._make_raw(
+            (n_units, self.n_pre),
+            init_mean=w_pre_init_mean,
+            name="W_pre_raw",
+        )
         self._plastic_names = ("W_pre_raw",)
 
     def forward(
@@ -876,5 +930,5 @@ class FastInhibitoryPopulation(_BasePopulation):
         w = _excitatory_eff(self.W_pre_raw)
         drive = F.linear(pre_input, w)
         activated = self._phi(drive - self.target_rate_hz)
-        rate_next = self._leak * state + activated
+        rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next

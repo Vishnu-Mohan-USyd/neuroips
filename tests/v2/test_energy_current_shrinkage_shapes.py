@@ -1,12 +1,17 @@
 """Shape / sign / monotonicity invariants for `current_weight_shrinkage`.
 
-Closed form: `Δw_ij = −β · mean_b(a_pre_i²) · w_ij`.
+Implicit-Euler form (Task #62): `Δw_ij = −w_ij · s_i / (1 + s_i)` with
+`s_i = β · mean_b(a_pre_i²)`. This guarantees `|Δw| ≤ |w|` regardless of
+pre-activity magnitude, replacing the explicit-Euler form that overshot
+for large `pre²` and drove oscillatory weight explosion in Phase-2.
 
   * Output shape matches weights.
   * Zero pre-activity ⇒ zero shrinkage.
-  * Higher pre-activity magnitude ⇒ larger shrinkage magnitude.
+  * Higher pre-activity magnitude ⇒ larger shrinkage magnitude (monotonic,
+    approximately square-law when `s ≪ 1`).
   * Output sign is opposite to weight sign (shrinkage pulls toward zero).
   * β = 0 turns the penalty off entirely.
+  * Bounded: `|Δw| ≤ |w|` for all finite pre.
 """
 
 from __future__ import annotations
@@ -83,27 +88,49 @@ def test_shrinkage_sign_opposite_weight_sign_when_pre_active() -> None:
 
 
 def test_higher_pre_magnitude_gives_larger_shrinkage_magnitude() -> None:
-    """Doubling |a_pre| quadruples |ΔW| (square law)."""
-    energy = EnergyPenalty(alpha=0.0, beta=1e-3)
+    """Doubling |a_pre| increases |ΔW| monotonically; in the `s ≪ 1` regime
+    the ratio approaches the square-law 4× limit. Under the implicit-Euler
+    form (Task #62), the ratio is exactly 4·(1+s_small)/(1+s_big) < 4."""
+    beta = 1e-3
+    energy = EnergyPenalty(alpha=0.0, beta=beta)
     weights = torch.ones(3, 2)
     pre_small = torch.ones(2, 2)
     pre_big = torch.full((2, 2), 2.0)
     dw_small = energy.current_weight_shrinkage(weights, pre_small)
     dw_big = energy.current_weight_shrinkage(weights, pre_big)
-    # Because the rule uses squared pre-activity, doubling gives 4×.
-    torch.testing.assert_close(dw_big, 4.0 * dw_small, atol=1e-7, rtol=0.0)
+    # Monotone: doubling pre grows |dw|.
+    assert torch.all(dw_big.abs() > dw_small.abs())
+    # Exact implicit-Euler ratio: s_small = β·1, s_big = β·4.
+    s_small = beta * 1.0
+    s_big = beta * 4.0
+    expected_ratio = (s_big / (1.0 + s_big)) / (s_small / (1.0 + s_small))
+    ratio = (dw_big.abs() / dw_small.abs()).mean().item()
+    assert abs(ratio - expected_ratio) < 1e-5
+    # Approaches 4 in the s ≪ 1 limit.
+    assert 3.9 < ratio < 4.0
+
+
+def test_bounded_by_weight_magnitude_for_any_pre() -> None:
+    """Implicit Euler guarantees |Δw| ≤ |w| even for huge pre-activities
+    (Task #62: this bound is what prevents the Phase-2 weight runaway)."""
+    energy = EnergyPenalty(alpha=0.0, beta=10.0)
+    weights = torch.randn(6, 5) * 3.0
+    pre = torch.full((4, 5), 1e3)                                   # extreme
+    dw = energy.current_weight_shrinkage(weights, pre)
+    assert torch.all(dw.abs() <= weights.abs() + 1e-8)
 
 
 def test_analytic_formula_spot_check() -> None:
-    """Hand-derived scalar check of −β · mean_b(a_pre²) · w."""
+    """Hand-derived scalar check of −w · s / (1 + s), s = β · mean_b(a_pre²)."""
     beta = 0.1
     energy = EnergyPenalty(alpha=0.0, beta=beta)
     weights = torch.tensor([[2.0]])                                 # [1, 1]
     pre = torch.tensor([[1.0], [3.0]])                              # [B=2, n_pre=1]
-    # mean_b(a_pre²) = mean(1, 9) = 5 ; ΔW = -0.1 · 5 · 2 = -1.0
+    # mean_b(a_pre²) = mean(1, 9) = 5 ; s = 0.1 · 5 = 0.5
+    # ΔW = -2 · 0.5 / (1 + 0.5) = -2/3
     dw = energy.current_weight_shrinkage(weights, pre)
     torch.testing.assert_close(
-        dw, torch.tensor([[-1.0]]), atol=1e-7, rtol=0.0
+        dw, torch.tensor([[-2.0 / 3.0]]), atol=1e-7, rtol=0.0
     )
 
 

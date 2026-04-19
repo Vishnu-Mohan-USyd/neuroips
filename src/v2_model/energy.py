@@ -162,7 +162,13 @@ class EnergyPenalty(nn.Module):
                 f"pre_activity last dim {pre_activity.shape[1]} must equal "
                 f"weights n_pre = {n_pre}"
             )
-        # mean over batch of a_pre² → shape [n_pre]; broadcast to [n_post, n_pre]
+        # mean over batch of a_pre² → shape [n_pre]; broadcast to [n_post, n_pre].
+        # Implicit-Euler-equivalent shrinkage (Task #62): the explicit-Euler
+        # form dw = -β·pre²·w overshoots for large pre² and drives oscillatory
+        # weight explosion. Equivalent implicit form w_new = w / (1 + β·pre²)
+        # gives dw = -w · shrink / (1 + shrink), which is always bounded
+        # |dw| ≤ |w| for any non-negative shrink_factor.
         pre_sq_mean = (pre_activity * pre_activity).mean(dim=0)        # [n_pre]
-        dw = -self.beta * pre_sq_mean * weights                        # [n_post, n_pre]
+        shrink_factor = self.beta * pre_sq_mean.view(1, -1)            # [1, n_pre]
+        dw = -weights * shrink_factor / (1.0 + shrink_factor)          # [n_post, n_pre]
         return _apply_mask(dw, mask)

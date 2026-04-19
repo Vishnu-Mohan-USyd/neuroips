@@ -46,11 +46,26 @@ def test_different_seed_different_generic_init() -> None:
         assert not torch.equal(p1, p2), f"{name} identical across seeds"
 
 
-def test_task_weights_zero_regardless_of_seed() -> None:
+def test_task_input_weights_seed_dependent_and_small() -> None:
+    """W_qm_task / W_lm_task are small-random init (N(0, 0.01), Task #58).
+
+    They must vary with seed (so Phase-3 bootstrap gets a real signal) and
+    their magnitudes must stay under the 0.05 cap used by the null-control
+    tolerance. W_mh_task stays at exact zero regardless of seed.
+    """
+    cm_a = _make(seed=0)
+    cm_b = _make(seed=1)
+    # Input-path task weights are seed-dependent and bounded.
+    for name in ("W_qm_task", "W_lm_task"):
+        p_a = getattr(cm_a, name)
+        p_b = getattr(cm_b, name)
+        assert not torch.equal(p_a, p_b), f"{name} identical across seeds"
+        assert float(p_a.abs().max().item()) < 0.05
+        assert float(p_b.abs().max().item()) < 0.05
+    # Output readout task weight stays at exact zero until Phase-3 plasticity.
     for seed in (0, 1, 42, 9999):
         cm = _make(seed=seed)
-        for name in ("W_qm_task", "W_lm_task", "W_mh_task"):
-            assert torch.all(getattr(cm, name) == 0.0)
+        assert torch.all(cm.W_mh_task == 0.0)
 
 
 def test_forward_bit_exact_across_calls() -> None:

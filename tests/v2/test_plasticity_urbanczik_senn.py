@@ -44,8 +44,12 @@ def test_negative_epsilon_produces_negative_update() -> None:
 
 
 def test_hebbian_magnitude_matches_analytic_formula() -> None:
-    """Scalar check: Δw[j, i] == lr · mean_b(eps[b,j] · pre[b,i])."""
-    rule = UrbanczikSennRule(lr=0.5, weight_decay=0.0)
+    """Scalar check: Δw[j, i] == lr · mean_b(eps[b,j] · pre[b,i]).
+
+    lr kept small so analytic values stay inside the ±0.01 per-step clamp
+    (Task #62) and the formula is verified unclipped.
+    """
+    rule = UrbanczikSennRule(lr=0.001, weight_decay=0.0)
     pre = torch.tensor([[1.0, 2.0], [3.0, 4.0]])           # [B=2, n_pre=2]
     apical = torch.tensor([[1.0], [2.0]])                  # [B=2, n_post=1]
     basal = torch.tensor([[0.5], [0.0]])
@@ -53,9 +57,20 @@ def test_hebbian_magnitude_matches_analytic_formula() -> None:
     eps = apical - basal                                   # [[0.5], [2.0]]
     # hebb[0, 0] = mean(0.5·1, 2.0·3) = mean(0.5, 6.0) = 3.25
     # hebb[0, 1] = mean(0.5·2, 2.0·4) = mean(1.0, 8.0) = 4.5
-    expected = torch.tensor([[0.5 * 3.25, 0.5 * 4.5]])
+    expected = torch.tensor([[0.001 * 3.25, 0.001 * 4.5]])
     dw = rule.delta(pre, apical, basal, weights)
     torch.testing.assert_close(dw, expected, atol=1e-6, rtol=0.0)
+
+
+def test_delta_clamps_large_updates() -> None:
+    """Per-step Δw magnitude is clamped to [-0.01, 0.01] (Task #62)."""
+    rule = UrbanczikSennRule(lr=0.5, weight_decay=0.0)
+    pre = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    apical = torch.tensor([[1.0], [2.0]])
+    basal = torch.tensor([[0.5], [0.0]])
+    weights = torch.zeros(1, 2)
+    dw = rule.delta(pre, apical, basal, weights)
+    assert float(dw.abs().max().item()) <= 0.01 + 1e-8
 
 
 # ---------------------------------------------------------------------------
@@ -63,15 +78,20 @@ def test_hebbian_magnitude_matches_analytic_formula() -> None:
 # ---------------------------------------------------------------------------
 
 def test_weight_decay_shrinks_existing_weights() -> None:
-    """With zero Hebbian drive and positive weights, decay pulls ΔW negative."""
-    rule = UrbanczikSennRule(lr=0.1, weight_decay=0.05)
+    """With zero Hebbian drive and positive weights, decay pulls ΔW negative.
+
+    weight_decay kept small so the expected analytic value stays inside the
+    ±0.01 per-step clamp (Task #62) and the decay arithmetic is verified
+    unclipped.
+    """
+    rule = UrbanczikSennRule(lr=0.1, weight_decay=0.005)
     pre = torch.zeros(2, 3)
     apical = torch.zeros(2, 4)
     basal = torch.zeros(2, 4)
     weights = torch.ones(4, 3)                             # positive weights
     dw = rule.delta(pre, apical, basal, weights)
     torch.testing.assert_close(
-        dw, torch.full_like(weights, -0.05), atol=1e-6, rtol=0.0
+        dw, torch.full_like(weights, -0.005), atol=1e-6, rtol=0.0
     )
 
 

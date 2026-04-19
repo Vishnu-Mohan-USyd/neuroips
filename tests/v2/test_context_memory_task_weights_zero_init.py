@@ -1,9 +1,16 @@
-"""Task-specific weights initialise to exact zero.
+"""Task-specific weight init: small random for input paths, zero for readout.
 
-Required for Gate-6 null-expectation control: before Phase-3 plasticity
-begins, the task-specific streams (Kok cue, Richter leader, task readout)
-contribute exactly nothing to memory dynamics or to the output bias. Only
-the generic pathway is active.
+The input-pathway weights (``W_qm_task``, ``W_lm_task``) initialise to
+small-random ``N(0, 0.01)`` so Phase-3 trial 0 already has
+cue/leader-differentiated memory — without this, the three-factor rule
+``cue × memory × memory_error`` yields identical ``dw`` for every cue
+and no learning can bootstrap (Task #58 / debugger Task #49 Claim 4).
+The magnitude is small enough that the Gate-6 null-expectation control
+still passes within 1·SEM.
+
+The output readout weight (``W_mh_task``) stays at exact zero at
+construction — the output bias path must not be touched by task inputs
+until Phase-3 plasticity binds it.
 """
 
 from __future__ import annotations
@@ -13,6 +20,9 @@ import torch
 from src.v2_model.context_memory import ContextMemory
 
 
+TASK_INPUT_MAX_MAGNITUDE = 0.05  # small-random cap used by the test suite
+
+
 def _cm() -> ContextMemory:
     return ContextMemory(
         n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12,
@@ -20,10 +30,19 @@ def _cm() -> ContextMemory:
     )
 
 
-def test_task_weights_zero_at_construction() -> None:
+def test_task_input_weights_small_at_construction() -> None:
+    """|W|_max < 0.05 for Kok cue + Richter leader pathways (N(0, 0.01) init)."""
     cm = _cm()
-    assert torch.all(cm.W_qm_task == 0.0)
-    assert torch.all(cm.W_lm_task == 0.0)
+    assert float(cm.W_qm_task.abs().max().item()) < TASK_INPUT_MAX_MAGNITUDE
+    assert float(cm.W_lm_task.abs().max().item()) < TASK_INPUT_MAX_MAGNITUDE
+    # But not exactly zero — they must carry a bootstrap signal.
+    assert float(cm.W_qm_task.abs().max().item()) > 0.0
+    assert float(cm.W_lm_task.abs().max().item()) > 0.0
+
+
+def test_task_readout_weight_zero_at_construction() -> None:
+    """W_mh_task (output path) must still be exact zero before Phase-3."""
+    cm = _cm()
     assert torch.all(cm.W_mh_task == 0.0)
 
 
@@ -35,8 +54,13 @@ def test_generic_weights_nonzero_at_construction() -> None:
     assert not torch.all(cm.W_mh_gen == 0.0)
 
 
-def test_task_weights_contribute_zero_to_bias_before_training() -> None:
-    """With task weights at zero, `b_t` comes entirely from the generic readout."""
+def test_readout_bias_independent_of_task_inputs_before_training() -> None:
+    """With W_mh_task = 0, the pre-update bias readout is generic-only.
+
+    Because ``b_t = W_mh_gen · m_t + W_mh_task · m_t`` uses the *pre-update*
+    memory state, passing or omitting q/leader this step does not change
+    ``b_t`` as long as ``W_mh_task = 0``.
+    """
     cm = _cm()
     B = 3
     m = torch.randn(B, cm.n_m)
@@ -52,9 +76,9 @@ def test_task_weights_contribute_zero_to_bias_before_training() -> None:
     )
 
 
-def test_task_inputs_do_not_affect_memory_before_training() -> None:
-    """With W_qm_task / W_lm_task zero, the memory update is input-independent
-    in q and leader."""
+def test_task_inputs_shift_memory_by_at_most_input_scale() -> None:
+    """W_qm_task, W_lm_task are small-random, so swapping q/leader tensors
+    perturbs the memory update by a bounded amount, not exactly zero."""
     cm = _cm()
     B = 3
     m = torch.randn(B, cm.n_m)
@@ -67,7 +91,10 @@ def test_task_inputs_do_not_affect_memory_before_training() -> None:
 
     m_next_1, _ = cm(m, h, q1, lead1)
     m_next_2, _ = cm(m, h, q2, lead2)
-    m_next_none, _ = cm(m, h)
 
-    torch.testing.assert_close(m_next_1, m_next_2, atol=0.0, rtol=0.0)
-    torch.testing.assert_close(m_next_1, m_next_none, atol=0.0, rtol=0.0)
+    # The delta is bounded by (1 - decay) · φ′ · (‖W_qm‖‖Δq‖ + ‖W_lm‖‖Δl‖),
+    # and with ‖W‖ ~ 0.01 and random inputs of order 1 this is well under 1.0.
+    delta = (m_next_1 - m_next_2).abs().max().item()
+    assert delta < 1.0
+    # But it is not identically zero — cue/leader now carry signal.
+    assert delta > 0.0

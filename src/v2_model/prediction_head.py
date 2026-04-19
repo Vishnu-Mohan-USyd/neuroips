@@ -119,7 +119,8 @@ class PredictionHead(nn.Module):
       * ``b_pred_raw``         [n_l4_e]                — small non-negative
                                                          bias (init so that
                                                          ``softplus(b_pred_raw)
-                                                         ≈ 6.7e-3`` per unit).
+                                                         ≈ 4.5e-5`` per unit —
+                                                         Task #52 calibration).
 
     Parameters
     ----------
@@ -179,26 +180,53 @@ class PredictionHead(nn.Module):
         gen = torch.Generator(device=self._device)
         gen.manual_seed(self._seed)
 
-        def _make_raw(shape: tuple[int, ...]) -> nn.Parameter:
+        # Task #50 — per-weight init-mean registry for raw-prior weight decay.
+        # Mirrors `_BasePopulation.raw_init_means`; the Phase-2 driver reads
+        # this to anchor weight-decay at init magnitude rather than 0.
+        self.raw_init_means: dict[str, float] = {}
+
+        def _make_raw(
+            shape: tuple[int, ...],
+            *,
+            init_mean: float = 0.0,
+            name: Optional[str] = None,
+        ) -> nn.Parameter:
             t = torch.empty(*shape, device=self._device, dtype=self._dtype)
             with torch.no_grad():
-                t.normal_(mean=0.0, std=self._init_scale, generator=gen)
+                t.normal_(
+                    mean=float(init_mean), std=self._init_scale, generator=gen,
+                )
+            if name is not None:
+                self.raw_init_means[name] = float(init_mean)
             return nn.Parameter(t, requires_grad=False)
 
-        self.W_pred_H_raw = _make_raw((self.n_l4_e, self.n_h_e))
+        # Task #52 — T29 calibration: all pred-head weights init at -10.0
+        # so that ``softplus(-10) ≈ 4.54e-5`` per unit keeps x̂ within one
+        # decade of the L4 blank rate (r_l4 ≈ 5e-5). With b_pred_raw=-10
+        # and W_pred_*=-10, the drive at blank is dominated by the bias:
+        # softplus(-10) + small contributions from h_rate / l23_apical →
+        # x̂ ≈ 5e-5 per unit, matching r_l4 (Target 6: |x̂|/|r_l4| ≈ 2).
+        # Phase-2 plasticity grows these upward as the prediction error
+        # signal becomes informative.
+        self.W_pred_H_raw = _make_raw(
+            (self.n_l4_e, self.n_h_e), init_mean=-10.0, name="W_pred_H_raw",
+        )
 
-        # Bias pre-softplus value → softplus(-5) ≈ 6.7e-3 per unit; matches
-        # the "small non-negative" spec, plasticity grows it upward.
         b_init = torch.full(
-            (self.n_l4_e,), -5.0, device=self._device, dtype=self._dtype,
+            (self.n_l4_e,), -10.0, device=self._device, dtype=self._dtype,
         )
         self.b_pred_raw = nn.Parameter(b_init, requires_grad=False)
+        self.raw_init_means["b_pred_raw"] = -10.0
 
         if self.n_c_bias is not None:
-            self.W_pred_C_raw = _make_raw((self.n_l4_e, self.n_c_bias))
+            self.W_pred_C_raw = _make_raw(
+                (self.n_l4_e, self.n_c_bias),
+                init_mean=-10.0, name="W_pred_C_raw",
+            )
         if self.n_l23_apical is not None:
             self.W_pred_apical_raw = _make_raw(
-                (self.n_l4_e, self.n_l23_apical)
+                (self.n_l4_e, self.n_l23_apical),
+                init_mean=-10.0, name="W_pred_apical_raw",
             )
 
         # Plastic-in-phase-2 manifest (stable iteration order: H, C, apical, b).

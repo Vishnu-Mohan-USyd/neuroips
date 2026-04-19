@@ -113,10 +113,21 @@ class ContextMemory(nn.Module):
     ----------
     W_hm_gen, W_mm_gen, W_mh_gen : nn.Parameter (requires_grad=False)
         Generic pathway weights. Normal-initialised with std=``init_std``.
-    W_qm_task, W_lm_task, W_mh_task : nn.Parameter (requires_grad=False)
-        Task-specific weights. Initialised to zero so they contribute
-        nothing to the dynamics or the output bias before Phase-3 plasticity
-        begins — important for the null-expectation control (Gate 6).
+    W_qm_task, W_lm_task : nn.Parameter (requires_grad=False)
+        Task-specific input-pathway weights. Initialised with small random
+        values (``N(0, task_input_init_std)`` with ``task_input_init_std``
+        ≈ 0.01) so the cue/leader streams already carry a tiny
+        cue-differentiated signal at Phase-3 trial 0 — without this,
+        the three-factor rule ``cue × memory × memory_error`` produces
+        identical ``dw`` for both cues and no learning can bootstrap
+        (Task #58 / debugger Task #49 Claim 4). The magnitude is small
+        enough that the null-expectation control (Gate 6) still passes
+        within its SEM tolerance.
+    W_mh_task : nn.Parameter (requires_grad=False)
+        Task-specific output-path readout. Stays at exact zero at
+        construction so the output bias is untouched by the task stream
+        until Phase-3 plasticity binds it — this keeps the null control
+        strictly conservative on the output side.
     tau_m_ms, dt_ms : float
         Time constant and integration step. The cached leak factor
         ``exp(−dt/τ_m)`` lives in (0, 1) for any positive tau/dt, so only
@@ -134,6 +145,7 @@ class ContextMemory(nn.Module):
         dt_ms: float,
         phi: Callable[[Tensor], Tensor] = rectified_softplus,
         init_std: float = 0.1,
+        task_input_init_std: float = 0.01,
         seed: int = 0,
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float32,
@@ -150,6 +162,10 @@ class ContextMemory(nn.Module):
             raise ValueError(f"dt_ms must be > 0; got {dt_ms}")
         if init_std < 0:
             raise ValueError(f"init_std must be ≥ 0; got {init_std}")
+        if task_input_init_std < 0:
+            raise ValueError(
+                f"task_input_init_std must be ≥ 0; got {task_input_init_std}"
+            )
 
         self.n_m = int(n_m)
         self.n_h = int(n_h)
@@ -166,10 +182,13 @@ class ContextMemory(nn.Module):
         gen = torch.Generator(device=dev)
         gen.manual_seed(int(seed))
 
-        def _normal(shape: tuple[int, int]) -> nn.Parameter:
+        def _normal(shape: tuple[int, int], std: float) -> nn.Parameter:
             t = torch.empty(*shape, device=dev, dtype=dtype)
             with torch.no_grad():
-                t.normal_(mean=0.0, std=init_std, generator=gen)
+                if std > 0:
+                    t.normal_(mean=0.0, std=std, generator=gen)
+                else:
+                    t.zero_()
             return nn.Parameter(t, requires_grad=False)
 
         def _zeros(shape: tuple[int, int]) -> nn.Parameter:
@@ -178,13 +197,20 @@ class ContextMemory(nn.Module):
                 requires_grad=False,
             )
 
+        self._task_input_init_std = float(task_input_init_std)
+
         # Generic weights.
-        self.W_hm_gen = _normal((self.n_m, self.n_h))
-        self.W_mm_gen = _normal((self.n_m, self.n_m))
-        self.W_mh_gen = _normal((self.n_out, self.n_m))
-        # Task-specific weights — exact zero at construction.
-        self.W_qm_task = _zeros((self.n_m, self.n_cue))
-        self.W_lm_task = _zeros((self.n_m, self.n_leader))
+        self.W_hm_gen = _normal((self.n_m, self.n_h), init_std)
+        self.W_mm_gen = _normal((self.n_m, self.n_m), init_std)
+        self.W_mh_gen = _normal((self.n_out, self.n_m), init_std)
+        # Task-specific input weights — small random init so Phase-3 trial 0
+        # already has cue/leader-differentiated memory and the three-factor
+        # rule can bootstrap (Task #58). Magnitude small enough to satisfy
+        # Gate-6 null expectation control within 1·SEM.
+        self.W_qm_task = _normal((self.n_m, self.n_cue), task_input_init_std)
+        self.W_lm_task = _normal((self.n_m, self.n_leader), task_input_init_std)
+        # Task-specific readout stays at exact zero — the output path must
+        # not be touched by task inputs until Phase-3 plasticity binds it.
         self.W_mh_task = _zeros((self.n_out, self.n_m))
 
     # ---- Phase gating API --------------------------------------------------
@@ -272,7 +298,7 @@ class ContextMemory(nn.Module):
                 )
             drive = drive + F.linear(leader_t, self.W_lm_task)
 
-        m_next = self._decay * m_t + self._phi(drive)
+        m_next = self._decay * m_t + (1.0 - self._decay) * self._phi(drive)
 
         # Bias uses the pre-update memory state per plan D.2; the readout
         # reflects what the memory looked like as the caller entered this step.

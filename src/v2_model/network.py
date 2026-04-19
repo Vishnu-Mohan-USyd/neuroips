@@ -175,6 +175,12 @@ class V2Network(nn.Module):
             tau_ms=t.tau_l23_pv_ms,
             dt_ms=t.dt_ms,
             target_rate_hz=p.target_rate_hz,
+            # Task #52 — T29 init_mean. W_pre = -1.0 puts PV drive
+            # ≈ 256·softplus(-1)·r_l23 = 256·0.313·0.012 ≈ 0.96 just below
+            # the target_rate_hz=1.0 threshold at blank; for r_l23 > 0.013
+            # PV crosses threshold and responds. The L23↔PV loop stays
+            # stable because W_pv_l23 in L23E is -5.0 (weak feedback).
+            w_pre_init_mean=-1.0,
             seed=self._seed + self._SEED_OFFSET_L23_PV,
             device=self._device,
             dtype=self._dtype,
@@ -219,6 +225,12 @@ class V2Network(nn.Module):
             tau_ms=t.tau_l23_pv_ms,
             dt_ms=t.dt_ms,
             target_rate_hz=p.target_rate_hz,
+            # Task #52 — T29 init_mean. HE rate ≈ 0.005 at blank is much
+            # lower than L23E (0.012), so HPV needs a much stronger W_pre
+            # to cross threshold: softplus(3)·64·0.005 ≈ 1.00 matches the
+            # target_rate_hz=1.0 threshold. Loop stability maintained by
+            # W_pv_h = -5.0 in HE (weak HPV→HE feedback).
+            w_pre_init_mean=3.0,
             seed=self._seed + self._SEED_OFFSET_H_PV,
             device=self._device,
             dtype=self._dtype,
