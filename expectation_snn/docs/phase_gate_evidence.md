@@ -120,6 +120,36 @@ near-deterministic (CW/CCW block, 5 of 6 items predict the next) while
 Richter crossover is 1-of-6 at each step — both signals are well above
 the 0.05 bits finite-sample floor.
 
+### Sprint-3 component-level validation (Lead standing rule backfill, 2026-04-19)
+
+Per Lead's standing rule ("each module gets functional -- not just smoke
+-- validation BEFORE the next module is built on top"), five validators
+exercise the biological/architectural claims of the five Sprint-3
+modules. Commit `a99a8a7` (`test(sprint-3): component-level validators`).
+
+| Validator | Assays | Result | Key numbers |
+|---|---|---|---|
+| `validate_nmda_channel.py`      | 3  | 3/3 PASS | tau_nmda=49.95 ms; V_1/2=-20.50 mV; NMDA:AMPA charge ratio=0.58 |
+| `validate_per_channel_inh.py`   | 2  | 1/2 PASS | local suppression: 114->0 Hz; WTA margin=0.03 (FAIL, structural) |
+| `validate_v1_ring.py`           | 3  | 3/3 PASS | smooth span=15 pA, cliff span=0 pA, monotone=yes |
+| `validate_stimulus_schedules.py`| 14 | 14/14 PASS | Richter balanced 10/pair; Tang deviant frac=0.142 (expected 0.142) |
+| `validate_plasticity.py`        | 5  | 5/5 PASS | LTP=+0.015, LTD=-0.294; NMDA deposit=w*amp=0.250 nS (exact) |
+
+Totals: 26 PASS / 1 FAIL across 5 modules.
+
+The single FAIL (WTA under balanced 2-channel drive) is a structural
+gap: the current per-channel + broad-pool inh cannot enforce WTA when
+two channels receive symmetric Gaussian drive. Stage-1 MI does not
+depend on this property (the Richter cue is unambiguous, Tang blocks
+are deterministic), so it is captured as a regression target rather
+than a Stage-1 blocker. Remediation options (Mexican-hat cross-channel
+inh, SFA on H_E, or cross-channel E->inh recurrence) are deferred to a
+future sprint.
+
+Run any validator:
+
+    python -m expectation_snn.validation.validate_<name>
+
 ## Stage 2 gate — pending
 
 (Cue-H orientation selectivity d >= 0.2; cue-alone evokes H bump in >= 80 pct valid trials;
