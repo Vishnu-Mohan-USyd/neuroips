@@ -125,26 +125,47 @@ the 0.05 bits finite-sample floor.
 Per Lead's standing rule ("each module gets functional -- not just smoke
 -- validation BEFORE the next module is built on top"), five validators
 exercise the biological/architectural claims of the five Sprint-3
-modules. Commit `a99a8a7` (`test(sprint-3): component-level validators`).
+modules. First cut committed as `a99a8a7`
+(`test(sprint-3): component-level validators`). Reworked 2026-04-19
+with biology-anchored bands, renames for clarity, and statistical rigor
+(bootstrap CIs, chi-squared GoF):
 
-| Validator | Assays | Result | Key numbers |
-|---|---|---|---|
-| `validate_nmda_channel.py`      | 3  | 3/3 PASS | tau_nmda=49.95 ms; V_1/2=-20.50 mV; NMDA:AMPA charge ratio=0.58 |
-| `validate_per_channel_inh.py`   | 2  | 1/2 PASS | local suppression: 114->0 Hz; WTA margin=0.03 (FAIL, structural) |
-| `validate_v1_ring.py`           | 3  | 3/3 PASS | smooth span=15 pA, cliff span=0 pA, monotone=yes |
-| `validate_stimulus_schedules.py`| 14 | 14/14 PASS | Richter balanced 10/pair; Tang deviant frac=0.142 (expected 0.142) |
-| `validate_plasticity.py`        | 5  | 5/5 PASS | LTP=+0.015, LTD=-0.294; NMDA deposit=w*amp=0.250 nS (exact) |
+| Validator | Assays | Result | Key numbers | Commit |
+|---|---|---|---|---|
+| `validate_neurons.py`     | 4  | 3/4 PASS (1 FAIL flagged) | tau_nmda=49.95 ms; V_1/2=-20.50 mV; NMDA:AMPA charge=1.161 @ V_h=-55 mV (FAIL vs Wang 2001 [2,6]); SFA tau=149.95 ms | `4b1f57b` |
+| `validate_plasticity.py`  | 6  | 6/6 PASS | LTP=+0.015, LTD=-0.294; NMDA deposit=0.25 nS (exact); NMDA-on-post-only peak=0.0000 nS (pre-release-only invariant) | `2731fdf` |
+| `validate_h_ring.py`      | 3 gated + 1 informational | 3/3 gated PASS | local[0]=6 Hz ch0 drive, broad=4 Hz ch0+ch6 drive; local[0]/local[1] tuning ratio=6.0x; broad-abl multi-ch suppression delta=+16 Hz; WTA n_sustained=2 (informational gap, not gated) | `57ce01e` |
+| `validate_v1_ring.py`     | 3  | 3/3 PASS | peak channel=0 (driven); FWHM=33.00 deg (Tang [30,60]); orth rate<0.5*peak. Scope reduced to tuning-preservation pending debugger smoothing metric. | `b123231` |
+| `validate_stimulus.py`    | 17 | 17/17 PASS | Richter balanced 10/cell + bootstrap spread CI=[10,18]; Tang block-len chi2=2.156, p=0.707 (uniform{5..9}); Tang deviant 95% CI=[0.120, 0.164] contains 0.143 | `79daa87` |
 
-Totals: 26 PASS / 1 FAIL across 5 modules.
+Totals: 32 PASS / 1 FAIL across 5 modules (33 assays gated; WTA is
+reported informational-only).
 
-The single FAIL (WTA under balanced 2-channel drive) is a structural
-gap: the current per-channel + broad-pool inh cannot enforce WTA when
-two channels receive symmetric Gaussian drive. Stage-1 MI does not
-depend on this property (the Richter cue is unambiguous, Tang blocks
-are deterministic), so it is captured as a regression target rather
-than a Stage-1 blocker. Remediation options (Mexican-hat cross-channel
-inh, SFA on H_E, or cross-channel E->inh recurrence) are deferred to a
-future sprint.
+**Open architectural items:**
+
+1. **NMDA:AMPA charge ratio 1.16 vs Wang-2001 target [2, 6]** (neurons
+   Assay 3). Measured at V_h=-55 mV with shipped H_E wiring amps
+   (AMPA 25 pA / NMDA 0.5 nS per HRingConfig default). Under-NMDA'd
+   relative to Wang 2001 ideal for bump attractor persistence. Options
+   (escalated to Lead, pending decision): (a) widen band to accept
+   current wiring, (b) re-tune `drive_amp_ee_pA` / `nmda_drive_amp_nS`
+   for biological ratio, (c) spawn debugger to root-cause whether
+   Stage-1 MI depends on hitting the Wang range.
+
+2. **WTA under symmetric 2-channel drive** (h_ring Assay 4, informational).
+   The current per-channel + broad-pool inh cannot enforce
+   winner-take-all when ch0+ch6 are driven simultaneously: n_sustained=2
+   under intact wiring. Stage-1 MI does not depend on this property
+   (Richter cue is unambiguous; Tang blocks are deterministic), so it
+   is captured as a regression target. Remediation options (Mexican-hat
+   cross-channel inh, SFA on H_E, cross-channel E->inh recurrence) are
+   deferred to a future sprint.
+
+3. **V1 ring PV Poisson-noise smoothing metric** (v1_ring, deferred).
+   The Sprint-3 commit `ec2a2ac` claimed "smooths PV rheobase with
+   Poisson background." Finding the right metric + threshold is tracked
+   by the debugger (task #25 CONFIRMED). This validator will be amended
+   post-Sprint-4 with the debugger's tested metric (task #26).
 
 Run any validator:
 
