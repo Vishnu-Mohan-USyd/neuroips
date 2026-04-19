@@ -33,6 +33,13 @@ Assays
    pairings, w saturates at w_max (never exceeds it) — checks the
    `clip(w, 0, w_max_eff)` in the rule.
 
+6. **NMDA is pre-spike-only (not post-spike)**: Sprint-3 rework — fire
+   ONLY post-spikes (via kicker), with NMDA co-release enabled on the
+   synapse. Assert g_nmda_h stays at zero — post-spikes must NOT deposit
+   into the slow NMDA channel. This is the biology (Wang 2001): NMDA
+   co-release is governed by pre-synaptic vesicle release, not
+   post-synaptic depolarization.
+
 Run:
     python -m expectation_snn.validation.validate_plasticity
 """
@@ -248,6 +255,91 @@ def _run_nmda_coreleae_probe(
     return np.asarray(mon.g_nmda_h[0] / nS)
 
 
+# --- assay 6: NMDA deposited on pre-spikes only (not post-spikes) ----------
+
+def _run_post_only_nmda_probe(
+    nmda_drive_amp_nS: float,
+    drive_amp_pA: float,
+    n_post_spikes: int = 10,
+    inter_spike_ms: float = 20.0,
+    probe_ms: float = 300.0,
+    dt_sample_ms: float = 0.1,
+    seed: int = 77,
+) -> float:
+    """Fire ONLY post-spikes (no pre-spikes); return peak g_nmda_h.
+
+    A separate kicker SpikeGeneratorGroup is wired into the post cell via
+    ``V_post += 100*mV`` to force n_post_spikes inside the probe window.
+    The STDP synapse has `nmda_drive_amp_nS > 0` so that IF post-spikes
+    were depositing into g_nmda_h, we'd see a positive peak. The rule
+    only deposits on on_pre, so the expected peak is 0.
+    """
+    prefs.codegen.target = "numpy"
+    defaultclock.dt = dt_sample_ms * ms
+    b2_seed(seed); np.random.seed(seed)
+
+    post = NeuronGroup(
+        1,
+        """dV/dt = (gL*(EL - V) + I_e - I_i) / C : volt (unless refractory)
+           dI_e/dt = -I_e / tau_e : amp
+           dI_i/dt = -I_i / tau_i : amp
+           dg_nmda_h/dt = -g_nmda_h / tau_nmda_h : siemens""",
+        threshold="V > V_th", reset="V = V_reset",
+        refractory=2 * ms, method="euler",
+        namespace={
+            "V_th": -50 * mV, "V_reset": -65 * mV,
+            "tau_e": 5 * ms, "tau_i": 10 * ms,
+            "tau_nmda_h": 50 * ms,
+            "gL": 10 * nS, "EL": -70 * mV, "C": 0.2 * (nS * 1e3 * ms),
+        },
+        name=f"post_only_post_{seed}",
+    )
+    post.V = -70 * mV
+
+    # Silent pre-group: attached to synapse but never fires. Use a
+    # SpikeGeneratorGroup with zero-length time array.
+    pre = SpikeGeneratorGroup(
+        1, indices=np.asarray([], dtype=np.int64),
+        times=np.asarray([]) * ms,
+        name=f"post_only_pre_{seed}",
+    )
+    syn = pair_stdp_with_normalization(
+        pre, post, connectivity="True",
+        w_init=0.5, w_max=1.0,
+        A_plus=1e-6, A_minus=1e-6,
+        tau_pre=20 * ms, tau_post=20 * ms,
+        drive_amp_pA=drive_amp_pA,
+        nmda_drive_amp_nS=nmda_drive_amp_nS,
+        target_channel="soma",
+        name=f"post_only_syn_{seed}",
+    )
+
+    # Kicker: forces post to spike at n_post_spikes times without
+    # involving the STDP synapse's pre path.
+    kick_times = (5.0 + np.arange(n_post_spikes) * inter_spike_ms) * ms
+    kicker = SpikeGeneratorGroup(
+        1, indices=np.zeros(n_post_spikes, dtype=np.int64),
+        times=kick_times, name=f"post_only_kick_{seed}",
+    )
+    kick_syn = Synapses(kicker, post, on_pre="V_post += 100*mV",
+                        name=f"post_only_kick_syn_{seed}")
+    kick_syn.connect()
+
+    from brian2 import StateMonitor, SpikeMonitor
+    g_mon = StateMonitor(post, "g_nmda_h", record=True,
+                         name=f"post_only_g_{seed}")
+    spk_mon = SpikeMonitor(post, name=f"post_only_spk_{seed}")
+    net = Network(pre, post, kicker, syn, kick_syn, g_mon, spk_mon)
+    net.run(probe_ms * ms)
+
+    # Sanity: we must have observed post-spikes (the assay is meaningful
+    # only if post actually fired without the pre path).
+    if len(spk_mon.t) < n_post_spikes // 2:
+        # Return a sentinel large value to force FAIL if kicker didn't work.
+        return float("inf")
+    return float(np.asarray(g_mon.g_nmda_h[0] / nS).max())
+
+
 # --- Assay dataclasses ------------------------------------------------------
 
 @dataclass
@@ -271,11 +363,14 @@ class PlasticityValidationReport:
     w_max_reference: float
     bounded_ok: bool
 
+    nmda_peak_post_only_nS: float
+    nmda_pre_only_ok: bool
+
     @property
     def passed(self) -> bool:
         return (self.stdp_asymmetry_ok and self.nmda_on_ok
                 and self.nmda_off_ok and self.nmda_ratio_constant_ok
-                and self.bounded_ok)
+                and self.bounded_ok and self.nmda_pre_only_ok)
 
     def summary(self) -> str:
         lines = ["Plasticity validation (pair-STDP + NMDA co-release):"]
@@ -310,6 +405,13 @@ class PlasticityValidationReport:
             f"     w_final = {self.bounded_w_final:.4f} "
             f"(w_max = {self.w_max_reference})  "
             f"{'PASS' if self.bounded_ok else 'FAIL'}"
+        )
+        lines.append("  6. NMDA deposit on pre-spikes ONLY (post-only -> g_nmda=0):")
+        lines.append(
+            f"     peak g_nmda_h (post-only drive) = "
+            f"{self.nmda_peak_post_only_nS:.4f} nS  "
+            f"(expect ~0)  "
+            f"{'PASS' if self.nmda_pre_only_ok else 'FAIL'}"
         )
         lines.append("  -----------------------------------")
         lines.append(f"  verdict: {'PASS' if self.passed else 'FAIL'}")
@@ -372,6 +474,13 @@ def run_plasticity_validation(verbose: bool = True) -> PlasticityValidationRepor
     )
     bounded_ok = (w_bound_final <= 1.0 + 1e-9) and (w_bound_final > 0.9)
 
+    # --- Assay 6: NMDA deposit on pre-spikes ONLY (not post-spikes) ---
+    nmda_peak_post_only = _run_post_only_nmda_probe(
+        nmda_drive_amp_nS=nmda_amp, drive_amp_pA=drive_pA,
+        n_post_spikes=10, inter_spike_ms=20.0, probe_ms=300.0, seed=77,
+    )
+    nmda_pre_only_ok = nmda_peak_post_only < NMDA_DEPOSIT_TOL_NS
+
     rep = PlasticityValidationReport(
         stdp_ltp_delta=stdp_ltp_delta,
         stdp_ltd_delta=stdp_ltd_delta,
@@ -387,6 +496,8 @@ def run_plasticity_validation(verbose: bool = True) -> PlasticityValidationRepor
         bounded_w_final=w_bound_final,
         w_max_reference=1.0,
         bounded_ok=bounded_ok,
+        nmda_peak_post_only_nS=nmda_peak_post_only,
+        nmda_pre_only_ok=nmda_pre_only_ok,
     )
     if verbose:
         print(rep.summary())
