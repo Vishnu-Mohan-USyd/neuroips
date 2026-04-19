@@ -60,6 +60,7 @@ def pair_stdp_with_normalization(
     tau_pre=20 * ms,
     tau_post=20 * ms,
     drive_amp_pA: float = 20.0,
+    nmda_drive_amp_nS: float = 0.0,
     target_channel: str = "soma",
     name: str = "pair_stdp",
 ) -> Synapses:
@@ -87,9 +88,17 @@ def pair_stdp_with_normalization(
         ratio for pair-STDP under Poisson drive (Bi & Poo 1998 ~1.05).
     tau_pre, tau_post : Quantity
     drive_amp_pA : float
-        Amplitude of the postsynaptic current step on each pre-spike, in pA.
-        The effective drive is `w * drive_amp_pA` (so a unit-weight synapse
-        deposits drive_amp_pA picoamps).
+        Amplitude of the postsynaptic AMPA-current step on each pre-spike,
+        in pA. The effective drive is `w * drive_amp_pA` (so a unit-weight
+        synapse deposits drive_amp_pA picoamps into ``I_e_post``).
+    nmda_drive_amp_nS : float, optional
+        If > 0, each pre-spike ALSO deposits `w * nmda_drive_amp_nS` into
+        the postsynaptic ``g_nmda_h`` slow NMDA conductance channel
+        (Wang 2001 bump-attractor recurrent). Requires the postsynaptic
+        group to expose ``g_nmda_h`` (i.e. H_E from `make_h_e_population`)
+        and ``target_channel="soma"``. Plasticity still acts on the AMPA
+        weight only; NMDA co-release scales with the same weight at a
+        fixed ratio.
     target_channel : {"soma", "apical"}
         Which post-synaptic current variable to write into. "soma" targets
         ``I_e_post``; "apical" targets ``I_ap_e_post`` (only valid when the
@@ -117,8 +126,19 @@ def pair_stdp_with_normalization(
         on_pre_drive = f"I_e_post += w * {drive_amp_pA}*pA"
     else:
         on_pre_drive = "v_post += w * mV"
+
+    nmda_deposit = ""
+    if nmda_drive_amp_nS > 0.0:
+        if target_channel != "soma" or "g_nmda_h" not in target_group.variables:
+            raise ValueError(
+                "nmda_drive_amp_nS > 0 requires target with g_nmda_h variable "
+                "(e.g. H_E from make_h_e_population) and target_channel='soma'"
+            )
+        nmda_deposit = f"g_nmda_h_post += w * {nmda_drive_amp_nS}*nS"
+
     on_pre = f"""
     {on_pre_drive}
+    {nmda_deposit}
     Apre += A_plus_eff
     w = clip(w - A_minus_eff * w * Apost, 0, w_max_eff)
     """

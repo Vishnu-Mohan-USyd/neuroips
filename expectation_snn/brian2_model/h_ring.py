@@ -1,13 +1,19 @@
-"""H module: stateful context / prediction ring (plan §1 v5).
+"""H module: stateful context / prediction ring (plan §1 v5, Sprint-3 revised).
 
-Architecture
+Architecture (Sprint-3 revision — Wang 2001 bump-attractor)
 ------------
 - 12 channels, 16 LIF E cells per channel (192 total E).
-- Strong within-channel recurrent E->E for bump persistence (Wang 2001).
-- Weak cross-channel ring E->E for mild competition.
-- One broad H inhibitory pool (16 LIF) for global stability.
-- Cue afferents deposit into H_E's I_e via dedicated Poisson group.
-- Bump half-life target: 200-500 ms after a brief pulse.
+- Recurrent E->E co-releases AMPA (tau_e=5 ms) + NMDA slow (tau_nmda=100 ms)
+  with Mg2+ block — enables persistent single-channel bumps (Wang 2001,
+  Compte et al. 2000). Plasticity (pair-STDP) acts on the AMPA weight only;
+  NMDA co-release scales at a fixed ratio per pre-spike.
+- Inhibition is split into per-channel PV-like subpools (default: 1 cell per
+  channel, 12 cells) + a weaker broad cross-channel pool (4 cells) that
+  prevents simultaneous multi-channel states. Total 16 cells (matches the
+  plan's original count).
+- Cue afferents deposit into H_E's I_e via dedicated Poisson group
+  (AMPA-only; cue learning is feedback_routes' job at Stage 2).
+- Bump half-life target: 200-500 ms after a brief pulse (Stage-1 gate).
 
 Two factory functions:
 - `build_h_r` -> H_R for Kok/Richter leader->trailer sequences.
@@ -19,6 +25,8 @@ training corpus the caller feeds them during Stage 1 (plan §3).
 References
 ----------
 - Wang X-J (2001) Trends Neurosci 24:455 — persistent bumps via strong recurrent E.
+- Compte A et al. (2000) Cereb Cortex 10:910 (PMID 10982751) — ring-attractor WM.
+- Jahr CE, Stevens CF (1990) J Neurosci 10:3178 — NMDA Mg2+ block kinetics.
 - Wimmer et al. 2014 Nat Neurosci 17:431 — bump dynamics noise-robustness.
 - Vogels 2011 (PMID 22075724) — inhibitory control of E/I balance.
 """
@@ -52,6 +60,9 @@ from .plasticity import (
 N_CHANNELS = 12
 CHANNEL_SPACING_RAD = np.pi / N_CHANNELS  # matches V1 ring
 N_E_PER_CHANNEL = 16
+# Inh pool is now structured: cells [0..N_CHANNELS) are per-channel local
+# PV-like subpools (one per channel by default); cells [N_CHANNELS..N_INH_POOL)
+# are broad cross-channel. N_INH_POOL = 16 matches plan's original count.
 N_INH_POOL = 16
 
 DEFAULT_N_CUE_AFFERENTS = 64   # shared over all cues; caller assigns rates
@@ -102,23 +113,34 @@ class HRingConfig:
         Cue -> H_E drive amplitude per spike (pA).
     """
 
-    # H recurrent E<->E
+    # H recurrent E<->E (AMPA + NMDA co-release; plasticity acts on AMPA only).
     w_ee_within_init: float = 0.3
     w_ee_cross_init: float = 0.05
-    drive_amp_ee_pA: float = 25.0
+    drive_amp_ee_pA: float = 25.0        # AMPA per-spike drive (pA)
+    nmda_drive_amp_nS: float = 0.5       # NMDA per-spike conductance (nS)
     ee_w_max: float = 1.5
     ee_A_plus: float = 0.01
     ee_A_minus: float = 0.0105
     target_postsyn_sum: float = 3.0
 
-    # H E <-> inh pool
-    w_e_inh: float = 0.3
-    p_e_inh: float = 0.25
+    # H E <-> inh pool (per-channel local + broad; see module docstring).
+    # Inh cells [0..N_CHANNELS)        -> local, 1 per channel.
+    # Inh cells [N_CHANNELS..N_INH_POOL) -> broad cross-channel.
+    w_e_inh: float = 0.3                 # E -> inh weight (both local & broad)
+    p_e_inh: float = 0.25                # sparsity for E -> broad inh wiring
+                                         # (local E -> inh connectivity is always
+                                         # channel-deterministic; p_e_inh applies
+                                         # only to E -> broad inh cells.)
     drive_amp_e_inh_pA: float = 20.0
-    w_inh_e_init: float = 0.5
+    w_inh_e_init: float = 0.5            # per-channel local inh -> E init weight
+    broad_inh_scale: float = 0.3         # broad inh -> E weight = w_inh_e_init * scale
     drive_amp_inh_e_pA: float = 30.0
     inh_rho_hz: float = 2.0
     inh_eta: float = 5e-3
+    inh_w_max: float = 10.0              # Vogels iSTDP weight ceiling; lower
+                                         # values (~1.5-2.0) prevent the long
+                                         # schedule from over-strengthening
+                                         # inh -> E (kills the bump).
 
     # Cue afferents (cue->H weight governed by feedback_routes at Stage 2)
     w_cue_e_init: float = 0.5
@@ -134,13 +156,14 @@ class HRing:
     inh: NeuronGroup
     cue: PoissonGroup
     # plastic synapses (H STDP + Vogels + cue-elig)
-    ee: Synapses           # E->E (within + cross-channel), pair-STDP
-    e_to_inh: Synapses     # fixed
-    inh_to_e: Synapses     # Vogels iSTDP
+    ee: Synapses           # E->E (within + cross-channel), pair-STDP w/ NMDA co-release
+    e_to_inh: Synapses     # fixed (per-channel local + sparse broad)
+    inh_to_e: Synapses     # Vogels iSTDP (per-channel local + weaker broad)
     cue_to_e: Synapses     # fixed in h_ring.py; elig wiring done elsewhere
     config: HRingConfig
     thetas_rad: np.ndarray        # (N_CHANNELS,)
     e_channel: np.ndarray         # (192,) channel index per E cell
+    inh_channel: np.ndarray       # (N_INH_POOL,) channel per local inh; -1 for broad
     groups: List[object] = field(default_factory=list)
 
 
@@ -153,15 +176,25 @@ def _build_h_ring(name: str, config: Optional[HRingConfig]) -> HRing:
     n_e = N_CHANNELS * N_E_PER_CHANNEL
     e_channel = np.repeat(np.arange(N_CHANNELS), N_E_PER_CHANNEL)
 
+    # Inh pool structure: cells [0..N_CHANNELS) local (1 per channel);
+    # cells [N_CHANNELS..N_INH_POOL) broad cross-channel.
+    n_inh_local = N_CHANNELS
+    n_inh_broad = N_INH_POOL - N_CHANNELS    # e.g. 16 - 12 = 4
+    inh_channel = np.concatenate([
+        np.arange(N_CHANNELS),                    # local: inh[c] -> ch c
+        -1 * np.ones(n_inh_broad, dtype=np.int64) # broad: -1 sentinel
+    ])
+
     # --- populations
     e = make_h_e_population(n_e, name=f"{name}_e")
     inh = make_h_inh_population(N_INH_POOL, name=f"{name}_inh")
     cue = PoissonGroup(cfg.n_cue_afferents, rates=0 * Hz, name=f"{name}_cue")
 
-    # --- E <-> E : pair-STDP, within-channel all-to-all (except self)
-    #     + cross-channel nearest-neighbour (ring).
-    #     We connect within and cross as one Synapses object then assign
-    #     initial weights by post/pre channel labels.
+    # --- E <-> E : pair-STDP with AMPA + NMDA co-release.
+    #     Plasticity acts on the AMPA (w) channel only; NMDA co-release scales
+    #     with the same w at a fixed drive per spike. Within-channel all-to-all
+    #     (except self) + cross-channel ring nearest-neighbour. Re-assign w by
+    #     (pre, post) channel pair below.
     ee = pair_stdp_with_normalization(
         e, e,
         connectivity="i != j",
@@ -171,6 +204,7 @@ def _build_h_ring(name: str, config: Optional[HRingConfig]) -> HRing:
         A_minus=cfg.ee_A_minus,
         tau_pre=20 * ms, tau_post=20 * ms,
         drive_amp_pA=cfg.drive_amp_ee_pA,
+        nmda_drive_amp_nS=cfg.nmda_drive_amp_nS,   # NMDA co-release (Wang 2001)
         target_channel="soma",
         name=f"{name}_ee",
     )
@@ -187,28 +221,83 @@ def _build_h_ring(name: str, config: Optional[HRingConfig]) -> HRing:
              np.where(dc == 1, cfg.w_ee_cross_init, 0.0))
     ee.w[:] = w_init
 
-    # --- E -> inh pool (fixed)
+    # --- E -> inh pool (fixed). Per-channel local: every E cell in channel
+    # c drives inh[c]. Broad: sparse E -> inh[N_CHANNELS..N_INH_POOL) at
+    # probability p_e_inh.
     e_to_inh = Synapses(
         e, inh,
         model="w : 1",
         on_pre=f"I_e_post += w * {cfg.drive_amp_e_inh_pA}*pA",
         name=f"{name}_e_to_inh",
     )
-    e_to_inh.connect(p=cfg.p_e_inh)
+    i_ei: list[int] = []
+    j_ei: list[int] = []
+    # Local per-channel E -> inh
+    for c in range(N_CHANNELS):
+        for i_e in range(c * N_E_PER_CHANNEL, (c + 1) * N_E_PER_CHANNEL):
+            i_ei.append(i_e)
+            j_ei.append(c)   # inh[c] is the local for channel c
+    # Broad E -> inh (sparse, inh cells [N_CHANNELS..N_INH_POOL))
+    rng = np.random.default_rng(12345)   # deterministic for this wiring
+    for i_e in range(n_e):
+        for j_inh in range(N_CHANNELS, N_INH_POOL):
+            if rng.random() < cfg.p_e_inh:
+                i_ei.append(i_e)
+                j_ei.append(j_inh)
+    e_to_inh.connect(i=np.asarray(i_ei, dtype=np.int64),
+                     j=np.asarray(j_ei, dtype=np.int64))
     e_to_inh.w = cfg.w_e_inh
 
-    # --- inh pool -> E (Vogels iSTDP, Stage-0 stabilizer)
-    inh_to_e = vogels_istdp(
+    # --- inh pool -> E (Vogels iSTDP). Per-channel local inh[c] targets only
+    # its own channel's E cells at full weight. Broad inh cells target all
+    # E cells at reduced weight (broad_inh_scale * w_inh_e_init).
+    # Both wired inside ONE Synapses so the Vogels traces are computed per
+    # (i, j) pair consistently.
+    alpha = 2.0 * float(cfg.inh_rho_hz * Hz * 20 * ms)
+    inh_to_e = Synapses(
         inh, e,
-        connectivity="True",
-        w_init=cfg.w_inh_e_init,
-        w_max=10.0,
-        eta=cfg.inh_eta,
-        rho=cfg.inh_rho_hz * Hz,
-        tau=20 * ms,
-        drive_amp_pA=cfg.drive_amp_inh_e_pA,
+        model="""
+        w : 1
+        dxpre/dt  = -xpre  / tau_vogels : 1 (event-driven)
+        dxpost/dt = -xpost / tau_vogels : 1 (event-driven)
+        """,
+        on_pre=f"""
+        I_i_post += w * {cfg.drive_amp_inh_e_pA}*pA
+        xpre += 1.0
+        w = clip(w + eta_eff * (xpost - alpha_eff), 0, w_max_eff)
+        """,
+        on_post="""
+        xpost += 1.0
+        w = clip(w + eta_eff * xpre, 0, w_max_eff)
+        """,
+        method="linear",
+        namespace={
+            "eta_eff": cfg.inh_eta,
+            "alpha_eff": alpha,
+            "w_max_eff": cfg.inh_w_max,
+            "tau_vogels": 20 * ms,
+        },
         name=f"{name}_inh_to_e",
     )
+    i_ie: list[int] = []
+    j_ie: list[int] = []
+    w_ie: list[float] = []
+    # Local per-channel: inh[c] -> all E cells in channel c
+    for c in range(N_CHANNELS):
+        for j_e in range(c * N_E_PER_CHANNEL, (c + 1) * N_E_PER_CHANNEL):
+            i_ie.append(c)
+            j_ie.append(j_e)
+            w_ie.append(cfg.w_inh_e_init)
+    # Broad: inh cells [N_CHANNELS..N_INH_POOL) -> all E cells
+    w_broad = cfg.w_inh_e_init * cfg.broad_inh_scale
+    for i_inh in range(N_CHANNELS, N_INH_POOL):
+        for j_e in range(n_e):
+            i_ie.append(i_inh)
+            j_ie.append(j_e)
+            w_ie.append(w_broad)
+    inh_to_e.connect(i=np.asarray(i_ie, dtype=np.int64),
+                     j=np.asarray(j_ie, dtype=np.int64))
+    inh_to_e.w[:] = np.asarray(w_ie, dtype=np.float64)
 
     # --- cue -> E  (placeholder fixed channel-matched block wiring;
     #                plastic cue->H synapses are built in feedback_routes
@@ -239,6 +328,7 @@ def _build_h_ring(name: str, config: Optional[HRingConfig]) -> HRing:
         e=e, inh=inh, cue=cue,
         ee=ee, e_to_inh=e_to_inh, inh_to_e=inh_to_e, cue_to_e=cue_to_e,
         config=cfg, thetas_rad=thetas_rad, e_channel=e_channel,
+        inh_channel=inh_channel,
     )
     ring.groups = [e, inh, cue, ee, e_to_inh, inh_to_e, cue_to_e]
     return ring
