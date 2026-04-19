@@ -25,10 +25,14 @@ import numpy as np
 from brian2 import (
     Network,
     NetworkOperation,
+    PoissonGroup,
     SpikeMonitor,
+    Synapses,
     defaultclock,
     Hz,
     ms,
+    mV,
+    nS,
     pA,
     prefs,
     seed as b2_seed,
@@ -58,7 +62,10 @@ from .stimulus import (
     RICHTER_ORIENTATIONS_DEG,
     TANG_ORIENTATIONS_DEG,
 )
-from .plasticity import normalize_postsyn_sum
+from .plasticity import (
+    normalize_postsyn_sum,
+    eligibility_trace_cue_rule,
+)
 from ..validation.stage_0_gate import (  # type: ignore[relative-beyond-top-level]
     check_v1_e_rate_band,
     check_v1_pv_rate_band,
@@ -79,6 +86,14 @@ from ..validation.stage_1_gate import (  # type: ignore[relative-beyond-top-leve
     aggregate as aggregate_s1,
     Stage1Report,
     compute_bump_persistence_ms,
+)
+from ..validation.stage_2_gate import (  # type: ignore[relative-beyond-top-level]
+    check_cue_selectivity,
+    check_bump_fraction,
+    check_hr_weights_unchanged,
+    check_no_runaway as check_no_runaway_s2,
+    aggregate as aggregate_s2,
+    Stage2Report,
 )
 
 
@@ -1120,12 +1135,607 @@ def run_stage_1_ht(
     )
 
 
+# -- Stage-2: cue learning on H_R ------------------------------------------
+
+# Stage-2 paradigm constants (plan §3; Lead dispatch for Sprint 4).
+# H and V1 share 12-channel geometry at 15° spacing, so channel c has pref
+# orientation c * 15°. 45° → channel 3; 135° → channel 9.
+STAGE2_CUE_CHANNELS: Tuple[int, int] = (3, 9)
+STAGE2_N_CUE_AFFERENTS: int = 32
+STAGE2_CUE_ACTIVE_HZ: float = 80.0       # per-afferent rate when cue "on"
+# Cue drive is tuned so the cue alone is BELOW rheobase in the untrained
+# ring -- LTP only happens when the teacher fires matched-channel H_E
+# cells during the grating epoch (which pairs with still-elevated elig
+# from the cue). Without this, the broad all-to-all cue LTPs every
+# cue->H synapse, saturating w_max and washing out selectivity.
+STAGE2_CUE_DRIVE_PA: float = 20.0        # H_E rheobase ~200 pA. Cue-alone tonic:
+                                         # 32 * 80 Hz * w * 20 pA * 5 ms = w * 256 pA.
+                                         # At w_init=0.1: 25.6 pA (clearly sub);
+                                         # at trained matched w≈1.0: 256 pA (supra);
+                                         # at trained unmatched w≈0.4: 102 pA (sub).
+STAGE2_TAU_ELIG_MS: float = 1500.0       # elig decay (plan; validated in Sprint-4 Step 1)
+STAGE2_LR: float = 0.0002                # Per matched synapse, per valid trial:
+                                         # ~15 post_spikes/cell * 0.43 avg elig *
+                                         # 0.0002 = +0.0013 LTP. 150 valid trials -->
+                                         # +0.19 LTP. Plus positive-feedback from
+                                         # cue-alone firing (grows nonlinearly once
+                                         # w crosses ~1.2). Target matched w ~1.5.
+                                         # Unmatched 50-trial LTP ~0.065, no feedback.
+STAGE2_W_INIT: float = 0.1               # Low init so untrained cue is sub-rheobase
+                                         # (25.6 pA tonic << 200 pA rheobase).
+STAGE2_W_MAX: float = 2.0
+STAGE2_TEACHER_W: float = 1.0            # V1 -> H_R fixed teacher weight (unused
+                                         # after direct-injection refactor)
+STAGE2_TEACHER_DRIVE_PA: float = 150.0   # V1 -> H_R per-spike drive (unused)
+STAGE2_TEACHER_BIAS_PA: float = 300.0    # DC bias injected on matched-channel H_E
+                                         # cells during grating epoch. Replaces the
+                                         # V1 -> H_R Poisson teacher: cleaner (no
+                                         # V1 tuning spillover to adjacent channels)
+                                         # and faster (no V1 physics). H_E rheobase
+                                         # is I_rheo=gL*(Vt-EL)=10*20=200 pA; 300 pA
+                                         # is 1.5x rheobase -> sustained ~30 Hz.
+STAGE2_VALID_FRAC: float = 0.75          # 75% of training trials = cue-matched
+STAGE2_CUE_MS: float = 500.0
+STAGE2_GAP_MS: float = 500.0
+STAGE2_GRATING_MS: float = 500.0
+STAGE2_ITI_MS: float = 2500.0
+STAGE2_N_PROBES_PER_CUE: int = 20
+STAGE2_PROBE_GAP_MS: float = 500.0
+
+
+@dataclass
+class Stage2Result:
+    """Return value of `run_stage_2_cue`."""
+    seed: int
+    report: Stage2Report
+    v1_cfg: V1RingConfig
+    h_cfg: HRingConfig
+    diagnostics: Dict[str, float] = field(default_factory=dict)
+    checkpoint_path: Optional[str] = None
+
+
+def _freeze_v1_ring_plasticity(ring: V1Ring) -> None:
+    """Freeze Vogels iSTDP on V1 PV→E (post-Stage-0)."""
+    ring.pv_to_e.active = False
+
+
+def _freeze_h_ring_plasticity(ring: HRing) -> None:
+    """Freeze H-ring plasticity (pair-STDP on ee; Vogels on inh→E).
+
+    Synaptic drive (AMPA + NMDA co-release on ee; inhibitory current on
+    inh→E) still flows; only the weight-update terms are zeroed via
+    namespace mutation. This preserves the Stage-1 bump-attractor
+    dynamics while keeping the weights fixed as Lead's gate requires
+    (`|Δw|/max(|w|) < 0.01`).
+    """
+    ring.ee.namespace["A_plus_eff"] = 0.0
+    ring.ee.namespace["A_minus_eff"] = 0.0
+    ring.inh_to_e.namespace["eta_eff"] = 0.0
+
+
+def _load_stage0_v1(ring: V1Ring, ckpt_path: str) -> Tuple[float, int]:
+    """Restore V1 E bias + PV→E weights from Stage-0 checkpoint.
+
+    Returns
+    -------
+    (bias_pA, n_pv_to_e_synapses)
+    """
+    data = np.load(ckpt_path)
+    bias = float(data["bias_pA"])
+    ring.e.I_bias = bias * pA
+    pv_w = np.asarray(data["pv_to_e_w"], dtype=np.float64)
+    live = np.asarray(ring.pv_to_e.w[:])
+    if pv_w.shape != live.shape:
+        raise ValueError(
+            f"Stage-0 pv_to_e_w shape {pv_w.shape} != live {live.shape}"
+        )
+    ring.pv_to_e.w[:] = pv_w
+    return bias, pv_w.size
+
+
+def _load_stage1_hr(ring: HRing, ckpt_path: str) -> int:
+    """Restore H_R E→E weights from Stage-1 H_R checkpoint."""
+    data = np.load(ckpt_path)
+    ee_w = np.asarray(data["ee_w_final"], dtype=np.float64)
+    live = np.asarray(ring.ee.w[:])
+    if ee_w.shape != live.shape:
+        raise ValueError(
+            f"Stage-1 H_R ee_w_final shape {ee_w.shape} != live {live.shape}"
+        )
+    ring.ee.w[:] = ee_w
+    return ee_w.size
+
+
+def _build_v1_to_hr_teacher(
+    v1_ring: V1Ring,
+    h_ring: HRing,
+    teacher_w: float = STAGE2_TEACHER_W,
+    drive_pA: float = STAGE2_TEACHER_DRIVE_PA,
+) -> Synapses:
+    """Fixed channel-matched V1 E → H_R E teacher projection.
+
+    Each V1 E cell in channel c connects to every H_R E cell in the same
+    channel c (V1 and H share 12-channel 15°-spacing geometry). Weights
+    are fixed (not plastic). During the grating epoch, V1 activity at
+    the grating θ drives the matched H_R channel strongly enough to
+    evoke a bump; during cue / gap / ITI windows V1 is silent so the
+    teacher contributes nothing.
+    """
+    teacher = Synapses(
+        v1_ring.e, h_ring.e,
+        model="w : 1",
+        on_pre=f"I_e_post += w * {drive_pA}*pA",
+        name="s2_v1_to_hr_teacher",
+    )
+    i_list: List[int] = []
+    j_list: List[int] = []
+    for c in range(V1_N_CHANNELS):
+        for i_v in range(c * V1_N_E_PER, (c + 1) * V1_N_E_PER):
+            for j_h in range(c * H_N_E_PER, (c + 1) * H_N_E_PER):
+                i_list.append(i_v)
+                j_list.append(j_h)
+    teacher.connect(
+        i=np.asarray(i_list, dtype=np.int64),
+        j=np.asarray(j_list, dtype=np.int64),
+    )
+    teacher.w = teacher_w
+    return teacher
+
+
+def _build_stage2_cue_pathway(
+    h_ring: HRing,
+) -> Tuple[Tuple[PoissonGroup, PoissonGroup], Tuple[Synapses, Synapses]]:
+    """Build the two cue populations + plastic eligibility-trace synapses.
+
+    cue_A (Poisson, 32 afferents) and cue_B (Poisson, 32 afferents) each
+    project all-to-all to all 192 H_R E cells via
+    `eligibility_trace_cue_rule` (tau_elig=1500 ms, lr=0.08, w_init=0.2,
+    w_max=2.0). Learning is driven by post-spikes: the V1→H_R teacher
+    fires the matched channel on valid trials while elig from the
+    earlier cue is still non-zero, producing LTP on the matched edges.
+    """
+    cue_A = PoissonGroup(
+        STAGE2_N_CUE_AFFERENTS, rates=0 * Hz, name="s2_cue_A",
+    )
+    cue_B = PoissonGroup(
+        STAGE2_N_CUE_AFFERENTS, rates=0 * Hz, name="s2_cue_B",
+    )
+    elig_A = eligibility_trace_cue_rule(
+        cue_A, h_ring.e,
+        connectivity="True",
+        w_init=STAGE2_W_INIT,
+        w_max=STAGE2_W_MAX,
+        tau_elig=STAGE2_TAU_ELIG_MS * ms,
+        learning_rate=STAGE2_LR,
+        drive_amp_pA=STAGE2_CUE_DRIVE_PA,
+        name="s2_cue_elig_A",
+    )
+    elig_B = eligibility_trace_cue_rule(
+        cue_B, h_ring.e,
+        connectivity="True",
+        w_init=STAGE2_W_INIT,
+        w_max=STAGE2_W_MAX,
+        tau_elig=STAGE2_TAU_ELIG_MS * ms,
+        learning_rate=STAGE2_LR,
+        drive_amp_pA=STAGE2_CUE_DRIVE_PA,
+        name="s2_cue_elig_B",
+    )
+    return (cue_A, cue_B), (elig_A, elig_B)
+
+
+def _stage2_trial_plan(
+    rng: np.random.Generator,
+    n_trials: int,
+    valid_frac: float = STAGE2_VALID_FRAC,
+) -> Dict[str, np.ndarray]:
+    """Balanced training schedule: 50% cue_A / 50% cue_B, shuffled.
+
+    Per cue: `valid_frac` of trials present the cue-matched grating θ
+    (e.g. cue_A + 45° grating); the rest present the orthogonal θ
+    (e.g. cue_A + 135° grating).
+    """
+    if n_trials % 2 != 0:
+        raise ValueError(f"n_trials must be even (got {n_trials})")
+    half = n_trials // 2
+    cue_label = np.concatenate([
+        np.zeros(half, dtype=np.int64),
+        np.ones(half, dtype=np.int64),
+    ])
+    valid = np.zeros(n_trials, dtype=bool)
+    n_valid_per_cue = int(round(half * valid_frac))
+    idx_A = np.where(cue_label == 0)[0]
+    idx_B = np.where(cue_label == 1)[0]
+    valid[rng.choice(idx_A, size=n_valid_per_cue, replace=False)] = True
+    valid[rng.choice(idx_B, size=n_valid_per_cue, replace=False)] = True
+    perm = rng.permutation(n_trials)
+    return {
+        "cue_label": cue_label[perm],
+        "valid": valid[perm],
+    }
+
+
+def run_stage_2_cue(
+    seed: int = 42,
+    n_train_trials: int = 200,
+    stage0_ckpt: Optional[str] = None,
+    stage1_hr_ckpt: Optional[str] = None,
+    checkpoint_dir: Optional[str] = None,
+    v1_cfg: Optional[V1RingConfig] = None,
+    h_cfg: Optional[HRingConfig] = None,
+    verbose: bool = True,
+) -> Stage2Result:
+    """Stage-2 driver: cue learning on H_R (plan §3, Sprint-4).
+
+    Workflow
+    --------
+    1. Build V1 ring + H_R ring; load Stage-0 (V1 bias + PV→E weights)
+       and Stage-1 H_R (E→E recurrent weights) from checkpoints.
+    2. Freeze ALL existing plasticity:
+        - V1 PV→E Vogels iSTDP  →  `pv_to_e.active=False`
+        - H_R E→E pair-STDP     →  `A_plus_eff = A_minus_eff = 0`
+        - H_R inh→E Vogels iSTDP→  `eta_eff = 0`
+    3. Wire plastic cue pathway: 2 Poisson cue populations → H_R E
+       all-to-all via `eligibility_trace_cue_rule` (τ=1500 ms, lr=0.08).
+    4. Wire fixed V1 → H_R teacher: channel-matched within-channel
+       all-to-all (V1 E ch c → H_R E ch c).
+    5. Run `n_train_trials` trials of
+       (500 ms cue → 500 ms gap → 500 ms grating → 2500 ms ITI).
+       cue_A → 45° (ch 3); cue_B → 135° (ch 9). 75% of trials are valid
+       (grating matches cue's predicted θ); 25% are invalid (orthogonal).
+    6. Post-training: 40 held-out cue-alone probes (20 per cue) measure
+       matched- vs unmatched-channel H_R rates over the 500 ms cue
+       window.
+    7. Aggregate Stage-2 gate:
+        - cue_selectivity_d (d ≥ 0.2, bootstrap 95% CI > 0)
+        - bump_evocation_frac (matched rate > 5 Hz AND matched = peak,
+          ≥ 80 pct of probes)
+        - hr_weights_unchanged (max|Δw|/max|w_before| < 0.01)
+        - no_runaway (H_E + H_inh rates < 80 Hz during training)
+    """
+    prefs.codegen.target = "numpy"
+    defaultclock.dt = 0.1 * ms
+    b2_seed(seed); np.random.seed(seed)
+    rng = np.random.default_rng(seed)
+
+    v1_cfg = v1_cfg or V1RingConfig()
+    h_cfg = _stage1_h_cfg(h_cfg)
+
+    ckpt_dir = checkpoint_dir or CHECKPOINT_DIR_DEFAULT
+    stage0_ckpt = stage0_ckpt or os.path.join(
+        ckpt_dir, f"stage_0_seed{seed}.npz",
+    )
+    stage1_hr_ckpt = stage1_hr_ckpt or os.path.join(
+        ckpt_dir, f"stage_1_hr_seed{seed}.npz",
+    )
+    for p in (stage0_ckpt, stage1_hr_ckpt):
+        if not os.path.exists(p):
+            raise FileNotFoundError(
+                f"Stage-2 requires upstream checkpoint: {p}"
+            )
+
+    log: List[str] = [
+        f"Stage-2 driver: seed={seed}, n_train_trials={n_train_trials}",
+        f"  Stage-0 ckpt: {stage0_ckpt}",
+        f"  Stage-1 H_R ckpt: {stage1_hr_ckpt}",
+        f"  Trial: {STAGE2_CUE_MS:.0f}ms cue → {STAGE2_GAP_MS:.0f}ms gap → "
+        f"{STAGE2_GRATING_MS:.0f}ms grating → {STAGE2_ITI_MS:.0f}ms ITI",
+        f"  Cues: A→{STAGE2_CUE_CHANNELS[0]*15}° (ch{STAGE2_CUE_CHANNELS[0]}), "
+        f"B→{STAGE2_CUE_CHANNELS[1]*15}° (ch{STAGE2_CUE_CHANNELS[1]});  "
+        f"valid_frac={STAGE2_VALID_FRAC:.2f}",
+    ]
+
+    # ---- Build + load + freeze ---------------------------------------
+    v1_ring = build_v1_ring(config=v1_cfg, name_prefix="v1_s2")
+    h_ring = build_h_r(config=h_cfg)
+    silence_cue(h_ring)   # built-in fixed cue pathway silenced all run
+
+    bias_pA_, pv_w_n = _load_stage0_v1(v1_ring, stage0_ckpt)
+    ee_n = _load_stage1_hr(h_ring, stage1_hr_ckpt)
+    log.append(f"  loaded: V1 I_bias={bias_pA_:.1f} pA, pv→e.w n={pv_w_n}; "
+               f"H_R ee.w n={ee_n}")
+
+    _freeze_v1_ring_plasticity(v1_ring)
+    _freeze_h_ring_plasticity(h_ring)
+    log.append("  froze: V1 pv→e iSTDP, H_R ee pair-STDP, H_R inh→e Vogels")
+
+    # ---- Plastic cue pathway -----------------------------------------
+    (cue_A, cue_B), (elig_A, elig_B) = _build_stage2_cue_pathway(h_ring)
+
+    # Teacher: direct DC bias injection on matched-channel H_E cells
+    # during the grating epoch. V1→H_R Poisson teacher (broad due to V1
+    # ±15° tuning width) is replaced here because it produced cross-
+    # channel LTP that saturated weights. V1 ring is still built/loaded/
+    # frozen but dropped from the simulation Network.
+    matched_cells_by_cue = {
+        0: np.arange(STAGE2_CUE_CHANNELS[0] * H_N_E_PER,
+                     (STAGE2_CUE_CHANNELS[0] + 1) * H_N_E_PER, dtype=np.int64),
+        1: np.arange(STAGE2_CUE_CHANNELS[1] * H_N_E_PER,
+                     (STAGE2_CUE_CHANNELS[1] + 1) * H_N_E_PER, dtype=np.int64),
+    }
+
+    # Snapshot H_R ee.w BEFORE training for drift check.
+    ee_w_before = np.asarray(h_ring.ee.w[:], dtype=np.float64).copy()
+
+    # ---- Monitors + Network ------------------------------------------
+    h_e_mon = SpikeMonitor(h_ring.e, name="s2_h_e")
+    h_inh_mon = SpikeMonitor(h_ring.inh, name="s2_h_inh")
+
+    # V1 ring NOT in Network: teacher is direct injection.
+    net = Network(
+        *h_ring.groups,
+        cue_A, cue_B, elig_A, elig_B,
+        h_e_mon, h_inh_mon,
+    )
+
+    # ---- Training schedule -------------------------------------------
+    plan = _stage2_trial_plan(rng, n_train_trials, STAGE2_VALID_FRAC)
+    trial_ms = (STAGE2_CUE_MS + STAGE2_GAP_MS
+                + STAGE2_GRATING_MS + STAGE2_ITI_MS)
+    log.append(f"  trials: {n_train_trials} "
+               f"(valid={int(plan['valid'].sum())}, "
+               f"invalid={int((~plan['valid']).sum())}); "
+               f"sim-time budget = {trial_ms*n_train_trials/1000.0:.0f} s")
+
+    train_start_abs_ms = float(net.t / ms)
+    t_wall0 = time.time()
+    for k in range(n_train_trials):
+        cue_idx = int(plan["cue_label"][k])
+        is_valid = bool(plan["valid"][k])
+        theta_cue_rad = STAGE2_CUE_CHANNELS[cue_idx] * (np.pi / H_N_CHANNELS)
+        theta_orth_rad = STAGE2_CUE_CHANNELS[1 - cue_idx] * (np.pi / H_N_CHANNELS)
+        grating_theta_rad = theta_cue_rad if is_valid else theta_orth_rad
+
+        # (0) per-trial reset: kill any lingering bump + elig from prior
+        # trial so each trial starts with H_R at resting state and no
+        # residual eligibility (prevents cross-trial LTP bleed-through).
+        h_ring.e.V = -70.0 * mV
+        h_ring.e.I_e = 0 * pA
+        h_ring.e.I_i = 0 * pA
+        h_ring.e.g_nmda_h = 0 * nS
+        h_ring.inh.V = -65.0 * mV
+        h_ring.inh.I_e = 0 * pA
+        h_ring.inh.I_i = 0 * pA
+        elig_A.elig = 0.0
+        elig_B.elig = 0.0
+
+        # (1) cue epoch: fire the selected cue; teacher off
+        if cue_idx == 0:
+            cue_A.rates = STAGE2_CUE_ACTIVE_HZ * Hz
+            cue_B.rates = 0 * Hz
+        else:
+            cue_A.rates = 0 * Hz
+            cue_B.rates = STAGE2_CUE_ACTIVE_HZ * Hz
+        net.run(STAGE2_CUE_MS * ms)
+
+        # (2) gap: everything silent
+        cue_A.rates = 0 * Hz
+        cue_B.rates = 0 * Hz
+        net.run(STAGE2_GAP_MS * ms)
+
+        # (3) grating: teacher fires matched channel via DC bias injection
+        # (channel determined by validity: valid -> cue's matched channel,
+        # invalid -> orthogonal channel)
+        matched_ch_this_trial = (
+            STAGE2_CUE_CHANNELS[cue_idx] if is_valid
+            else STAGE2_CUE_CHANNELS[1 - cue_idx]
+        )
+        teacher_cells = np.arange(
+            matched_ch_this_trial * H_N_E_PER,
+            (matched_ch_this_trial + 1) * H_N_E_PER, dtype=np.int64,
+        )
+        h_ring.e.I_bias[teacher_cells] = STAGE2_TEACHER_BIAS_PA * pA
+        net.run(STAGE2_GRATING_MS * ms)
+
+        # (4) ITI: teacher off
+        h_ring.e.I_bias[teacher_cells] = 0 * pA
+        net.run(STAGE2_ITI_MS * ms)
+
+        step = max(1, n_train_trials // 10)
+        if verbose and (k + 1) % step == 0:
+            elapsed = time.time() - t_wall0
+            # diagnostic: mean cue_A weight on matched (ch3) vs unmatched (ch9)
+            w_A = np.asarray(elig_A.w[:], dtype=np.float64)
+            w_A_mat = w_A.reshape(STAGE2_N_CUE_AFFERENTS, -1)
+            w_A_per_h = w_A_mat.mean(axis=0)
+            wA_match = float(w_A_per_h[h_ring.e_channel == STAGE2_CUE_CHANNELS[0]].mean())
+            wA_unmatch = float(w_A_per_h[h_ring.e_channel == STAGE2_CUE_CHANNELS[1]].mean())
+            print(f"    trial {k+1:4d}/{n_train_trials}  wall={elapsed:6.0f}s  "
+                  f"cue={'A' if cue_idx == 0 else 'B'}  valid={is_valid}  "
+                  f"grating_θ={np.rad2deg(grating_theta_rad):5.1f}°  "
+                  f"wA_matched={wA_match:.3f}  wA_unmatched={wA_unmatch:.3f}")
+
+    train_wall_s = time.time() - t_wall0
+    train_end_abs_ms = float(net.t / ms)
+    log.append(f"  training wall-clock: {train_wall_s:.0f} s "
+               f"({train_wall_s / n_train_trials:.2f} s/trial)")
+
+    # ---- Training-window runaway guard -------------------------------
+    e_t = np.asarray(h_e_mon.t / ms, dtype=np.float64)
+    inh_t = np.asarray(h_inh_mon.t / ms, dtype=np.float64)
+    train_dur_s = max((train_end_abs_ms - train_start_abs_ms) / 1000.0, 1e-6)
+    n_e_train = int(((e_t >= train_start_abs_ms) & (e_t < train_end_abs_ms)).sum())
+    n_inh_train = int(((inh_t >= train_start_abs_ms) & (inh_t < train_end_abs_ms)).sum())
+    h_e_rate = n_e_train / (len(h_ring.e) * train_dur_s)
+    h_inh_rate = n_inh_train / (len(h_ring.inh) * train_dur_s)
+    log.append(f"  train H rates: E={h_e_rate:.2f} Hz, inh={h_inh_rate:.2f} Hz")
+
+    # ---- Cue-alone probes --------------------------------------------
+    n_probes_total = 2 * STAGE2_N_PROBES_PER_CUE
+    probe_cue_order = np.concatenate([
+        np.zeros(STAGE2_N_PROBES_PER_CUE, dtype=np.int64),
+        np.ones(STAGE2_N_PROBES_PER_CUE, dtype=np.int64),
+    ])
+    probe_cue_order = probe_cue_order[rng.permutation(n_probes_total)]
+
+    probe_starts: List[float] = []
+    probe_labels: List[int] = []
+    for k in range(n_probes_total):
+        # Quiet gap before probe to drain any lingering bump, then full
+        # state reset so prior probe's bump cannot contaminate this one.
+        cue_A.rates = 0 * Hz
+        cue_B.rates = 0 * Hz
+        net.run(STAGE2_PROBE_GAP_MS * ms)
+        h_ring.e.V = -70.0 * mV
+        h_ring.e.I_e = 0 * pA
+        h_ring.e.I_i = 0 * pA
+        h_ring.e.g_nmda_h = 0 * nS
+        h_ring.inh.V = -65.0 * mV
+        h_ring.inh.I_e = 0 * pA
+        h_ring.inh.I_i = 0 * pA
+        t_probe_start = float(net.t / ms)
+        cue_idx = int(probe_cue_order[k])
+        if cue_idx == 0:
+            cue_A.rates = STAGE2_CUE_ACTIVE_HZ * Hz
+        else:
+            cue_B.rates = STAGE2_CUE_ACTIVE_HZ * Hz
+        net.run(STAGE2_CUE_MS * ms)
+        cue_A.rates = 0 * Hz
+        cue_B.rates = 0 * Hz
+        probe_starts.append(t_probe_start)
+        probe_labels.append(cue_idx)
+
+    probe_starts_arr = np.asarray(probe_starts, dtype=np.float64)
+    probe_labels_arr = np.asarray(probe_labels, dtype=np.int64)
+
+    # ---- Per-probe per-channel H_R rates ------------------------------
+    e_spike_i = np.asarray(h_e_mon.i[:], dtype=np.int64)
+    e_spike_t = np.asarray(h_e_mon.t / ms, dtype=np.float64)
+    e_channel = h_ring.e_channel
+
+    matched_rates = np.zeros(n_probes_total, dtype=np.float64)
+    unmatched_rates = np.zeros(n_probes_total, dtype=np.float64)
+    peak_channels = np.zeros(n_probes_total, dtype=np.int64)
+    matched_channels = np.zeros(n_probes_total, dtype=np.int64)
+
+    for k in range(n_probes_total):
+        t0 = probe_starts_arr[k]
+        t1 = t0 + STAGE2_CUE_MS
+        cue_idx = int(probe_labels_arr[k])
+        matched_ch = STAGE2_CUE_CHANNELS[cue_idx]
+        unmatched_ch = STAGE2_CUE_CHANNELS[1 - cue_idx]
+        per_ch_rate = _per_channel_rate_in_window(
+            e_spike_i, e_spike_t, e_channel,
+            t0, t1, H_N_CHANNELS, H_N_E_PER,
+        )
+        matched_rates[k] = per_ch_rate[matched_ch]
+        unmatched_rates[k] = per_ch_rate[unmatched_ch]
+        peak_channels[k] = int(np.argmax(per_ch_rate))
+        matched_channels[k] = matched_ch
+
+    log.append(
+        f"  probes: {n_probes_total} total "
+        f"(A={int((probe_labels_arr == 0).sum())}, "
+        f"B={int((probe_labels_arr == 1).sum())}); "
+        f"matched mean={matched_rates.mean():.2f} Hz, "
+        f"unmatched mean={unmatched_rates.mean():.2f} Hz"
+    )
+
+    # ---- Weight drift ------------------------------------------------
+    ee_w_after = np.asarray(h_ring.ee.w[:], dtype=np.float64)
+    max_drift = float(np.max(np.abs(ee_w_after - ee_w_before)))
+    log.append(f"  ee.w drift: max|Δw| = {max_drift:.3e}")
+
+    # ---- Cue weight diagnostics --------------------------------------
+    cue_A_w = np.asarray(elig_A.w[:], dtype=np.float64)
+    cue_B_w = np.asarray(elig_B.w[:], dtype=np.float64)
+    # eligibility cue→H is all-to-all, flat array N_cue * N_h_e.
+    # Reshape as (N_cue, N_h_e) to inspect channel-specific means.
+    cue_A_w_mat = cue_A_w.reshape(STAGE2_N_CUE_AFFERENTS, -1)
+    cue_B_w_mat = cue_B_w.reshape(STAGE2_N_CUE_AFFERENTS, -1)
+    # Mean incoming cue→H weight per post-H-cell, re-indexed by channel.
+    mean_w_A_per_h = cue_A_w_mat.mean(axis=0)
+    mean_w_B_per_h = cue_B_w_mat.mean(axis=0)
+    mean_w_A_per_ch = np.array([
+        mean_w_A_per_h[e_channel == c].mean() for c in range(H_N_CHANNELS)
+    ])
+    mean_w_B_per_ch = np.array([
+        mean_w_B_per_h[e_channel == c].mean() for c in range(H_N_CHANNELS)
+    ])
+    log.append(
+        f"  cue_A w per-ch: matched ch{STAGE2_CUE_CHANNELS[0]}="
+        f"{mean_w_A_per_ch[STAGE2_CUE_CHANNELS[0]]:.3f}, "
+        f"unmatched ch{STAGE2_CUE_CHANNELS[1]}="
+        f"{mean_w_A_per_ch[STAGE2_CUE_CHANNELS[1]]:.3f}"
+    )
+    log.append(
+        f"  cue_B w per-ch: matched ch{STAGE2_CUE_CHANNELS[1]}="
+        f"{mean_w_B_per_ch[STAGE2_CUE_CHANNELS[1]]:.3f}, "
+        f"unmatched ch{STAGE2_CUE_CHANNELS[0]}="
+        f"{mean_w_B_per_ch[STAGE2_CUE_CHANNELS[0]]:.3f}"
+    )
+
+    # ---- Gate checks + aggregation -----------------------------------
+    sel_check = check_cue_selectivity(matched_rates, unmatched_rates)
+    bump_check = check_bump_fraction(
+        matched_rates, peak_channels, matched_channels,
+    )
+    weights_check = check_hr_weights_unchanged(ee_w_before, ee_w_after)
+    runaway_check = check_no_runaway_s2(
+        {"h_e": h_e_rate, "h_inh": h_inh_rate},
+    )
+    checks = {
+        "cue_selectivity_d": sel_check,
+        "bump_evocation_frac": bump_check,
+        "hr_weights_unchanged": weights_check,
+        "no_runaway": runaway_check,
+    }
+    report = aggregate_s2(checks)
+    log.append(report.summary())
+
+    total_wall = time.time() - t_wall0
+    log.append(f"Stage-2 elapsed: {total_wall:.0f} s wall-clock")
+    if verbose:
+        print("\n".join(log))
+
+    # ---- Checkpoint --------------------------------------------------
+    os.makedirs(ckpt_dir, exist_ok=True)
+    ckpt_path = os.path.join(ckpt_dir, f"stage_2_seed{seed}.npz")
+    np.savez(
+        ckpt_path,
+        seed=np.int32(seed),
+        n_train_trials=np.int32(n_train_trials),
+        cue_label=plan["cue_label"],
+        valid_mask=plan["valid"],
+        cue_A_w_final=cue_A_w,
+        cue_B_w_final=cue_B_w,
+        cue_A_w_per_ch=mean_w_A_per_ch,
+        cue_B_w_per_ch=mean_w_B_per_ch,
+        matched_rates=matched_rates,
+        unmatched_rates=unmatched_rates,
+        peak_channels=peak_channels,
+        matched_channels=matched_channels,
+        probe_cue_labels=probe_labels_arr,
+        ee_w_before=ee_w_before,
+        ee_w_after=ee_w_after,
+        h_e_rate_hz=np.float64(h_e_rate),
+        h_inh_rate_hz=np.float64(h_inh_rate),
+        max_ee_w_drift=np.float64(max_drift),
+        passed=np.bool_(report.passed),
+    )
+    if verbose:
+        print(f"checkpoint saved: {ckpt_path}")
+
+    return Stage2Result(
+        seed=seed, report=report,
+        v1_cfg=v1_cfg, h_cfg=h_cfg,
+        diagnostics={
+            "h_e_rate_hz": h_e_rate,
+            "h_inh_rate_hz": h_inh_rate,
+            "max_ee_w_drift": max_drift,
+            "mean_matched_rate_hz": float(matched_rates.mean()),
+            "mean_unmatched_rate_hz": float(unmatched_rates.mean()),
+            "sim_wall_s": total_wall,
+        },
+        checkpoint_path=ckpt_path,
+    )
+
+
 # -- CLI entry -------------------------------------------------------------
 
 def _parse_cli() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Training drivers (Stage 0 / Stage 1)")
+    p = argparse.ArgumentParser(description="Training drivers (Stage 0 / Stage 1 / Stage 2)")
     p.add_argument("--stage", type=str, default="0",
-                   choices=["0", "1_hr", "1_ht", "1_both"])
+                   choices=["0", "1_hr", "1_ht", "1_both", "2"])
     p.add_argument("--seed", type=int, default=42)
     # Stage 0 args
     p.add_argument("--target_e_rate", type=float, default=4.0)
@@ -1139,6 +1749,9 @@ def _parse_cli() -> argparse.Namespace:
                    help="Stage-1 H_T item count")
     p.add_argument("--iti_ms", type=float, default=1500.0,
                    help="Stage-1 H_R ITI (<< paper 5000 for wall-clock)")
+    # Stage 2 args
+    p.add_argument("--n_train_trials", type=int, default=200,
+                   help="Stage-2 cue training trial count (even)")
     p.add_argument("--checkpoint_dir", type=str, default=None)
     return p.parse_args()
 
@@ -1184,6 +1797,15 @@ if __name__ == "__main__":
         )
         passed = r1.report.passed and r2.report.passed
         name = "Stage-1 both"
+    elif args.stage == "2":
+        result = run_stage_2_cue(
+            seed=args.seed,
+            n_train_trials=args.n_train_trials,
+            checkpoint_dir=args.checkpoint_dir,
+            verbose=True,
+        )
+        passed = result.report.passed
+        name = "Stage-2"
     else:
         raise SystemExit(f"Unknown stage: {args.stage}")
     if passed:
