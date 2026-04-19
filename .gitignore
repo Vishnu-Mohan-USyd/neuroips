@@ -5,3 +5,17 @@ results/
 checkpoints/
 *.pt
 .env
+# v2 build artifacts
+checkpoints/v2/**/*.pt
+checkpoints/v2/**/eval_*.json
+checkpoints/v2/**/gate_*.json
+checkpoints/v2/**/gates_*.json
+checkpoints/v2/**/metrics.jsonl
+checkpoints/v2/*.jsonl
+checkpoints/v2/*.pt
+checkpoints/v2/*/*.pt
+logs/dbg_*.json
+logs/dbg_*.log
+scripts/v2/__pycache__/
+src/v2_model/__pycache__/
+tests/v2/__pycache__/
