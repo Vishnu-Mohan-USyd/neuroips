@@ -52,6 +52,19 @@ from brian2 import (
 TAU_E = 5.0 * ms        # AMPA-like excitatory current decay
 TAU_I = 10.0 * ms       # GABA-A-like inhibitory current decay
 
+# NMDA slow recurrent on H_E (Wang 2001 working-memory bump attractor).
+TAU_NMDA_H = 50.0 * ms   # NMDA gating time constant. 50 ms is in the NR2A
+                         # subunit-dominated range (Vicini et al. 1998); gives
+                         # bump persistence in the [200, 500] ms working-memory
+                         # band under our recurrent-gain regime. NR2B-dominated
+                         # synapses have slower (~150-400 ms) decay.
+V_NMDA_REV = 0.0 * mV    # NMDA reversal potential (mixed cation)
+# Mg2+ block (Jahr & Stevens 1990, [Mg]=1 mM):
+#   s_nmda(V) = 1 / (1 + exp(-0.062 * V/mV) / 3.57)
+#   s_nmda(-70 mV) = 0.044  (mostly blocked at rest)
+#   s_nmda(-50 mV) = 0.138  (partial unblock at threshold)
+#   s_nmda(  0 mV) = 0.781  (mostly open under strong depolarization)
+
 
 # --- V1 excitatory pyramidal (LIF soma + passive apical + SFA) --------------
 
@@ -187,7 +200,7 @@ def make_v1_pv_population(n_cells: int, name: str = "v1_pv") -> NeuronGroup:
         threshold="V > V_th",
         reset="V = V_reset",
         refractory=V1PV_REFRACTORY,
-        method="exact",
+        method="euler",
         name=name,
         namespace={
             "V_th": V1PV_VT, "V_reset": V1PV_VR,
@@ -222,7 +235,7 @@ def make_v1_som_population(n_cells: int, name: str = "v1_som") -> NeuronGroup:
         threshold="V > V_th",
         reset="V = V_reset",
         refractory=V1SOM_REFRACTORY,
-        method="exact",
+        method="euler",
         name=name,
         namespace={
             "V_th": V1SOM_VT, "V_reset": V1SOM_VR,
@@ -240,6 +253,22 @@ def make_v1_som_population(n_cells: int, name: str = "v1_som") -> NeuronGroup:
 
 
 # --- H excitatory (prior / memory ring) --------------------------------------
+#
+# H_E carries the context / prediction bump. Needs a slow recurrent channel
+# (NMDA with Mg2+ block) so that a cue-evoked bump can persist 200-500 ms
+# after cue offset, matching the working-memory attractor regime of Wang
+# (2001) Trends Neurosci 24:455 and Compte et al. (2000) Cereb Cortex 10:910.
+# AMPA-only recurrence (tau_e=5 ms) cannot sustain a bump at biologically
+# plausible firing rates.
+#
+# Three synaptic channels here:
+#   I_e       : AMPA-like fast excitatory (tau_e=5 ms), receives cue + recurrent AMPA.
+#   I_nmda    : NMDA slow excitatory with Mg2+ block (tau_nmda_h=100 ms).
+#   I_i       : GABA-A inhibitory (tau_i=10 ms).
+#
+# Recurrent H E->E synapses deposit into BOTH I_e (AMPA) and g_nmda_h (NMDA),
+# at the Wang 2001 ratio (NMDA ~60-80 pct of integrated recurrent
+# conductance). Cue / feedforward inputs stay AMPA-only.
 
 HE_C = 0.2 * nF
 HE_GL = 10.0 * nS
@@ -248,26 +277,64 @@ HE_VT = -50.0 * mV
 HE_VR = -65.0 * mV
 HE_REFRACTORY = 2.0 * ms
 
+_HE_NMDA_EQS = Equations(
+    """
+    dV/dt = (gL*(EL - V) + I_bias + I_e + I_nmda - I_i) / C : volt (unless refractory)
+    dI_e/dt = -I_e / tau_e : amp
+    dI_i/dt = -I_i / tau_i : amp
+    dg_nmda_h/dt = -g_nmda_h / tau_nmda_h : siemens
+    s_nmda = 1 / (1 + exp(-0.062 * V/mV) / 3.57) : 1
+    I_nmda = g_nmda_h * s_nmda * (V_nmda_rev - V) : amp
+    I_bias : amp
+    C : farad
+    gL : siemens
+    EL : volt
+    """
+)
+
 
 def make_h_e_population(n_cells: int, name: str = "h_e") -> NeuronGroup:
-    """H excitatory LIF. Recurrent / cue / feedback all deposit into I_e."""
+    """H excitatory LIF + NMDA slow recurrent (Wang 2001 bump-attractor).
+
+    Postsynaptic variables used by the wiring layer:
+
+    - ``I_e_post``    : AMPA-like fast excitatory current (cue + recurrent
+      AMPA co-release).
+    - ``g_nmda_h_post`` : NMDA gating conductance (recurrent NMDA co-release
+      only). Mg2+ block applied algebraically via ``s_nmda``.
+    - ``I_i_post``    : GABA-A inhibitory current (inh pool).
+    - ``I_bias``      : static DC bias (calibrated in Stage-0).
+
+    Parameters
+    ----------
+    n_cells : int
+    name : str
+
+    Returns
+    -------
+    NeuronGroup
+        H_E at rest, zero synaptic currents, zero NMDA conductance.
+    """
     group = NeuronGroup(
         n_cells,
-        model=_LIF_WITH_EI_EQS,
+        model=_HE_NMDA_EQS,
         threshold="V > V_th",
         reset="V = V_reset",
         refractory=HE_REFRACTORY,
-        method="exact",
+        method="euler",
         name=name,
         namespace={
             "V_th": HE_VT, "V_reset": HE_VR,
             "tau_e": TAU_E, "tau_i": TAU_I,
+            "tau_nmda_h": TAU_NMDA_H,
+            "V_nmda_rev": V_NMDA_REV,
         },
     )
     group.V = HE_EL
     group.I_e = 0 * pA
     group.I_i = 0 * pA
     group.I_bias = 0 * pA
+    group.g_nmda_h = 0 * nS
     group.C = HE_C
     group.gL = HE_GL
     group.EL = HE_EL
@@ -292,7 +359,7 @@ def make_h_inh_population(n_cells: int, name: str = "h_inh") -> NeuronGroup:
         threshold="V > V_th",
         reset="V = V_reset",
         refractory=HINH_REFRACTORY,
-        method="exact",
+        method="euler",
         name=name,
         namespace={
             "V_th": HINH_VT, "V_reset": HINH_VR,
