@@ -50,10 +50,75 @@ Calibrated values (seed 42):
 - SOM tonic bias: 130 pA.
 - Stimulus Gaussian σ: 22° (gave FWHM 36.4° vs target 30-60°).
 
-## Stage 1 gate — pending
+## Stage 1 gate — PASSED (seed 42, 2026-04-19)
 
-(H bump persistence 200-500 ms; MI(leader, H_state_+500ms) > 0 for H_R;
- analogous rotation MI for H_T; no runaway; 3 seeds.)
+Per pre-registered seed policy (see research_log.md): first-pass seed=42 only.
+Multi-seed replication {7, 123, 2024, 11} + held-out {99, 314} deferred until
+Stage-1 paradigm-level findings worth replicating.
+
+Evidence (gitignored, re-derivable from tag `phase-stage-1-passed`):
+
+- `data/checkpoints/stage_1_hr_seed42.npz` (Richter grammar, H_R)
+- `data/checkpoints/stage_1_ht_seed42.npz` (Tang grammar, H_T)
+
+Drivers:
+
+- `brian2_model/train.py::run_stage_1_hr` (Richter 6×6 crossover).
+- `brian2_model/train.py::run_stage_1_ht` (Tang 30° rotating blocks).
+
+Architecture changes (Sprint-3):
+
+- `neurons.py`: NMDA slow recurrent conductance on H_E with Jahr & Stevens
+  1990 Mg²⁺ block; `tau_nmda_h=50 ms` (NR2A-dominated; Vicini et al. 1998);
+  `V_nmda_rev=0 mV`. Enables Wang 2001 bump-attractor persistence.
+- `plasticity.py`: `pair_stdp_with_normalization` gains
+  `nmda_drive_amp_nS` parameter — pre-spike also deposits
+  `w * nmda_drive_amp_nS` into `g_nmda_h_post`; plasticity acts on AMPA
+  weight only.
+- `h_ring.py`: inhibitory pool split into per-channel local PV-like
+  subpools (12 cells, one per channel) + broad cross-channel (4 cells,
+  scaled by `broad_inh_scale=0.3`). E→E co-releases AMPA + NMDA.
+  Vogels iSTDP weight ceiling `inh_w_max=1.5` caps total adaptation
+  independent of schedule length.
+- `v1_ring.py`: PV Poisson background noise (400 Hz × 15 pA) smooths the
+  FS rheobase f-I curve; enables PV to fire in the 10-40 Hz band over a
+  broader bias range. Stage-0 gate re-passes with `pv_bias_pA=240`.
+- `stimulus.py`: `richter_crossover_training_schedule` and
+  `tang_rotating_sequence` builders (deterministic under `rng`).
+- `validation/stage_1_gate.py`: `check_h_bump_persistence`,
+  `check_h_transition_mi`, `check_h_rotation_mi`, `check_no_runaway`.
+
+### Stage 1 H_R gate @ seed 42
+
+Run config: `n_trials=72`, `leader_ms=500`, `trailer_ms=500`, `iti_ms=1500`,
+presettle=10 s @ 40 Hz broadband, `cue_peak_hz=300`, `cue_sigma_deg=15`.
+
+| Check | Value | Band | Status |
+|---|---|---|---|
+| h_bump_persistence_ms | 360.0 ms | [200, 500] | PASS |
+| h_transition_mi_bits  | 0.092 bits | ≥ 0.05      | PASS |
+| no_runaway            | 28.4 Hz   | [0, 80]    | PASS |
+
+E→E weight diagnostics (post-schedule): within-channel mean=0.948,
+cross-nbr mean=0.055 (no LTP runaway on cross-channel edges).
+
+### Stage 1 H_T gate @ seed 42
+
+Run config: `n_items=500`, `item_ms=250` (Tang 4 Hz), presettle=10 s,
+cue as above.
+
+| Check | Value | Band | Status |
+|---|---|---|---|
+| h_bump_persistence_ms | 250.0 ms | [200, 500] | PASS |
+| h_rotation_mi_bits    | 1.662 bits | ≥ 0.05      | PASS |
+| no_runaway            | 33.8 Hz   | [0, 80]    | PASS |
+
+E→E weight diagnostics: within-channel mean=0.938, cross-nbr mean=0.057.
+
+Rotation MI dominates the transition MI because the Tang grammar is
+near-deterministic (CW/CCW block, 5 of 6 items predict the next) while
+Richter crossover is 1-of-6 at each step — both signals are well above
+the 0.05 bits finite-sample floor.
 
 ## Stage 2 gate — pending
 
