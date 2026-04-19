@@ -38,6 +38,7 @@ import numpy as np
 from brian2 import (
     NeuronGroup,
     PoissonGroup,
+    PoissonInput,
     Synapses,
     Hz,
     ms,
@@ -139,8 +140,19 @@ class V1RingConfig:
     # Tonic bias currents (pA). Stage 0 calibration uses these to bring
     # PV/SOM into realistic rate bands without requiring unrealistically
     # strong synaptic recruitment from the sparse bottom-up input.
-    pv_bias_pA: float = 302.0
+    pv_bias_pA: float = 240.0
     som_bias_pA: float = 130.0
+
+    # PV Poisson background noise. Fast-spiking neurons have extremely
+    # sharp rheobase f-I curves under deterministic input; in vivo they
+    # receive ~400-1000 Hz of spontaneous EPSCs from local cortex, which
+    # smooths the f-I curve and keeps them in the 10-40 Hz band over a
+    # wider bias range. Disabled -> deterministic cliff at rheobase.
+    pv_bg_enabled: bool = True
+    pv_bg_rate_hz: float = 400.0        # per-PV-cell effective Poisson rate
+    pv_bg_weight_pA: float = 15.0       # amplitude per event deposited in I_e
+                                        #  mean = w * rate * tau_e = 30 pA,
+                                        #  sigma ~ 15 pA @ 400 Hz, tau_e=5 ms
 
 
 @dataclass
@@ -164,6 +176,8 @@ class V1Ring:
     e_channel: np.ndarray               # (n_e,) channel index per E cell
     som_channel: np.ndarray             # (n_som,) channel index per SOM cell
     stim_channel: np.ndarray            # (n_stim,) channel index per afferent
+    # optional PV background noise (None if pv_bg_enabled=False)
+    pv_bg: Optional[PoissonInput] = None
     # brian2 objects the caller needs for Network(...) add
     groups: List[object] = field(default_factory=list)
 
@@ -324,6 +338,20 @@ def build_v1_ring(config: Optional[V1RingConfig] = None,
                      j=np.asarray(j_se, dtype=np.int64))
     som_to_e.w = cfg.w_som_e
 
+    # --- PV Poisson background (smooths FS rheobase f-I curve). Each PV
+    # cell receives an independent Poisson stream at `pv_bg_rate_hz`,
+    # with each event depositing `pv_bg_weight_pA` into `I_e`. Typical
+    # in vivo PV cells see ~400-1000 spontaneous EPSCs/s from recurrent
+    # cortex; without this noise, deterministic bias drives the LIF into
+    # a razor-thin window between silence and saturation.
+    pv_bg: Optional[PoissonInput] = None
+    if cfg.pv_bg_enabled:
+        pv_bg = PoissonInput(
+            target=pv, target_var="I_e", N=1,
+            rate=cfg.pv_bg_rate_hz * Hz,
+            weight=cfg.pv_bg_weight_pA * pA,
+        )
+
     ring = V1Ring(
         e=e, som=som, pv=pv, stim=stim,
         stim_to_e=stim_to_e, ee_ring=ee_ring,
@@ -332,11 +360,14 @@ def build_v1_ring(config: Optional[V1RingConfig] = None,
         config=cfg, thetas_rad=thetas_rad,
         e_channel=e_channel, som_channel=som_channel,
         stim_channel=stim_channel,
+        pv_bg=pv_bg,
     )
     ring.groups = [
         e, som, pv, stim,
         stim_to_e, ee_ring, e_to_pv, pv_to_e, e_to_som, som_to_e,
     ]
+    if pv_bg is not None:
+        ring.groups.append(pv_bg)
     return ring
 
 
