@@ -229,3 +229,115 @@ at w_max=2.0 is the expected end-state under positive feedback once the
 matched-channel cue weight crosses rheobase during the cue window; the
 selectivity asymmetry (matched 2.00 vs unmatched ~0.97) is set during the
 early linear-growth phase by the teacher-gated LTP before feedback kicks in.
+
+## Sprint 4.5 — H→V1 feedback routes (seed 42, 2026-04-19)
+
+See `memory/` + commits `7c87f95`, `6cb20f5`. Accepted by Lead with 1pp SOM
+tolerance (regime-dependency proven at r={0.25, 0.5, 1, 2, 4} with opposite
+signs at the extremes). Proceeding to Sprint 5a.
+
+## Sprint 5a — Kok / Richter / Tang (intact, seed 42, 2026-04-19)
+
+First-pass observed metrics at `r = 1.0`, `g_total = 1.0` (balanced
+direct-apical + SOM feedback, intact only; no ablations). Per-component
+validators all PASS before integration:
+
+| Validator                         | Result    |
+|---                                |---        |
+| `validate_kok_passive`            | 8/8 PASS  |
+| `validate_richter_crossover`      | 8/8 PASS  |
+| `validate_tang_rotating`          | 5/5 PASS  |
+
+Full-run provenance:
+
+- seed = 42, r = 1.0, g_total = 1.0 (intact).
+- Wall clock: Kok 29.2 min, Richter 24.7 min, Tang 9.2 min, **total 63.1 min**.
+- Output: `data/checkpoints/sprint_5a_intact_r1.0_seed42_full.npz` (82 arrays).
+- Commits: `364bada` (runtime), `526ff25` (assays + validators + driver).
+- Driver: `python -m expectation_snn.scripts.run_sprint_5a`.
+
+### Metric table — primary metrics
+
+**Kok passive (expectation modulation)** — 288 trials (180 valid + 60 invalid + 48 omission):
+
+| Metric                                         | Value           | 95% CI           |
+|---                                             |---              |---               |
+| mean_amp valid (total_rate_hz)                 | 4.010 Hz        | [3.97, 4.05]     |
+| mean_amp invalid (total_rate_hz)               | 4.025 Hz        | [3.97, 4.09]     |
+| Δ (valid − invalid)                            | −0.015 Hz       | —                |
+| SVM validity decoding (cue→trial label)        | 0.742           | [0.729, 0.750]   |
+| pref-rank bin 0 Δ (matched-θ, valid − invalid) | −0.109 Hz       | —                |
+| omission delta, mean over neurons              | **+2.005 Hz**   | (median +1.642)  |
+
+**Richter cross-over (expected = θ_L=θ_T; unexpected = θ_L−θ_T = π/2)** —
+360 trials, 12 pair types × 30 reps:
+
+| Metric                                               | Value         |
+|---                                                   |---            |
+| center-vs-flank `redist`                             | **−1.248**    |
+| `center_delta` (matched-θ bin, exp − unexp rate)     | −1.252 Hz     |
+| `flank_delta` (off-channel bins)                     | −0.004 Hz     |
+| pref-rank bin 0 Δ (matched channel, exp − unexp)     | −1.252 Hz     |
+| pref-rank bin 1 Δ (neighbour channel)                | −0.710 Hz     |
+| cell-type × distance Δ (Hz, expected − unexpected)   | see below     |
+
+Cell-type × distance Δ (pops = [E, SOM, PV], dists = [local, nbr, far]):
+
+```
+            local     nbr     far
+E       [-2.789  -1.439  -0.002]   local E suppressed strongly, nbr partially
+SOM     [-0.833  -1.078  -0.035]   SOM suppressed under "expected" (NB)
+PV      [-3.006   0.000  -2.860]   PV suppressed in both local + far
+```
+
+6 pseudo-voxel forward families computed (global_gain, local_gain_{enhance,
+dampen}, local_tuning_{sharpen, broaden}, remote_gain) — baseline and
+predicted (4 voxels × 6 orientations per family) in the npz.
+
+**Tang rotating-deviant (~14% deviant rate in blocks of 5-9 items)** — 1000
+items, 142 deviant + 858 expected:
+
+| Metric                                                | Value                |
+|---                                                    |---                   |
+| per-cell matched-θ gain `mean_delta_hz` (dev − exp)   | **−1.390 Hz**        |
+| `mean_delta_hz_ci` (bootstrap 95%)                    | [−1.532, −1.246]     |
+| population SVM (deviant vs expected)                  | **0.858**            |
+| svm accuracy CI                                       | [0.855, 0.860]       |
+| laminar mean rate — deviant                           | 4.216 Hz             |
+| laminar mean rate — expected                          | 4.248 Hz             |
+| laminar delta                                         | −0.032 Hz            |
+| tuning FWHM expected (median, r²>0.5 only)            | 0.351 rad (~20°)     |
+| tuning FWHM deviant (median, r²>0.5 only)             | 0.188 rad (~11°)     |
+| n cells with fit r²>0.5, expected / deviant           | 176 / 128  (of 192)  |
+
+### Observations
+
+1. **Kok population amp modulation is null** (Δ = −0.015 Hz, CI overlapping).
+   Cue-validity SVM at 74.2% is well above chance but reflects the
+   inherently distinguishable stimulus sets (different θ distributions
+   across valid vs invalid), not a valid/invalid effect per se. The
+   omission response is strongly positive (+2.0 Hz mean), consistent with
+   prior predictive-coding literature (Fiser et al. 2016; Kok et al. 2014).
+
+2. **Richter shows robust expected-suppression** at the matched channel
+   (`redist = −1.248`, `center_delta = −1.25 Hz`) with essentially no
+   flank redistribution. Local E cells are suppressed 2.79 Hz under
+   expected relative to unexpected; the effect tapers with feature
+   distance (nbr: −1.44 Hz; far: ~0). Cell-type pattern shows PV
+   suppressed more than SOM at the local scale — consistent with direct
+   apical feedback reducing drive to PV-gating E cells.
+
+3. **Tang shows `deviant − expected = −1.39 Hz` at matched θ** (CI strictly
+   negative), i.e. *expected* cells are firing *more* than *deviants* at
+   their preferred orientation, the opposite of a naive mismatch-release
+   signature. Population SVM at 85.8% confirms deviant vs expected IS
+   linearly separable. H3 pre-registered null on FWHM is non-null here:
+   deviant tuning is sharper (0.188 rad) than expected (0.351 rad).
+
+4. All three assays returned all primary metrics + all secondary outputs
+   without error. Pipeline end-to-end validated at pre-registered trial
+   counts (288 / 360 / 1000).
+
+These are first-pass observations at the intact balanced configuration.
+Regime-dependency, ablations (r = 0 / r = ∞), and cross-seed replication
+are the Sprint 5b scope.
