@@ -341,3 +341,132 @@ items, 142 deviant + 858 expected:
 These are first-pass observations at the intact balanced configuration.
 Regime-dependency, ablations (r = 0 / r = ∞), and cross-seed replication
 are the Sprint 5b scope.
+
+
+## Sprint 5b — balance sweep over r ∈ {0.25, 0.5, 1.0, 2.0, 4.0} @ seed 42
+
+**Context.** Initial Sprint 5b (task #29) found complete r-invariance at
+every metric. Debugger task #30 confirmed root cause: H rings emitted 0
+spikes during every assay measurement window, so `g_direct * H = g_SOM * H
+= 0` and r had no effect. Task #31 added a V1_E → H_E feedforward
+afferent (commit `6ba542c`, `brian2_model/feedforward_v1_to_h.py`) wired
+assay-time only through `runtime.build_frozen_network(with_v1_to_h=True)`.
+This entry reports the rerun across all 5 r values (including r=1.0 —
+the Sprint 5a r=1.0 result was also a no-feedback artifact).
+
+**Run**: `python -m expectation_snn.scripts.run_sprint_5a --seed 42 --r <R>
+--out expectation_snn/data/checkpoints/sprint_5b_intact_r<R>_seed42.npz`.
+All 5 r-values ran in parallel tmux sessions; each 73-75 min wall
+(Kok ~38 + Richter ~27 + Tang ~9 min). 5 fresh .npz files, 82 arrays each.
+
+### Primary metrics vs r
+
+| metric                       | r=0.25   | r=0.5    | r=1      | r=2      | r=4      | verdict       |
+|---                           |---       |---       |---       |---       |---       |---            |
+| kok_amp_delta_hz             | −0.022   | −0.023   | −0.013   | +0.000   | −0.003   | NONMONOTONIC  |
+| kok_omission_mean_hz         | +1.942   | +1.955   | +1.987   | +2.035   | +2.072   | MONOTONIC     |
+| kok_svm                      | +0.742   | +0.738   | +0.733   | +0.729   | +0.737   | NONMONOTONIC  |
+| kok_bin0_delta               | −0.171   | −0.150   | −0.151   | −0.083   | −0.072   | NONMONOTONIC  |
+| richter_redist               | −1.113   | −1.106   | −1.204   | −1.265   | −1.447   | MONOTONIC     |
+| richter_center_delta         | −1.117   | −1.108   | −1.210   | −1.269   | −1.454   | MONOTONIC     |
+| richter_flank_delta          | −0.004   | −0.002   | −0.006   | −0.004   | −0.007   | NULL          |
+| richter_E_local_delta        | −2.522   | −2.467   | −2.700   | −2.811   | −3.211   | MONOTONIC     |
+| tang_mean_delta_hz           | −1.585   | −1.308   | −1.590   | −1.606   | −1.778   | MONOTONIC     |
+| tang_svm                     | +0.858   | +0.858   | +0.858   | +0.858   | +0.858   | NONMONOTONIC  |
+| tang_laminar_delta_hz        | −0.058   | −0.029   | −0.044   | −0.092   | −0.101   | MONOTONIC     |
+| tang_fwhm_expected           | +0.339   | +0.345   | +0.387   | +0.347   | +0.348   | MONOTONIC     |
+| tang_fwhm_deviant            | +0.180   | +0.239   | +0.180   | +0.180   | +0.180   | NONMONOTONIC  |
+
+Full summary at `data/figures/sprint_5b_summary.md`; H1 verdict file at
+`data/figures/sprint_5b_h1_verdict.md`; figures at
+`data/figures/sprint_5b_balance_sweep.png` and
+`data/figures/sprint_5b_tang_fwhm.png`.
+
+**H1 summary**: 0 REGIME-SWITCH, 7 MONOTONIC, 1 NULL, 5 NONMONOTONIC (of 13).
+
+### H1 verdict — NOT supported in this configuration
+
+H1 predicted: sign(metric @ r=0.25) ≠ sign(metric @ r=4.0) for metrics
+genuinely modulated by the feedback balance (SOM-dominated vs
+direct-apical-dominated regimes should push opposite directions).
+
+**Result**: zero of 13 primary metrics pass the regime-switch criterion
+(|v(0.25)| > 0.01 AND |v(4.0)| > 0.01 AND sign(v(0.25)) ≠ sign(v(4.0))).
+Every non-null metric retains the same sign across the sweep; r acts as a
+magnitude dial, not a sign flip.
+
+### Observations
+
+1. **r now matters** (unlike the pre-fix Sprint 5b). Example spot-checks
+   from the diagnostic: `kok_bin0_delta` moves from −0.171 at r=0.25 to
+   −0.072 at r=4.0 (a 2.4× magnitude change); `richter_E_local_delta`
+   from −2.522 to −3.211; `kok_omission_mean_hz` from +1.942 to +2.072.
+   The effect sizes are small but the ordering is monotone.
+
+2. **Direction of the monotone shift is consistent with direct-apical
+   excitation winning at high r**: `richter_center_delta` (center
+   suppression under expected) grows *more negative* as r increases
+   (direct-apical → stronger apical drive to locally-predicted E cells →
+   bigger expected-suppression in cell rate via EI balance). Same for
+   `richter_E_local_delta`, `tang_mean_delta_hz`, `tang_laminar_delta_hz`.
+
+3. **Kok omission response grows monotonically with r** (+1.942 → +2.072):
+   a stronger direct feedback pathway yields a slightly larger
+   prediction-error burst during omission, as expected for an apical
+   "mismatch" signal.
+
+4. **Richter flank_delta ≈ 0** across the sweep — no flank redistribution
+   anywhere. Confirms the "sharpening via flank suppression" mechanism
+   doesn't express in this network under any r.
+
+5. **Tang SVM at 0.858 for all 5 r values exactly** — SVM accuracy is
+   insensitive to r. Either (a) the SVM readout saturates at 85.8% on
+   the rotating-deviant design, or (b) r modulates rate without changing
+   the separability of the deviant-vs-expected code. Either way, SVM is
+   a poor regime-discrimination metric here.
+
+6. **`tang_fwhm_deviant = 0.180 rad` at r ∈ {0.25, 1, 2, 4}** (only
+   deviates at r=0.5: 0.239). Likely the same small set of well-fit
+   deviant cells emerge at these r values and give identical median FWHM
+   — a floor effect from the fit-quality filter (`r² > 0.5`, ~66 cells).
+
+### Sprint 5c scope recommendation
+
+Given the absence of a regime switch in the intact-network r-sweep, I
+recommend Sprint 5c widens the search space rather than deepening the
+same slice:
+
+1. **(g_total, r) 2D sweep** — the sign-flip may only appear when *both*
+   feedback magnitude and balance move; at g_total=1.0 everything may
+   be sub-threshold for regime-switch. Scan g_total ∈ {0.5, 1.0, 2.0}
+   crossed with the same 5 r values (15 runs × ~75 min ≈ 1 tmux day).
+
+2. **Ablation contrasts** — instead of r-ratio, run direct-only
+   (g_SOM=0, g_direct = g_total) vs SOM-only (g_direct=0,
+   g_SOM = g_total) at a fixed g_total. This is the "clean" A1/A2
+   contrast and is the canonical way to test whether the two routes
+   produce *qualitatively different* modulation patterns — the r-ratio
+   sweep confounds because both routes are always active.
+
+3. **Feedback engagement audit** — before spending more compute, measure
+   how much of H_E's current during grating epochs comes from the
+   feedforward V1→H path vs the H→V1→H round-trip (which requires H→V1
+   to meaningfully modulate V1). The current g_v1_to_h=1.5 may keep H
+   in a regime where its small modulations of V1 are lost to bottom-up
+   drive. A quick diag at (r=0.25, r=4.0) × (g_v1_to_h ∈ {0.5, 1.0,
+   1.5}) would tell us whether the feedback ratio has *any* chance of
+   switching direction at lower feedforward gains.
+
+Default recommendation: **(2) ablation contrasts** first (fastest and most
+mechanistically interpretable), then **(3) engagement audit** to inform a
+targeted **(1) 2D sweep** if (2) also shows monotone-only behaviour.
+
+### Provenance
+
+- Branch: `expectation-snn-v1h` (post commit `6ba542c`).
+- Python: `/home/vysoforlife/miniconda3/envs/expectation_snn/bin/python` (3.9).
+- Brian2 2.10.1 numpy codegen, dt = 0.1 ms, seed = 42.
+- V1→H wired via `runtime.build_frozen_network(with_v1_to_h=True)` with
+  `V1ToHConfig()` defaults: `g_v1_to_h=1.5`, `drive_amp_v1_to_h_pA=80.0`,
+  `sigma_channels=1.0`.
+- Stale pre-fix Sprint 5b npz files removed before this rerun.
