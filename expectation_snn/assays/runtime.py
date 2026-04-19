@@ -41,6 +41,9 @@ from ..brian2_model.v1_ring import (
 from ..brian2_model.feedback_routes import (
     FeedbackRoutes, FeedbackRoutesConfig, build_feedback_routes,
 )
+from ..brian2_model.feedforward_v1_to_h import (
+    V1ToH, V1ToHConfig, build_v1_to_h_feedforward,
+)
 from ..brian2_model.plasticity import eligibility_trace_cue_rule
 
 
@@ -83,6 +86,7 @@ class FrozenBundle:
     h_kind: str
     v1_ring: V1Ring
     fb: FeedbackRoutes
+    v1_to_h: Optional[V1ToH] = None
 
     cue_A: Optional[PoissonGroup] = None
     cue_B: Optional[PoissonGroup] = None
@@ -250,10 +254,12 @@ def build_frozen_network(
     r: float = 1.0,
     g_total: float = 1.0,
     with_cue: bool = False,
+    with_v1_to_h: bool = True,
     ckpt_dir: Optional[str] = None,
     h_cfg: Optional[HRingConfig] = None,
     v1_cfg: Optional[V1RingConfig] = None,
     fb_cfg: Optional[FeedbackRoutesConfig] = None,
+    v1_to_h_cfg: Optional[V1ToHConfig] = None,
 ) -> FrozenBundle:
     """Assemble the intact frozen assay-time network.
 
@@ -270,6 +276,12 @@ def build_frozen_network(
         If True, build the Stage-2 cue pathway (cue_A/cue_B + frozen elig
         synapses) and load Stage-2 weights. Only valid for h_kind='hr'
         (Stage-2 was trained against H_R). Raises on 'ht' + with_cue=True.
+    with_v1_to_h : bool
+        If True (default), attach V1_E → H_E feedforward pathway (task #31).
+        Fixed weights, feature-matched Gaussian over channels. Required for
+        H rings to emit spikes during grating epochs (Sprint 5b diagnostic).
+        Attach only at assay time — training paths keep this off to preserve
+        Stage-2 DC-teacher isolation.
     ckpt_dir : str, optional
         Override for checkpoint directory. Defaults to
         ``expectation_snn/data/checkpoints``.
@@ -320,6 +332,14 @@ def build_frozen_network(
         h, v1, fb_cfg_eff, name_prefix=f"s5a_{h_kind}",
     )
 
+    # --- V1 → H feedforward (task #31; assay-time only) -----------------
+    v1_to_h_obj: Optional[V1ToH] = None
+    if with_v1_to_h:
+        ff_cfg = v1_to_h_cfg or V1ToHConfig()
+        v1_to_h_obj = build_v1_to_h_feedforward(
+            v1, h, ff_cfg, name_prefix=f"s5a_ffv1h_{h_kind}",
+        )
+
     # --- cue pathway (optional) -----------------------------------------
     cue_A = cue_B = None
     cue_A_to_h = cue_B_to_h = None
@@ -352,11 +372,23 @@ def build_frozen_network(
     groups.extend(h.groups)
     groups.extend(v1.groups)
     groups.extend(fb.groups)
+    if v1_to_h_obj is not None:
+        groups.extend(v1_to_h_obj.groups)
     if with_cue:
         groups.extend([cue_A, cue_B, cue_A_to_h, cue_B_to_h])
 
+    v1_to_h_meta = {}
+    if v1_to_h_obj is not None:
+        v1_to_h_meta = {
+            "v1_to_h_g": float(v1_to_h_obj.g_v1_to_h),
+            "v1_to_h_drive_pA": float(v1_to_h_obj.config.drive_amp_v1_to_h_pA),
+            "v1_to_h_sigma_ch": float(v1_to_h_obj.config.sigma_channels),
+            "v1_to_h_n_syn": int(v1_to_h_obj.kernel_w.size),
+        }
+
     bundle = FrozenBundle(
         h_ring=h, h_kind=h_kind, v1_ring=v1, fb=fb,
+        v1_to_h=v1_to_h_obj,
         cue_A=cue_A, cue_B=cue_B,
         cue_A_to_h=cue_A_to_h, cue_B_to_h=cue_B_to_h,
         groups=groups,
@@ -372,6 +404,8 @@ def build_frozen_network(
             "n_fb_som": int(fb.kernel_w_som.size),
             "g_direct": float(fb.g_direct),
             "g_SOM": float(fb.g_SOM),
+            "with_v1_to_h": bool(with_v1_to_h),
+            **v1_to_h_meta,
             **cue_meta,
         },
     )
