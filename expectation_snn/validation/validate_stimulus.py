@@ -45,8 +45,30 @@ C. Tang schedule
    C5. Deviant fraction is 1/mean_block_len within 20% (finite-sample).
    C6. Rotation direction is {+1, -1} only.
 
+Stat assays (Sprint-3 rework, 2026-04-19)
+-----------------------------------------
+
+S1. **Richter pair-count bootstrap CI** (B=2000). Resample 360 trials
+    with replacement from a fixed schedule, compute the observed
+    per-cell count spread (max - min), report the 95% CI for that
+    spread. Anchors the "balanced" claim in sampling-uncertainty terms:
+    for the multinomial-balanced builder the true spread is 0 and the
+    bootstrap CI widens only because of resampling noise.
+
+S2. **Tang block-length chi-squared vs uniform{5..9}** (alpha=0.05).
+    Asserts the internal (non-truncated) block lengths are compatible
+    with a discrete-uniform draw on {5, 6, 7, 8, 9}. Chi-squared is the
+    correct goodness-of-fit test for discrete counts — one-sample KS
+    is biased on discrete data because scipy's empirical-CDF jumps
+    don't line up with the step CDF (KS here reports D~0.24 purely as
+    a discretization artifact even on exactly-uniform samples).
+
+S3. **Tang deviant-rate bootstrap 95% CI** (B=2000). Resamples the
+    deviant mask with replacement, reports the 95% CI on mean deviant
+    frac, asserts 1/mean_block_len falls inside the CI.
+
 Run:
-    python -m expectation_snn.validation.validate_stimulus_schedules
+    python -m expectation_snn.validation.validate_stimulus
 """
 from __future__ import annotations
 
@@ -54,6 +76,7 @@ from dataclasses import dataclass
 from typing import Dict, Tuple
 
 import numpy as np
+from scipy import stats
 
 from ..brian2_model.stimulus import (
     N_CHANNELS,
@@ -70,6 +93,11 @@ from ..brian2_model.stimulus import (
 
 
 STIM_DETERMINISM_SEED = 42
+BOOTSTRAP_B = 2000
+BOOTSTRAP_SEED = 123
+KS_ALPHA = 0.05
+TANG_BLOCK_UNIFORM_LO = 5
+TANG_BLOCK_UNIFORM_HI = 9
 
 
 # --- small helpers ----------------------------------------------------------
@@ -164,12 +192,16 @@ class RichterAssay:
     timing_ok: bool
     leader_coverage_ok: bool
     trailer_coverage_ok: bool
+    bootstrap_spread_lo: int
+    bootstrap_spread_hi: int
+    bootstrap_spread_median: float
+    bootstrap_ok: bool
 
     @property
     def passed(self) -> bool:
         return (self.deterministic and self.balanced_ok and self.kinds_ok
                 and self.timing_ok and self.leader_coverage_ok
-                and self.trailer_coverage_ok)
+                and self.trailer_coverage_ok and self.bootstrap_ok)
 
 
 def _check_richter(n_trials: int = 360) -> RichterAssay:
@@ -206,6 +238,28 @@ def _check_richter(n_trials: int = 360) -> RichterAssay:
     leader_coverage = leader_idxs == set(range(6))
     trailer_coverage = trailer_idxs == set(range(6))
 
+    # S1 bootstrap CI on per-cell spread (max - min count over 6x6 pairs)
+    # under trial-with-replacement resampling of the 360-trial schedule.
+    # Expected typical spread under a truly uniform multinomial is
+    # ~2*sqrt(log(K))*sqrt(N/K*(1-1/K)) ~= 11 for N=360, K=36, so bootstrap
+    # noise alone produces spreads in roughly [5, 25]. Structural imbalance
+    # (e.g., doubled-weight cells) would blow the upper bound far past 2x
+    # the expected per-cell count. Assertion: upper 95% CI <= 2x expected.
+    pair_ids = pairs_a[:, 0] * 6 + pairs_a[:, 1]
+    boot_rng = np.random.default_rng(BOOTSTRAP_SEED)
+    spreads = np.empty(BOOTSTRAP_B, dtype=np.int64)
+    N = len(pair_ids)
+    for b in range(BOOTSTRAP_B):
+        idx = boot_rng.integers(0, N, size=N)
+        sample = pair_ids[idx]
+        bc = np.bincount(sample, minlength=36)
+        spreads[b] = int(bc.max() - bc.min())
+    spread_lo = int(np.quantile(spreads, 0.025))
+    spread_hi = int(np.quantile(spreads, 0.975))
+    spread_med = float(np.median(spreads))
+    expected_per_cell = n_trials / 36
+    bootstrap_ok = spread_hi <= 2.0 * expected_per_cell
+
     return RichterAssay(
         n_trials=n_trials,
         deterministic=deterministic,
@@ -216,6 +270,10 @@ def _check_richter(n_trials: int = 360) -> RichterAssay:
         timing_ok=timing_ok,
         leader_coverage_ok=leader_coverage,
         trailer_coverage_ok=trailer_coverage,
+        bootstrap_spread_lo=spread_lo,
+        bootstrap_spread_hi=spread_hi,
+        bootstrap_spread_median=spread_med,
+        bootstrap_ok=bootstrap_ok,
     )
 
 
@@ -232,13 +290,20 @@ class TangAssay:
     deviant_frac_expected: float
     deviant_frac_ok: bool
     direction_in_set_ok: bool
+    blen_chi2_stat: float
+    blen_chi2_pvalue: float
+    blen_chi2_ok: bool
+    dev_ci_lo: float
+    dev_ci_hi: float
+    dev_ci_ok: bool
 
     @property
     def passed(self) -> bool:
         return (self.deterministic and self.rotation_ok
                 and self.deviant_ne_expected_ok
                 and self.block_len_in_range_ok
-                and self.deviant_frac_ok and self.direction_in_set_ok)
+                and self.deviant_frac_ok and self.direction_in_set_ok
+                and self.blen_chi2_ok and self.dev_ci_ok)
 
 
 def _check_tang(n_items: int = 1000) -> TangAssay:
@@ -315,6 +380,29 @@ def _check_tang(n_items: int = 1000) -> TangAssay:
     # C6 direction in {-1, +1}
     dir_ok = bool(set(np.unique(rot_dir).tolist()) <= {-1, 1})
 
+    # S2 block-length chi-squared GoF vs discrete-uniform{5..9}.
+    lo, hi = TANG_BLOCK_UNIFORM_LO, TANG_BLOCK_UNIFORM_HI
+    bins = np.arange(lo, hi + 2)  # edges for bincount range
+    observed = np.zeros(hi - lo + 1, dtype=np.int64)
+    for v in lens_internal:
+        if lo <= v <= hi:
+            observed[int(v) - lo] += 1
+    expected = np.full_like(observed, observed.sum() / len(observed),
+                            dtype=np.float64)
+    chi2_stat, chi2_pval = stats.chisquare(observed, f_exp=expected)
+    blen_chi2_ok = bool(chi2_pval >= KS_ALPHA)
+
+    # S3 deviant-rate bootstrap 95% CI on mean(dev_mask).
+    boot_rng = np.random.default_rng(BOOTSTRAP_SEED)
+    M = len(dev_mask)
+    devs = np.empty(BOOTSTRAP_B, dtype=np.float64)
+    for b in range(BOOTSTRAP_B):
+        idx = boot_rng.integers(0, M, size=M)
+        devs[b] = float(dev_mask[idx].mean())
+    dev_ci_lo = float(np.quantile(devs, 0.025))
+    dev_ci_hi = float(np.quantile(devs, 0.975))
+    dev_ci_ok = bool(dev_ci_lo <= deviant_frac_expected <= dev_ci_hi)
+
     return TangAssay(
         n_items=n_items,
         deterministic=deterministic,
@@ -325,6 +413,12 @@ def _check_tang(n_items: int = 1000) -> TangAssay:
         deviant_frac_expected=deviant_frac_expected,
         deviant_frac_ok=deviant_frac_ok,
         direction_in_set_ok=dir_ok,
+        blen_chi2_stat=float(chi2_stat),
+        blen_chi2_pvalue=float(chi2_pval),
+        blen_chi2_ok=blen_chi2_ok,
+        dev_ci_lo=dev_ci_lo,
+        dev_ci_hi=dev_ci_hi,
+        dev_ci_ok=dev_ci_ok,
     )
 
 
@@ -371,6 +465,13 @@ class StimulusValidationReport:
                      f"{'PASS' if r.leader_coverage_ok else 'FAIL'}")
         lines.append(f"    full trailer coverage (all 6):     "
                      f"{'PASS' if r.trailer_coverage_ok else 'FAIL'}")
+        lines.append(
+            f"    S1 bootstrap spread 95% CI = "
+            f"[{r.bootstrap_spread_lo}, {r.bootstrap_spread_hi}] "
+            f"(median {r.bootstrap_spread_median:.1f}, "
+            f"expected/cell = {r.n_trials / 36:.1f}): "
+            f"{'PASS' if r.bootstrap_ok else 'FAIL'}"
+        )
         lines.append("  C. tang_rotating_sequence:")
         lines.append(f"    deterministic under seed={STIM_DETERMINISM_SEED}: "
                      f"{'PASS' if t.deterministic else 'FAIL'}")
@@ -385,6 +486,18 @@ class StimulusValidationReport:
                      f"{'PASS' if t.deviant_frac_ok else 'FAIL'}")
         lines.append(f"    direction set {{-1, +1}}:           "
                      f"{'PASS' if t.direction_in_set_ok else 'FAIL'}")
+        lines.append(
+            f"    S2 block-len chi2 vs uniform{{5..9}}: "
+            f"chi2 = {t.blen_chi2_stat:.3f}, p = {t.blen_chi2_pvalue:.3f} "
+            f"(alpha = {KS_ALPHA}): "
+            f"{'PASS' if t.blen_chi2_ok else 'FAIL'}"
+        )
+        lines.append(
+            f"    S3 deviant frac 95% CI = "
+            f"[{t.dev_ci_lo:.3f}, {t.dev_ci_hi:.3f}] "
+            f"(expected {t.deviant_frac_expected:.3f}): "
+            f"{'PASS' if t.dev_ci_ok else 'FAIL'}"
+        )
         lines.append("  -----------------------------------")
         lines.append(f"  verdict: {'PASS' if self.passed else 'FAIL'}")
         return "\n".join(lines)
