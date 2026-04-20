@@ -1,6 +1,7 @@
-=== Stage-1 ctx_pred FULL retrain (seed=42, n_trials=360) ===
+=== Stage-1 ctx_pred FULL retrain (seed=42, n_trials=360, attempt=2) ===
 checkpoint dir: /home/vysoforlife/code_files/und_OSI_formation_extend/Fold6_pvfix/expectation_snn/data/checkpoints
-wall-start    : 2026-04-21 05:18:08
+wall-start    : 2026-04-21 06:12:32
+override      : HRingConfig.inh_w_max = 2.0 (default 10.0 -> 2.0 per attempt #1 diagnosis)
 Stage-1 ctx_pred driver: seed=42, n_trials=360
   schedule: richter_biased p_bias=0.80  derangement=(1, 2, 3, 4, 5, 0)  900.0 s sim time
   V1→H_ctx g=1.50  V1→H_pred g=1.50
@@ -15,10 +16,10 @@ Stage-1 ctx_pred driver: seed=42, n_trials=360
 [FAIL] h_preprobe_forecast_prob       value=0.000 band=[0.250, 1.000] n_trials=180 hits=0 chance=0.167 window=pre_trailer
 [PASS] no_runaway                     value=21.274 band=[0.000, 80.000] OK
 --- Stage 1 gate: FAILED ---
-Stage-1 ctx_pred elapsed: 2671.9 s sim wall-clock
+Stage-1 ctx_pred elapsed: 2689.5 s sim wall-clock
 checkpoint saved: /home/vysoforlife/code_files/und_OSI_formation_extend/Fold6_pvfix/expectation_snn/data/checkpoints/stage_1_ctx_pred_seed42.npz
 
-=== Stage-1 ctx_pred full retrain completed in 2700.4 s (45.0 min) ===
+=== Stage-1 ctx_pred full retrain completed in 2716.0 s (45.3 min) ===
 
 --- Stage-1 gate report ---
   [FAIL] h_bump_persistence_ms          value=10.000 band=[200.000, 500.000]
@@ -29,9 +30,13 @@ checkpoint saved: /home/vysoforlife/code_files/und_OSI_formation_extend/Fold6_pv
 --- evidence-log JSON ---
 {
   "stage": "stage_1_ctx_pred_full",
+  "attempt": 2,
+  "overrides": {
+    "HRingConfig.inh_w_max": 1.5
+  },
   "seed": 42,
   "n_trials": 360,
-  "wall_s": 2700.3506915569305,
+  "wall_s": 2715.993547677994,
   "checkpoint_path": "/home/vysoforlife/code_files/und_OSI_formation_extend/Fold6_pvfix/expectation_snn/data/checkpoints/stage_1_ctx_pred_seed42.npz",
   "passed": false,
   "checks": {
@@ -76,7 +81,6 @@ checkpoint saved: /home/vysoforlife/code_files/und_OSI_formation_extend/Fold6_pv
     "W_ctx_pred_max_final": 0.07838407428371029,
     "elig_mean_final": 2.4235116253248705,
     "n_gate_updates": 360.0,
-    "sim_wall_s": 2671.876631975174
+    "sim_wall_s": 2689.5226531028748
   }
 }
-EXIT=1
