@@ -470,3 +470,154 @@ targeted **(1) 2D sweep** if (2) also shows monotone-only behaviour.
   `V1ToHConfig()` defaults: `g_v1_to_h=1.5`, `drive_amp_v1_to_h_pA=80.0`,
   `sigma_channels=1.0`.
 - Stale pre-fix Sprint 5b npz files removed before this rerun.
+
+---
+
+## Sprint 5c pre-audit — debugger verdict on prior-vs-amplifier + researcher verdict on assay design
+
+**Status**: Sprint 5c hold. External reviewer critique
+(`docs/SPRINT_5B_REVIEW.md`, commit `c4614b7`) raised five confounds (C1–C5).
+Lead dispatched two parallel audits:
+
+  - **Task #33 (debugger)**: prior-vs-amplifier diagnostic on Sprint 5b r=1.0
+    measurements. Time-resolved H_E/V1_E rates per assay window with V1→H
+    on vs ablated during the probe.
+  - **Task #34 (researcher)**: verify the three assay-design concerns (C2 / C3
+    / C4) against Kok 2012, Richter 2022, Tang 2023 primary sources.
+
+Both audits returned. Sprint 5c implementation begins after this section.
+
+### Debugger verdict (task #33) — Richter 100% amplifier, Tang 100% amplifier, Kok mostly amplifier with ~15–25% prior contribution
+
+Diagnostic script: `scripts/diag_prior_vs_amplifier.py`. Output log:
+`scripts/diag_prior_vs_amplifier.log` (138 lines).
+
+**Methodology**: For each assay at r=1.0 seed=42, run 2–6 trials with
+spike monitors on H_R/H_T E, V1_E, V1_SOM, V1_PV. Bin spikes into
+pre-probe / 0–50 ms / 50–150 ms / 150–500 ms windows on the matched and
+orthogonal-far channels. For Richter only, repeat with V1→H weights
+zeroed at trailer onset (restored at ITI) — H rate during the trailer
+should drop to zero if H is amplifier-only, or persist (carried by
+recurrent NMDA in H) if H carries a prior.
+
+**Richter** (4 trials, 2 expected + 2 unexpected, condition col before
+ablation):
+  - V1→H **on**, expected (cond=1, L_ch == T_ch): trail_0_50 H(T) = 60 / 0,
+    trail_50_150 = 20 / 20, trail_150_500 = 14.3 / 25.7 Hz on matched.
+  - V1→H **on**, unexpected (cond=0, L_ch ≠ T_ch): trail_0_50 H(T) =
+    0 / 20, trail_50_150 = 20 / 20, trail_150_500 = 17.1 / 14.3 Hz.
+  - V1→H **off** during trailer, **all 4 trials**: trail_0_50 = 0,
+    trail_50_150 = 0, trail_150_500 = 0 Hz on H(T) **and** H(L) and H(far).
+    (V1_E(T) and SOM(T) on V1 are unchanged → not a network-collapse
+    artefact; only H goes silent.)
+
+  Verdict: **100% amplifier**. Trailer-time H activity is fully explained
+  by V1→H during the trailer; the leader produces no measurable carry-over
+  H_E activity at trailer onset under the current g_v1_to_h=1.5 and
+  H NMDA decay.
+
+**Tang** (6 items, item 0 → 5, all expected at r=1.0):
+  - prev_item window H_T(matched) = 0.0 Hz for **every** item k ∈ {0..5}.
+  - item_0_50 H_T(matched) ranges 0–20 Hz (driven by current item's V1→H).
+  - item_50_150 H_T(matched) peaks at 10–70 Hz.
+  - item_150_end H_T(matched) decays to 10–40 Hz.
+
+  Verdict: **100% amplifier**. The 250 ms item duration with no ITI is too
+  short for any inter-item carry-over of H state to survive — every item
+  starts with H = 0. Tang H tracking is purely a within-item amplifier
+  response to V1→H drive, with zero contribution from prior expectation.
+
+**Kok** (2 trials, 1 valid + 1 invalid):
+  - pre_cue: H_R = 0 Hz.
+  - cue (500 ms cue input directly to H_R cue channel): H_R = 200+ Hz.
+  - gap (500 ms blank, no cue, no V1→H drive): H_R = 12–14 Hz on cue
+    channel — the recurrent NMDA in H_R holds activity *above* zero into
+    the gap, decaying from cue-end.
+  - grat_0_50 (matched channel — note channel mismatch from cue):
+    H_R(matched) = 0–20 Hz.
+  - grat_50_150 H_R(matched) = 30–50 Hz.
+  - grat_150_500 H_R(matched) = 17–26 Hz.
+
+  Verdict: **amplifier-dominant with ~15–25% prior contribution**. The
+  ~12 Hz H residue at gap-end is the only "prior" signal H carries into
+  the grating, and it sits on the **cue channel**, not on the
+  upcoming-grating channel. By grat_50_150 the matched-channel rate
+  (driven by V1→H from the live grating) already exceeds the cue-channel
+  residue. The "prior" therefore exists but is spatially mis-targeted (cue
+  channel ≠ grating channel) and small relative to the within-trial
+  amplifier signal.
+
+**Implication for Sprint 5b positive findings**: the −1.20 Hz Richter
+center suppression and the −1.59 Hz Tang dev−exp suppression are *both
+generated entirely during the probe by the V1→H→V1 round-trip*, not by
+H acting as a stored prior. This is consistent with C1: H is operating as
+an amplifier that adds suppressive feedback to currently-driven V1
+neurons, not as a pre-loaded prior that gates incoming V1 responses.
+
+### Researcher verdict (task #34) — all 3 assay-design concerns CONFIRMED vs primary sources
+
+**C2 — Richter design** (Richter, Ekman, de Lange 2022, *Cerebral Cortex*):
+  - **Confirmed**. The Richter "local gain dampening" claim relies on the
+    cross-over design where the **same trailing item** can be expected or
+    unexpected depending on the preceding leader. Our Sprint 5b design
+    (expected = θ_L = θ_T; unexpected = θ_L = θ_T + π/2) does not
+    instantiate this — it conflates expectation with same-channel
+    repetition. Same-channel trials carry adaptation, E/I fatigue, and
+    V1→H→V1 recurrence all in one direction; the −1.25 Hz matched-channel
+    delta could be any of these plus expectation.
+  - **Sprint 5c R1 fix**: deranged-permutation expected
+    (D = [1,2,3,4,5,0]) so every "expected" trial has Δθ ≠ 0 between
+    leader and trailer; unexpected trials drawn from the remaining
+    orientation pairs with matched leader/trailer-distance distributions.
+
+**C3 — Kok design** (Kok, Brouwer, van Gerven, de Lange 2012, *J Neurosci*):
+  - **Confirmed**. The actual Kok 2012 result is that **stimulus
+    orientation decoding accuracy** is *higher* for expected than
+    unexpected probes (sharpened representation under prediction). Our
+    Sprint 5b SVM decoded the validity label (valid vs invalid cue), with
+    a class imbalance (180 valid vs 60 invalid → 75% majority floor) that
+    sits within ε of the reported 0.742, making the result trivially
+    explained by class imbalance rather than expectation-related coding.
+  - **Sprint 5c R2 fix**: orientation MVPA (45° vs 135°) decoded
+    separately within valid trials and within invalid trials (balanced),
+    with subsample-and-bootstrap; primary metric is Δaccuracy =
+    Acc_valid − Acc_invalid.
+
+**C4 — Tang design** (Tang, Galletti, Kohn 2023, *J Neurophysiol* / equivalent
+matched-orientation deviance paper):
+  - **Confirmed**. Tang's empirical signature is **dev > exp at matched
+    θ** (gain enhancement / surprise gain). Our Sprint 5b dev−exp =
+    −1.59 Hz at matched θ has the **opposite sign**. Additionally, the
+    Tang paradigm includes a **Random** baseline condition (IID
+    orientations, no rotating-block structure); without it, neither
+    suppression nor enhancement can be attributed to expectation per se
+    rather than to repetition-suppression in the rotating block.
+  - **Sprint 5c R3 fix**: add a Random block of 500 IID-orientation items
+    paired with the existing rotating block of 500; report 3-condition
+    rates (Random / Expected / Deviant) on matched channel, with Δθ_prev
+    (orientation distance to previous item) covariate-stratified to
+    separate expectation from adaptation.
+
+### Sprint 5c targets (replaces 5a–5b open questions)
+
+1. **Step 2** — V1→H runtime toggle `with_v1_to_h ∈ {continuous,
+   context_only, off}`. `context_only` = active during cue/leader, off
+   during grating/trailer. If positive findings collapse under
+   `context_only`, Sprint 5b results are NOT prior effects.
+2. **Step 3** — three assay rewrites per R1/R2/R3 above.
+3. **Step 4** — r=1.0 dual-mode rerun (continuous vs context_only).
+   Save dual .npz, write `docs/SPRINT_5C_DUAL_MODE_FINDINGS.md`.
+5. **Step 5** — decision gate. If context_only collapses positive
+   findings, paper frame becomes "amplifier-only feedback circuit
+   reproduces a subset of expectation phenomena." If context_only
+   preserves them, frame stays "prior-carrying feedback circuit."
+
+### Provenance (pre-audit)
+
+- Branch: `expectation-snn-v1h` (post commit `c4614b7`).
+- Diagnostic: `scripts/diag_prior_vs_amplifier.py` (368 lines), log
+  `scripts/diag_prior_vs_amplifier.log` (138 lines).
+- Reviewer doc: `expectation_snn/docs/SPRINT_5B_REVIEW.md` (commit
+  `c4614b7`).
+- Sources cited by reviewer: Richter, Ekman, de Lange 2022; Kok et al.
+  2012; Tang et al. 2023; Kim/Shen LM→V1 physiology.
