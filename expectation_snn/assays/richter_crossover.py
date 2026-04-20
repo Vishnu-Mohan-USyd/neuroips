@@ -1,19 +1,27 @@
 """Richter 6 × 6 cross-over assay (Sprint 5a Step 3, task #27).
 
-Paradigm (plan §3.6, Richter 2022 logic)::
+Sprint 5c R1 design (reviewer rec 5c-3 — addresses C2 same-θ adaptation
+confound): deranged-permutation D=[1,2,3,4,5,0]::
 
     leader (500 ms, θ_L) -> trailer (500 ms, θ_T) -> ITI (1500 ms).
 
-    Test phase only. Stage 1 H_R was trained on balanced 6 × 6 pairs.
-    In the test, we use 12 distinct (θ_L, θ_T) pair types at 50 % reliability:
+    expected   (6 pairs):  θ_T = θ_L + 30°        (Δθ_step = 1)
+        Stage-1 trained the H_R rotational expectation; expected pairs
+        always present a one-step rotation. This breaks the same-θ
+        adaptation confound the original 5a design suffered (where
+        expected ≡ θ_L = θ_T forced ~1 s of identical orientation).
+    unexpected (24 pairs): θ_T = θ_L + k·30°,   k ∈ {2,3,4,5}
+        Four offsets per leader, balanced across orientations.
 
-        expected   (6 pairs): θ_L = θ_T        ("same-orientation continuity")
-        unexpected (6 pairs): θ_L = θ_T + π/2  ("orthogonal violation")
-
-    360 trials total = 30 reps × 12 pair types.
+    Default schedule:
+        180 expected  =  6 pair types × 30 reps
+        192 unexpected = 24 pair types ×  8 reps
+        372 trials total.
 
 V1 responses are measured on the trailer epoch; the leader serves as the
-context that H_R feedback rides on.
+context that H_R feedback rides on. The Δθ-step covariate (1..5) is
+written into each schedule item so downstream metrics can stratify by
+expected vs unexpected step (and by step distance within unexpected).
 
 Primary neuron-level metrics (assays.metrics):
 
@@ -63,15 +71,27 @@ from .metrics import (
 
 @dataclass
 class RichterConfig:
-    """Richter test-phase configuration."""
-    n_trials: int = 360
-    reps_per_pair: int = 30            # 30 × 12 pair types = 360
+    """Richter test-phase configuration (Sprint 5c R1: deranged-permutation).
+
+    The schedule is determined by ``reps_expected`` and ``reps_unexpected``;
+    ``n_trials`` is derived. Defaults:
+
+      - 6 expected pair types  × 30 reps  = 180 trials   (Δθ_step = 1)
+      - 24 unexpected pair types × 8 reps = 192 trials   (Δθ_step ∈ {2,3,4,5})
+      - total                            = 372 trials.
+    """
     leader_ms: float = 500.0
     trailer_ms: float = 500.0
     iti_ms: float = 1500.0
     contrast: float = 1.0
     n_voxels: int = 4                  # Richter pseudo-voxel default
     seed: int = 42
+    reps_expected: int = 30            # × 6 expected pair types = 180
+    reps_unexpected: int = 8           # × 24 unexpected pair types = 192
+
+    @property
+    def n_trials(self) -> int:
+        return int(self.reps_expected) * 6 + int(self.reps_unexpected) * 24
 
 
 @dataclass
@@ -82,6 +102,7 @@ class RichterResult:
     cell_type_gain: Dict[str, Any]
     center_vs_flank: Dict[str, Any]
     voxel_forward: Dict[str, Any]        # 6-family secondary
+    dtheta_stratified: Dict[str, Any] = field(default_factory=dict)
     raw: Dict[str, Any] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
 
@@ -99,51 +120,73 @@ def build_richter_schedule(
     cfg: RichterConfig,
     rng: Optional[np.random.Generator] = None,
 ) -> List[Dict[str, Any]]:
-    """Assemble the 360-trial test schedule.
+    """Assemble the deranged-permutation Richter test schedule.
 
-    12 pair types × 30 reps (at defaults). Each item is a dict with keys:
-      - ``theta_L``  : leader orientation (rad)
-      - ``theta_T``  : trailer orientation (rad)
-      - ``condition``: 1 = expected (θ_L = θ_T), 0 = unexpected (θ_L = θ_T + π/2)
-      - ``pair_id``  : int in 0..11 (canonical pair index)
+    Sprint 5c R1 (reviewer rec 5c-3): the original 5a design used
+    expected ≡ θ_L = θ_T, which left V1 driven by the *same* orientation
+    for ~1 s straight (leader+trailer). At 30°-spaced channels that
+    produces strong same-channel adaptation that is indistinguishable
+    from "expectation suppression". The deranged-permutation design
+    removes that confound: expected pairs always rotate 30° between
+    leader and trailer.
 
-    Pair ordering: [exp_0, ..., exp_5, unexp_0, ..., unexp_5], then shuffled.
+    Schedule (defaults, 372 trials):
+      - 6 expected pair types  (Δθ_step = 1)              × 30 reps = 180
+      - 24 unexpected pair types (Δθ_step ∈ {2, 3, 4, 5})  × 8 reps = 192
+
+    Each item is a dict with keys:
+      - ``theta_L``     : leader orientation (rad)
+      - ``theta_T``     : trailer orientation (rad)
+      - ``condition``   : 1 = expected (Δθ_step=1), 0 = unexpected (step≥2)
+      - ``pair_id``     : int in 0..29 (canonical pair index)
+      - ``dtheta_step`` : int in {1,2,3,4,5} — the step distance (mod 6)
+                         from leader to trailer on the 30°-spaced ring.
+
+    Pair construction: leader index i ∈ {0..5}, trailer = (i+k) mod 6,
+    k ∈ {1} for expected, k ∈ {2,3,4,5} for unexpected.
     """
     if rng is None:
         rng = np.random.default_rng(cfg.seed)
     thetas = _richter_thetas_rad()                      # (6,)
     n_orients = len(thetas)
+    if n_orients != 6:
+        raise ValueError(f"Richter requires 6 orientations, got {n_orients}")
 
     pairs: List[Dict[str, Any]] = []
+    pid = 0
+    # Expected: Δθ_step = 1 (single-step rotation)
     for i in range(n_orients):
-        theta_T = float(thetas[i])
-        # Expected: θ_L = θ_T
-        theta_L_exp = theta_T
+        theta_L = float(thetas[i])
+        theta_T = float(thetas[(i + 1) % n_orients])
         pairs.append({
-            "theta_L": theta_L_exp, "theta_T": theta_T,
-            "condition": 1, "pair_id": i,
+            "theta_L": theta_L, "theta_T": theta_T,
+            "condition": 1, "pair_id": pid, "dtheta_step": 1,
         })
+        pid += 1
+    # Unexpected: Δθ_step ∈ {2, 3, 4, 5}
     for i in range(n_orients):
-        theta_T = float(thetas[i])
-        # Unexpected: θ_L = θ_T + π/2 — shift by 3 bins (90° / 30° step) on
-        # the 6-orientation grid, wrapping mod 6.
-        theta_L_unexp = float(thetas[(i + 3) % n_orients])
-        pairs.append({
-            "theta_L": theta_L_unexp, "theta_T": theta_T,
-            "condition": 0, "pair_id": n_orients + i,
-        })
+        theta_L = float(thetas[i])
+        for k in (2, 3, 4, 5):
+            theta_T = float(thetas[(i + k) % n_orients])
+            pairs.append({
+                "theta_L": theta_L, "theta_T": theta_T,
+                "condition": 0, "pair_id": pid, "dtheta_step": k,
+            })
+            pid += 1
 
-    n_pair = len(pairs)                        # 12
-    reps = int(cfg.reps_per_pair)
-    if reps * n_pair != cfg.n_trials:
-        raise ValueError(
-            f"n_trials={cfg.n_trials} must = reps_per_pair ({reps}) × "
-            f"n_pairs ({n_pair})"
-        )
     items: List[Dict[str, Any]] = []
+    reps_exp = int(cfg.reps_expected)
+    reps_unexp = int(cfg.reps_unexpected)
     for p in pairs:
+        reps = reps_exp if p["condition"] == 1 else reps_unexp
         for _ in range(reps):
             items.append(dict(p))
+    expected_total = reps_exp * 6 + reps_unexp * 24
+    if len(items) != expected_total or expected_total != cfg.n_trials:
+        raise ValueError(
+            f"schedule items {len(items)} != n_trials {cfg.n_trials} "
+            f"(reps_expected={reps_exp}, reps_unexpected={reps_unexp})"
+        )
     order = np.arange(len(items))
     rng.shuffle(order)
     return [items[i] for i in order]
@@ -252,6 +295,62 @@ def _cell_type_gain_matrix(
     }
 
 
+def _dtheta_step_stratified(
+    trailer_counts_e: np.ndarray,        # (n_e, n_trials)
+    pref_rad: np.ndarray,                # (n_e,)
+    theta_T: np.ndarray,                 # (n_trials,)
+    cond_mask: np.ndarray,               # (n_trials,)
+    dtheta_step: np.ndarray,             # (n_trials,) ∈ {1..5}
+    window_ms: float,
+) -> Dict[str, Any]:
+    """Per-Δθ_step preference-rank suppression report (Sprint 5c R1).
+
+    For each unexpected step k ∈ {2,3,4,5}, compute the
+    suppression-vs-preference Δ between expected (Δθ_step=1) and the
+    given unexpected k. Returns the per-step ``bin_delta`` (10 bins) and
+    the matched center/flank/redist scalars per step.
+
+    Bins are computed by :func:`suppression_vs_preference` with the
+    expected step (k=1) recoded as ``condition=1`` and the chosen
+    unexpected k as ``condition=0``.
+    """
+    bin_deltas: Dict[int, np.ndarray] = {}
+    redists: Dict[int, Dict[str, float]] = {}
+    n_per_step: Dict[int, int] = {}
+    expected_mask = (dtheta_step == 1) & (cond_mask == 1)
+    n_per_step[1] = int(expected_mask.sum())
+    for k in (2, 3, 4, 5):
+        unexp_mask = (dtheta_step == k) & (cond_mask == 0)
+        n_per_step[k] = int(unexp_mask.sum())
+        sel = expected_mask | unexp_mask
+        if not sel.any() or not unexp_mask.any():
+            bin_deltas[k] = np.full(10, np.nan, dtype=np.float64)
+            redists[k] = {"center_delta": float("nan"),
+                          "flank_delta": float("nan"),
+                          "redist": float("nan")}
+            continue
+        sub_cond = np.where(expected_mask[sel], 1, 0).astype(np.int64)
+        pr = suppression_vs_preference(
+            trailer_counts_e[:, sel], pref_rad,
+            theta_T[sel], sub_cond, n_bins=10,
+        )
+        bd = np.asarray(pr["bin_delta"], dtype=np.float64)
+        bin_deltas[k] = bd
+        n_bins = bd.size
+        redists[k] = {
+            "center_delta": float(bd[0]),
+            "flank_delta": float(bd[n_bins // 2:].mean()) if n_bins > 1 else 0.0,
+            "redist": float(bd[0] - (bd[n_bins // 2:].mean() if n_bins > 1 else 0.0)),
+        }
+    return {
+        "bin_delta_by_step": {int(k): bin_deltas[k] for k in (2, 3, 4, 5)},
+        "redist_by_step": redists,
+        "n_trials_per_step": {int(k): int(n_per_step.get(k, 0))
+                              for k in (1, 2, 3, 4, 5)},
+        "window_ms": float(window_ms),
+    }
+
+
 def _center_vs_flank_redistribution(pref_rank: Dict[str, Any]) -> Dict[str, Any]:
     """Compact redistribution readout from the preference-rank Δ per bin.
 
@@ -348,12 +447,14 @@ def run_richter_crossover(
     theta_T = np.zeros(n_trials, dtype=np.float64)
     cond_mask = np.zeros(n_trials, dtype=np.int64)
     pair_id = np.zeros(n_trials, dtype=np.int64)
+    dtheta_step = np.zeros(n_trials, dtype=np.int64)
 
     for k, item in enumerate(schedule):
         theta_L[k] = item["theta_L"]
         theta_T[k] = item["theta_T"]
         cond_mask[k] = item["condition"]
         pair_id[k] = item["pair_id"]
+        dtheta_step[k] = item["dtheta_step"]
 
         bundle.reset_all()
 
@@ -426,6 +527,12 @@ def run_richter_crossover(
     # ---- metric 4: center-vs-flank redistribution ----------------------
     cvf = _center_vs_flank_redistribution(pref_rank)
 
+    # ---- Sprint 5c R1: Δθ-step stratified report ----------------------
+    dtheta_strat = _dtheta_step_stratified(
+        trailer_counts_e, pref_rad, theta_T, cond_mask, dtheta_step,
+        window_ms=cfg.trailer_ms,
+    )
+
     # ---- secondary: pseudo-voxel 6-family predictions ------------------
     # Build per-theta (presented) average counts from expected trials only.
     thetas_unique = _richter_thetas_rad()
@@ -448,6 +555,7 @@ def run_richter_crossover(
         cell_type_gain=ctg,
         center_vs_flank=cvf,
         voxel_forward=voxel_fwd,
+        dtheta_stratified=dtheta_strat,
         raw={
             "trailer_counts_e": trailer_counts_e,
             "trailer_counts_som": trailer_counts_som,
@@ -457,6 +565,7 @@ def run_richter_crossover(
             "theta_T": theta_T,
             "cond_mask": cond_mask,
             "pair_id": pair_id,
+            "dtheta_step": dtheta_step,
             "pref_rad": pref_rad,
         },
         meta={
@@ -464,6 +573,7 @@ def run_richter_crossover(
             "n_trials": int(n_trials),
             "n_expected": int((cond_mask == 1).sum()),
             "n_unexpected": int((cond_mask == 0).sum()),
+            "n_per_step": dtheta_strat["n_trials_per_step"],
             "config": cfg.__dict__,
             "bundle": {k: v for k, v in bundle.meta.items() if k != "config"},
         },
@@ -476,16 +586,19 @@ def run_richter_crossover(
 
 if __name__ == "__main__":
     cfg = RichterConfig(
-        n_trials=24, reps_per_pair=2,
+        reps_expected=2, reps_unexpected=1,
         leader_ms=300.0, trailer_ms=300.0, iti_ms=300.0,
         seed=42,
     )
     r = run_richter_crossover(cfg=cfg, verbose=True)
     print(f"[richter smoke] n_trials={r.meta['n_trials']}  "
           f"exp={r.meta['n_expected']}  unexp={r.meta['n_unexpected']}")
+    print(f"  per-step n trials = {r.meta['n_per_step']}")
     print(f"  pref-rank bin0 Δ = {r.pref_rank['bin_delta'][0]:.3f}")
     print(f"  feat-dist grid shape = {r.feature_distance['grid'].shape}")
     print(f"  cell-type Δ E/SOM/PV × local/nbr/far =\n"
           f"    {r.cell_type_gain['delta_hz']}")
     print(f"  center-vs-flank redist = {r.center_vs_flank['redist']:+.3f}")
+    for k, rd in r.dtheta_stratified["redist_by_step"].items():
+        print(f"  step k={k} redist = {rd['redist']:+.3f}")
     print(f"  voxel families = {sorted(r.voxel_forward)}")

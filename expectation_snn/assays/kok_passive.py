@@ -1,4 +1,5 @@
-"""Kok-inspired passive cueing assay (Sprint 5a Step 2, task #27).
+"""Kok-inspired passive cueing assay (Sprint 5a Step 2, task #27;
+Sprint 5c R2 — orientation-MVPA decoder, reviewer rec 5c-4).
 
 Paradigm (plan §3.5, Kok 2012 PMID 22841311 logic, not an exact replication)::
 
@@ -20,8 +21,15 @@ Primary neuron-level metrics (assays.metrics signatures):
 
 1. Mean V1_E amplitude during the grating epoch (valid vs invalid);
    :func:`total_population_activity`.
-2. Cross-validated linear-SVM decoding of validity from the V1_E
-   population vector; :func:`svm_decoding_accuracy`.
+2. **Sprint 5c R2**: orientation-MVPA decoding (45° vs 135°) computed
+   *separately* on valid vs invalid grating-evoked V1_E vectors. To keep
+   class counts equal across the two splits, valid trials are
+   sub-sampled down to the invalid-trial count (default 60: 30 of 45° +
+   30 of 135°). Repeated 20 times with different seeds; report
+   ``Δ_decoding = Acc_valid − Acc_invalid`` as the expectation-MVPA
+   index, with a percentile bootstrap CI over the 20 sub-samples.
+   Original validity-decoder (predict valid vs invalid label from the
+   V1 vector) is retained as ``svm_validity_legacy`` for backward compat.
 3. Preference-rank suppression (Δ(valid − invalid) vs rank bin on
    cells sorted by |θ_pref − θ_presented|); :func:`suppression_vs_preference`.
 4. Omission-subtracted response (valid − omission per cell);
@@ -71,6 +79,14 @@ class KokConfig:
     """Kok passive-cueing paradigm configuration.
 
     Defaults match the plan §3.5 paradigm and task #27 Step-2 specification.
+
+    Sprint 5c R2 additions:
+      ``mvpa_n_subsamples``  — number of random valid sub-samples for
+                                Δ_decoding bootstrap (default 20).
+      ``mvpa_n_bootstrap``   — bootstrap reps over the per-subsample
+                                Δ_decoding distribution (default 1000).
+      ``mvpa_cv``            — k-fold CV inside each MVPA decoder fit
+                                (default 5).
     """
     n_stim_trials: int = 240
     n_omission_trials: int = 48
@@ -82,15 +98,20 @@ class KokConfig:
     cue_rate_hz: float = STAGE2_CUE_ACTIVE_HZ
     contrast: float = 1.0
     seed: int = 42
+    mvpa_n_subsamples: int = 20
+    mvpa_n_bootstrap: int = 1000
+    mvpa_cv: int = 5
 
 
 @dataclass
 class KokResult:
-    """Kok passive-cueing assay output (Sprint 5a primary metrics)."""
-    mean_amp: Dict[str, Any]           # {"valid": ..., "invalid": ...}
-    svm: Dict[str, Any]
+    """Kok passive-cueing assay output (Sprint 5a primary metrics +
+    Sprint 5c R2 orientation-MVPA decoder)."""
+    mean_amp: Dict[str, Any]              # {"valid": ..., "invalid": ...}
+    svm: Dict[str, Any]                   # legacy validity decoder (5a primary)
+    orientation_mvpa: Dict[str, Any]      # Sprint 5c R2 — Δ_decoding result
     pref_rank: Dict[str, Any]
-    omission: np.ndarray               # per-cell valid − omission
+    omission: np.ndarray                  # per-cell valid − omission
     raw: Dict[str, Any] = field(default_factory=dict)
     meta: Dict[str, Any] = field(default_factory=dict)
 
@@ -207,6 +228,125 @@ def build_kok_schedule(
 def _snapshot_counts(mon: SpikeMonitor) -> np.ndarray:
     """Return a copy of per-neuron cumulative spike counts."""
     return np.asarray(mon.count[:], dtype=np.int64).copy()
+
+
+def _orientation_label(theta_rad: float, expected_a_rad: float,
+                       expected_b_rad: float) -> int:
+    """Map presented theta to a binary orientation label (0 = 45°, 1 = 135°)."""
+    da = abs(theta_rad - expected_a_rad)
+    db = abs(theta_rad - expected_b_rad)
+    return 0 if da <= db else 1
+
+
+def _orientation_mvpa(
+    spike_vectors: np.ndarray,           # (n_trials, n_cells)
+    orient_labels: np.ndarray,           # (n_trials,) ∈ {0,1}
+    valid_mask: np.ndarray,              # (n_trials,) bool
+    invalid_mask: np.ndarray,            # (n_trials,) bool
+    n_subsamples: int,
+    n_bootstrap: int,
+    cv: int,
+    seed: int,
+) -> Dict[str, Any]:
+    """Sprint 5c R2 orientation-decoding split: Δ = Acc_valid − Acc_invalid.
+
+    Decoder: linear SVM (5-fold stratified CV inside each fit), trained
+    to predict orientation (0=45° / 1=135°) from the V1_E spike vector.
+
+    Sub-sampling: invalid trials are typically ~60 (30 per orientation
+    at default). We sub-sample valid trials down to the same per-class
+    count so both decoders see equal numbers of trials per class.
+    Repeat ``n_subsamples`` times with different sub-sample seeds.
+
+    Δ_decoding = Acc_valid − Acc_invalid is computed per sub-sample;
+    the mean is reported with a percentile bootstrap CI.
+    """
+    from .metrics import svm_decoding_accuracy
+    rng = np.random.default_rng(seed)
+
+    valid_idx = np.where(valid_mask)[0]
+    invalid_idx = np.where(invalid_mask)[0]
+    if invalid_idx.size < 4 or valid_idx.size < invalid_idx.size:
+        raise RuntimeError(
+            f"Need at least 4 invalid + ≥invalid valid trials for MVPA; "
+            f"got valid={valid_idx.size} invalid={invalid_idx.size}"
+        )
+    inv_labels = orient_labels[invalid_idx]
+    n_per_class = int(min(np.bincount(inv_labels.astype(np.int64),
+                                      minlength=2)))
+    if n_per_class < 2:
+        raise RuntimeError(
+            f"Each orientation class needs ≥2 invalid trials; got "
+            f"per-class counts {np.bincount(inv_labels.astype(np.int64), minlength=2)}"
+        )
+
+    # Index of invalid trials per orientation class (kept fixed across reps).
+    inv_by_class: List[np.ndarray] = [
+        invalid_idx[inv_labels == c] for c in (0, 1)
+    ]
+    val_labels_full = orient_labels[valid_idx]
+    val_by_class: List[np.ndarray] = [
+        valid_idx[val_labels_full == c] for c in (0, 1)
+    ]
+    if any(c.size < n_per_class for c in val_by_class):
+        raise RuntimeError(
+            f"Not enough valid per class ({[c.size for c in val_by_class]}) "
+            f"to subsample to {n_per_class} per class"
+        )
+
+    acc_valid_subs = np.zeros(n_subsamples, dtype=np.float64)
+    acc_invalid_subs = np.zeros(n_subsamples, dtype=np.float64)
+    delta_subs = np.zeros(n_subsamples, dtype=np.float64)
+
+    # Invalid decoder: same trials each subsample (no random subsetting needed),
+    # but we re-fit per subsample with seed offset so CV folds vary too.
+    inv_idx_balanced = np.concatenate([
+        inv_by_class[0][:n_per_class], inv_by_class[1][:n_per_class],
+    ])
+    Xinv = spike_vectors[inv_idx_balanced]
+    yinv = orient_labels[inv_idx_balanced].astype(np.int64)
+
+    for s in range(n_subsamples):
+        sub_seed = int(seed + s + 1)
+        # Sub-sample valid trials
+        rng_s = np.random.default_rng(sub_seed)
+        sel_v = []
+        for c in (0, 1):
+            pool = val_by_class[c]
+            pick = rng_s.choice(pool.size, size=n_per_class, replace=False)
+            sel_v.append(pool[pick])
+        val_idx_balanced = np.concatenate(sel_v)
+        Xv = spike_vectors[val_idx_balanced]
+        yv = orient_labels[val_idx_balanced].astype(np.int64)
+        rv = svm_decoding_accuracy(Xv, yv, cv=cv, seed=sub_seed)
+        ri = svm_decoding_accuracy(Xinv, yinv, cv=cv, seed=sub_seed)
+        acc_valid_subs[s] = rv["accuracy"]
+        acc_invalid_subs[s] = ri["accuracy"]
+        delta_subs[s] = rv["accuracy"] - ri["accuracy"]
+
+    # Bootstrap percentile CI on the mean of Δ_decoding across subsamples.
+    boot = np.zeros(n_bootstrap, dtype=np.float64)
+    for b in range(n_bootstrap):
+        idx = rng.integers(0, n_subsamples, size=n_subsamples)
+        boot[b] = float(delta_subs[idx].mean())
+    delta_mean = float(delta_subs.mean())
+    delta_ci = (float(np.quantile(boot, 0.025)),
+                float(np.quantile(boot, 0.975)))
+
+    return {
+        "delta_decoding": delta_mean,
+        "delta_decoding_ci": delta_ci,
+        "acc_valid_mean": float(acc_valid_subs.mean()),
+        "acc_invalid_mean": float(acc_invalid_subs.mean()),
+        "acc_valid_subs": acc_valid_subs,
+        "acc_invalid_subs": acc_invalid_subs,
+        "delta_subs": delta_subs,
+        "n_subsamples": int(n_subsamples),
+        "n_bootstrap": int(n_bootstrap),
+        "n_per_class_subsample": int(n_per_class),
+        "n_invalid_per_class": int(min(c.size for c in inv_by_class)),
+        "cv": int(cv),
+    }
 
 
 def run_kok_passive(
@@ -358,10 +498,33 @@ def run_kok_passive(
         pop_mask, window_ms=cfg.grating_ms,
     )
 
-    # ----- metric 2: SVM (valid vs invalid) -----------------------------
+    # ----- metric 2 (legacy): SVM validity decoder ---------------------
+    # Kept for backward compat; main 5c R2 metric is orientation_mvpa below.
     X = trial_grating_counts[:, stim_mask].T                # (n_stim, n_e)
     y = cond_mask[stim_mask]
     svm_res = svm_decoding_accuracy(X, y, cv=5, seed=cfg.seed)
+
+    # ----- Sprint 5c R2: orientation MVPA, valid vs invalid split ------
+    # Map presented theta to a binary orientation label (45° vs 135°).
+    expected_a_rad = _cue_expected_theta_rad("A")
+    expected_b_rad = _cue_expected_theta_rad("B")
+    orient_labels = np.full(n_trials, -1, dtype=np.int64)
+    for i in range(n_trials):
+        if not is_omission[i]:
+            orient_labels[i] = _orientation_label(
+                float(theta_per_trial[i]), expected_a_rad, expected_b_rad,
+            )
+    spike_vectors_all = trial_grating_counts.T               # (n_trials, n_e)
+    orient_mvpa = _orientation_mvpa(
+        spike_vectors=spike_vectors_all,
+        orient_labels=orient_labels,
+        valid_mask=valid_stim_mask,
+        invalid_mask=invalid_stim_mask,
+        n_subsamples=int(cfg.mvpa_n_subsamples),
+        n_bootstrap=int(cfg.mvpa_n_bootstrap),
+        cv=int(cfg.mvpa_cv),
+        seed=int(cfg.seed),
+    )
 
     # ----- metric 3: preference-rank suppression ------------------------
     pref_rad = v1_e_preferred_thetas(bundle.v1_ring)         # (n_e,)
@@ -380,6 +543,7 @@ def run_kok_passive(
     return KokResult(
         mean_amp={"valid": valid_amp, "invalid": invalid_amp},
         svm=svm_res,
+        orientation_mvpa=orient_mvpa,
         pref_rank=pref_rank,
         omission=omission_delta,
         raw={
@@ -390,6 +554,7 @@ def run_kok_passive(
             "expected_per_trial": expected_per_trial,
             "cond_mask": cond_mask,
             "is_omission": is_omission,
+            "orient_labels": orient_labels,
             "pref_rad": pref_rad,
         },
         meta={
@@ -411,8 +576,9 @@ def run_kok_passive(
 if __name__ == "__main__":
     # Quick smoke: tiny n to prove the pipeline runs end-to-end.
     cfg = KokConfig(
-        n_stim_trials=20, n_omission_trials=4,
+        n_stim_trials=40, n_omission_trials=4,
         iti_ms=500.0, grating_ms=500.0, cue_ms=500.0, gap_ms=500.0,
+        mvpa_n_subsamples=4, mvpa_n_bootstrap=200,
         seed=42,
     )
     result = run_kok_passive(cfg=cfg, verbose=True)
@@ -423,6 +589,10 @@ if __name__ == "__main__":
           f"CI {result.mean_amp['valid']['total_rate_hz_ci']}")
     print(f"  invalid amp = {result.mean_amp['invalid']['total_rate_hz']:.3f} Hz "
           f"CI {result.mean_amp['invalid']['total_rate_hz_ci']}")
-    print(f"  svm acc     = {result.svm['accuracy']:.3f}")
+    print(f"  svm validity acc (legacy) = {result.svm['accuracy']:.3f}")
+    om = result.orientation_mvpa
+    print(f"  Δ_decoding (valid-invalid) = {om['delta_decoding']:+.3f} "
+          f"CI {om['delta_decoding_ci']}  "
+          f"(acc_v={om['acc_valid_mean']:.3f}, acc_i={om['acc_invalid_mean']:.3f})")
     print(f"  pref bin0 Δ = {result.pref_rank['bin_delta'][0]:.3f}")
     print(f"  omission-sub mean = {float(result.omission.mean()):.3f}")

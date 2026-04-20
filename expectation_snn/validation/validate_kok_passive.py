@@ -117,8 +117,9 @@ def test_per_cue_validity_balance() -> None:
 def test_end_to_end_smoke() -> None:
     """Tiny run — asserts all 4 primary metrics populate correctly."""
     cfg = KokConfig(
-        n_stim_trials=16, n_omission_trials=4,
+        n_stim_trials=40, n_omission_trials=4,
         cue_ms=200.0, gap_ms=200.0, grating_ms=200.0, iti_ms=300.0,
+        mvpa_n_subsamples=3, mvpa_n_bootstrap=100, mvpa_cv=2,
         seed=42,
     )
     r = run_kok_passive(cfg=cfg)
@@ -128,7 +129,7 @@ def test_end_to_end_smoke() -> None:
         d = r.mean_amp[cond]
         assert "total_rate_hz" in d and np.isfinite(d["total_rate_hz"]), d
         assert "total_rate_hz_ci" in d
-    # Metric 2: SVM
+    # Metric 2 (legacy): SVM
     assert 0.0 <= r.svm["accuracy"] <= 1.0
     # Metric 3: preference rank
     assert r.pref_rank["bin_delta"].shape == (10,)
@@ -141,6 +142,51 @@ def test_end_to_end_smoke() -> None:
     assert (gc >= 0).all()
 
 
+def test_orientation_mvpa_smoke() -> None:
+    """Sprint 5c R2: orientation MVPA produces well-formed Δ_decoding output."""
+    cfg = KokConfig(
+        n_stim_trials=40, n_omission_trials=4,
+        cue_ms=200.0, gap_ms=200.0, grating_ms=200.0, iti_ms=300.0,
+        mvpa_n_subsamples=3, mvpa_n_bootstrap=100, mvpa_cv=2,
+        seed=42,
+    )
+    r = run_kok_passive(cfg=cfg)
+    om = r.orientation_mvpa
+    for k in ("delta_decoding", "delta_decoding_ci",
+              "acc_valid_mean", "acc_invalid_mean",
+              "n_subsamples", "n_per_class_subsample"):
+        assert k in om, k
+    assert np.isfinite(om["delta_decoding"])
+    lo, hi = om["delta_decoding_ci"]
+    assert np.isfinite(lo) and np.isfinite(hi)
+    assert lo <= om["delta_decoding"] <= hi or abs(lo - hi) < 1e-9
+    assert 0.0 <= om["acc_valid_mean"] <= 1.0
+    assert 0.0 <= om["acc_invalid_mean"] <= 1.0
+    assert om["n_subsamples"] == cfg.mvpa_n_subsamples
+    assert om["n_per_class_subsample"] >= 1
+    # Per-subsample arrays present and shaped
+    assert om["delta_subs"].shape == (cfg.mvpa_n_subsamples,)
+    assert om["acc_valid_subs"].shape == (cfg.mvpa_n_subsamples,)
+    assert om["acc_invalid_subs"].shape == (cfg.mvpa_n_subsamples,)
+
+
+def test_orient_labels_present() -> None:
+    """Per-trial orientation labels (0=45°, 1=135°, -1=omission) populate raw."""
+    cfg = KokConfig(
+        n_stim_trials=20, n_omission_trials=4,
+        cue_ms=150.0, gap_ms=150.0, grating_ms=150.0, iti_ms=200.0,
+        mvpa_n_subsamples=2, mvpa_n_bootstrap=50, mvpa_cv=2,
+        seed=42,
+    )
+    r = run_kok_passive(cfg=cfg)
+    ol = r.raw["orient_labels"]
+    is_om = r.raw["is_omission"]
+    assert ol.shape == (cfg.n_stim_trials + cfg.n_omission_trials,)
+    assert (ol[is_om] == -1).all(), "omission trials must be label -1"
+    stim = ~is_om
+    assert ((ol[stim] == 0) | (ol[stim] == 1)).all(), "stim labels must be 0 or 1"
+
+
 _CHECKS = [
     ("schedule_totals", test_schedule_totals),
     ("cue_balance", test_cue_balance),
@@ -150,6 +196,8 @@ _CHECKS = [
     ("omission_theta_is_nan", test_omission_theta_is_nan),
     ("per_cue_validity_balance", test_per_cue_validity_balance),
     ("end_to_end_smoke", test_end_to_end_smoke),
+    ("orientation_mvpa_smoke", test_orientation_mvpa_smoke),
+    ("orient_labels_present", test_orient_labels_present),
 ]
 
 

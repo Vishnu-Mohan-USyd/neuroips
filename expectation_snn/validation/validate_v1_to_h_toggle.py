@@ -298,8 +298,8 @@ def assay_5_tang_rejects_context_only() -> bool:
         h_kind="ht", seed=SEED, r=1.0, g_total=1.0,
         with_cue=False, with_v1_to_h="context_only",
     )
-    cfg = TangConfig(n_items=4, item_ms=50.0, presettle_ms=0.0,
-                     block_len_range=(2, 3), seed=SEED)
+    cfg = TangConfig(n_random=0, n_rotating=4, item_ms=50.0,
+                     presettle_ms=0.0, block_len_range=(2, 3), seed=SEED)
     raised = False
     msg = ""
     try:
