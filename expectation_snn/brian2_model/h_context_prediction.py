@@ -487,9 +487,9 @@ def apply_modulatory_update(
     cfg = bundle.config
     # Pull current state. Brian2 applies lazy decay so these values
     # reflect the current simulation time.
-    w = np.asarray(syn.w[:], dtype=np.float64)
-    elig = np.asarray(syn.elig[:], dtype=np.float64)
-    i_pre = np.asarray(syn.i[:], dtype=np.int64)
+    w = np.asarray(syn.w[:], dtype=np.float64).copy()
+    elig = np.asarray(syn.elig[:], dtype=np.float64).copy()
+    i_pre = np.asarray(syn.i[:], dtype=np.int64).copy()
 
     # Three-factor update + homeostatic decay (Frémaux-Gerstner 2015).
     # Integrated over the M(t) window using m_integral (seconds * M).
