@@ -2,7 +2,7 @@
 
 **Author**: Debugger (Task #42)
 **Date locked**: 2026-04-20
-**Status**: DRAFT — awaiting team-lead GO before any run.
+**Status**: LOCKED — team-lead GO given 2026-04-20. Any post-hoc deviation requires a "Post-hoc deviations" entry in the verdict report + team-lead re-approval.
 
 This document pre-registers the six diagnostics, their pass/fail thresholds,
 analysis pipelines, and the verdict mapping BEFORE any data is collected.
@@ -76,7 +76,7 @@ STOP CONDITION: If D5 shows ≥ 70% of continuous effect magnitude preserved wit
 - Window definitions:
   - **Kok**: final 100 ms of the cue→stim gap (t ∈ [900, 1000] ms post-cue-onset, with cue=500 + gap=500).
   - **Richter**: final 100 ms of leader (t ∈ [400, 500] ms of leader epoch).
-  - **Tang**: final 50 ms of item *t* (per-item; t ∈ [200, 250] ms within each 250 ms item).
+  - **Tang**: final 100 ms of item *t* (per-item; t ∈ [150, 250] ms within each 250 ms item). (Team-lead §8 resolution 2026-04-20: widened from 50 ms for rate-estimation stability.)
 
 #### Trial counts
 - Kok: 60 valid + 60 invalid trials per seed (matches Sprint 5c).
@@ -186,7 +186,7 @@ Runs early (step 2 in order). Can dominate the verdict.
 - Richter: per-Δθ-step trailer V1_E rate (matched channel), redistribution index, expected-vs-unexpected contrast.
 - Tang: per-Δθ_prev × condition (deviant / expected) matrix of V1_E rates.
 
-Reference: Sprint 5c continuous-mode values from `data/checkpoints/sprint_5c_intact_r1.0_seed42_continuous.npz` (and replicates at 43/44 if available; else Sprint 5c at 42 only, with caveat).
+Reference: Sprint 5c continuous-mode values from `data/checkpoints/sprint_5c_intact_r1.0_seed42_continuous.npz`. **Caveat (team-lead §8 resolution)**: seeds 43/44 Sprint 5c continuous replicates do not exist; retention baseline is seed-42 only, while 3-seed CI on H-off arm is still computed. Retention-ratio CI is therefore conservative (H-off variance bounded, baseline fixed).
 
 #### Pre-registered pass criteria (team-lead specified)
 
@@ -309,7 +309,7 @@ Coder (`task #41 step 5`) `scripts/diag_route_impulse.py` deterministic probe:
 - 4 route configs (off / direct-only / SOM-only / both).
 - Measure in 3 windows (0–50, 50–150, 150–500 ms): V1 E per-channel rate, SOM rate, PV rate, apical current `I_H_apical`, SOM input current, V1 adaptation current `I_adapt`.
 
-Since this is deterministic, run 10 seeds (different `brian2.seed`) to bootstrap CI on rate measurements.
+Seeds: **3** (`{42, 43, 44}`, matching rest of protocol — team-lead §8 resolution 2026-04-20, 10 was overkill since within-run variance of rate measurements already supplies CI width).
 
 #### Metrics
 Per (route × window):
@@ -382,12 +382,15 @@ Case D is orthogonal: it can co-exist with A/B/C and is reported independently.
 
 ---
 
-## 8. Outstanding design questions for team-lead review
+## 8. Design decisions (LOCKED — team-lead 2026-04-20 GO)
 
-1. **D1 Tang late-item window (50 ms)** — 50 ms at 0.1 ms dt is 500 samples; OK for rate estimation if H fires at ≥ 2 Hz. If rates below that, consider 100 ms window. Accept?
-2. **D3 clamp pre-probe insertion for Kok** — does coder's `with_h_clamp` allow overlapping with the cue/gap epoch directly, or do we need a dedicated pre-probe hook? Confirms once #41 lands.
-3. **D4 seed count** — 10 seeds for bootstrap on deterministic impulse response; OK or overkill?
-4. **Sprint 5c replicates at seeds 43/44** — do they exist on disk? If only seed 42 is available for Sprint 5c continuous, D5 retention baseline is single-seed. Flag caveat; not a blocker.
-5. **Case D interaction with Cases A/B/C** — the table treats D as orthogonal; confirm that's correct (a Kok-specific saturation confound doesn't flip the Richter/Tang call).
+Pre-reg approved. Resolutions recorded here for durability:
 
-Lock-in when team-lead signs off on §4 + §8 resolutions.
+1. **D1 Tang window** → **100 ms** (late-item 150–250 ms within each 250 ms item).
+   Rationale: 50 ms tight window risks PI sanity collapse if expected-channel rate < 2 Hz; wider window gives stable rate estimate. §3 D1 updated accordingly.
+2. **D3 clamp insertion for Kok** → defer to coder's `with_h_clamp` API once #41 step 2 lands. Overlap with cue/gap acceptable; request pre-probe hook extension only if the API forbids it.
+3. **D4 seed count** → **3 seeds {42, 43, 44}**, same as rest of the protocol. 10 was overkill. §3 D4 updated.
+4. **Sprint 5c continuous baseline for D5 retention** → **seed 42 only** (seeds 43/44 replicates don't exist). Flagged as caveat in §3 D5: "retention baseline is single-seed; 3-seed CI is from the H-off arm only".
+5. **Case D orthogonality** → **confirmed**. Kok decoder saturation is an assay-sensitivity issue independent of Richter/Tang circuit mechanism. Case D reports independently; Cases A/B/C are unaffected by D.
+
+Pre-reg is LOCKED. Any post-hoc deviation requires an explicit "Post-hoc deviations" entry in the final verdict report and team-lead re-approval.
