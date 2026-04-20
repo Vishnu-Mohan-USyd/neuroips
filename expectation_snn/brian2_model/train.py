@@ -57,6 +57,7 @@ from .h_ring import (
     N_E_PER_CHANNEL as H_N_E_PER,
 )
 from .stimulus import (
+    richter_biased_training_schedule,
     richter_crossover_training_schedule,
     tang_rotating_sequence,
     RICHTER_ORIENTATIONS_DEG,
@@ -639,20 +640,41 @@ def run_stage_1_hr(
     checkpoint_dir: Optional[str] = None,
     h_cfg: Optional[HRingConfig] = None,
     verbose: bool = True,
+    *,
+    biased: bool = True,
+    p_bias: float = 0.80,
+    derangement: Optional[Tuple[int, ...]] = None,
+    gate_window: str = "pre_trailer",
 ) -> Stage1Result:
     """Stage-1 driver for H_R (Richter crossover grammar).
 
     Workflow
     --------
     1. Build H_R, freeze Vogels iSTDP (inh->E frozen at init weights).
-    2. Generate balanced Richter schedule (n_trials must be multiple of 36).
+    2. Generate Richter schedule. With ``biased=True`` (Sprint 5e Fix A
+       default) this is the biased deranged-permutation schedule with
+       ``P(L → f(L)) = p_bias``; ``biased=False`` falls back to the
+       legacy balanced 36-pair schedule (ablation / assay-time generator).
     3. Drive cue with per-item Gaussian-over-channels rate; H E<->E STDP
        is plastic throughout (Hebbian pair rule, `pair_stdp_with_normalization`).
-    4. Post-hoc, per trial: H argmax at `trailer_offset + probe_delay_ms`.
-    5. Aggregate gate checks: bump_persistence, transition_MI, no_runaway.
+    4. Post-hoc, per trial: compute H_R argmax in the gate-window probe.
+       With ``gate_window="pre_trailer"`` (Sprint 5e Fix B default) the
+       window is the last ``probe_window_ms`` ms of the leader —
+       ``[leader_end - probe_window_ms, leader_end]`` — and the gate metric
+       is ``P(argmax == expected_trailer_idx)``, i.e. the pre-trailer
+       forecast. With ``gate_window="post_trailer"`` the window is the
+       legacy ``trailer_end + probe_delay_ms ± probe_window_ms/2`` and the
+       metric is ``MI(leader, argmax)`` (post-trailer bump tracking).
+    5. Aggregate gate checks: bump_persistence, transition_MI /
+       preprobe_forecast, no_runaway.
 
     The rotation MI check is not computed for this grammar (N/A for Richter).
     """
+    if gate_window not in ("pre_trailer", "post_trailer"):
+        raise ValueError(
+            f"gate_window must be 'pre_trailer' or 'post_trailer', "
+            f"got {gate_window!r}"
+        )
     prefs.codegen.target = "numpy"
     defaultclock.dt = 0.1 * ms
 
@@ -660,19 +682,46 @@ def run_stage_1_hr(
     b2_seed(seed); np.random.seed(seed)
     rng = np.random.default_rng(seed)
 
-    # Generate schedule.
-    plan = richter_crossover_training_schedule(
-        rng, n_trials=n_trials,
-        leader_ms=leader_ms, trailer_ms=trailer_ms, iti_ms=iti_ms,
-    )
+    # Generate schedule. Fix A default: biased deranged permutation with
+    # P(L → f(L)) = p_bias (default 0.80). Legacy balanced schedule is
+    # retained behind biased=False for ablation / assay use.
+    if biased:
+        if derangement is None:
+            derangement = (1, 2, 3, 4, 5, 0)
+        plan = richter_biased_training_schedule(
+            rng, n_trials=n_trials, p_bias=p_bias, derangement=derangement,
+            leader_ms=leader_ms, trailer_ms=trailer_ms, iti_ms=iti_ms,
+        )
+        schedule_name = "richter_biased"
+    else:
+        plan = richter_crossover_training_schedule(
+            rng, n_trials=n_trials,
+            leader_ms=leader_ms, trailer_ms=trailer_ms, iti_ms=iti_ms,
+        )
+        schedule_name = "richter_crossover"
     pairs = plan.meta["pairs"]               # (n_trials, 2)
+    # Per-trial expected trailer for the pre-probe gate (from derangement).
+    # On the legacy balanced schedule `expected_trailer_idx` is not produced
+    # by the generator, so we synthesize one for consistency: default f(L)
+    # = (L + 1) % 6, matching the reviewer's reference derangement. It is
+    # only consulted when gate_window="pre_trailer".
+    if "expected_trailer_idx" in plan.meta:
+        expected_trailer_all = np.asarray(
+            plan.meta["expected_trailer_idx"], dtype=np.int64,
+        )
+    else:
+        default_deran = np.array([1, 2, 3, 4, 5, 0], dtype=np.int64)
+        expected_trailer_all = default_deran[pairs[:, 0].astype(np.int64)]
 
     log: List[str] = [
         f"Stage-1 H_R driver: seed={seed}, n_trials={n_trials}, "
         f"ITI={iti_ms:.0f}ms, cue_peak={cue_peak_hz:.0f}Hz "
         f"sigma={cue_sigma_deg:.0f}deg",
-        f"  schedule: {plan.total_ms/1000.0:.1f} s sim time, "
+        f"  schedule: {schedule_name} biased={biased} p_bias={p_bias:.2f}  "
+        f"{plan.total_ms/1000.0:.1f} s sim time, "
         f"{len(plan.items)} items",
+        f"  gate_window={gate_window}  probe_window={probe_window_ms:.0f}ms"
+        + (f" probe_delay={probe_delay_ms:.0f}ms" if gate_window == "post_trailer" else ""),
         f"  presettle={presettle_ms:.0f}ms @{presettle_noise_hz:.0f}Hz, "
         f"norm_dt={normalize_dt_ms:.0f}ms target_sum={h_cfg.target_postsyn_sum:.1f}",
     ]
@@ -717,18 +766,27 @@ def run_stage_1_hr(
     # Trial time bookkeeping. Schedule items started at `schedule_start_abs_ms`.
     trial_ms = leader_ms + trailer_ms + iti_ms
     trial_start_abs = schedule_start_abs_ms + np.arange(n_trials) * trial_ms
+    leader_end_abs  = trial_start_abs + leader_ms                 # (n_trials,)
     trailer_end_abs = trial_start_abs + leader_ms + trailer_ms    # (n_trials,)
-    probe_win_start = trailer_end_abs + probe_delay_ms - probe_window_ms / 2.0
-    probe_win_end   = trailer_end_abs + probe_delay_ms + probe_window_ms / 2.0
+    # Gate-window selection. Sprint 5e Fix B: the pre-trailer gate asks
+    # whether H_R expresses the forecast BEFORE the trailer arrives, so
+    # the probe sits in the last `probe_window_ms` ms of the leader.
+    if gate_window == "pre_trailer":
+        probe_win_start = leader_end_abs - probe_window_ms
+        probe_win_end   = leader_end_abs.copy()
+    else:  # post_trailer — legacy
+        probe_win_start = trailer_end_abs + probe_delay_ms - probe_window_ms / 2.0
+        probe_win_end   = trailer_end_abs + probe_delay_ms + probe_window_ms / 2.0
 
     # Use the LAST half of trials (plasticity has kicked in).
     if trials_used_tail is None:
         trials_used_tail = max(n_trials // 2, 36)
     start_k = max(0, n_trials - trials_used_tail)
 
-    # Per-trial H argmax at +500ms after trailer offset, mapped to 6 orients.
+    # Per-trial H argmax in the gate window, mapped to 6 orients.
     h_argmax_per_trial_6 = np.empty(trials_used_tail, dtype=np.int64)
     leader_idx_used = np.empty(trials_used_tail, dtype=np.int64)
+    expected_trailer_used = np.empty(trials_used_tail, dtype=np.int64)
     for kk, k in enumerate(range(start_k, n_trials)):
         rates_12 = _per_channel_rate_in_window(
             spike_i, spike_t_ms, e_channel,
@@ -738,6 +796,7 @@ def run_stage_1_hr(
         rates_6 = rates_12[H_ORIENT_CHANNELS]      # (6,)
         h_argmax_per_trial_6[kk] = int(np.argmax(rates_6))
         leader_idx_used[kk] = int(pairs[k, 0])
+        expected_trailer_used[kk] = int(expected_trailer_all[k])
 
     # Bump persistence: dedicated post-training probe (like H_T). Single
     # isolated pulse -> silence -> measure persistence on peak channel.
@@ -816,13 +875,18 @@ def run_stage_1_hr(
 
     transition_check = check_h_transition_mi(
         leader_idx_used, h_argmax_per_trial_6, n_orient=6,
+        gate_window=gate_window,
+        expected_trailer_idx=expected_trailer_used,
     )
     runaway_check = check_no_runaway_s1(
         {"h_e": e_rate, "h_inh": inh_rate},
     )
+    # The gate metric name differs per mode: pre_trailer → probability,
+    # post_trailer → MI in bits. Use the name the check emitted so the
+    # Stage-1 report labels the value correctly.
     checks = {
         "h_bump_persistence_ms": bump_check,
-        "h_transition_mi_bits": transition_check,
+        transition_check.name: transition_check,
         "no_runaway": runaway_check,
     }
     report = aggregate_s1(checks)
@@ -843,6 +907,14 @@ def run_stage_1_hr(
         n_trials=np.int32(n_trials),
         leader_idx=leader_idx_used,
         h_argmax=h_argmax_per_trial_6,
+        expected_trailer_idx=expected_trailer_used,
+        gate_window=np.bytes_(gate_window),
+        schedule=np.bytes_(schedule_name),
+        p_bias=np.float64(p_bias),
+        derangement=np.asarray(
+            derangement if derangement is not None else (1, 2, 3, 4, 5, 0),
+            dtype=np.int64,
+        ),
         persistence_med_ms=np.float64(persistence_med),
         e_rate_hz=np.float64(e_rate),
         inh_rate_hz=np.float64(inh_rate),

@@ -33,6 +33,12 @@ BUMP_RATE_FLOOR_HZ = 2.0          # "bump present" when peak-channel rate > floo
 TRANSITION_MI_MIN_BITS = 0.05     # pragmatic ">0" threshold above finite-sample bias
 ROTATION_MI_MIN_BITS = 0.05
 RUNAWAY_CEILING_HZ = 80.0
+# Sprint 5e Fix B — pre-trailer forecast probability gate. Chance = 1/6
+# on 6 orientations ≈ 0.167; threshold 0.25 ≈ 1.5× chance is realistic
+# for a network that carries a pre-trailer prior (see
+# SPRINT_5D_POST_VERDICT_REVIEW.md Bug 2 + debugger's B4b seeds 42/43/44
+# which hit 0.015/0.015/0.030 under post-trailer gate).
+PREPROBE_FORECAST_MIN_PROB = 0.25
 
 
 @dataclass
@@ -150,25 +156,95 @@ def check_h_transition_mi(
     h_argmax_per_trial: np.ndarray,
     n_orient: int,
     min_bits: float = TRANSITION_MI_MIN_BITS,
+    gate_window: str = "post_trailer",
+    expected_trailer_idx: Optional[np.ndarray] = None,
+    min_prob: float = PREPROBE_FORECAST_MIN_PROB,
 ) -> CheckResult:
-    """H_R must carry information about the leader into the trailer window.
+    """H_R must carry information about the trailer forecast.
+
+    Two gate modes (Sprint 5e Fix B).
 
     Parameters
     ----------
     leader_idx_per_trial : np.ndarray, shape (n_trials,), int
-        Orientation index of the leader for each trial.
+        Orientation index of the leader for each trial. Used only in
+        ``post_trailer`` mode.
     h_argmax_per_trial : np.ndarray, shape (n_trials,), int
-        argmax channel of H_R rate at +500 ms after trailer offset (or
-        at any fixed post-trailer time). Index in [0, n_orient).
+        argmax channel of H_R rate in the gate window. Index in
+        ``[0, n_orient)``.
     n_orient : int
         Number of possible orientation categories.
     min_bits : float
-        Finite-sample floor for "> 0" MI (default 0.05 bits).
+        Finite-sample floor for "> 0" MI (post_trailer mode, default 0.05 bits).
+    gate_window : {"post_trailer", "pre_trailer"}
+        Which probe window the ``h_argmax_per_trial`` came from, and which
+        metric to apply.
+
+        - ``"post_trailer"`` (legacy, Sprint 5a/5c):
+              metric = ``MI(leader_idx, h_argmax_at_+500ms_after_trailer)``;
+              pass iff MI >= ``min_bits``. The probe window sits 500 ms past
+              trailer offset, so a network that simply tracks the *current*
+              input (no forecast) can pass this gate as long as the training
+              schedule has L→T contingency. Kept for backward compatibility
+              / ablation; the driver should pick this mode only when the
+              post-trailer bump is the claim under test.
+        - ``"pre_trailer"`` (new, default for the forecast claim):
+              metric = ``P(h_argmax_in_last_100ms_of_leader == expected_trailer_idx)``;
+              pass iff probability >= ``min_prob`` (default 0.25 ≈ 1.5× chance
+              on 6 orientations). This is the Richter / Kok incidental-pair
+              empirical signal: the network must express the forecast
+              **before** the trailer arrives. Requires ``expected_trailer_idx``
+              (derangement[leader_idx]) so the check knows what the expected
+              forecast is per trial.
+    expected_trailer_idx : np.ndarray, shape (n_trials,), int, optional
+        Expected trailer orientation per trial (derived from the schedule's
+        deranged permutation). Required when ``gate_window="pre_trailer"``.
+    min_prob : float
+        Probability floor for pre_trailer mode (default 0.25 = 1.5 × 1/6
+        chance).
+
+    Returns
+    -------
+    CheckResult
+        ``name="h_transition_mi_bits"`` in ``post_trailer`` mode, and
+        ``name="h_preprobe_forecast_prob"`` in ``pre_trailer`` mode, so
+        Stage-1 reports distinguish the two metrics at a glance.
     """
-    mi = _joint_hist_mi(leader_idx_per_trial, h_argmax_per_trial, n_orient)
-    return CheckResult("h_transition_mi_bits", mi >= min_bits, mi,
-                       (min_bits, np.log2(n_orient)),
-                       f"n_trials={len(leader_idx_per_trial)}")
+    if gate_window == "post_trailer":
+        mi = _joint_hist_mi(leader_idx_per_trial, h_argmax_per_trial, n_orient)
+        return CheckResult("h_transition_mi_bits", mi >= min_bits, mi,
+                           (min_bits, np.log2(n_orient)),
+                           f"n_trials={len(leader_idx_per_trial)} "
+                           f"window=post_trailer")
+    if gate_window == "pre_trailer":
+        if expected_trailer_idx is None:
+            raise ValueError(
+                "gate_window='pre_trailer' requires expected_trailer_idx "
+                "(derangement[leader_idx]) — the pre-probe forecast gate "
+                "needs a per-trial target."
+            )
+        h_arr = np.asarray(h_argmax_per_trial, dtype=np.int64)
+        e_arr = np.asarray(expected_trailer_idx, dtype=np.int64)
+        if h_arr.shape != e_arr.shape:
+            raise ValueError(
+                f"pre_trailer gate shape mismatch: "
+                f"h_argmax {h_arr.shape} vs expected_trailer {e_arr.shape}"
+            )
+        n = int(h_arr.size)
+        if n == 0:
+            return CheckResult("h_preprobe_forecast_prob", False, 0.0,
+                               (min_prob, 1.0),
+                               "n_trials=0 window=pre_trailer")
+        n_hit = int((h_arr == e_arr).sum())
+        prob = float(n_hit) / float(n)
+        return CheckResult("h_preprobe_forecast_prob", prob >= min_prob, prob,
+                           (min_prob, 1.0),
+                           f"n_trials={n} hits={n_hit} "
+                           f"chance={1.0/float(n_orient):.3f} "
+                           f"window=pre_trailer")
+    raise ValueError(
+        f"gate_window must be 'post_trailer' or 'pre_trailer', got {gate_window!r}"
+    )
 
 
 def check_h_rotation_mi(
@@ -253,6 +329,49 @@ if __name__ == "__main__":
     mi_null = _joint_hist_mi(leader, h_random, 6)
     assert mi_null < 0.15, mi_null
     print(f"stage_1 smoke: MI perfect={mi_perfect:.3f}, null={mi_null:.3f}")
+
+    # 4b) pre_trailer gate — perfect forecast (h_argmax == expected_trailer).
+    # derangement f(L) = (L+1) % 6 matches Sprint 5e Fix A default.
+    derangement = np.array([1, 2, 3, 4, 5, 0], dtype=np.int64)
+    leader_pre = rng.integers(0, 6, size=300)
+    expected_pre = derangement[leader_pre]
+    h_forecast_ok = expected_pre.copy()
+    check_pre_ok = check_h_transition_mi(
+        leader_pre, h_forecast_ok, 6,
+        gate_window="pre_trailer",
+        expected_trailer_idx=expected_pre,
+    )
+    assert check_pre_ok.passed, check_pre_ok.summary()
+    assert check_pre_ok.name == "h_preprobe_forecast_prob"
+    assert abs(check_pre_ok.value - 1.0) < 1e-9
+    # pre_trailer gate — argmax locked on leader (chance-level on expected trailer).
+    check_pre_fail = check_h_transition_mi(
+        leader_pre, leader_pre.copy(), 6,
+        gate_window="pre_trailer",
+        expected_trailer_idx=expected_pre,
+    )
+    assert not check_pre_fail.passed, check_pre_fail.summary()
+    # pre_trailer gate requires expected_trailer_idx.
+    try:
+        check_h_transition_mi(
+            leader_pre, h_forecast_ok, 6,
+            gate_window="pre_trailer",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("pre_trailer gate must require expected_trailer_idx")
+    # Unknown gate_window must raise.
+    try:
+        check_h_transition_mi(
+            leader_pre, h_forecast_ok, 6, gate_window="post_settle",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown gate_window must raise")
+    print(f"stage_1 smoke: pre_trailer perfect={check_pre_ok.value:.3f} "
+          f"fail={check_pre_fail.value:.3f}")
 
     # 5) Aggregation: all-pass case.
     res = {
