@@ -119,13 +119,20 @@ DEFAULT_TAU_COINC_MS = 500.0
 DEFAULT_TAU_ELIG_MS = 1000.0          # bridges 500-ms leader + 500-ms trailer.
 DEFAULT_ETA = 1e-3                    # three-factor learning rate.
 DEFAULT_GAMMA = 1e-4                  # weight-decay homeostasis rate.
-DEFAULT_W_TARGET = 0.05               # rest value of the decay term;
-                                      # spec: W_target = 0.05 * w_max = 0.05
-                                      # (Researcher Fix C spec; Vogels 2011
-                                      # iSTDP soft-decay precedent). Matches
-                                      # the mean of the w_init uniform so
-                                      # elig=0 synapses relax to init mean
-                                      # rather than drifting to silence.
+DEFAULT_W_TARGET = 0.0075             # rest value of the decay term; must
+                                      # match the POST-FIX init mean so
+                                      # elig=0 synapses relax to init and
+                                      # don't uniformly up-pump into the
+                                      # row cap. With DEFAULT_W_INIT_FRAC
+                                      # = 0.015, init mean = 0.015 * 1.0
+                                      # / 2 = 0.0075. Previously 0.05
+                                      # (matched the OLD 0.05 init frac);
+                                      # after the 0.015 init fix it became
+                                      # 6.7x above init, driving uniform
+                                      # up-pump that collapsed W_ctx_pred
+                                      # onto the 3.0/192 = 0.015625 row-
+                                      # cap floor (attempt #3 evidence).
+                                      # Task #47 Debugger verdict H4.
 DEFAULT_W_ROW_MAX = 3.0               # cap on sum_j w[i, j] (per presyn).
 DEFAULT_W_MAX = 1.0                   # per-synapse absolute ceiling.
 DEFAULT_W_INIT_FRAC = 0.015           # uniform(0, w_init_frac * w_max).
