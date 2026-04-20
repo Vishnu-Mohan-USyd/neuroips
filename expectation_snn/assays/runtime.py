@@ -44,6 +44,9 @@ from ..brian2_model.feedback_routes import (
 from ..brian2_model.feedforward_v1_to_h import (
     V1ToH, V1ToHConfig, build_v1_to_h_feedforward,
 )
+from ..brian2_model.h_clamp import (
+    HClamp, HClampConfig, build_h_clamp,
+)
 from ..brian2_model.plasticity import eligibility_trace_cue_rule
 
 
@@ -87,6 +90,7 @@ class FrozenBundle:
     v1_ring: V1Ring
     fb: FeedbackRoutes
     v1_to_h: Optional[V1ToH] = None
+    h_clamp: Optional[HClamp] = None
 
     cue_A: Optional[PoissonGroup] = None
     cue_B: Optional[PoissonGroup] = None
@@ -255,6 +259,8 @@ def build_frozen_network(
     g_total: float = 1.0,
     with_cue: bool = False,
     with_v1_to_h: object = "continuous",
+    with_feedback_routes: bool = True,
+    with_h_clamp: Optional[HClampConfig] = None,
     ckpt_dir: Optional[str] = None,
     h_cfg: Optional[HRingConfig] = None,
     v1_cfg: Optional[V1RingConfig] = None,
@@ -293,6 +299,19 @@ def build_frozen_network(
 
         Attach only at assay time — training paths keep this off to preserve
         Stage-2 DC-teacher isolation.
+    with_feedback_routes : bool, default True
+        If False, the H → V1 feedback routes (`feedback_routes.FeedbackRoutes`)
+        are still built (for Brian2 object parity) but their gains
+        (g_direct, g_SOM) are zeroed so no current flows on H spikes.
+        Used by Sprint 5d D5 — run Richter/Tang with feedback OFF and
+        V1→H OFF to measure the intrinsic V1-only adaptation baseline.
+        Independently toggleable from `with_v1_to_h`.
+    with_h_clamp : HClampConfig, optional
+        If supplied, build a diagnostic H-clamp pathway (Sprint 5d D3):
+        a Poisson afferent pool injecting AMPA drive into a specific H
+        channel, weight-gated off by default (construct at build time
+        with weights=0 — assay loop toggles `bundle.h_clamp.set_active`).
+        See :mod:`expectation_snn.brian2_model.h_clamp`.
     ckpt_dir : str, optional
         Override for checkpoint directory. Defaults to
         ``expectation_snn/data/checkpoints``.
@@ -353,6 +372,12 @@ def build_frozen_network(
     fb = build_feedback_routes(
         h, v1, fb_cfg_eff, name_prefix=f"s5a_{h_kind}",
     )
+    if not with_feedback_routes:
+        # Zero both H→V1 routes in-place (Sprint 5d D5 negative control).
+        # Leaves Synapses objects attached to the Network (simpler) but
+        # no current flows since on_pre deposits are scaled by w==0.
+        from ..brian2_model.feedback_routes import set_balance
+        set_balance(fb, r=fb_cfg_eff.r, g_total=0.0)
 
     # --- V1 → H feedforward (task #31; assay-time only) -----------------
     # Modes: "continuous" or "context_only" build the pathway identically
@@ -363,6 +388,13 @@ def build_frozen_network(
         ff_cfg = v1_to_h_cfg or V1ToHConfig()
         v1_to_h_obj = build_v1_to_h_feedforward(
             v1, h, ff_cfg, name_prefix=f"s5a_ffv1h_{h_kind}",
+        )
+
+    # --- H-clamp (Sprint 5d D3 diagnostic; optional) --------------------
+    h_clamp_obj: Optional[HClamp] = None
+    if with_h_clamp is not None:
+        h_clamp_obj = build_h_clamp(
+            h, with_h_clamp, name_prefix=f"s5d_hclamp_{h_kind}",
         )
 
     # --- cue pathway (optional) -----------------------------------------
@@ -399,6 +431,8 @@ def build_frozen_network(
     groups.extend(fb.groups)
     if v1_to_h_obj is not None:
         groups.extend(v1_to_h_obj.groups)
+    if h_clamp_obj is not None:
+        groups.extend(h_clamp_obj.groups)
     if with_cue:
         groups.extend([cue_A, cue_B, cue_A_to_h, cue_B_to_h])
 
@@ -411,9 +445,23 @@ def build_frozen_network(
             "v1_to_h_n_syn": int(v1_to_h_obj.kernel_w.size),
         }
 
+    h_clamp_meta = {}
+    if h_clamp_obj is not None:
+        h_clamp_meta = {
+            "h_clamp_target_channel": int(h_clamp_obj.config.target_channel),
+            "h_clamp_rate_hz": float(h_clamp_obj.config.clamp_rate_hz),
+            "h_clamp_drive_pA": float(h_clamp_obj.config.drive_amp_pA),
+            "h_clamp_n_afferents": int(h_clamp_obj.config.n_afferents),
+            "h_clamp_window_ms": (
+                float(h_clamp_obj.config.window_start_ms),
+                float(h_clamp_obj.config.window_end_ms),
+            ),
+        }
+
     bundle = FrozenBundle(
         h_ring=h, h_kind=h_kind, v1_ring=v1, fb=fb,
         v1_to_h=v1_to_h_obj,
+        h_clamp=h_clamp_obj,
         cue_A=cue_A, cue_B=cue_B,
         cue_A_to_h=cue_A_to_h, cue_B_to_h=cue_B_to_h,
         groups=groups,
@@ -431,7 +479,10 @@ def build_frozen_network(
             "g_SOM": float(fb.g_SOM),
             "with_v1_to_h": v1_to_h_mode,
             "v1_to_h_mode": v1_to_h_mode,
+            "with_feedback_routes": bool(with_feedback_routes),
+            "with_h_clamp": bool(with_h_clamp is not None),
             **v1_to_h_meta,
+            **h_clamp_meta,
             **cue_meta,
         },
     )
