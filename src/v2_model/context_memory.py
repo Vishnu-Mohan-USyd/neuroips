@@ -145,7 +145,8 @@ class ContextMemory(nn.Module):
         dt_ms: float,
         phi: Callable[[Tensor], Tensor] = rectified_softplus,
         init_std: float = 0.1,
-        task_input_init_std: float = 0.01,
+        task_input_init_std: float = 0.3,
+        cue_gain: float = 5.0,
         seed: int = 0,
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float32,
@@ -166,6 +167,8 @@ class ContextMemory(nn.Module):
             raise ValueError(
                 f"task_input_init_std must be ≥ 0; got {task_input_init_std}"
             )
+        if cue_gain < 0:
+            raise ValueError(f"cue_gain must be ≥ 0; got {cue_gain}")
 
         self.n_m = int(n_m)
         self.n_h = int(n_h)
@@ -198,6 +201,7 @@ class ContextMemory(nn.Module):
             )
 
         self._task_input_init_std = float(task_input_init_std)
+        self.cue_gain = float(cue_gain)
 
         # Generic weights.
         self.W_hm_gen = _normal((self.n_m, self.n_h), init_std)
@@ -284,7 +288,7 @@ class ContextMemory(nn.Module):
                 raise ValueError(
                     f"q_t must be [B={B}, {self.n_cue}]; got {tuple(q_t.shape)}"
                 )
-            drive = drive + F.linear(q_t, self.W_qm_task)
+            drive = drive + self.cue_gain * F.linear(q_t, self.W_qm_task)
 
         if leader_t is not None:
             if (
@@ -296,7 +300,7 @@ class ContextMemory(nn.Module):
                     f"leader_t must be [B={B}, {self.n_leader}]; got "
                     f"{tuple(leader_t.shape)}"
                 )
-            drive = drive + F.linear(leader_t, self.W_lm_task)
+            drive = drive + self.cue_gain * F.linear(leader_t, self.W_lm_task)
 
         m_next = self._decay * m_t + (1.0 - self._decay) * self._phi(drive)
 

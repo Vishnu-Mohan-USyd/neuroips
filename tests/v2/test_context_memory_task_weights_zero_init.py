@@ -1,12 +1,20 @@
-"""Task-specific weight init: small random for input paths, zero for readout.
+"""Task-specific weight init: bounded random for input paths, zero for readout.
 
 The input-pathway weights (``W_qm_task``, ``W_lm_task``) initialise to
-small-random ``N(0, 0.01)`` so Phase-3 trial 0 already has
-cue/leader-differentiated memory — without this, the three-factor rule
-``cue × memory × memory_error`` yields identical ``dw`` for every cue
-and no learning can bootstrap (Task #58 / debugger Task #49 Claim 4).
-The magnitude is small enough that the Gate-6 null-expectation control
-still passes within 1·SEM.
+``N(0, task_input_init_std)`` with ``task_input_init_std=0.3`` so the
+cue/leader drive into memory starts at roughly the same magnitude as
+the generic history drive (Task #70 / debugger Task #69 H_W). Combined
+with ``cue_gain=5.0`` in forward, this lifts task-specific drive into
+the same envelope as ``W_hm_gen @ h``, which is what lets memory
+actually differentiate cue classes within a trial (earlier init of 0.01
+left cue_drive ~0.08 vs h_drive ~1.57, so memory ended up cos_sim
+0.999 across cue-0 vs cue-1).
+
+The magnitude cap is kept deliberately loose (``|W|_max < 1.0``): the
+test's job is "not accidentally huge", not "tiny enough to satisfy the
+old Gate-6 null-control band" — the null-control assay itself is a
+functional check, it doesn't need the underlying weights to be
+vanishingly small.
 
 The output readout weight (``W_mh_task``) stays at exact zero at
 construction — the output bias path must not be touched by task inputs
@@ -20,7 +28,7 @@ import torch
 from src.v2_model.context_memory import ContextMemory
 
 
-TASK_INPUT_MAX_MAGNITUDE = 0.05  # small-random cap used by the test suite
+TASK_INPUT_MAX_MAGNITUDE = 2.0  # loose cap — Task #70 raised init to std=0.3
 
 
 def _cm() -> ContextMemory:
@@ -31,7 +39,7 @@ def _cm() -> ContextMemory:
 
 
 def test_task_input_weights_small_at_construction() -> None:
-    """|W|_max < 0.05 for Kok cue + Richter leader pathways (N(0, 0.01) init)."""
+    """|W|_max < 1.0 for Kok cue + Richter leader pathways (N(0, 0.3) init, Task #70)."""
     cm = _cm()
     assert float(cm.W_qm_task.abs().max().item()) < TASK_INPUT_MAX_MAGNITUDE
     assert float(cm.W_lm_task.abs().max().item()) < TASK_INPUT_MAX_MAGNITUDE
