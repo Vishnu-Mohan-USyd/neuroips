@@ -289,3 +289,82 @@ unblock candidate.
   `test_plasticity_homeostasis.py`, `test_prediction_head_deterministic.py` —
   updates for Tasks #48–#53.
 - `src/config.py` — project-wide config updates.
+
+## Update 2026-04-20 late — Tasks #67–#70 (external critique → cue-pathway
+breakthrough)
+
+An external critique (5 claims) was audited by debugger2 in Task #67; all 5
+claims CONFIRMED with tested evidence. Task #68 landed the four code-level
+audit fixes. Task #69 traced the residual C-decode failure to a cue-drive /
+history-drive magnitude mismatch inside `ContextMemory`. Task #70 applied a
+targeted 150× boost to the cue pathway; Kok and Richter expectation signals
+now form end-to-end.
+
+### Task #67 — critique audit (debugger2, evidence-only)
+
+| # | Critique claim | Verdict |
+|---|----------------|---------|
+| C1 | Phase-2 samples a fresh random seed every step → broken temporal continuity | CONFIRMED |
+| C2 | Phase-3 scan sub-phase still applies plasticity → dilutes the learning signal | CONFIRMED |
+| C3 | Kok asymmetry formula / comment mismatch (`(unexp − exp) / (unexp + exp)` vs comment) | CONFIRMED |
+| C4 | Gates harness only runs 5 of 7 gates (6 = null-control, 7 = C-load-bearing missing) | CONFIRMED |
+| C5 | Decoder-C expected-orientation accuracy at chance (0.52 / target >0.70) | CONFIRMED |
+
+### Task #68 — audit fixes (commit `4110056`)
+
+- `scripts/v2/train_phase2_predictive.py`: persistent per-batch world trajectories (`_clone_world`, `step_persistent_batch`, `_reset_all_world_states`).
+- `scripts/v2/train_phase3_kok_learning.py`, `…_richter_learning.py`: `apply_plasticity: bool = True` in forward-tuple signature; scan sub-phase passes False (frozen weights).
+- `scripts/v2/eval_kok.py`: asymmetry comment now aligned to formula (positive = sharpening).
+- `scripts/v2/eval_gates.py`: gates 6 + 7 wrapped into unified `run_gates_1_to_7` harness; gate 5 collapses 5a (orientation) + 5b (identity).
+
+Re-run after #68 alone: C5 failure persisted (C-decode stuck at 0.52 chance).
+Root cause not in pipeline but inside memory arithmetic → Task #69.
+
+### Task #69 — root-cause isolation (debugger2)
+
+Instrumented `ContextMemory.forward` to log per-term drive magnitudes during
+a Kok trial (cue-on window). Observed:
+
+- `h_drive = W_hm_gen @ h` peak  ≈ 1.57
+- `cue_drive = W_qm_task @ q_t` peak ≈ 0.08
+
+Cue drive is **20× smaller** than history drive, so the memory update is
+dominated by generic history; cue identity is drowned. Consistent with
+`cos_sim(cue0, cue1) = 0.999` (memory nearly identical across cues).
+
+### Task #70 — cue-pathway strengthening (commit `615cff0`)
+
+Three coupled fixes inside `src/v2_model/context_memory.py` and tests:
+
+| Fix | Where | Change | Effect |
+|-----|-------|--------|--------|
+| A | `ContextMemory.__init__` | `task_input_init_std: 0.01 → 0.3` | 30× init magnitude |
+| B | `ContextMemory.forward` | `cue_gain: float = 5.0` multiplier on `W_qm_task @ q_t` and `W_lm_task @ leader_t` | 5× forward gain |
+| C | `tests/v2/test_context_memory_task_weights_zero_init.py`, `…_determinism.py` | `|W|_max` cap raised from 0.05 → 2.0 (N(0, 0.3) × ~100 entries has fat tail; cap is "not accidentally huge", not a tight quantile) | keep bounded-init sanity check green |
+
+Combined: **150× boost to cue signal** into memory.
+
+### Post-#70 results (seed 42, checkpoints `phase3_{kok,richter}_task70/`)
+
+| Metric | Pre-fix | Post-fix | Target |
+|--------|---------|----------|--------|
+| `cos_sim(cue0, cue1)` of memory m at delay_end−1 | 0.999 | **0.319** | <0.95 |
+| C-decode expected orientation (5-fold LogReg) | 0.52 | **1.00** | >0.70 |
+| Richter leader-position decode from m at leader_end−1 | 0.167 (chance) | **1.00** | >0.50 |
+| Kok Δamplitude (exp − unexp) | −0.0013 | **−0.0126** | negative (dampening) |
+| Kok ΔSVM accuracy (exp − unexp) | — | **+0.0167** | positive (sharpening) |
+| Richter RSA between − within (class distance gap) | 3.24e-5 | **3.28e-4** | >0 |
+| `W_qm_task` Frobenius norm | ~0.05 | **14.03** | — |
+| `W_lm_task` Frobenius norm | ~0.05 | **16.62** | — |
+
+### Open issues (carried forward)
+
+- **Kok 2-orientation SVM at ceiling**: the expected-vs-unexpected SVM gap is real (+0.0167) but both conditions already decode near-perfectly on 45° vs 135° — a fine-orientation or noisy-probe eval is needed to see the sharpening effect outside the ceiling regime.
+- **Richter forward-model gains saturate at ~1.0**: `local_gain`, `remote_gain`, `global_gain` all correlate >0.999 with the population mean. Memory binding works (m-decode = 1.0) but the downstream pseudo-voxel readout path does not yet resolve modulation patterns; a proper modulation-pattern fit (not gain-only) is needed.
+- **Gates 2 / 7 pass only**: gates 1, 3, 4, 5, 6 currently fail. Task #70 fixes were not expected to move these — they probe sensory / L4 / L2-3 circuitry, not the cue→memory path. A separate sensory-gate regression audit is needed.
+
+### Files changed since `615cff0` (this commit)
+
+- `scripts/v2/_task70_verify.py` — Kok-trial cue-decode + cos_sim probe (new).
+- `scripts/v2/_task70_richter_decode.py` — Richter leader-position m-decode probe (new).
+- `docs/v2_model_status.md` — this section.
