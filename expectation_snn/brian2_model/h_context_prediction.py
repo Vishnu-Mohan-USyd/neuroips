@@ -123,7 +123,13 @@ DEFAULT_W_TARGET = 0.05               # rest value of the decay term;
                                       # rather than drifting to silence.
 DEFAULT_W_ROW_MAX = 3.0               # cap on sum_j w[i, j] (per presyn).
 DEFAULT_W_MAX = 1.0                   # per-synapse absolute ceiling.
-DEFAULT_W_INIT_FRAC = 0.05            # uniform(0, w_init_frac * w_max)
+DEFAULT_W_INIT_FRAC = 0.015           # uniform(0, w_init_frac * w_max).
+                                      # Chosen so init row sum < w_row_max:
+                                      # init mean = w_init_frac * w_max / 2 = 0.0075;
+                                      # row sum = 0.0075 * n_pre (192) = 1.44 < 3.0.
+                                      # Previous 0.05 gave row sum 4.80, triggering
+                                      # the row-cap rescale on trial 1 and collapsing
+                                      # W_ctx_pred to the uniform floor 3.0/192.
 DEFAULT_M_WINDOW_MS = 75.0            # half-width of M(t) pulse around
                                       # each trailer onset.
 DEFAULT_M_AMPLITUDE = 1.0             # amplitude of M(t) inside the window.
