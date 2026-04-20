@@ -42,10 +42,22 @@ if str(_pkg_root) not in sys.path:
 from expectation_snn.brian2_model.train import (
     Stage1CtxPredResult, run_stage_1_ctx_pred, CHECKPOINT_DIR_DEFAULT,
 )
+from expectation_snn.brian2_model.h_ring import HRingConfig
+from expectation_snn.brian2_model.h_context_prediction import HContextPredictionConfig
 
 
 SEED = 42
 N_TRIALS = 360
+
+# --- attempt #2 override (Sprint 5e-Fix E, 2026-04-21) ---------------------
+# Attempt #1 FAIL: bump_persistence_ms=10.0, forecast_prob=0.0. Vogels iSTDP
+# drove inh->E to inh_w_max=10.0 over 360 trials (ctx_E ~21 Hz, 10x the
+# inh_rho_hz=2.0 target), killing the bump. Per HRingConfig.inh_w_max
+# docstring ("lower values (~1.5-2.0) prevent the long schedule from
+# over-strengthening inh -> E (kills the bump)"), drop to 2.0.
+H_CFG = HRingConfig(inh_w_max=2.0)
+CTX_PRED_CFG = HContextPredictionConfig(ctx_cfg=H_CFG, pred_cfg=H_CFG)
+ATTEMPT = 2
 
 
 def _fmt_check(name: str, cr) -> str:
@@ -58,14 +70,18 @@ def _fmt_check(name: str, cr) -> str:
 
 def main() -> int:
     t0 = time.time()
-    print(f"=== Stage-1 ctx_pred FULL retrain (seed={SEED}, n_trials={N_TRIALS}) ===")
+    print(f"=== Stage-1 ctx_pred FULL retrain (seed={SEED}, n_trials={N_TRIALS}, attempt={ATTEMPT}) ===")
     print(f"checkpoint dir: {CHECKPOINT_DIR_DEFAULT}")
     print(f"wall-start    : {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"override      : HRingConfig.inh_w_max = {H_CFG.inh_w_max} "
+          f"(default 10.0 -> 2.0 per attempt #1 diagnosis)")
     sys.stdout.flush()
 
     res: Stage1CtxPredResult = run_stage_1_ctx_pred(
         seed=SEED,
         n_trials=N_TRIALS,
+        h_cfg=H_CFG,
+        ctx_pred_cfg=CTX_PRED_CFG,
         verbose=True,
     )
 
@@ -83,6 +99,8 @@ def main() -> int:
     # Evidence-log entry (JSON for easy downstream parsing).
     evidence = {
         "stage": "stage_1_ctx_pred_full",
+        "attempt": ATTEMPT,
+        "overrides": {"HRingConfig.inh_w_max": H_CFG.inh_w_max},
         "seed": SEED,
         "n_trials": N_TRIALS,
         "wall_s": wall_s,
