@@ -177,11 +177,17 @@ def run_richter_trial(
     *, leader_pos: int, trailer_pos: int,
     timing: RichterTiming, rule: ThreeFactorRule,
     noise_std: float = 0.0, device: str = "cpu",
+    apply_plasticity: bool = True,
 ) -> dict[str, Tensor]:
     """Run one Richter trial through the network; apply plasticity at end.
 
     Returns a dict with the four signals consumed by the update so the
-    caller can log them; the update has already been applied in-place.
+    caller can log them; the update has already been applied in-place
+    when ``apply_plasticity=True`` (the default).
+
+    Critique C2 / Task #68: scan sub-phase evaluates already-learned
+    weights — callers pass ``apply_plasticity=False`` so updates are
+    computed for logging but not written to parameters.
     """
     _assert_plastic(net, "context_memory", "W_lm_task")
     _assert_plastic(net, "context_memory", "W_mh_task")
@@ -251,10 +257,11 @@ def run_richter_trial(
         cue=leader_v, memory=m_end_leader, memory_error=memory_error_lm,
         weights=net.context_memory.W_lm_task,
     )
-    net.context_memory.W_lm_task.data.add_(dw_lm)
-    # Runaway safeguard: cap |W_lm_task| at 1.0 per element — mirrors the
-    # Kok-side cap (Task #58 / debugger Task #49 Claim 4).
-    net.context_memory.W_lm_task.data.clamp_(min=-1.0, max=1.0)
+    if apply_plasticity:
+        net.context_memory.W_lm_task.data.add_(dw_lm)
+        # Runaway safeguard: cap |W_lm_task| at 1.0 per element — mirrors the
+        # Kok-side cap (Task #58 / debugger Task #49 Claim 4).
+        net.context_memory.W_lm_task.data.clamp_(min=-1.0, max=1.0)
 
     r_l23_trailer_mean = torch.stack(trailer_l23, dim=0).mean(dim=0)  # [1, n_l23]
     probe_error_mh = r_l23_trailer_mean - b_l23_pre_trailer         # [1, n_l23]
@@ -262,7 +269,8 @@ def run_richter_trial(
         memory=m_start_trailer, probe_error=probe_error_mh,
         weights=net.context_memory.W_mh_task,
     )
-    net.context_memory.W_mh_task.data.add_(dw_mh)
+    if apply_plasticity:
+        net.context_memory.W_mh_task.data.add_(dw_mh)
 
     return {
         "dw_lm_abs_mean": dw_lm.abs().mean().detach(),
@@ -367,9 +375,10 @@ def run_phase3_richter_training(
 
     t_start = time.monotonic()
     try:
-        for sub_phase, n_trials, reliab in (
-            ("learning", int(n_trials_learning), 1.0),
-            ("scan",     int(n_trials_scan),     float(reliability_scan)),
+        # Critique C2 / Task #68: plasticity ON in learning, OFF in scan.
+        for sub_phase, n_trials, reliab, apply_plast in (
+            ("learning", int(n_trials_learning), 1.0,                      True),
+            ("scan",     int(n_trials_scan),     float(reliability_scan),  False),
         ):
             for k in range(n_trials):
                 leader_pos = int(np_rng.integers(0, N_LEAD_TRAIL))
@@ -381,6 +390,7 @@ def run_phase3_richter_training(
                     leader_pos=leader_pos, trailer_pos=trailer_pos,
                     timing=timing, rule=rule,
                     noise_std=float(noise_std), device=str(cfg.device),
+                    apply_plasticity=apply_plast,
                 )
                 if k % max(int(log_every), 1) == 0 or k == n_trials - 1:
                     m = TrainStepMetrics(

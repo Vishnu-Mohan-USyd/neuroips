@@ -63,7 +63,7 @@ from src.v2_model.plasticity import UrbanczikSennRule, VogelsISTDPRule
 from src.v2_model.prediction_head import compute_error
 from src.v2_model.state import NetworkStateV2
 from src.v2_model.stimuli.feature_tokens import TokenBank
-from src.v2_model.world.procedural import ProceduralWorld
+from src.v2_model.world.procedural import ProceduralWorld, WorldState
 
 __all__ = [
     "PhaseFrozenError",
@@ -71,6 +71,7 @@ __all__ = [
     "build_world",
     "run_phase2_training",
     "sample_batch_window",
+    "step_persistent_batch",
 ]
 
 
@@ -153,6 +154,12 @@ def sample_batch_window(
 
     Each trajectory draws from its own ``torch.Generator`` seeded from
     ``seed_family + seeds[b]``, so runs are reproducible given the seed list.
+
+    NOTE (critique C1 / Task #68): this helper re-creates a fresh N-frame
+    window per call, so using it inside a training loop yields *independent*
+    per-step windows rather than *persistent* trajectories. Phase-2
+    training uses :func:`step_persistent_batch` instead; this function is
+    retained for gates / tests that genuinely want independent windows.
     """
     if n_steps_per_window < 1:
         raise ValueError(
@@ -163,6 +170,75 @@ def sample_batch_window(
         frames, _states = world.trajectory(s, n_steps_per_window)
         tracks.append(frames)                                      # [T,1,H,W]
     return torch.stack(tracks, dim=0)                             # [B,T,1,H,W]
+
+
+def _clone_world(world: ProceduralWorld) -> ProceduralWorld:
+    """Create a sibling :class:`ProceduralWorld` sharing cfg + TokenBank but
+    with an independent internal ``_rng`` (set on the first ``reset`` call).
+
+    Per-batch-element persistent trajectories (critique C1 / Task #68)
+    require one :class:`ProceduralWorld` instance per batch element,
+    because ``ProceduralWorld`` stores its generator as instance state
+    (shared generator across concurrent states would interleave draws
+    in an order-dependent way, breaking determinism).
+    """
+    return ProceduralWorld(
+        world.cfg, world.token_bank,
+        seed_family=world.seed_family,
+        held_out_regime=world.held_out_regime,
+    )
+
+
+def step_persistent_batch(
+    worlds: list[ProceduralWorld], states: list[WorldState],
+    n_steps_per_window: int = 2,
+) -> tuple[Tensor, list[WorldState]]:
+    """Advance each of ``B = len(worlds)`` persistent trajectories by
+    ``n_steps_per_window`` frames; return the batched frame tensor and the
+    updated per-element ``WorldState`` list.
+
+    Critique C1 / Task #68: Phase-2 training carries BOTH network state
+    and world state forward across training steps. Each call advances
+    the world in lock-step with the network (which consumes ``T = 2``
+    frames per training step).
+
+    Parameters
+    ----------
+    worlds
+        List of ``B`` :class:`ProceduralWorld` instances, each already
+        reset to its own trajectory seed.
+    states
+        Per-element :class:`WorldState` (matches ``worlds`` by index).
+    n_steps_per_window
+        Number of frames to advance per call (default 2 — one training
+        step's worth).
+
+    Returns
+    -------
+    frames
+        Shape ``[B, n_steps_per_window, 1, H, W]``.
+    new_states
+        Updated :class:`WorldState` list (same length as ``worlds``).
+    """
+    if n_steps_per_window < 1:
+        raise ValueError(
+            f"n_steps_per_window must be ≥ 1; got {n_steps_per_window}"
+        )
+    if len(worlds) != len(states):
+        raise ValueError(
+            f"len(worlds)={len(worlds)} must match len(states)={len(states)}"
+        )
+    tracks: list[Tensor] = []
+    new_states: list[WorldState] = []
+    for w, s in zip(worlds, states):
+        frames_b: list[Tensor] = []
+        cur = s
+        for _ in range(n_steps_per_window):
+            f, cur, _info = w.step(cur)
+            frames_b.append(f)
+        tracks.append(torch.stack(frames_b, dim=0))                # [T,1,H,W]
+        new_states.append(cur)
+    return torch.stack(tracks, dim=0), new_states                  # [B,T,1,H,W]
 
 
 # ---------------------------------------------------------------------------
@@ -581,13 +657,32 @@ def run_phase2_training(
     # warmup loop and the main training loop (Task #56 rolling-window).
     state = net.initial_state(batch_size=batch_size)
 
+    # Critique C1 / Task #68: build B persistent world instances (one
+    # per batch element) and keep per-element :class:`WorldState` across
+    # training steps. Each training step advances each world by two
+    # frames — matching the net, which consumes two frames per step and
+    # thereby advances its own internal state by two. At segment
+    # boundaries both the network state AND all world states are reset.
+    worlds: list[ProceduralWorld] = [_clone_world(world) for _ in range(batch_size)]
+    reset_counter = 0
+
+    def _reset_all_world_states() -> list[WorldState]:
+        nonlocal reset_counter
+        states_new = [
+            worlds[b].reset(seed_offset + reset_counter * 10_000 + b)
+            for b in range(batch_size)
+        ]
+        reset_counter += 1
+        return states_new
+
+    world_states: list[WorldState] = _reset_all_world_states()
+
     try:
-        # ---- Warmup: forward-only, no plasticity -----------------------
+        # ---- Warmup: forward-only, no plasticity ----------------------
         for w in range(warmup_steps):
-            seeds = [
-                seed_offset + w * batch_size + b for b in range(batch_size)
-            ]
-            frames = sample_batch_window(world, seeds, n_steps_per_window=2)
+            frames, world_states = step_persistent_batch(
+                worlds, world_states, n_steps_per_window=2,
+            )
             _s0, _s1, state, _i0, _i1, _x0, _x1 = _forward_window(
                 net, frames, state,
             )
@@ -596,13 +691,11 @@ def run_phase2_training(
                     f"non-finite r_l23 during warmup step {w} — diverged"
                 )
 
-        # ---- Main loop: forward + plasticity, carrying state forward --
+        # ---- Main loop: forward + plasticity, carrying state forward -
         for step in range(n_steps):
-            seeds = [
-                seed_offset + (warmup_steps + step) * batch_size + b
-                for b in range(batch_size)
-            ]
-            frames = sample_batch_window(world, seeds, n_steps_per_window=2)
+            frames, world_states = step_persistent_batch(
+                worlds, world_states, n_steps_per_window=2,
+            )
 
             (
                 state0, state1, state2, info0, info1, x_hat_0, _x_hat_1,
@@ -623,6 +716,11 @@ def run_phase2_training(
                 and (step + 1) < n_steps
             ):
                 state = _soft_reset_state(state, scale=soft_reset_scale)
+                # Critique C1 / Task #68: reset world states at segment
+                # boundaries so new trajectories begin alongside the soft
+                # network reset (damps accumulated drift without losing
+                # circuit warmth).
+                world_states = _reset_all_world_states()
 
             if step % log_every == 0 or step == n_steps - 1:
                 eps = state2.r_l4 - x_hat_0

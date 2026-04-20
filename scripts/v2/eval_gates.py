@@ -1,22 +1,27 @@
-"""Phase-2 sanity gates 1-5 (plan v4 / Task #39).
+"""Phase-2 sanity gates 1-7 (plan v4 / Task #39; extended Task #68).
 
-Evaluates five pass/fail sensory sanity checks on a Phase-2 checkpoint:
+Evaluates seven pass/fail sensory sanity checks on a Phase-2 checkpoint:
 
 1. Rate distribution — L2/3 E median firing rate ∈ [0.05, 0.5] under blank input.
 2. Contrast response — L4 E mean response follows Naka-Rushton vs contrast
    with R² > 0.7.
 3. Surround suppression — ≥ 50% of L2/3 E units show SI > 0.1.
 4. Next-step prediction beats copy-last — network MSE ≤ 0.85 × copy-last MSE.
-5a. Orientation localizer — ≥ 70% of L2/3 E units have FWHM < 120°.
-5b. Identity localizer — L4 LinearSVC 12-way acc > 0.25 AND within-token
-    mean RSA distance < between-token mean RSA distance.
+5. Orientation + identity localizer (combined) — ≥ 70% of L2/3 E units have
+   FWHM < 120° AND L4 LinearSVC 12-way acc > 0.25 AND within-token mean RSA
+   distance < between-token mean RSA distance. (Internally 5a + 5b; the
+   combined gate_5 passes only if both sub-gates pass.)
+6. Null-expectation control (wraps ``run_gate_6_null_control``) — Kok +
+   Richter null assays both pass.
+7. Context-memory load-bearing (wraps ``run_gate_7_c_load_bearing``) —
+   ablating C degrades prediction MSE by ≥ 5%.
 
 Usage:
     python -m scripts.v2.eval_gates \\
         --checkpoint checkpoints/v2/phase2/phase2_s42/step_1000.pt \\
         --seed 42
 
-Writes ``gates_1_5.json`` next to the checkpoint. Exit 0 if all gates pass,
+Writes ``gates_1_7.json`` next to the checkpoint. Exit 0 if all gates pass,
 1 if any fail (still writes the JSON). Designed as a smoke harness: it
 must run on a freshly-initialised checkpoint (gates may fail but no
 crash), and produces reproducible numeric output given a fixed seed.
@@ -44,6 +49,8 @@ from scripts.v2._gates_common import (
     simulate_and_collect,
     simulate_steady_state,
 )
+from scripts.v2.run_null_expectation_control import run_gate_6_null_control
+from scripts.v2.run_c_load_bearing_check import run_gate_7_c_load_bearing
 from src.v2_model.network import V2Network
 from src.v2_model.world.procedural import ProceduralWorld
 
@@ -55,7 +62,10 @@ __all__ = [
     "gate_4_prediction_beats_copy_last",
     "gate_5a_orientation_localizer",
     "gate_5b_identity_localizer",
+    "gate_6_null_expectation_control",
+    "gate_7_c_load_bearing",
     "run_gates_1_to_5",
+    "run_gates_1_to_7",
 ]
 
 
@@ -410,12 +420,67 @@ def gate_5b_identity_localizer(
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Gate 6 — null-expectation control (wraps run_gate_6_null_control)
+# ---------------------------------------------------------------------------
+
+
+def gate_6_null_expectation_control(
+    bundle: CheckpointBundle,
+    *, phase: str = "phase3_kok",
+    kok_kwargs: dict | None = None,
+    richter_kwargs: dict | None = None,
+) -> dict[str, Any]:
+    """Thin wrapper around ``run_gate_6_null_control``.
+
+    Runs the Kok + Richter null assays to verify that observed expectation
+    effects are above a null-validity baseline. Returns the wrapped dict
+    with an added ``gate`` label so the 7-key output is uniform.
+    """
+    out = run_gate_6_null_control(
+        bundle, phase=phase,
+        kok_kwargs=kok_kwargs, richter_kwargs=richter_kwargs,
+    )
+    out = dict(out)
+    out["gate"] = "6_null_expectation_control"
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Gate 7 — C-load-bearing ablation (wraps run_gate_7_c_load_bearing)
+# ---------------------------------------------------------------------------
+
+
+def gate_7_c_load_bearing(
+    bundle: CheckpointBundle,
+    *, n_trajectories: int = 8, n_steps_per_traj: int = 20,
+    degradation_floor: float = 0.05,
+    phase: str = "phase2",
+    seed_family: str = "eval",
+) -> dict[str, Any]:
+    """Thin wrapper around ``run_gate_7_c_load_bearing``.
+
+    Ablates Context Memory and compares next-step prediction MSE with vs
+    without C; passes iff relative degradation ≥ ``degradation_floor``.
+    """
+    return run_gate_7_c_load_bearing(
+        bundle, n_trajectories=n_trajectories,
+        n_steps_per_traj=n_steps_per_traj,
+        degradation_floor=degradation_floor,
+        phase=phase, seed_family=seed_family,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entry points
 # ---------------------------------------------------------------------------
 
 
 def run_gates_1_to_5(bundle: CheckpointBundle) -> dict[str, Any]:
-    """Run all five gates and return a dict of per-gate results."""
+    """Run sensory gates 1-5 and return a dict of per-gate results.
+
+    Kept for backwards compatibility with callers written against the
+    original 5-gate harness. New callers should prefer ``run_gates_1_to_7``.
+    """
     results: dict[str, Any] = {}
     results["gate_1_rate_distribution"] = gate_1_rate_distribution(bundle)
     results["gate_2_contrast_response"] = gate_2_contrast_response(bundle)
@@ -433,20 +498,67 @@ def run_gates_1_to_5(bundle: CheckpointBundle) -> dict[str, Any]:
     return results
 
 
+def run_gates_1_to_7(bundle: CheckpointBundle) -> dict[str, Any]:
+    """Run all seven gates and return a dict with canonical 7-gate keys.
+
+    Returns a dict with keys ``gate_1`` through ``gate_7`` (each a dict
+    with at minimum a ``passed: bool`` field) plus ``all_passed: bool``.
+    Gate 5 collapses 5a + 5b: ``gate_5`` passes only if both sub-gates
+    pass, and its body preserves both sub-dicts under ``gate_5a`` /
+    ``gate_5b`` for transparency.
+
+    Note on phase bookkeeping: gate 6 switches ``bundle.net`` into
+    ``phase3_kok`` and gate 7 into ``phase2`` (see the wrapped runners),
+    so gates 1-5 are run FIRST under the checkpoint's loaded phase,
+    and then 6 + 7 are run last. Callers that need a specific final
+    phase should ``bundle.net.set_phase(...)`` after this returns.
+    """
+    results: dict[str, Any] = {}
+    results["gate_1"] = gate_1_rate_distribution(bundle)
+    results["gate_2"] = gate_2_contrast_response(bundle)
+    results["gate_3"] = gate_3_surround_suppression(bundle)
+    results["gate_4"] = gate_4_prediction_beats_copy_last(bundle)
+
+    g5a = gate_5a_orientation_localizer(bundle)
+    g5b = gate_5b_identity_localizer(bundle)
+    results["gate_5"] = {
+        "gate": "5_orientation_plus_identity_localizer",
+        "gate_5a": g5a,
+        "gate_5b": g5b,
+        "passed": bool(g5a.get("passed", False) and g5b.get("passed", False)),
+    }
+
+    results["gate_6"] = gate_6_null_expectation_control(bundle)
+    results["gate_7"] = gate_7_c_load_bearing(bundle)
+
+    results["all_passed"] = all(
+        bool(results[f"gate_{i}"].get("passed", False)) for i in range(1, 8)
+    )
+    return results
+
+
 def _cli() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Phase-2 sanity gates 1-5")
+    p = argparse.ArgumentParser(description="Phase-2 sanity gates 1-7")
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="cpu")
     p.add_argument("--output", type=Path, default=None)
+    p.add_argument(
+        "--only-1-to-5", action="store_true",
+        help="Legacy mode: run only sensory gates 1-5 (gates_1_5.json).",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _cli().parse_args(argv)
     bundle = load_checkpoint(args.checkpoint, seed=args.seed, device=args.device)
-    results = run_gates_1_to_5(bundle)
-    out_path = args.output or (args.checkpoint.parent / "gates_1_5.json")
+    if args.only_1_to_5:
+        results = run_gates_1_to_5(bundle)
+        out_path = args.output or (args.checkpoint.parent / "gates_1_5.json")
+    else:
+        results = run_gates_1_to_7(bundle)
+        out_path = args.output or (args.checkpoint.parent / "gates_1_7.json")
     out_path.write_text(json.dumps(results, indent=2))
     return 0 if results["all_passed"] else 1
 

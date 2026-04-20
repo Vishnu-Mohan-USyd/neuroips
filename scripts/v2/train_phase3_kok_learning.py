@@ -175,11 +175,21 @@ def run_kok_trial(
     *, cue_id: int, probe_orientation_deg: float,
     timing: KokTiming, rule: ThreeFactorRule,
     noise_std: float = 0.0, device: str = "cpu",
+    apply_plasticity: bool = True,
 ) -> dict[str, Tensor]:
     """Run one Kok trial through the network; apply plasticity at end.
 
     Returns a dict with the four signals consumed by the update so the
-    caller can log them; the update has already been applied in-place.
+    caller can log them; the update has already been applied in-place
+    when ``apply_plasticity=True`` (the default).
+
+    Critique C2 / Task #68: the scan sub-phase evaluates responses on
+    already-learned weights. Leaving plasticity active during scan
+    continues mutating ``W_qm_task`` / ``W_mh_task`` from random trial
+    labels, diluting the signal. Callers in the scan sub-phase pass
+    ``apply_plasticity=False`` so the updates are computed for logging
+    but **not** written to the parameters. Signals (``dw_*_abs_mean``)
+    still reflect what the rule WOULD have produced.
     """
     _assert_plastic(net, "context_memory", "W_qm_task")
     _assert_plastic(net, "context_memory", "W_mh_task")
@@ -245,11 +255,12 @@ def run_kok_trial(
         cue=q_cue, memory=m_end_cue, memory_error=memory_error_qm,
         weights=net.context_memory.W_qm_task,
     )
-    net.context_memory.W_qm_task.data.add_(dw_qm)
-    # Runaway safeguard: cap |W_qm_task| at 1.0 per element to prevent
-    # the cue → memory → cue positive-feedback loop from diverging during
-    # early Phase-3 training (Task #58 / debugger Task #49 Claim 4).
-    net.context_memory.W_qm_task.data.clamp_(min=-1.0, max=1.0)
+    if apply_plasticity:
+        net.context_memory.W_qm_task.data.add_(dw_qm)
+        # Runaway safeguard: cap |W_qm_task| at 1.0 per element to prevent
+        # the cue → memory → cue positive-feedback loop from diverging during
+        # early Phase-3 training (Task #58 / debugger Task #49 Claim 4).
+        net.context_memory.W_qm_task.data.clamp_(min=-1.0, max=1.0)
 
     r_l23_probe1_mean = torch.stack(probe1_l23, dim=0).mean(dim=0)  # [1, n_l23]
     probe_error_mh = r_l23_probe1_mean - b_l23_pre_probe         # [1, n_l23]
@@ -257,7 +268,8 @@ def run_kok_trial(
         memory=m_start_probe, probe_error=probe_error_mh,
         weights=net.context_memory.W_mh_task,
     )
-    net.context_memory.W_mh_task.data.add_(dw_mh)
+    if apply_plasticity:
+        net.context_memory.W_mh_task.data.add_(dw_mh)
 
     return {
         "dw_qm_abs_mean": dw_qm.abs().mean().detach(),
@@ -351,9 +363,14 @@ def run_phase3_kok_training(
 
     t_start = time.monotonic()
     try:
-        for sub_phase, n_trials, validity in (
-            ("learning", int(n_trials_learning), 1.0),
-            ("scan",     int(n_trials_scan),     float(validity_scan)),
+        # Critique C2 / Task #68: plasticity is ON in the learning sub-phase
+        # (trains the cue→memory→L23 mapping) and OFF in the scan sub-phase
+        # (which evaluates the already-learned weights against probabilistic
+        # labels). Keeping plasticity on during scan would dilute the
+        # learned signal with random label-driven updates.
+        for sub_phase, n_trials, validity, apply_plast in (
+            ("learning", int(n_trials_learning), 1.0,                   True),
+            ("scan",     int(n_trials_scan),     float(validity_scan),  False),
         ):
             for k in range(n_trials):
                 cue_id = int(np_rng.integers(0, 2))
@@ -363,6 +380,7 @@ def run_phase3_kok_training(
                     cue_id=cue_id, probe_orientation_deg=probe_deg,
                     timing=timing, rule=rule,
                     noise_std=float(noise_std), device=str(cfg.device),
+                    apply_plasticity=apply_plast,
                 )
                 if k % max(int(log_every), 1) == 0 or k == n_trials - 1:
                     m = TrainStepMetrics(

@@ -18,8 +18,12 @@ comparison. Primary metrics:
          * ``nonpref_exp`` / ``nonpref_unexp``
          * ``asymmetry`` = (nonpref_unexp − nonpref_exp)
                          − (pref_unexp − pref_exp)
-       A positive asymmetry is the Kok-2012 prediction: expectation
-       suppresses preferred activity, enhances non-preferred activity.
+       A positive asymmetry is the Kok-2012 sharpening prediction:
+       expectation suppresses non-preferred activity more than preferred
+       activity, i.e. non-preferred units are suppressed MORE by
+       expectation than preferred units. (Critique C3 / Task #68:
+       docstring corrected to match the formula — the earlier wording
+       described dampening, which is the opposite sign.)
 
 Writes ``eval_kok.json`` next to the checkpoint. Exit 0 always — the
 script reports metrics; a separate pass/fail policy lives upstream.
