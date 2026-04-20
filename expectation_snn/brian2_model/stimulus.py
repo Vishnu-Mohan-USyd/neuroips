@@ -241,6 +241,187 @@ def richter_crossover_training_schedule(
     )
 
 
+# --- Richter biased training schedule (Sprint 5e Fix A) --------------------
+
+def richter_biased_training_schedule(
+    rng: np.random.Generator,
+    n_trials: int = 360,
+    p_bias: float = 0.80,
+    derangement: Sequence[int] = (1, 2, 3, 4, 5, 0),
+    leader_ms: float = RICHTER_LEADER_MS,
+    trailer_ms: float = RICHTER_TRAILER_MS,
+    iti_ms: float = RICHTER_ITI_MS,
+    contrast: float = 1.0,
+    orientations_deg: Sequence[float] = RICHTER_ORIENTATIONS_DEG,
+) -> TrialPlan:
+    """Biased Richter training schedule with learnable leader→trailer contingency.
+
+    Sprint 5e Fix A: the legacy `richter_crossover_training_schedule` is
+    balanced over all 36 leader-trailer pairs, so `P(T|L) = 1/6` for every
+    `L` — a uniform transition matrix with **no** statistical regularity for
+    STDP to latch onto. Per Sprint 5e-Diag (task #43, commit 5c8ad05), this
+    schedule has `min_L entropy = log2(6) = 2.585` bits — maximal, i.e. zero
+    contingency. The deranged-permutation variant implemented here induces
+    a learnable prior: `P(L → f(L)) = p_bias`, with the remaining
+    `1 − p_bias` split uniformly across the four trailers that are neither
+    `L` nor `f(L)` (same-orientation trailers never occur under this
+    schedule, avoiding the same-θ adaptation confound Sprint 5c R1 already
+    removed from the test phase).
+
+    The legacy balanced schedule remains the **test-phase** generator
+    (`richter_crossover_training_schedule`); this function is
+    training-phase only.
+
+    Parameters
+    ----------
+    rng : np.random.Generator
+        Deterministic RNG (seed=42 per current-stage pre-reg).
+    n_trials : int
+        Total trial count. Must be a multiple of `len(orientations_deg)` so
+        that each leader appears exactly `n_trials / n_orients` times.
+    p_bias : float
+        Probability that `T = f(L)` given `L`. Must lie in (1/(n-1), 1) so
+        that the expected-transition dominates the uniform alternative.
+        Default 0.80 per Sprint 5e-Diag reference.
+    derangement : Sequence[int]
+        A derangement (fixed-point-free permutation) of `range(n_orients)`:
+        `derangement[L] = f(L)` with `f(L) != L` for all `L`. Default
+        `(1, 2, 3, 4, 5, 0)` — one-step rotation on the 6-orientation ring,
+        matching the assay's expected direction (Sprint 5c R1).
+    leader_ms, trailer_ms, iti_ms, contrast : float
+    orientations_deg : Sequence[float]
+        Must have length 6.
+
+    Returns
+    -------
+    TrialPlan
+        `meta` contains:
+          - `paradigm` = "richter_biased"
+          - `n_trials`
+          - `pairs` : (n_trials, 2) int64 — (leader_idx, trailer_idx)
+          - `expected_trailer_idx` : (n_trials,) int64 — `f(L)` for each trial
+          - `is_expected` : (n_trials,) bool — `T == f(L)`
+          - `p_bias` : float
+          - `derangement` : tuple[int, ...]
+          - `orientations_deg`
+
+    References
+    ----------
+    Richter D, de Lange FP (2022) DOI 10.1093/oons/kvac013.
+    Sprint 5e-Diag VERDICT_REPORT.md §Bug 1, §B5.
+    """
+    n_orients = len(orientations_deg)
+    if n_orients != 6:
+        raise ValueError(
+            f"Richter paradigm requires 6 orientations, got {n_orients}"
+        )
+    if n_trials % n_orients != 0:
+        raise ValueError(
+            f"n_trials ({n_trials}) must be a multiple of {n_orients} "
+            f"so each leader is presented {n_trials // n_orients} times"
+        )
+    if len(derangement) != n_orients:
+        raise ValueError(
+            f"derangement length {len(derangement)} != n_orients {n_orients}"
+        )
+    derangement = tuple(int(x) for x in derangement)
+    if sorted(derangement) != list(range(n_orients)):
+        raise ValueError(
+            f"derangement {derangement} is not a permutation of 0..{n_orients-1}"
+        )
+    if any(derangement[i] == i for i in range(n_orients)):
+        raise ValueError(
+            f"derangement has a fixed point: {derangement} "
+            f"(f(L) must differ from L for all L)"
+        )
+    p_other_total = 1.0 - float(p_bias)
+    if not (0.0 < p_bias < 1.0):
+        raise ValueError(f"p_bias must be in (0, 1), got {p_bias}")
+    n_other = n_orients - 2  # exclude L itself AND f(L); spread 1-p_bias across these
+    p_other = p_other_total / n_other    # per non-{L, f(L)} trailer
+    if p_bias <= p_other:
+        raise ValueError(
+            f"p_bias={p_bias} is not greater than per-other mass "
+            f"{p_other:.4f}; schedule would not be biased"
+        )
+
+    # Balanced leader sampling: each leader appears n_trials // n_orients times.
+    reps_per_leader = n_trials // n_orients
+    leaders = np.repeat(np.arange(n_orients, dtype=np.int64), reps_per_leader)
+    rng.shuffle(leaders)
+
+    # Per-trial trailer sampling from the biased multinomial.
+    pairs = np.empty((n_trials, 2), dtype=np.int64)
+    expected_trailer_idx = np.empty(n_trials, dtype=np.int64)
+    is_expected = np.empty(n_trials, dtype=bool)
+    # Precompute per-leader probability vector (shape (6,)).
+    per_leader_p = np.zeros((n_orients, n_orients), dtype=np.float64)
+    for L in range(n_orients):
+        fL = derangement[L]
+        per_leader_p[L, :] = 0.0
+        for T in range(n_orients):
+            if T == L:
+                per_leader_p[L, T] = 0.0
+            elif T == fL:
+                per_leader_p[L, T] = p_bias
+            else:
+                per_leader_p[L, T] = p_other
+        # Renormalise defensively (round-off).
+        per_leader_p[L, :] /= per_leader_p[L, :].sum()
+
+    for k, L in enumerate(leaders):
+        L = int(L)
+        T = int(rng.choice(n_orients, p=per_leader_p[L]))
+        pairs[k] = (L, T)
+        expected_trailer_idx[k] = derangement[L]
+        is_expected[k] = (T == derangement[L])
+
+    thetas_rad = np.deg2rad(np.asarray(orientations_deg, dtype=np.float64))
+
+    items: List[TrialItem] = []
+    for trial_idx, ((li, ti), exp_ti, is_exp) in enumerate(
+        zip(pairs, expected_trailer_idx, is_expected)
+    ):
+        meta_base = {
+            "trial": trial_idx,
+            "leader_idx": int(li),
+            "trailer_idx": int(ti),
+            "expected_trailer_idx": int(exp_ti),
+            "is_expected": bool(is_exp),
+        }
+        items.append(TrialItem(
+            theta_rad=float(thetas_rad[li]),
+            contrast=contrast,
+            duration_ms=leader_ms,
+            kind="leader",
+            meta=dict(meta_base),
+        ))
+        items.append(TrialItem(
+            theta_rad=float(thetas_rad[ti]),
+            contrast=contrast,
+            duration_ms=trailer_ms,
+            kind="trailer",
+            meta=dict(meta_base),
+        ))
+        if iti_ms > 0:
+            items.append(TrialItem(
+                theta_rad=None, contrast=0.0, duration_ms=iti_ms,
+                kind="iti", meta={"trial": trial_idx},
+            ))
+
+    return TrialPlan(
+        items=items,
+        meta={"paradigm": "richter_biased",
+              "n_trials": int(n_trials),
+              "pairs": pairs,
+              "expected_trailer_idx": expected_trailer_idx,
+              "is_expected": is_expected,
+              "p_bias": float(p_bias),
+              "derangement": tuple(derangement),
+              "orientations_deg": tuple(orientations_deg)},
+    )
+
+
 # --- Tang 2023 rotating sequence -------------------------------------------
 
 def tang_rotating_sequence(
@@ -434,6 +615,61 @@ if __name__ == "__main__":
     plan_b = richter_crossover_training_schedule(rng_b, n_trials=36)
     assert np.array_equal(plan_a.meta["pairs"], plan_b.meta["pairs"])
     print("stimulus smoke: Richter deterministic under seed=42")
+
+    # 2c) Biased training schedule (Sprint 5e Fix A): empirical bias matches
+    #     the target p_bias within sampling slack; same-orientation trailers
+    #     never occur; deterministic under seed.
+    rng_bias = np.random.default_rng(42)
+    plan_bias = richter_biased_training_schedule(
+        rng_bias, n_trials=360, p_bias=0.80,
+    )
+    assert plan_bias.meta["paradigm"] == "richter_biased"
+    pairs_b = plan_bias.meta["pairs"]
+    is_exp = plan_bias.meta["is_expected"]
+    assert pairs_b.shape == (360, 2)
+    # No same-orientation trailers under deranged-permutation schedule.
+    assert np.all(pairs_b[:, 0] != pairs_b[:, 1]), (
+        "same-orientation trailer leaked into biased schedule"
+    )
+    # Empirical P(T=f(L)|L) approx 0.80; allow ±0.05 slack on 360 trials.
+    emp_bias = float(is_exp.mean())
+    assert 0.75 <= emp_bias <= 0.85, (
+        f"empirical bias {emp_bias:.3f} outside [0.75, 0.85]"
+    )
+    # max P(T|L) across all 6 leaders must be >= 0.70 (matches validator floor).
+    from collections import Counter
+    max_pt = 0.0
+    min_ent = float("inf")
+    for L in range(6):
+        row_mask = pairs_b[:, 0] == L
+        n_L = int(row_mask.sum())
+        assert n_L > 0, f"leader {L} never appeared"
+        ct = Counter(pairs_b[row_mask, 1].tolist())
+        probs = np.array([ct.get(T, 0) / n_L for T in range(6)])
+        max_pt = max(max_pt, float(probs.max()))
+        p_nonzero = probs[probs > 0]
+        ent = float(-(p_nonzero * np.log2(p_nonzero)).sum())
+        min_ent = min(min_ent, ent)
+    assert max_pt >= 0.70, f"max P(T|L) = {max_pt:.3f} < 0.70"
+    assert min_ent <= (np.log2(6) - 0.5), (
+        f"min_L entropy {min_ent:.3f} > log2(6) - 0.5"
+    )
+    # Determinism.
+    rng_c = np.random.default_rng(42)
+    rng_d = np.random.default_rng(42)
+    pa = richter_biased_training_schedule(rng_c, n_trials=60)
+    pb = richter_biased_training_schedule(rng_d, n_trials=60)
+    assert np.array_equal(pa.meta["pairs"], pb.meta["pairs"])
+    # Derangement validation: f(L) != L required.
+    try:
+        richter_biased_training_schedule(
+            np.random.default_rng(0), n_trials=60, derangement=(0, 2, 3, 4, 5, 1),
+        )
+        raise AssertionError("fixed-point derangement should raise")
+    except ValueError:
+        pass
+    print(f"stimulus smoke: biased schedule p_bias=0.80, empirical={emp_bias:.3f}, "
+          f"max P(T|L)={max_pt:.3f}, min_L entropy={min_ent:.3f} bits")
 
     # 3) Tang rotating.
     rng2 = np.random.default_rng(42)
