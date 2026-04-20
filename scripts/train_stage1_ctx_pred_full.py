@@ -49,15 +49,22 @@ from expectation_snn.brian2_model.h_context_prediction import HContextPrediction
 SEED = 42
 N_TRIALS = 360
 
-# --- attempt #2 override (Sprint 5e-Fix E, 2026-04-21) ---------------------
-# Attempt #1 FAIL: bump_persistence_ms=10.0, forecast_prob=0.0. Vogels iSTDP
-# drove inh->E to inh_w_max=10.0 over 360 trials (ctx_E ~21 Hz, 10x the
-# inh_rho_hz=2.0 target), killing the bump. Per HRingConfig.inh_w_max
-# docstring ("lower values (~1.5-2.0) prevent the long schedule from
-# over-strengthening inh -> E (kills the bump)"), drop to 2.0.
+# --- attempt #3 (real attempt #2), Sprint 5e-Fix E, 2026-04-21 -------------
+# Attempt #1 (commit 5317540): FAIL. bump_persistence=10ms, forecast=0.0.
+# Attempt #2 (commit 31e6e98): bit-identical no-op. The script override
+#   HRingConfig(inh_w_max=2.0) was silently overwritten by train.py's
+#   _stage1_h_cfg (forces inh_w_max=1.5 unconditionally).
+# Attempt #3 (THIS run) — fix commit 5ef422b:
+#   Snapshot (docs/stage1_ctx_pred_attempt1_snapshot.md, commit 4493fa8)
+#   showed W_ctx_pred collapsed to w_row_max / n_pre = 3.0 / 192 = 0.015625
+#   on trial 1 because init row sum (0.025 * 192 = 4.80) exceeded
+#   w_row_max = 3.0. Fix: shrink DEFAULT_W_INIT_FRAC 0.05 -> 0.015 so init
+#   row sum = 0.0075 * 192 = 1.44, leaving headroom for LTP before cap.
+# HRingConfig(inh_w_max=2.0) retained here for trace continuity — it is
+# still a no-op under _stage1_h_cfg but documents intent.
 H_CFG = HRingConfig(inh_w_max=2.0)
 CTX_PRED_CFG = HContextPredictionConfig(ctx_cfg=H_CFG, pred_cfg=H_CFG)
-ATTEMPT = 2
+ATTEMPT = 3
 
 
 def _fmt_check(name: str, cr) -> str:
@@ -73,8 +80,13 @@ def main() -> int:
     print(f"=== Stage-1 ctx_pred FULL retrain (seed={SEED}, n_trials={N_TRIALS}, attempt={ATTEMPT}) ===")
     print(f"checkpoint dir: {CHECKPOINT_DIR_DEFAULT}")
     print(f"wall-start    : {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"override      : HRingConfig.inh_w_max = {H_CFG.inh_w_max} "
-          f"(default 10.0 -> 2.0 per attempt #1 diagnosis)")
+    print(f"fix (commit 5ef422b) : DEFAULT_W_INIT_FRAC 0.05 -> 0.015  "
+          f"(row-cap collapse fix; docs/stage1_ctx_pred_attempt1_snapshot.md)")
+    print(f"               effective W_ctx_pred init row sum = "
+          f"{CTX_PRED_CFG.w_init_frac * CTX_PRED_CFG.w_max / 2 * 192:.3f} "
+          f"(cap = {CTX_PRED_CFG.w_row_max:.1f})")
+    print(f"intended HRingConfig.inh_w_max = {H_CFG.inh_w_max} "
+          f"(no-op under train._stage1_h_cfg; effective = 1.5)")
     sys.stdout.flush()
 
     res: Stage1CtxPredResult = run_stage_1_ctx_pred(
@@ -100,7 +112,12 @@ def main() -> int:
     evidence = {
         "stage": "stage_1_ctx_pred_full",
         "attempt": ATTEMPT,
-        "overrides": {"HRingConfig.inh_w_max": H_CFG.inh_w_max},
+        "overrides": {
+            "HRingConfig.inh_w_max_intended": H_CFG.inh_w_max,
+            "HContextPredictionConfig.w_init_frac": CTX_PRED_CFG.w_init_frac,
+            "HContextPredictionConfig.w_row_max": CTX_PRED_CFG.w_row_max,
+            "init_row_sum_expected": CTX_PRED_CFG.w_init_frac * CTX_PRED_CFG.w_max / 2 * 192,
+        },
         "seed": SEED,
         "n_trials": N_TRIALS,
         "wall_s": wall_s,
