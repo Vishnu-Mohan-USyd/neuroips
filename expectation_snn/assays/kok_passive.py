@@ -59,9 +59,15 @@ from brian2 import seed as b2_seed
 from .runtime import (
     FrozenBundle, build_frozen_network,
     set_grating, v1_e_preferred_thetas,
+    snapshot_h_counts, preprobe_h_rate_hz,
     STAGE2_CUE_CHANNELS, STAGE2_CUE_ACTIVE_HZ,
 )
 from ..brian2_model.h_ring import N_CHANNELS as H_N_CHANNELS
+from ..brian2_model.v1_ring import (
+    N_CHANNELS as V1_N_CHANNELS,
+    stimulus_tuning_profile,
+)
+from brian2 import Hz
 from .metrics import (
     suppression_vs_preference,
     total_population_activity,
@@ -87,6 +93,26 @@ class KokConfig:
                                 Δ_decoding distribution (default 1000).
       ``mvpa_cv``            — k-fold CV inside each MVPA decoder fit
                                 (default 5).
+
+    Sprint 5d SNR-probe knobs (diagnostic D6, failure-case D):
+      ``contrast_multiplier``  — multiplies ``contrast`` during grating
+                                 epoch (default 1.0 = no change). Smaller
+                                 → weaker grating drive.
+      ``input_noise_std_hz``   — Gaussian σ (Hz) added to per-channel
+                                 stimulus rate on every grating-epoch set
+                                 (default 0.0 = clean). Clamped ≥ 0.
+      ``n_cells_subsampled``   — if set, random subset of V1 E cells used
+                                 as SVM feature vector (default None =
+                                 use all 192). Applies to both legacy
+                                 validity decoder and orientation-MVPA.
+      ``n_orientations``       — number of orientations for the decoder
+                                 (default 2 = {45°, 135°}, existing
+                                 behaviour). If > 2, must be 6 or 12;
+                                 schedule switches to evenly-spaced
+                                 orientations over 180°, cue logic is
+                                 dropped (all trials treated as "valid"
+                                 with no omissions), and the decoder runs
+                                 a multi-class CV on the full stim set.
     """
     n_stim_trials: int = 240
     n_omission_trials: int = 48
@@ -101,6 +127,16 @@ class KokConfig:
     mvpa_n_subsamples: int = 20
     mvpa_n_bootstrap: int = 1000
     mvpa_cv: int = 5
+    # -- Sprint 5d SNR-probe knobs (diagnostic D6) --------------------------
+    contrast_multiplier: float = 1.0
+    input_noise_std_hz: float = 0.0
+    n_cells_subsampled: Optional[int] = None
+    n_orientations: int = 2
+    # -- Sprint 5d pre-probe H instrumentation (diagnostic D1/D2) -----------
+    # Measured in the *last* `preprobe_window_ms` of the cue→gap interval,
+    # i.e. just before grating onset. Only recorded if bundle was built
+    # with ``with_preprobe_h_mon=True``; otherwise ignored.
+    preprobe_window_ms: float = 100.0
 
 
 @dataclass
@@ -138,24 +174,43 @@ def _cue_invalid_theta_rad(cue: str) -> float:
     return _cue_expected_theta_rad(_CUE_B if cue == _CUE_A else _CUE_A)
 
 
+def _evenly_spaced_orientations_rad(n: int) -> np.ndarray:
+    """Return n orientations evenly spaced over 180° in radians (0..π).
+
+    n=2  -> [0°, 90°]   — note: this does NOT match default cue 45°/135°
+                          grid; the default n_orientations=2 path keeps
+                          the existing Stage-2 cue channels via the
+                          separate schedule branch.
+    n=6  -> 30° steps {0°, 30°, 60°, 90°, 120°, 150°}
+    n=12 -> 15° steps {0°, 15°, 30°, …, 165°} (matches H-ring channels).
+    """
+    if n < 2:
+        raise ValueError(f"n_orientations must be >= 2, got {n}")
+    return np.linspace(0.0, np.pi, n, endpoint=False)
+
+
 def build_kok_schedule(
     cfg: KokConfig,
     rng: Optional[np.random.Generator] = None,
 ) -> List[Dict[str, Any]]:
-    """Assemble the trial list: 240 stim + 48 omission, balanced across cues.
+    """Assemble the trial list.
+
+    Default (``n_orientations == 2``): 240 stim + 48 omission, balanced
+    across cues A/B, 75%/25% valid/invalid split. Backward-compat.
+
+    SNR-probe (``n_orientations > 2``): cue logic dropped, all trials
+    marked valid with no omissions, ``n_stim_trials`` distributed evenly
+    across the ``n_orientations`` orientations (evenly spaced over 180°).
+    For multi-class orientation decoding only — cue attributes A/B are
+    still emitted alternately for bookkeeping but carry no semantics.
 
     Each item is a dict with keys:
       - ``cue`` in {"A", "B"}
       - ``theta_rad`` : presented orientation (radians, float). NaN if omission.
-      - ``expected_rad`` : cue-predicted orientation (radians).
+      - ``expected_rad`` : cue-predicted orientation (radians), or
+                           ``theta_rad`` itself in the SNR branch.
       - ``condition``  : 1 = valid (shown = expected), 0 = invalid.
       - ``is_omission``: bool — True if grating epoch is blank.
-
-    Balance
-    -------
-    Stim trials are equally split across cue A / cue B (120 each at the
-    default n_stim_trials=240); within each cue, 75 % valid / 25 % invalid
-    (90/30). Omission trials are split 24 / 24.
 
     Parameters
     ----------
@@ -165,6 +220,36 @@ def build_kok_schedule(
     """
     if rng is None:
         rng = np.random.default_rng(cfg.seed)
+
+    # -- SNR-probe branch: multi-orientation, no cue logic ------------------
+    n_orient = int(cfg.n_orientations)
+    if n_orient != 2:
+        if n_orient not in (6, 12):
+            raise ValueError(
+                f"n_orientations must be 2, 6, or 12; got {n_orient}"
+            )
+        n_stim = int(cfg.n_stim_trials)
+        if n_stim % n_orient != 0:
+            raise ValueError(
+                f"n_stim_trials={n_stim} must be divisible by "
+                f"n_orientations={n_orient}"
+            )
+        thetas = _evenly_spaced_orientations_rad(n_orient)
+        per_orient = n_stim // n_orient
+        items: List[Dict[str, Any]] = []
+        for k, theta in enumerate(thetas):
+            cue = _CUE_A if (k % 2 == 0) else _CUE_B
+            for _ in range(per_orient):
+                items.append({
+                    "cue": cue,
+                    "theta_rad": float(theta),
+                    "expected_rad": float(theta),
+                    "condition": 1,
+                    "is_omission": False,
+                })
+        order = np.arange(len(items))
+        rng.shuffle(order)
+        return [items[i] for i in order]
 
     n_stim = int(cfg.n_stim_trials)
     n_om = int(cfg.n_omission_trials)
@@ -236,6 +321,51 @@ def _orientation_label(theta_rad: float, expected_a_rad: float,
     da = abs(theta_rad - expected_a_rad)
     db = abs(theta_rad - expected_b_rad)
     return 0 if da <= db else 1
+
+
+def _orientation_label_multi(theta_rad: float, grid_rad: np.ndarray) -> int:
+    """Map presented theta to a multi-class label 0..n_orientations-1.
+
+    Nearest grid point on the ring (orientation is π-periodic, so wrap
+    differences into (-π/2, π/2] before measuring).
+    """
+    d = theta_rad - grid_rad
+    # wrap to (-π/2, π/2]
+    d = (d + np.pi / 2) % np.pi - np.pi / 2
+    return int(np.argmin(np.abs(d)))
+
+
+def _set_grating_snr(
+    v1,
+    theta_rad: Optional[float],
+    contrast: float,
+    noise_std_hz: float,
+    rng: Optional[np.random.Generator],
+) -> None:
+    """Set V1 stimulus with optional per-channel Gaussian noise.
+
+    When ``noise_std_hz <= 0.0`` and ``contrast * <tuning profile>`` is
+    the same as the default path, this is numerically identical to
+    :func:`.runtime.set_grating` (to preserve SNR-default backward
+    compat). When ``noise_std_hz > 0.0``, adds a fresh Gaussian draw to
+    every channel's rate and clamps to ≥ 0 Hz. A blank epoch
+    (``theta_rad is None`` or ``contrast <= 0``) skips the noise path
+    entirely so ITI/gap windows remain silent.
+    """
+    if theta_rad is None or contrast <= 0.0:
+        per_channel = np.zeros(V1_N_CHANNELS, dtype=np.float64)
+    else:
+        per_channel = stimulus_tuning_profile(
+            float(theta_rad), v1.config,
+        ).astype(np.float64) * float(contrast)
+        if noise_std_hz > 0.0:
+            assert rng is not None, "rng required when noise_std_hz > 0"
+            per_channel = per_channel + rng.normal(
+                0.0, float(noise_std_hz), size=per_channel.shape,
+            )
+            per_channel = np.maximum(per_channel, 0.0)
+    rates = per_channel[v1.stim_channel]
+    v1.stim.rates = rates * Hz
 
 
 def _orientation_mvpa(
@@ -410,10 +540,39 @@ def run_kok_passive(
     b2_seed(seed)
     np.random.seed(seed)
     rng = np.random.default_rng(seed)
+    # Dedicated RNG for per-trial stimulus noise; sits downstream of `rng`
+    # but is never advanced when ``input_noise_std_hz == 0`` so SNR-default
+    # numerics stay bit-exact with the legacy path.
+    noise_rng = (
+        np.random.default_rng(seed + 9001)
+        if cfg.input_noise_std_hz > 0.0 else None
+    )
 
     schedule = build_kok_schedule(cfg, rng)
     n_trials = len(schedule)
     n_e = int(bundle.v1_ring.e.N)
+    eff_contrast = float(cfg.contrast) * float(cfg.contrast_multiplier)
+
+    # --- Pre-probe H instrumentation (diagnostic D1/D2) -----------------
+    # Present only when the bundle was built with ``with_preprobe_h_mon``.
+    # We split the gap epoch into (gap_ms - preprobe_window_ms) + (pre-
+    # probe window), snapshotting H_E cumulative counts at the boundary.
+    # Window duration & placement: last `preprobe_window_ms` of gap →
+    # matches Sprint 5d spec "Kok: final 100 ms of cue-stim gap".
+    preprobe_on = bundle.h_e_mon is not None
+    preprobe_win_ms = float(cfg.preprobe_window_ms) if preprobe_on else 0.0
+    if preprobe_on and preprobe_win_ms >= cfg.gap_ms:
+        raise ValueError(
+            f"preprobe_window_ms={preprobe_win_ms} must be < gap_ms="
+            f"{cfg.gap_ms} to leave a pre-probe block inside the gap"
+        )
+    n_h_channels = int(bundle.h_ring.e_channel.max()) + 1
+    if preprobe_on:
+        h_preprobe_rate_hz_arr = np.zeros(
+            (n_trials, n_h_channels), dtype=np.float64,
+        )
+    else:
+        h_preprobe_rate_hz_arr = None
 
     e_mon = SpikeMonitor(bundle.v1_ring.e, name=f"kok_e_mon_seed{seed}")
     net = Network(*bundle.groups, e_mon)
@@ -451,13 +610,42 @@ def run_kok_passive(
         trial_cue_epoch_counts[:, k] = cnt_post_cue - cnt_pre_cue
 
         # --- gap epoch -------------------------------------------------
+        # With pre-probe instrumentation on, split gap into
+        # (gap_ms - preprobe_win_ms) then (preprobe_win_ms) so we can
+        # snapshot H_E spike counts at the boundary. Only the final
+        # `preprobe_win_ms` chunk is the "pre-probe prior" window.
         bundle.cue_off()
         set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
-        net.run(cfg.gap_ms * ms)
+        if preprobe_on:
+            pre_gap_ms = cfg.gap_ms - preprobe_win_ms
+            if pre_gap_ms > 0.0:
+                net.run(pre_gap_ms * ms)
+            cnt_before_pp = snapshot_h_counts(bundle)
+            net.run(preprobe_win_ms * ms)
+            cnt_after_pp = snapshot_h_counts(bundle)
+            h_preprobe_rate_hz_arr[k, :] = preprobe_h_rate_hz(
+                cnt_before_pp, cnt_after_pp,
+                bundle.h_ring, preprobe_win_ms,
+            )
+        else:
+            net.run(cfg.gap_ms * ms)
 
         # --- grating epoch ---------------------------------------------
+        # SNR-probe path: if contrast_multiplier != 1.0 OR input_noise > 0,
+        # use the local helper so we can inject per-channel Gaussian noise
+        # and apply the contrast multiplier. Default case (cm=1, noise=0)
+        # routes through set_grating and is bit-exact with the legacy path.
         if not omit:
-            set_grating(bundle.v1_ring, theta_rad=theta, contrast=cfg.contrast)
+            if cfg.contrast_multiplier != 1.0 or cfg.input_noise_std_hz > 0.0:
+                _set_grating_snr(
+                    bundle.v1_ring, theta_rad=theta,
+                    contrast=eff_contrast,
+                    noise_std_hz=float(cfg.input_noise_std_hz),
+                    rng=noise_rng,
+                )
+            else:
+                set_grating(bundle.v1_ring, theta_rad=theta,
+                            contrast=cfg.contrast)
         else:
             set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
         if context_only:
@@ -484,7 +672,8 @@ def run_kok_passive(
 
     if not valid_stim_mask.any():
         raise RuntimeError("no valid stim trials produced")
-    if not invalid_stim_mask.any():
+    # Multi-orientation branch has no invalid trials by construction.
+    if cfg.n_orientations == 2 and not invalid_stim_mask.any():
         raise RuntimeError("no invalid stim trials produced")
 
     # ----- metric 1: mean amplitude (valid vs invalid) ------------------
@@ -493,52 +682,127 @@ def run_kok_passive(
         trial_grating_counts[:, valid_stim_mask],
         pop_mask, window_ms=cfg.grating_ms,
     )
-    invalid_amp = total_population_activity(
-        trial_grating_counts[:, invalid_stim_mask],
-        pop_mask, window_ms=cfg.grating_ms,
-    )
+    if invalid_stim_mask.any():
+        invalid_amp = total_population_activity(
+            trial_grating_counts[:, invalid_stim_mask],
+            pop_mask, window_ms=cfg.grating_ms,
+        )
+    else:
+        invalid_amp = {}
+
+    # ----- cell subsampling for SVM features ---------------------------
+    # Applied to both legacy validity decoder and orientation-MVPA so the
+    # knob cleanly reduces all decoders' signal-to-noise. Subsample seed
+    # is deterministic from cfg.seed (distinct stream so it doesn't disturb
+    # trial shuffling).
+    if cfg.n_cells_subsampled is not None:
+        n_sub = int(cfg.n_cells_subsampled)
+        if n_sub < 2 or n_sub > n_e:
+            raise ValueError(
+                f"n_cells_subsampled={n_sub} must be in [2, {n_e}]"
+            )
+        sub_rng = np.random.default_rng(int(cfg.seed) + 7001)
+        sub_cells = np.sort(sub_rng.choice(n_e, size=n_sub, replace=False))
+    else:
+        sub_cells = np.arange(n_e, dtype=np.int64)
+    feature_counts = trial_grating_counts[sub_cells, :]  # (n_features, n_trials)
 
     # ----- metric 2 (legacy): SVM validity decoder ---------------------
     # Kept for backward compat; main 5c R2 metric is orientation_mvpa below.
-    X = trial_grating_counts[:, stim_mask].T                # (n_stim, n_e)
-    y = cond_mask[stim_mask]
-    svm_res = svm_decoding_accuracy(X, y, cv=5, seed=cfg.seed)
+    # Multi-orientation branch has no invalid class -> skip legacy decoder.
+    if cfg.n_orientations == 2:
+        X = feature_counts[:, stim_mask].T               # (n_stim, n_features)
+        y = cond_mask[stim_mask]
+        svm_res = svm_decoding_accuracy(X, y, cv=5, seed=cfg.seed)
+    else:
+        svm_res = {
+            "accuracy": float("nan"),
+            "accuracy_ci": (float("nan"), float("nan")),
+            "fold_accuracy": np.full(5, np.nan),
+            "n_trials": int(stim_mask.sum()),
+            "n_classes": 0,
+            "skipped_reason": "n_orientations != 2 (SNR multi-class branch)",
+        }
 
-    # ----- Sprint 5c R2: orientation MVPA, valid vs invalid split ------
-    # Map presented theta to a binary orientation label (45° vs 135°).
-    expected_a_rad = _cue_expected_theta_rad("A")
-    expected_b_rad = _cue_expected_theta_rad("B")
-    orient_labels = np.full(n_trials, -1, dtype=np.int64)
-    for i in range(n_trials):
-        if not is_omission[i]:
-            orient_labels[i] = _orientation_label(
-                float(theta_per_trial[i]), expected_a_rad, expected_b_rad,
-            )
-    spike_vectors_all = trial_grating_counts.T               # (n_trials, n_e)
-    orient_mvpa = _orientation_mvpa(
-        spike_vectors=spike_vectors_all,
-        orient_labels=orient_labels,
-        valid_mask=valid_stim_mask,
-        invalid_mask=invalid_stim_mask,
-        n_subsamples=int(cfg.mvpa_n_subsamples),
-        n_bootstrap=int(cfg.mvpa_n_bootstrap),
-        cv=int(cfg.mvpa_cv),
-        seed=int(cfg.seed),
-    )
+    # ----- Orientation MVPA: 2-class (valid-vs-invalid) or multi-class --
+    if cfg.n_orientations == 2:
+        # Sprint 5c R2: binary orientation label (45° vs 135°).
+        expected_a_rad = _cue_expected_theta_rad("A")
+        expected_b_rad = _cue_expected_theta_rad("B")
+        orient_labels = np.full(n_trials, -1, dtype=np.int64)
+        for i in range(n_trials):
+            if not is_omission[i]:
+                orient_labels[i] = _orientation_label(
+                    float(theta_per_trial[i]), expected_a_rad, expected_b_rad,
+                )
+        spike_vectors_all = feature_counts.T              # (n_trials, n_features)
+        orient_mvpa = _orientation_mvpa(
+            spike_vectors=spike_vectors_all,
+            orient_labels=orient_labels,
+            valid_mask=valid_stim_mask,
+            invalid_mask=invalid_stim_mask,
+            n_subsamples=int(cfg.mvpa_n_subsamples),
+            n_bootstrap=int(cfg.mvpa_n_bootstrap),
+            cv=int(cfg.mvpa_cv),
+            seed=int(cfg.seed),
+        )
+    else:
+        # Sprint 5d SNR-probe: multi-class orientation decoder over the
+        # full stim set (no valid/invalid split in this branch).
+        grid_rad = _evenly_spaced_orientations_rad(int(cfg.n_orientations))
+        orient_labels = np.full(n_trials, -1, dtype=np.int64)
+        for i in range(n_trials):
+            if not is_omission[i]:
+                orient_labels[i] = _orientation_label_multi(
+                    float(theta_per_trial[i]), grid_rad,
+                )
+        spike_vectors_all = feature_counts.T              # (n_trials, n_features)
+        Xm = spike_vectors_all[stim_mask]
+        ym = orient_labels[stim_mask].astype(np.int64)
+        mc_res = svm_decoding_accuracy(
+            Xm, ym, cv=int(cfg.mvpa_cv), seed=int(cfg.seed),
+        )
+        orient_mvpa = {
+            # chance-above accuracy is the SNR probe's meaningful quantity.
+            "accuracy": float(mc_res["accuracy"]),
+            "accuracy_ci": tuple(mc_res["accuracy_ci"]),
+            "fold_accuracy": np.asarray(mc_res["fold_accuracy"]),
+            "n_classes": int(cfg.n_orientations),
+            "n_trials": int(stim_mask.sum()),
+            "n_per_class": int(stim_mask.sum()) // int(cfg.n_orientations),
+            "chance_acc": 1.0 / float(cfg.n_orientations),
+            "cv": int(cfg.mvpa_cv),
+            "mode": "multi_class",
+            # Back-compat shape fields (2-class caller expects these keys):
+            "delta_decoding": float("nan"),
+            "delta_decoding_ci": (float("nan"), float("nan")),
+            "acc_valid_mean": float(mc_res["accuracy"]),
+            "acc_invalid_mean": float("nan"),
+        }
 
     # ----- metric 3: preference-rank suppression ------------------------
+    # Only defined for the 2-class valid/invalid paradigm; in the SNR
+    # multi-orientation branch the "preference-rank vs valid-invalid" axis
+    # is undefined, so we return an empty dict.
     pref_rad = v1_e_preferred_thetas(bundle.v1_ring)         # (n_e,)
-    stim_counts = trial_grating_counts[:, stim_mask]
-    stim_theta = theta_per_trial[stim_mask]
-    stim_cond = cond_mask[stim_mask]
-    pref_rank = suppression_vs_preference(
-        stim_counts, pref_rad, stim_theta, stim_cond, n_bins=10,
-    )
+    if cfg.n_orientations == 2:
+        stim_counts = trial_grating_counts[:, stim_mask]
+        stim_theta = theta_per_trial[stim_mask]
+        stim_cond = cond_mask[stim_mask]
+        pref_rank = suppression_vs_preference(
+            stim_counts, pref_rad, stim_theta, stim_cond, n_bins=10,
+        )
+    else:
+        pref_rank = {"skipped_reason": "multi_orientation_snr_branch"}
 
     # ----- metric 4: omission-subtracted response -----------------------
-    omit_counts = trial_grating_counts[:, is_omission]
-    valid_counts = trial_grating_counts[:, valid_stim_mask]
-    omission_delta = omission_subtracted_response(valid_counts, omit_counts)
+    # SNR multi-orientation branch has no omissions by construction.
+    if is_omission.any() and valid_stim_mask.any():
+        omit_counts = trial_grating_counts[:, is_omission]
+        valid_counts = trial_grating_counts[:, valid_stim_mask]
+        omission_delta = omission_subtracted_response(valid_counts, omit_counts)
+    else:
+        omission_delta = np.zeros(n_e, dtype=np.float64)
 
     return KokResult(
         mean_amp={"valid": valid_amp, "invalid": invalid_amp},
@@ -556,6 +820,10 @@ def run_kok_passive(
             "is_omission": is_omission,
             "orient_labels": orient_labels,
             "pref_rad": pref_rad,
+            "sub_cells": sub_cells,
+            # Sprint 5d D1/D2 pre-probe H rate (if instrumented; else None).
+            "h_preprobe_rate_hz": h_preprobe_rate_hz_arr,
+            "preprobe_window_ms": float(preprobe_win_ms),
         },
         meta={
             "seed": int(cfg.seed),
@@ -565,6 +833,12 @@ def run_kok_passive(
             "n_omission": int(is_omission.sum()),
             "config": cfg.__dict__,
             "bundle": {k: v for k, v in bundle.meta.items() if k != "config"},
+            # Sprint 5d SNR-probe provenance:
+            "snr_contrast_multiplier": float(cfg.contrast_multiplier),
+            "snr_input_noise_std_hz": float(cfg.input_noise_std_hz),
+            "snr_n_cells_used": int(sub_cells.size),
+            "snr_n_orientations": int(cfg.n_orientations),
+            "snr_effective_contrast": float(eff_contrast),
         },
     )
 

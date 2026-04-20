@@ -54,6 +54,7 @@ from brian2 import seed as b2_seed
 from .runtime import (
     FrozenBundle, build_frozen_network,
     set_grating, v1_e_preferred_thetas,
+    snapshot_h_counts, preprobe_h_rate_hz,
 )
 from ..brian2_model.v1_ring import N_CHANNELS as V1_N_CHANNELS
 from ..brian2_model.stimulus import RICHTER_ORIENTATIONS_DEG
@@ -88,6 +89,11 @@ class RichterConfig:
     seed: int = 42
     reps_expected: int = 30            # × 6 expected pair types = 180
     reps_unexpected: int = 8           # × 24 unexpected pair types = 192
+    # -- Sprint 5d pre-probe H instrumentation (diagnostic D1/D2) -----------
+    # Measured in the *last* `preprobe_window_ms` of the leader epoch,
+    # i.e. just before trailer onset. Only recorded if bundle was built
+    # with ``with_preprobe_h_mon=True``; otherwise ignored.
+    preprobe_window_ms: float = 100.0
 
     @property
     def n_trials(self) -> int:
@@ -449,6 +455,22 @@ def run_richter_crossover(
     pair_id = np.zeros(n_trials, dtype=np.int64)
     dtheta_step = np.zeros(n_trials, dtype=np.int64)
 
+    # -- Sprint 5d D1/D2 pre-probe H instrumentation (last preprobe_win_ms
+    #    of the leader, i.e. just before trailer onset). Only active if
+    #    the bundle carries an ``h_e_mon``.
+    preprobe_on = bundle.h_e_mon is not None
+    preprobe_win_ms = float(cfg.preprobe_window_ms) if preprobe_on else 0.0
+    if preprobe_on and preprobe_win_ms >= cfg.leader_ms:
+        raise ValueError(
+            f"preprobe_window_ms={preprobe_win_ms} must be < leader_ms="
+            f"{cfg.leader_ms} to leave a pre-probe block inside the leader"
+        )
+    n_h_channels = int(bundle.h_ring.e_channel.max()) + 1
+    h_preprobe_rate_hz_arr = (
+        np.zeros((n_trials, n_h_channels), dtype=np.float64)
+        if preprobe_on else None
+    )
+
     for k, item in enumerate(schedule):
         theta_L[k] = item["theta_L"]
         theta_T[k] = item["theta_T"]
@@ -459,9 +481,25 @@ def run_richter_crossover(
         bundle.reset_all()
 
         # --- leader epoch --------------------------------------------------
+        # With pre-probe instrumentation on, split the leader run into
+        # (leader_ms - preprobe_win_ms) + (preprobe_win_ms) so we can
+        # snapshot H_E spike counts at the boundary. The final
+        # preprobe_win_ms is the "Richter pre-trailer prior" window.
         set_grating(bundle.v1_ring, theta_rad=item["theta_L"], contrast=cfg.contrast)
         pre_e = _snapshot(e_mon)
-        net.run(cfg.leader_ms * ms)
+        if preprobe_on:
+            pre_leader_ms = cfg.leader_ms - preprobe_win_ms
+            if pre_leader_ms > 0.0:
+                net.run(pre_leader_ms * ms)
+            cnt_before_pp = snapshot_h_counts(bundle)
+            net.run(preprobe_win_ms * ms)
+            cnt_after_pp = snapshot_h_counts(bundle)
+            h_preprobe_rate_hz_arr[k, :] = preprobe_h_rate_hz(
+                cnt_before_pp, cnt_after_pp,
+                bundle.h_ring, preprobe_win_ms,
+            )
+        else:
+            net.run(cfg.leader_ms * ms)
         leader_counts_e[:, k] = _snapshot(e_mon) - pre_e
 
         # --- trailer epoch -------------------------------------------------
@@ -567,6 +605,9 @@ def run_richter_crossover(
             "pair_id": pair_id,
             "dtheta_step": dtheta_step,
             "pref_rad": pref_rad,
+            # Sprint 5d D1/D2 pre-probe H rate (if instrumented; else None).
+            "h_preprobe_rate_hz": h_preprobe_rate_hz_arr,
+            "preprobe_window_ms": float(preprobe_win_ms),
         },
         meta={
             "seed": int(cfg.seed),

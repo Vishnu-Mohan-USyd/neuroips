@@ -55,6 +55,7 @@ from brian2 import seed as b2_seed
 from .runtime import (
     FrozenBundle, build_frozen_network,
     set_grating, v1_e_preferred_thetas,
+    snapshot_h_counts, preprobe_h_rate_hz,
 )
 from ..brian2_model.v1_ring import N_CHANNELS as V1_N_CHANNELS
 from ..brian2_model.stimulus import (
@@ -91,6 +92,12 @@ class TangConfig:
     contrast: float = 1.0
     presettle_ms: float = 500.0          # warm-up before first item
     seed: int = 42
+    # -- Sprint 5d pre-probe H instrumentation (diagnostic D1/D2) -----------
+    # Measured in the *last* `preprobe_window_ms` of the current item
+    # window, i.e. just before the next item onset. Only recorded if
+    # bundle was built with ``with_preprobe_h_mon=True``; otherwise
+    # ignored.
+    preprobe_window_ms: float = 50.0
 
     @property
     def n_items(self) -> int:
@@ -586,12 +593,41 @@ def run_tang_rotating(
         net.run(cfg.presettle_ms * ms)
 
     counts_per_item = np.zeros((n_e, n_items), dtype=np.int64)
+
+    # -- Pre-probe H instrumentation (Sprint 5d, diagnostic D1/D2) ---------
+    # Only record when bundle was built with with_preprobe_h_mon=True.
+    preprobe_on = bundle.h_e_mon is not None
+    preprobe_win_ms = float(cfg.preprobe_window_ms)
+    if preprobe_on:
+        from ..brian2_model.h_ring import N_CHANNELS as H_N_CHANNELS_FALLBACK
+        n_h_channels = int(getattr(bundle.h_ring, "n_channels",
+                                   H_N_CHANNELS_FALLBACK))
+        h_preprobe_rate_hz_arr = np.zeros(
+            (n_items, n_h_channels), dtype=np.float64,
+        )
+    else:
+        h_preprobe_rate_hz_arr = None
+
     for k, it in enumerate(items):
         set_grating(
             bundle.v1_ring, theta_rad=it.theta_rad, contrast=it.contrast,
         )
         pre_e = _snapshot(e_mon)
-        net.run(cfg.item_ms * ms)
+
+        if preprobe_on and preprobe_win_ms > 0.0 and preprobe_win_ms < cfg.item_ms:
+            pre_item_ms = float(cfg.item_ms) - preprobe_win_ms
+            if pre_item_ms > 0.0:
+                net.run(pre_item_ms * ms)
+            cnt_before_pp = snapshot_h_counts(bundle)
+            net.run(preprobe_win_ms * ms)
+            cnt_after_pp = snapshot_h_counts(bundle)
+            h_preprobe_rate_hz_arr[k, :] = preprobe_h_rate_hz(
+                cnt_before_pp, cnt_after_pp,
+                bundle.h_ring, preprobe_win_ms,
+            )
+        else:
+            net.run(cfg.item_ms * ms)
+
         counts_per_item[:, k] = _snapshot(e_mon) - pre_e
 
         if verbose and (k + 1) % 250 == 0:
@@ -697,6 +733,8 @@ def run_tang_rotating(
             "dtheta_prev_step": dtheta_prev_step,
             "cond_codes": cond_codes,
             "pref_rad": pref_rad,
+            "h_preprobe_rate_hz": h_preprobe_rate_hz_arr,
+            "preprobe_window_ms": preprobe_win_ms,
         },
         meta={
             "seed": int(cfg.seed),

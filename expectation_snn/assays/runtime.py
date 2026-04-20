@@ -27,7 +27,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from brian2 import (
-    Hz, mV, ms, nS, pA, PoissonGroup, Synapses,
+    Hz, mV, ms, nS, pA, PoissonGroup, SpikeMonitor, Synapses,
 )
 
 from ..brian2_model.h_ring import (
@@ -91,6 +91,9 @@ class FrozenBundle:
     fb: FeedbackRoutes
     v1_to_h: Optional[V1ToH] = None
     h_clamp: Optional[HClamp] = None
+    # Sprint 5d pre-probe H instrumentation (diagnostic D1/D2).
+    # Present iff build_frozen_network(..., with_preprobe_h_mon=True).
+    h_e_mon: Optional[SpikeMonitor] = None
 
     cue_A: Optional[PoissonGroup] = None
     cue_B: Optional[PoissonGroup] = None
@@ -261,6 +264,7 @@ def build_frozen_network(
     with_v1_to_h: object = "continuous",
     with_feedback_routes: bool = True,
     with_h_clamp: Optional[HClampConfig] = None,
+    with_preprobe_h_mon: bool = False,
     ckpt_dir: Optional[str] = None,
     h_cfg: Optional[HRingConfig] = None,
     v1_cfg: Optional[V1RingConfig] = None,
@@ -312,6 +316,12 @@ def build_frozen_network(
         channel, weight-gated off by default (construct at build time
         with weights=0 — assay loop toggles `bundle.h_clamp.set_active`).
         See :mod:`expectation_snn.brian2_model.h_clamp`.
+    with_preprobe_h_mon : bool, default False
+        If True, attach a SpikeMonitor to ``h.e`` exposed as
+        ``bundle.h_e_mon``. Used by Sprint 5d diagnostics D1/D2 (pre-probe
+        prior index, forecast-vs-memory confusion matrix). Assays then
+        call :func:`snapshot_h_counts` / :func:`preprobe_h_rate_hz` at
+        the appropriate window boundary. Minimal overhead when off.
     ckpt_dir : str, optional
         Override for checkpoint directory. Defaults to
         ``expectation_snn/data/checkpoints``.
@@ -424,6 +434,13 @@ def build_frozen_network(
             "cue_B_w_mean": float(wB.mean()),
         }
 
+    # --- Sprint 5d pre-probe H monitor (optional) -----------------------
+    h_e_mon: Optional[SpikeMonitor] = None
+    if with_preprobe_h_mon:
+        h_e_mon = SpikeMonitor(
+            h.e, name=f"s5d_preprobe_h_mon_{h_kind}_seed{seed}",
+        )
+
     # --- groups list for Network ----------------------------------------
     groups: List[object] = []
     groups.extend(h.groups)
@@ -433,6 +450,8 @@ def build_frozen_network(
         groups.extend(v1_to_h_obj.groups)
     if h_clamp_obj is not None:
         groups.extend(h_clamp_obj.groups)
+    if h_e_mon is not None:
+        groups.append(h_e_mon)
     if with_cue:
         groups.extend([cue_A, cue_B, cue_A_to_h, cue_B_to_h])
 
@@ -462,6 +481,7 @@ def build_frozen_network(
         h_ring=h, h_kind=h_kind, v1_ring=v1, fb=fb,
         v1_to_h=v1_to_h_obj,
         h_clamp=h_clamp_obj,
+        h_e_mon=h_e_mon,
         cue_A=cue_A, cue_B=cue_B,
         cue_A_to_h=cue_A_to_h, cue_B_to_h=cue_B_to_h,
         groups=groups,
@@ -481,6 +501,7 @@ def build_frozen_network(
             "v1_to_h_mode": v1_to_h_mode,
             "with_feedback_routes": bool(with_feedback_routes),
             "with_h_clamp": bool(with_h_clamp is not None),
+            "with_preprobe_h_mon": bool(with_preprobe_h_mon),
             **v1_to_h_meta,
             **h_clamp_meta,
             **cue_meta,
@@ -520,6 +541,73 @@ def count_spikes_in_window(
 def v1_e_preferred_thetas(v1: V1Ring) -> np.ndarray:
     """Per-cell preferred orientation (rad), = channel index × π/N."""
     return v1.e_channel.astype(np.float64) * (np.pi / V1_N_CHANNELS)
+
+
+# --- Sprint 5d pre-probe H instrumentation helpers -----------------------
+
+def snapshot_h_counts(bundle: FrozenBundle) -> np.ndarray:
+    """Return a copy of the cumulative H_E spike counts per cell.
+
+    Requires ``build_frozen_network(with_preprobe_h_mon=True)`` so
+    ``bundle.h_e_mon`` is present.
+
+    Returns
+    -------
+    counts : np.ndarray, shape (h_ring.e.N,), dtype int64
+        Cumulative spike counts at the time of call.
+    """
+    if bundle.h_e_mon is None:
+        raise RuntimeError(
+            "bundle.h_e_mon is None — rebuild with with_preprobe_h_mon=True"
+        )
+    return np.asarray(bundle.h_e_mon.count[:], dtype=np.int64).copy()
+
+
+def preprobe_h_rate_hz(
+    counts_before: np.ndarray,
+    counts_after: np.ndarray,
+    h_ring: HRing,
+    window_ms: float,
+) -> np.ndarray:
+    """Per-H-channel firing rate during a [counts_before, counts_after) window.
+
+    Parameters
+    ----------
+    counts_before, counts_after : np.ndarray, shape (h_ring.e.N,)
+        Cumulative counts (from :func:`snapshot_h_counts`) at window
+        boundaries. ``counts_after - counts_before`` gives per-cell
+        spikes in the window.
+    h_ring : HRing
+        Used for ``e_channel`` mapping (cell index → H channel id) and
+        channel count.
+    window_ms : float
+        Duration of the snapshot window in ms. Must be > 0.
+
+    Returns
+    -------
+    rate_hz : np.ndarray, shape (N_CHANNELS,), dtype float64
+        Mean firing rate (Hz) per H channel = total spikes / (n_cells
+        in channel × window_s).
+    """
+    if window_ms <= 0.0:
+        raise ValueError(f"window_ms must be > 0, got {window_ms}")
+    delta = (np.asarray(counts_after, dtype=np.int64)
+             - np.asarray(counts_before, dtype=np.int64))
+    if delta.shape != (int(h_ring.e.N),):
+        raise ValueError(
+            f"counts shape {delta.shape} != h_ring.e.N={int(h_ring.e.N)}"
+        )
+    ch = np.asarray(h_ring.e_channel, dtype=np.int64)
+    n_ch = int(ch.max()) + 1
+    rate_hz = np.zeros(n_ch, dtype=np.float64)
+    window_s = float(window_ms) * 1e-3
+    for c in range(n_ch):
+        m = (ch == c)
+        if not m.any():
+            rate_hz[c] = 0.0
+            continue
+        rate_hz[c] = float(delta[m].sum()) / (float(m.sum()) * window_s)
+    return rate_hz
 
 
 # --- self-check / smoke ---------------------------------------------------
