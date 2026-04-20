@@ -106,9 +106,14 @@ DEFAULT_N_DIRECTION_AFFERENTS = 32
 DIRECTION_CHANNELS = 2  # CW, CCW
 
 # Coincidence-trace time constant (fast pre/post covariance detector).
-# Shorter than tau_elig: we want x_pre * x_post to capture tight timing
-# (~tens of ms), then the eligibility decays slowly (seconds).
-DEFAULT_TAU_COINC_MS = 20.0
+# Must span the leader->trailer gap (500 ms leader + 0 ms ITI within a
+# pair) so x_pre from leader spikes is still non-trivial when the
+# trailer post-spikes arrive: e^(-500/500) ~= 0.37 residual. A shorter
+# value (e.g. 20 ms) decays to ~e^(-25) ~= 0 long before the trailer
+# post-spikes occur, collapsing the coincidence term to self-pairs
+# (amplifier signature: pred_argmax == leader, not trailer).
+# Task #47 Debugger verdict (H1, empirical match on e^(-gap/tau)).
+DEFAULT_TAU_COINC_MS = 500.0
 
 # Researcher's defaults (see module docstring).
 DEFAULT_TAU_ELIG_MS = 1000.0          # bridges 500-ms leader + 500-ms trailer.
