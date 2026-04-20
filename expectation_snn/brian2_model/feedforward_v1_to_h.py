@@ -148,6 +148,23 @@ class V1ToH:
     kernel_w: np.ndarray = field(default_factory=lambda: np.array([]))
     groups: List[object] = field(default_factory=list)
 
+    def set_active(self, active: bool) -> None:
+        """Enable / silence the V1 -> H pathway in place.
+
+        Sprint 5c context_only mode: at probe onset the assay loop calls
+        ``bundle.v1_to_h.set_active(False)`` to remove the same-trial
+        amplifier; at ITI it restores via ``set_active(True)``. Avoids a
+        Network rebuild between trials by mutating the synapse weight
+        vector directly (same pattern as :func:`set_v1_to_h_gain`).
+
+        ``g_v1_to_h`` is unchanged across toggles, so re-enabling restores
+        the calibrated drive amplitude exactly.
+        """
+        if active:
+            self.v1_to_he.w[:] = self.kernel_w * self.g_v1_to_h
+        else:
+            self.v1_to_he.w[:] = 0.0
+
 
 # -- builder ----------------------------------------------------------------
 

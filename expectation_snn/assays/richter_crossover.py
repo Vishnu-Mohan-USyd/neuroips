@@ -313,6 +313,16 @@ def run_richter_crossover(
     elif bundle.h_kind != "hr":
         raise ValueError(f"Richter assay requires h_kind='hr', got {bundle.h_kind!r}")
 
+    # Sprint 5c context_only mode: silence V1->H during the trailer so the
+    # trailer-window H rate reflects only carry-over from the leader (a true
+    # prior signal). Restored at ITI start.
+    v1_to_h_mode = bundle.meta.get("v1_to_h_mode", "continuous")
+    context_only = (v1_to_h_mode == "context_only")
+    if context_only and bundle.v1_to_h is None:
+        raise RuntimeError(
+            "Richter assay context_only mode requires bundle.v1_to_h built"
+        )
+
     prefs.codegen.target = "numpy"
     defaultclock.dt = 0.1 * ms
     b2_seed(seed); np.random.seed(seed)
@@ -355,6 +365,8 @@ def run_richter_crossover(
 
         # --- trailer epoch -------------------------------------------------
         set_grating(bundle.v1_ring, theta_rad=item["theta_T"], contrast=cfg.contrast)
+        if context_only:
+            bundle.v1_to_h.set_active(False)
         pre_e = _snapshot(e_mon)
         pre_som = _snapshot(som_mon)
         pre_pv = _snapshot(pv_mon)
@@ -365,6 +377,8 @@ def run_richter_crossover(
 
         # --- ITI -----------------------------------------------------------
         set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
+        if context_only:
+            bundle.v1_to_h.set_active(True)
         net.run(cfg.iti_ms * ms)
 
         if verbose and (k + 1) % 60 == 0:

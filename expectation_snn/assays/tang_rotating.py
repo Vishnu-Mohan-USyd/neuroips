@@ -276,6 +276,17 @@ def run_tang_rotating(
     elif bundle.h_kind != "ht":
         raise ValueError(f"Tang assay requires h_kind='ht', got {bundle.h_kind!r}")
 
+    # Sprint 5c: Tang has no natural "context window" between items (250 ms
+    # back-to-back, no ITI), so context_only mode is undefined. Reject
+    # explicitly rather than silently equating to "off".
+    v1_to_h_mode = bundle.meta.get("v1_to_h_mode", "continuous")
+    if v1_to_h_mode == "context_only":
+        raise ValueError(
+            "Tang assay does not support v1_to_h_mode='context_only' "
+            "(no natural context window — items are 250 ms back-to-back). "
+            "Use 'continuous' or 'off' instead."
+        )
+
     prefs.codegen.target = "numpy"
     defaultclock.dt = 0.1 * ms
     b2_seed(seed); np.random.seed(seed)

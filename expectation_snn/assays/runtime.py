@@ -254,7 +254,7 @@ def build_frozen_network(
     r: float = 1.0,
     g_total: float = 1.0,
     with_cue: bool = False,
-    with_v1_to_h: bool = True,
+    with_v1_to_h: object = "continuous",
     ckpt_dir: Optional[str] = None,
     h_cfg: Optional[HRingConfig] = None,
     v1_cfg: Optional[V1RingConfig] = None,
@@ -276,10 +276,21 @@ def build_frozen_network(
         If True, build the Stage-2 cue pathway (cue_A/cue_B + frozen elig
         synapses) and load Stage-2 weights. Only valid for h_kind='hr'
         (Stage-2 was trained against H_R). Raises on 'ht' + with_cue=True.
-    with_v1_to_h : bool
-        If True (default), attach V1_E → H_E feedforward pathway (task #31).
-        Fixed weights, feature-matched Gaussian over channels. Required for
-        H rings to emit spikes during grating epochs (Sprint 5b diagnostic).
+    with_v1_to_h : str | bool
+        V1_E → H_E feedforward pathway mode (task #31; Sprint 5c toggle):
+
+          - ``"continuous"`` (default) — pathway active throughout the assay
+            (required for H rings to emit spikes during grating; Sprint 5b
+            diagnostic). Same as legacy ``True``.
+          - ``"context_only"`` — pathway built and at full strength, but
+            the assay loop is expected to silence it during the probe
+            window via ``bundle.v1_to_h.set_active(False)`` (Sprint 5c
+            prior-vs-amplifier separation; reviewer rec 5c-2).
+          - ``"off"`` — pathway not built (legacy ``False``); H rings will
+            be silent during grating epochs.
+
+        Backward compat: ``True`` → ``"continuous"``, ``False`` → ``"off"``.
+
         Attach only at assay time — training paths keep this off to preserve
         Stage-2 DC-teacher isolation.
     ckpt_dir : str, optional
@@ -298,6 +309,17 @@ def build_frozen_network(
         raise ValueError(
             "with_cue=True requires h_kind='hr' (Stage-2 was trained on H_R)"
         )
+    # Normalize with_v1_to_h: bool -> string (backward compat for diag scripts).
+    if with_v1_to_h is True:
+        with_v1_to_h = "continuous"
+    elif with_v1_to_h is False:
+        with_v1_to_h = "off"
+    if with_v1_to_h not in ("continuous", "context_only", "off"):
+        raise ValueError(
+            f"with_v1_to_h must be 'continuous' | 'context_only' | 'off' "
+            f"(or bool), got {with_v1_to_h!r}"
+        )
+    v1_to_h_mode = with_v1_to_h
     ckpt_dir = ckpt_dir or DEFAULT_CKPT_DIR
     stage0_ckpt = os.path.join(ckpt_dir, f"stage_0_seed{seed}.npz")
     stage1_ckpt = os.path.join(
@@ -333,8 +355,11 @@ def build_frozen_network(
     )
 
     # --- V1 → H feedforward (task #31; assay-time only) -----------------
+    # Modes: "continuous" or "context_only" build the pathway identically
+    # (caller toggles via bundle.v1_to_h.set_active(...) for context_only);
+    # "off" skips construction entirely, leaving H rings unforced.
     v1_to_h_obj: Optional[V1ToH] = None
-    if with_v1_to_h:
+    if v1_to_h_mode != "off":
         ff_cfg = v1_to_h_cfg or V1ToHConfig()
         v1_to_h_obj = build_v1_to_h_feedforward(
             v1, h, ff_cfg, name_prefix=f"s5a_ffv1h_{h_kind}",
@@ -404,7 +429,8 @@ def build_frozen_network(
             "n_fb_som": int(fb.kernel_w_som.size),
             "g_direct": float(fb.g_direct),
             "g_SOM": float(fb.g_SOM),
-            "with_v1_to_h": bool(with_v1_to_h),
+            "with_v1_to_h": v1_to_h_mode,
+            "v1_to_h_mode": v1_to_h_mode,
             **v1_to_h_meta,
             **cue_meta,
         },

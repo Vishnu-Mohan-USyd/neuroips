@@ -253,6 +253,17 @@ def run_kok_passive(
             f"got h_kind={bundle.h_kind!r}, cue={'present' if bundle.cue_A else 'absent'}"
         )
 
+    # Sprint 5c context_only mode: V1->H is silenced during the grating
+    # window so H carries only the prior built up over cue+gap. Restored at
+    # ITI start so the next cue+gap can still drive H. Mode "continuous"
+    # (default) leaves the pathway always-on; "off" means no V1->H built.
+    v1_to_h_mode = bundle.meta.get("v1_to_h_mode", "continuous")
+    context_only = (v1_to_h_mode == "context_only")
+    if context_only and bundle.v1_to_h is None:
+        raise RuntimeError(
+            "Kok assay context_only mode requires bundle.v1_to_h built"
+        )
+
     # Determinism
     prefs.codegen.target = "numpy"
     defaultclock.dt = 0.1 * ms
@@ -309,6 +320,8 @@ def run_kok_passive(
             set_grating(bundle.v1_ring, theta_rad=theta, contrast=cfg.contrast)
         else:
             set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
+        if context_only:
+            bundle.v1_to_h.set_active(False)
         cnt_pre_g = _snapshot_counts(e_mon)
         net.run(cfg.grating_ms * ms)
         cnt_post_g = _snapshot_counts(e_mon)
@@ -316,6 +329,8 @@ def run_kok_passive(
 
         # --- ITI -------------------------------------------------------
         set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
+        if context_only:
+            bundle.v1_to_h.set_active(True)
         net.run(cfg.iti_ms * ms)
 
         if verbose and (k + 1) % 50 == 0:
