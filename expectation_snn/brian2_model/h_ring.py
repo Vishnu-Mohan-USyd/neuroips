@@ -135,7 +135,14 @@ class HRingConfig:
     w_inh_e_init: float = 0.5            # per-channel local inh -> E init weight
     broad_inh_scale: float = 0.3         # broad inh -> E weight = w_inh_e_init * scale
     drive_amp_inh_e_pA: float = 30.0
-    inh_rho_hz: float = 2.0
+    inh_rho_hz: float = 20.0             # Vogels target rate; sized to match
+                                         # observed ctx/pred E-rate under the
+                                         # Sprint-5e H ring (schedule-rate
+                                         # ~20-60 Hz). A 2 Hz target runs
+                                         # Vogels away: iSTDP pumps inh->E
+                                         # weights toward ceiling, crushing
+                                         # bump persistence (attempts #1-#3
+                                         # saw ~10 ms hold; task #47 H3).
     inh_eta: float = 5e-3
     inh_w_max: float = 10.0              # Vogels iSTDP weight ceiling; lower
                                          # values (~1.5-2.0) prevent the long
