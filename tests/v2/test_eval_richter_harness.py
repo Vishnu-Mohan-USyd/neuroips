@@ -64,7 +64,7 @@ def test_evaluate_richter_returns_structured_dict(untrained_richter_bundle):
         untrained_richter_bundle,
         n_trials_per_condition=1, noise_std=0.0,
         n_pseudo_voxels_per_model=8,
-        seed=42, timing=_tiny_timing(),
+        seed=42, timing=_tiny_timing(), run_upgrades=False,
     )
     assert out["assay"] == "eval_richter"
     assert out["n_trials_per_condition"] == 1
@@ -102,6 +102,7 @@ def test_cli_main_writes_json(cfg, tmp_path):
         "--checkpoint", str(path), "--seed", "42", "--device", "cpu",
         "--n-trials-per-condition", "1", "--n-pseudo-voxels", "8",
         "--noise-std", "0.0", "--output", str(out_path),
+        "--skip-upgrades",
     ])
     assert rc == 0
     payload = json.loads(out_path.read_text())

@@ -53,7 +53,7 @@ def test_evaluate_kok_returns_structured_dict(untrained_kok_bundle):
     out = evaluate_kok(
         untrained_kok_bundle,
         n_trials_per_condition=3, n_cell_groups=4, noise_std=0.0,
-        seed=42, timing=_tiny_timing(),
+        seed=42, timing=_tiny_timing(), run_upgrades=False,
     )
     assert out["assay"] == "eval_kok"
     assert out["n_trials_per_condition"] == 3
@@ -99,6 +99,7 @@ def test_cli_main_writes_json(cfg, tmp_path):
         "--checkpoint", str(path), "--seed", "42", "--device", "cpu",
         "--n-trials-per-condition", "2", "--n-cell-groups", "4",
         "--noise-std", "0.0", "--output", str(out_path),
+        "--skip-upgrades",
     ])
     assert rc == 0
     payload = json.loads(out_path.read_text())
