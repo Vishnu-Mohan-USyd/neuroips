@@ -159,6 +159,7 @@ def _state_window_stats(
 
 def run_one_config(
     rc: RouteConfig, seed: int, verbose: bool = True,
+    checkpoint_seed: int = 42,
 ) -> Dict[str, Dict[str, object]]:
     """Run all 3 windows for one route-config. Returns dict keyed by window.
 
@@ -173,7 +174,7 @@ def run_one_config(
         clamp_rate_hz=float(CLAMP_RATE_HZ),
     )
     bundle = build_frozen_network(
-        h_kind="ht", seed=seed, with_cue=False,
+        h_kind="ht", seed=checkpoint_seed, with_cue=False,
         r=rc.r if np.isfinite(rc.r) else 1.0,  # set_balance will refine
         g_total=rc.g_total,
         with_v1_to_h="off",          # isolate: no V1→H confound
@@ -296,6 +297,8 @@ def run_one_config(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--checkpoint-seed", type=int, default=42,
+                    help="Checkpoint seed (fixed at 42 per Sprint 5d §1).")
     ap.add_argument(
         "--out-dir", type=str,
         default=str(_root / "expectation_snn" / "data"),
@@ -323,7 +326,10 @@ def main() -> int:
     for rc in ROUTE_CONFIGS:
         if verbose:
             print(f"[{rc.name}]  r={rc.r!r}  g_total={rc.g_total:.2f}")
-        all_results[rc.name] = run_one_config(rc, seed=args.seed, verbose=verbose)
+        all_results[rc.name] = run_one_config(
+            rc, seed=args.seed, verbose=verbose,
+            checkpoint_seed=args.checkpoint_seed,
+        )
 
     # Flatten into a single npz: keys = f"{config}/{window}/{signal}".
     flat: Dict[str, np.ndarray] = {}
