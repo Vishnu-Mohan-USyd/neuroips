@@ -49,22 +49,34 @@ from expectation_snn.brian2_model.h_context_prediction import HContextPrediction
 SEED = 42
 N_TRIALS = 360
 
-# --- attempt #3 (real attempt #2), Sprint 5e-Fix E, 2026-04-21 -------------
+# --- attempt #4, Sprint 5e-Fix E, 2026-04-21 --------------------------------
 # Attempt #1 (commit 5317540): FAIL. bump_persistence=10ms, forecast=0.0.
-# Attempt #2 (commit 31e6e98): bit-identical no-op. The script override
-#   HRingConfig(inh_w_max=2.0) was silently overwritten by train.py's
-#   _stage1_h_cfg (forces inh_w_max=1.5 unconditionally).
-# Attempt #3 (THIS run) — fix commit 5ef422b:
-#   Snapshot (docs/stage1_ctx_pred_attempt1_snapshot.md, commit 4493fa8)
-#   showed W_ctx_pred collapsed to w_row_max / n_pre = 3.0 / 192 = 0.015625
-#   on trial 1 because init row sum (0.025 * 192 = 4.80) exceeded
-#   w_row_max = 3.0. Fix: shrink DEFAULT_W_INIT_FRAC 0.05 -> 0.015 so init
-#   row sum = 0.0075 * 192 = 1.44, leaving headroom for LTP before cap.
-# HRingConfig(inh_w_max=2.0) retained here for trace continuity — it is
-# still a no-op under _stage1_h_cfg but documents intent.
-H_CFG = HRingConfig(inh_w_max=2.0)
+# Attempt #2 (commit 31e6e98): bit-identical no-op (inh_w_max override
+#   squashed by _stage1_h_cfg).
+# Attempt #3 (commit 55d0f3f, fix 5ef422b): FAIL. w_init_frac 0.05 -> 0.015
+#   fix landed (init mean 0.025 -> 0.0075, confirmed in evidence-log), but
+#   persistence stayed at ~10 ms, W_ctx_pred collapsed onto the 3/192
+#   row-cap floor after trial ~35, and pred_argmax == leader 99.4%
+#   (amplifier signature). Debugger (task #47) delivered compound H1+H3+H4
+#   verdict.
+#
+# Attempt #4 (THIS run) — three commits:
+#   0f30cd2 Fix A: DEFAULT_TAU_COINC_MS 20 -> 500 ms (leader->trailer gap).
+#   b5d8fd7 Fix B(i): HRingConfig.inh_rho_hz 2 -> 20 Hz (Vogels target).
+#   b5ba400 Fix C: DEFAULT_W_TARGET 0.05 -> 0.0075 (match post-fix init).
+#
+#   Pre-check: H3 sanity (bg b1od0brws) confirmed inh_eta=0 raises
+#   persistence 10 ms -> 990 ms at n=24, proving Vogels was the crusher.
+#
+#   Go/no-go thresholds (Lead dispatch 2026-04-21):
+#       h_bump_persistence_ms in [200, 500]
+#       h_preprobe_forecast_prob >= 0.25
+#       no_runaway <= 80 Hz
+#
+#   This is the LAST iteration budget. Zero remaining if attempt #4 fails.
+H_CFG = HRingConfig()
 CTX_PRED_CFG = HContextPredictionConfig(ctx_cfg=H_CFG, pred_cfg=H_CFG)
-ATTEMPT = 3
+ATTEMPT = 4
 
 
 def _fmt_check(name: str, cr) -> str:
@@ -80,13 +92,20 @@ def main() -> int:
     print(f"=== Stage-1 ctx_pred FULL retrain (seed={SEED}, n_trials={N_TRIALS}, attempt={ATTEMPT}) ===")
     print(f"checkpoint dir: {CHECKPOINT_DIR_DEFAULT}")
     print(f"wall-start    : {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"fix (commit 5ef422b) : DEFAULT_W_INIT_FRAC 0.05 -> 0.015  "
-          f"(row-cap collapse fix; docs/stage1_ctx_pred_attempt1_snapshot.md)")
-    print(f"               effective W_ctx_pred init row sum = "
+    print(f"attempt-#4 fixes (task #47 Debugger compound verdict):")
+    print(f"  Fix A (0f30cd2): tau_coinc = {CTX_PRED_CFG.tau_coinc_ms:.1f} ms  "
+          f"(was 20.0; span leader->trailer gap)")
+    print(f"  Fix B(i) (b5d8fd7): HRingConfig.inh_rho_hz = {H_CFG.inh_rho_hz:.1f} Hz  "
+          f"(was 2.0; match observed ctx-E rate)")
+    print(f"  Fix C (b5ba400): w_target = {CTX_PRED_CFG.w_target:.5f}  "
+          f"(was 0.05; match post-fix init mean)")
+    print(f"  Carry-over (5ef422b): w_init_frac = {CTX_PRED_CFG.w_init_frac:.3f}  "
+          f"(was 0.05; avoid init row-cap collapse)")
+    print(f"init row sum = "
           f"{CTX_PRED_CFG.w_init_frac * CTX_PRED_CFG.w_max / 2 * 192:.3f} "
           f"(cap = {CTX_PRED_CFG.w_row_max:.1f})")
-    print(f"intended HRingConfig.inh_w_max = {H_CFG.inh_w_max} "
-          f"(no-op under train._stage1_h_cfg; effective = 1.5)")
+    print(f"go/no-go: bump_persistence in [200, 500] ms, "
+          f"forecast >= 0.25, no_runaway <= 80 Hz")
     sys.stdout.flush()
 
     res: Stage1CtxPredResult = run_stage_1_ctx_pred(
@@ -113,7 +132,9 @@ def main() -> int:
         "stage": "stage_1_ctx_pred_full",
         "attempt": ATTEMPT,
         "overrides": {
-            "HRingConfig.inh_w_max_intended": H_CFG.inh_w_max,
+            "HRingConfig.inh_rho_hz": H_CFG.inh_rho_hz,
+            "HContextPredictionConfig.tau_coinc_ms": CTX_PRED_CFG.tau_coinc_ms,
+            "HContextPredictionConfig.w_target": CTX_PRED_CFG.w_target,
             "HContextPredictionConfig.w_init_frac": CTX_PRED_CFG.w_init_frac,
             "HContextPredictionConfig.w_row_max": CTX_PRED_CFG.w_row_max,
             "init_row_sum_expected": CTX_PRED_CFG.w_init_frac * CTX_PRED_CFG.w_max / 2 * 192,
