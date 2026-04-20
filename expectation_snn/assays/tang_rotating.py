@@ -478,18 +478,33 @@ def run_tang_rotating(
     seed: int = 42,
     r: float = 1.0,
     g_total: float = 1.0,
+    architecture: str = "h_t",
     verbose: bool = False,
 ) -> TangResult:
-    """Run the Tang-rotating deviant assay end-to-end on H_T.
+    """Run the Tang-rotating deviant assay end-to-end.
+
+    Supports two backbones (Sprint 5e-Fix D.4):
+
+      * ``architecture='h_t'`` — legacy H_T single-ring bundle.
+      * ``architecture='ctx_pred'`` — H_context + H_prediction. The
+        rotating-block direction (CW/CCW) is wired to the Tang direction
+        afferent at each block onset via
+        :meth:`FrozenBundle.set_tang_direction`; random-block items and
+        post-sequence silence use
+        :meth:`FrozenBundle.silence_tang_direction`.
 
     Parameters
     ----------
     bundle : FrozenBundle, optional
-        H_T-backed bundle (no cue). Built fresh if None.
+        H_T-backed or ctx_pred bundle (no cue). Built fresh if None using
+        ``architecture``.
     cfg : TangConfig, optional
     seed : int
     r, g_total : float
         Feedback balance ratio / total. Only used if bundle is None.
+    architecture : {'h_t', 'ctx_pred'}, default 'h_t'
+        Only consulted when ``bundle is None``. If an explicit bundle is
+        passed its ``h_kind`` is used directly.
     verbose : bool
 
     Returns
@@ -501,11 +516,24 @@ def run_tang_rotating(
         seed = cfg.seed
 
     if bundle is None:
-        bundle = build_frozen_network(
-            h_kind="ht", seed=seed, r=r, g_total=g_total, with_cue=False,
+        if architecture == "ctx_pred":
+            bundle = build_frozen_network(
+                architecture="ctx_pred",
+                seed=seed, r=r, g_total=g_total, with_cue=False,
+            )
+        elif architecture == "h_t":
+            bundle = build_frozen_network(
+                h_kind="ht", seed=seed, r=r, g_total=g_total, with_cue=False,
+            )
+        else:
+            raise ValueError(
+                f"architecture must be 'h_t' or 'ctx_pred', got {architecture!r}"
+            )
+    elif bundle.h_kind not in ("ht", "ctx_pred"):
+        raise ValueError(
+            f"Tang assay requires h_kind in {{'ht', 'ctx_pred'}}, "
+            f"got {bundle.h_kind!r}"
         )
-    elif bundle.h_kind != "ht":
-        raise ValueError(f"Tang assay requires h_kind='ht', got {bundle.h_kind!r}")
 
     # Sprint 5c: Tang has no natural "context window" between items (250 ms
     # back-to-back, no ITI), so context_only mode is undefined. Reject
@@ -608,7 +636,43 @@ def run_tang_rotating(
     else:
         h_preprobe_rate_hz_arr = None
 
+    # -- Sprint 5e-Fix D.4: Tang direction wiring for ctx_pred bundles -----
+    # In the ctx_pred architecture the H_context ring receives a 2-channel
+    # (CW=0, CCW=1) direction afferent. At each *block onset* we activate
+    # the channel matching the rotating block's direction; for random-block
+    # items (block_id = -1) we silence both channels so H_ctx integrates
+    # from V1 only, as during training. Legacy (h_t) bundles skip this
+    # wiring entirely — `bundle.silence_tang_direction()` is a no-op there
+    # and `set_tang_direction()` would raise, so we guard on the flag.
+    wire_direction = bundle.ctx_pred is not None
+    # rotation_dir ∈ {-1, 0, +1}:  +1 = CW  →  direction 0
+    #                              -1 = CCW →  direction 1
+    #                               0        →  silenced (random block)
+    _DIR_FROM_ROT = {+1: 0, -1: 1}
+    prev_block_id: Optional[int] = None
+    if wire_direction:
+        # Start silenced — first item will set if it's a rotating block.
+        bundle.silence_tang_direction()
+
     for k, it in enumerate(items):
+        # Block transition? Rewire Tang direction before stimulus onset.
+        if wire_direction and block_ids.size > 0:
+            cur_block = int(block_ids[k])
+            if cur_block != prev_block_id:
+                if cur_block < 0:
+                    # Random block — silence both direction channels.
+                    bundle.silence_tang_direction()
+                else:
+                    rd = int(rotation_dir[k])
+                    if rd not in _DIR_FROM_ROT:
+                        raise RuntimeError(
+                            f"tang item {k}: block_id={cur_block} "
+                            f"(rotating) but rotation_dir={rd} "
+                            f"(expected ±1)"
+                        )
+                    bundle.set_tang_direction(_DIR_FROM_ROT[rd])
+                prev_block_id = cur_block
+
         set_grating(
             bundle.v1_ring, theta_rad=it.theta_rad, contrast=it.contrast,
         )
@@ -636,6 +700,11 @@ def run_tang_rotating(
 
     # Turn stim off after the sequence.
     set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
+    if wire_direction:
+        # Leave the direction afferent silenced so no stale CW/CCW bias
+        # persists into any downstream reads / subsequent assay runs on
+        # the same bundle. No-op on non-ctx_pred bundles.
+        bundle.silence_tang_direction()
 
     pref_rad = v1_e_preferred_thetas(bundle.v1_ring)     # (n_e,)
     thetas_tang = _tang_thetas_rad()
@@ -744,6 +813,7 @@ def run_tang_rotating(
             "n_deviant": int(deviant_mask.sum()),
             "n_expected": int((~deviant_mask & ~is_random).sum()),
             "n_random_items": int(is_random.sum()),
+            "tang_direction_wired": bool(wire_direction),
             "config": cfg.__dict__,
             "bundle": {k: v for k, v in bundle.meta.items() if k != "config"},
         },
