@@ -493,6 +493,17 @@ def assay_namespace_and_imports_are_stable() -> None:
     assert cfg.w_max == 1.0
     assert cfg.w_row_max == 3.0
     assert cfg.w_init_frac == 0.05
+    # Researcher Fix C spec: W_target = 0.05 * w_max (soft-decay to
+    # the init-uniform mean, Vogels 2011 iSTDP precedent).
+    assert cfg.w_target == 0.05, (
+        f"w_target should be 0.05 (= w_init_frac · w_max), got {cfg.w_target}"
+    )
+    assert cfg.tau_coinc_ms == 20.0, (
+        f"tau_coinc_ms should be 20 (fast pre/post filter), got {cfg.tau_coinc_ms}"
+    )
+    assert cfg.m_window_ms == 75.0, (
+        f"m_window_ms should be 75 (Yagishita 2014), got {cfg.m_window_ms}"
+    )
     print(f"    {len(required)} public names present; config defaults intact  "
           f"PASS")
 
