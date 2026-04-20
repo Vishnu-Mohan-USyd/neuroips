@@ -47,6 +47,11 @@ from ..brian2_model.feedforward_v1_to_h import (
 from ..brian2_model.h_clamp import (
     HClamp, HClampConfig, build_h_clamp,
 )
+from ..brian2_model.h_context_prediction import (
+    HContextPrediction, HContextPredictionConfig, build_h_context_prediction,
+    set_direction as _hcp_set_direction,
+    silence_direction as _hcp_silence_direction,
+)
 from ..brian2_model.plasticity import eligibility_trace_cue_rule
 
 
@@ -78,9 +83,25 @@ class FrozenBundle:
 
     Attributes
     ----------
-    h_ring, v1_ring : the two rings (H_R or H_T for `h_ring`).
-    fb : H → V1 feedback routes at the given (g_total, r).
-    cue_A, cue_B : Poisson cue groups (only if with_cue=True).
+    h_ring : HRing
+        For ``architecture="h_r"`` or ``"h_t"``: the single H ring.
+        For ``architecture="ctx_pred"``: points to ``ctx_pred.pred`` —
+        the H_prediction ring that sources the H → V1 feedback.
+    h_kind : str
+        Legacy tag: ``"hr"`` | ``"ht"`` | ``"ctx_pred"``.
+    v1_ring : V1Ring
+    fb : H → V1 feedback routes at the given (g_total, r). Source ring:
+        h_ring (= pred ring under ctx_pred).
+    v1_to_h : Optional[V1ToH]
+        V1_E → H_E teacher. For ctx_pred this targets ``ctx_pred.ctx``
+        (the sensory-driven ring). For h_r/h_t it targets ``h_ring``.
+    ctx_pred : Optional[HContextPrediction]
+        Present only under ``architecture="ctx_pred"``. Exposes
+        ``ctx``, ``pred``, ``ctx_pred`` (the plastic W_ctx_pred — frozen
+        at assay time: no modulatory gate is attached), ``direction``
+        afferents (silenced by default — assays call
+        :meth:`set_tang_direction` per block).
+    cue_A, cue_B : Poisson cue groups (only if with_cue=True; h_r only).
     cue_A_to_h, cue_B_to_h : frozen cue → H_E synapses (lr_eff = 0).
     groups : list of all Brian2 objects to splat into ``Network(...)``.
     meta : dict with loaded-checkpoint info + config.
@@ -95,6 +116,9 @@ class FrozenBundle:
     # Present iff build_frozen_network(..., with_preprobe_h_mon=True).
     h_e_mon: Optional[SpikeMonitor] = None
 
+    # Sprint 5e-Fix D.3 — present only under architecture="ctx_pred".
+    ctx_pred: Optional[HContextPrediction] = None
+
     cue_A: Optional[PoissonGroup] = None
     cue_B: Optional[PoissonGroup] = None
     cue_A_to_h: Optional[Synapses] = None
@@ -106,20 +130,62 @@ class FrozenBundle:
     # --- per-trial state helpers ------------------------------------------
 
     def reset_h(self) -> None:
-        """Kill any lingering bump / eligibility in H_R (H_T) so each trial
-        starts from a clean resting state. Matches Stage-2 training reset.
+        """Kill any lingering bump / eligibility in H so each trial starts
+        from a clean resting state. Matches Stage-2 training reset.
+
+        For ``architecture="ctx_pred"``, resets BOTH rings (ctx + pred)
+        and zeros the W_ctx_pred eligibility / coincidence traces so
+        nothing leaks trial-to-trial at assay time.
         """
-        self.h_ring.e.V = -70.0 * mV
-        self.h_ring.e.I_e = 0 * pA
-        self.h_ring.e.I_i = 0 * pA
-        self.h_ring.e.g_nmda_h = 0 * nS
-        self.h_ring.inh.V = -65.0 * mV
-        self.h_ring.inh.I_e = 0 * pA
-        self.h_ring.inh.I_i = 0 * pA
+        def _reset_ring(ring: HRing) -> None:
+            ring.e.V = -70.0 * mV
+            ring.e.I_e = 0 * pA
+            ring.e.I_i = 0 * pA
+            ring.e.g_nmda_h = 0 * nS
+            ring.inh.V = -65.0 * mV
+            ring.inh.I_e = 0 * pA
+            ring.inh.I_i = 0 * pA
+
+        if self.ctx_pred is not None:
+            _reset_ring(self.ctx_pred.ctx)
+            _reset_ring(self.ctx_pred.pred)
+            # Clear per-synapse traces on the (frozen) W_ctx_pred — at
+            # assay time there is no modulatory gate to consume them, so
+            # they would otherwise accumulate across trials and (via the
+            # on_pre `I_e_post += w * drive` line, which is independent
+            # of elig) have no effect on drive — but clearing keeps the
+            # stored state clean for optional diagnostic reads.
+            self.ctx_pred.ctx_pred.xpre[:] = 0.0
+            self.ctx_pred.ctx_pred.xpost[:] = 0.0
+            self.ctx_pred.ctx_pred.elig[:] = 0.0
+        else:
+            _reset_ring(self.h_ring)
         if self.cue_A_to_h is not None:
             self.cue_A_to_h.elig = 0.0
         if self.cue_B_to_h is not None:
             self.cue_B_to_h.elig = 0.0
+
+    # --- Tang direction helpers (Sprint 5e-Fix D.4) -----------------------
+
+    def set_tang_direction(self, direction: int, rate_hz: float = 80.0) -> None:
+        """Activate the CW (0) or CCW (1) Tang direction afferent.
+
+        Only valid under ``architecture="ctx_pred"``. No-op (with a clear
+        error) otherwise, so accidental calls from a legacy (h_r / h_t)
+        assay are caught explicitly rather than silently ignored.
+        """
+        if self.ctx_pred is None:
+            raise RuntimeError(
+                "set_tang_direction() requires architecture='ctx_pred'; "
+                f"current bundle h_kind={self.h_kind!r}"
+            )
+        _hcp_set_direction(self.ctx_pred, int(direction), float(rate_hz))
+
+    def silence_tang_direction(self) -> None:
+        """Zero both Tang direction afferents. No-op on non-ctx_pred bundles."""
+        if self.ctx_pred is None:
+            return
+        _hcp_silence_direction(self.ctx_pred)
 
     def reset_v1(self) -> None:
         """Reset V1 soma/apical voltages + currents. (Optional; long ITIs
@@ -215,6 +281,57 @@ def _freeze_h_plasticity(h: HRing) -> None:
     h.inh_to_e.namespace["eta_eff"] = 0.0
 
 
+def _load_stage1_ctx_pred_into(
+    bundle: HContextPrediction, ckpt_path: str,
+) -> dict:
+    """Restore H_ctx E→E, H_pred E→E, and W_ctx_pred weights from a
+    Stage-1 ctx_pred checkpoint (see train.run_stage_1_ctx_pred).
+
+    The checkpoint stores three flat weight arrays plus associated
+    metadata; this loader validates shapes and writes into the live
+    synapses. Weight updates for ``ctx_pred`` are NOT applied at assay
+    time (no modulatory gate attached), so this loader is the single
+    source of truth for W_ctx_pred during assays.
+    """
+    data = np.load(ckpt_path)
+    required = ("ctx_ee_w_final", "pred_ee_w_final", "W_ctx_pred_final")
+    for k in required:
+        if k not in data.files:
+            raise KeyError(
+                f"Stage-1 ctx_pred checkpoint missing key {k!r} "
+                f"(found keys: {sorted(data.files)})"
+            )
+    ctx_w = np.asarray(data["ctx_ee_w_final"], dtype=np.float64)
+    pred_w = np.asarray(data["pred_ee_w_final"], dtype=np.float64)
+    ctx_pred_w = np.asarray(data["W_ctx_pred_final"], dtype=np.float64)
+
+    live_ctx = np.asarray(bundle.ctx.ee.w[:])
+    live_pred = np.asarray(bundle.pred.ee.w[:])
+    live_cp = np.asarray(bundle.ctx_pred.w[:])
+    if ctx_w.shape != live_ctx.shape:
+        raise ValueError(
+            f"ctx_ee_w_final shape {ctx_w.shape} != live {live_ctx.shape}"
+        )
+    if pred_w.shape != live_pred.shape:
+        raise ValueError(
+            f"pred_ee_w_final shape {pred_w.shape} != live {live_pred.shape}"
+        )
+    if ctx_pred_w.shape != live_cp.shape:
+        raise ValueError(
+            f"W_ctx_pred_final shape {ctx_pred_w.shape} != live {live_cp.shape}"
+        )
+    bundle.ctx.ee.w[:] = ctx_w
+    bundle.pred.ee.w[:] = pred_w
+    bundle.ctx_pred.w[:] = ctx_pred_w
+    return {
+        "n_ctx_ee_w": int(ctx_w.size),
+        "n_pred_ee_w": int(pred_w.size),
+        "n_ctx_pred_w": int(ctx_pred_w.size),
+        "ctx_pred_w_mean_final": float(ctx_pred_w.mean()),
+        "ctx_pred_w_max_final": float(ctx_pred_w.max()),
+    }
+
+
 def _build_frozen_cue_pathway(
     h: HRing,
 ) -> Tuple[PoissonGroup, PoissonGroup, Synapses, Synapses]:
@@ -270,14 +387,28 @@ def build_frozen_network(
     v1_cfg: Optional[V1RingConfig] = None,
     fb_cfg: Optional[FeedbackRoutesConfig] = None,
     v1_to_h_cfg: Optional[V1ToHConfig] = None,
+    *,
+    architecture: Optional[str] = None,
+    ctx_pred_cfg: Optional[HContextPredictionConfig] = None,
 ) -> FrozenBundle:
     """Assemble the intact frozen assay-time network.
 
     Parameters
     ----------
     h_kind : str
-        "hr" → H_R (Kok, Richter) loaded from stage_1_hr_seed{SEED}.npz.
-        "ht" → H_T (Tang)            loaded from stage_1_ht_seed{SEED}.npz.
+        Backward-compat short tag:
+        ``"hr"`` → H_R  (architecture='h_r'),
+        ``"ht"`` → H_T  (architecture='h_t'),
+        ``"ctx_pred"`` → H_context + H_prediction (architecture='ctx_pred').
+        Ignored if ``architecture`` is explicitly supplied.
+    architecture : {'h_r', 'h_t', 'ctx_pred'}, optional
+        Preferred spelling (Sprint 5e-Fix D.3). If given, overrides
+        ``h_kind``. Under ``'ctx_pred'`` the bundle builds an
+        :class:`HContextPrediction` (ctx + pred + plastic W_ctx_pred +
+        direction afferent), loads the Stage-1 ctx_pred checkpoint, and
+        wires the H → V1 feedback routes out of ``ctx_pred.pred`` (the
+        ring emitting predictions back to V1). V1 → H teacher (if any)
+        targets ``ctx_pred.ctx`` (the sensory-driven ring).
     seed : int
         Checkpoint seed suffix. Only seed=42 has been trained per task #27.
     r, g_total : float
@@ -332,11 +463,32 @@ def build_frozen_network(
     FrozenBundle
         Ready for ``Network(*bundle.groups, *monitors)``.
     """
-    if h_kind not in ("hr", "ht"):
-        raise ValueError(f"h_kind must be 'hr' or 'ht', got {h_kind!r}")
-    if with_cue and h_kind != "hr":
+    # Resolve architecture from the new keyword (preferred) or fall back
+    # to the legacy h_kind tag. Keep legacy callers working unchanged.
+    if architecture is None:
+        if h_kind == "hr":
+            architecture = "h_r"
+        elif h_kind == "ht":
+            architecture = "h_t"
+        elif h_kind == "ctx_pred":
+            architecture = "ctx_pred"
+        else:
+            raise ValueError(
+                f"h_kind must be 'hr', 'ht', or 'ctx_pred', got {h_kind!r}"
+            )
+    if architecture not in ("h_r", "h_t", "ctx_pred"):
         raise ValueError(
-            "with_cue=True requires h_kind='hr' (Stage-2 was trained on H_R)"
+            f"architecture must be 'h_r', 'h_t', or 'ctx_pred', "
+            f"got {architecture!r}"
+        )
+    # Normalize h_kind to match resolved architecture (for the meta tag).
+    h_kind = {
+        "h_r": "hr", "h_t": "ht", "ctx_pred": "ctx_pred",
+    }[architecture]
+    if with_cue and architecture != "h_r":
+        raise ValueError(
+            "with_cue=True requires architecture='h_r' (Stage-2 was trained "
+            "on H_R only)"
         )
     # Normalize with_v1_to_h: bool -> string (backward compat for diag scripts).
     if with_v1_to_h is True:
@@ -351,10 +503,14 @@ def build_frozen_network(
     v1_to_h_mode = with_v1_to_h
     ckpt_dir = ckpt_dir or DEFAULT_CKPT_DIR
     stage0_ckpt = os.path.join(ckpt_dir, f"stage_0_seed{seed}.npz")
-    stage1_ckpt = os.path.join(
-        ckpt_dir,
-        f"stage_1_{'hr' if h_kind == 'hr' else 'ht'}_seed{seed}.npz",
-    )
+    if architecture == "ctx_pred":
+        stage1_ckpt = os.path.join(
+            ckpt_dir, f"stage_1_ctx_pred_seed{seed}.npz",
+        )
+    else:
+        stage1_ckpt = os.path.join(
+            ckpt_dir, f"stage_1_{h_kind}_seed{seed}.npz",
+        )
     stage2_ckpt = os.path.join(ckpt_dir, f"stage_2_seed{seed}.npz")
     for p in (stage0_ckpt, stage1_ckpt):
         if not os.path.isfile(p):
@@ -364,20 +520,59 @@ def build_frozen_network(
 
     # --- rings -----------------------------------------------------------
     v1 = build_v1_ring(config=v1_cfg)
-    if h_kind == "hr":
+    ctx_pred_bundle: Optional[HContextPrediction] = None
+    v1_to_h_target: HRing   # which ring the V1 → H teacher drives
+    if architecture == "h_r":
         h = build_h_r(config=h_cfg)
-    else:
+        v1_to_h_target = h
+    elif architecture == "h_t":
         h = build_h_t(config=h_cfg)
+        v1_to_h_target = h
+    else:  # ctx_pred
+        cp_cfg = ctx_pred_cfg or HContextPredictionConfig(
+            ctx_cfg=h_cfg, pred_cfg=h_cfg,
+        )
+        # Distinct Brian2 name prefix avoids collisions if somebody
+        # stacks an assay on top of a legacy bundle in the same session.
+        ctx_pred_bundle = build_h_context_prediction(
+            config=cp_cfg,
+            ctx_name=f"s5a_ctx_seed{seed}",
+            pred_name=f"s5a_pred_seed{seed}",
+        )
+        # Feedback source: pred (predictions → V1). V1→H teacher target:
+        # ctx (sensory-driven ring).
+        h = ctx_pred_bundle.pred
+        v1_to_h_target = ctx_pred_bundle.ctx
 
     # --- checkpoints ----------------------------------------------------
     bias_pA_val, pv_w_n = _load_stage0_into_v1(v1, stage0_ckpt)
-    ee_w_n = _load_stage1_into_h(h, stage1_ckpt)
+    if architecture == "ctx_pred":
+        cp_load_meta = _load_stage1_ctx_pred_into(ctx_pred_bundle, stage1_ckpt)
+        # Mirror legacy n_ee_w reporting: use ctx's E→E count as the
+        # canonical "H E→E" size (ctx and pred share shape on the same
+        # 12-channel ring).
+        ee_w_n = cp_load_meta["n_ctx_ee_w"]
+    else:
+        ee_w_n = _load_stage1_into_h(h, stage1_ckpt)
+        cp_load_meta = {}
 
     # --- freeze plasticity ----------------------------------------------
     _freeze_v1_plasticity(v1)
-    _freeze_h_plasticity(h)
+    if architecture == "ctx_pred":
+        _freeze_h_plasticity(ctx_pred_bundle.ctx)
+        _freeze_h_plasticity(ctx_pred_bundle.pred)
+        # W_ctx_pred weights are frozen by simply NOT attaching the
+        # modulatory-gate NetworkOperation at assay time — the
+        # Frémaux-Gerstner three-factor rule only updates w inside
+        # `apply_modulatory_update`, which is called exclusively from
+        # that gate. The on_pre / on_post event handlers still run and
+        # drive current (drive_amp_ctx_pred_pA · w per spike) + maintain
+        # the event-driven traces, but traces never flow back into w.
+    else:
+        _freeze_h_plasticity(h)
 
     # --- feedback routes (H → V1) ---------------------------------------
+    # Source ring = `h` (= pred under ctx_pred; h_r/h_t ring otherwise).
     fb_cfg_eff = fb_cfg or FeedbackRoutesConfig(g_total=g_total, r=r)
     fb = build_feedback_routes(
         h, v1, fb_cfg_eff, name_prefix=f"s5a_{h_kind}",
@@ -393,11 +588,14 @@ def build_frozen_network(
     # Modes: "continuous" or "context_only" build the pathway identically
     # (caller toggles via bundle.v1_to_h.set_active(...) for context_only);
     # "off" skips construction entirely, leaving H rings unforced.
+    # Under ctx_pred the target is ctx (bottom-up sensory teacher), not
+    # pred — pred stays cue-/prediction-only and learns from ctx via the
+    # frozen W_ctx_pred.
     v1_to_h_obj: Optional[V1ToH] = None
     if v1_to_h_mode != "off":
         ff_cfg = v1_to_h_cfg or V1ToHConfig()
         v1_to_h_obj = build_v1_to_h_feedforward(
-            v1, h, ff_cfg, name_prefix=f"s5a_ffv1h_{h_kind}",
+            v1, v1_to_h_target, ff_cfg, name_prefix=f"s5a_ffv1h_{h_kind}",
         )
 
     # --- H-clamp (Sprint 5d D3 diagnostic; optional) --------------------
@@ -443,7 +641,12 @@ def build_frozen_network(
 
     # --- groups list for Network ----------------------------------------
     groups: List[object] = []
-    groups.extend(h.groups)
+    if architecture == "ctx_pred":
+        # ctx_pred_bundle.groups includes BOTH rings + W_ctx_pred +
+        # direction afferent — avoids double-adding pred.groups via `h`.
+        groups.extend(ctx_pred_bundle.groups)
+    else:
+        groups.extend(h.groups)
     groups.extend(v1.groups)
     groups.extend(fb.groups)
     if v1_to_h_obj is not None:
@@ -482,11 +685,13 @@ def build_frozen_network(
         v1_to_h=v1_to_h_obj,
         h_clamp=h_clamp_obj,
         h_e_mon=h_e_mon,
+        ctx_pred=ctx_pred_bundle,
         cue_A=cue_A, cue_B=cue_B,
         cue_A_to_h=cue_A_to_h, cue_B_to_h=cue_B_to_h,
         groups=groups,
         meta={
             "seed": int(seed),
+            "architecture": architecture,
             "h_kind": h_kind,
             "r": float(r),
             "g_total": float(g_total),
@@ -505,6 +710,7 @@ def build_frozen_network(
             **v1_to_h_meta,
             **h_clamp_meta,
             **cue_meta,
+            **cp_load_meta,
         },
     )
     return bundle
