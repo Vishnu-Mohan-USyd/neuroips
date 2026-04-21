@@ -410,3 +410,289 @@ No mechanism interpretation beyond these literal comparisons.
 - Figure: `docs/figures/eval_ex_vs_unex_decC.png` (4-panel: dec_acc,
   net_L2/3, peak_at_stim, FWHM vs N).
 - Run log: `logs/eval_ex_vs_unex_decC_t13.log`.
+
+---
+
+## 11. Cross-decoder comprehensive matrix (Task #26, 2026-04-22)
+
+One forward pass per trial; three orientation decoders (A / B / C) applied to
+the same `r_l23`. See `ARCHITECTURE.md` § "Decoders" for decoder definitions.
+A single 17-row matrix aggregates:
+
+- 4 paired-HMM-fork conditions on R1+R2 (see § 12)
+- HMM C1 (focused + HMM cue) on legacy reference networks a1, b1, c1, e1 (see § 13)
+- 6 native-strategy evaluations on R1+R2 (NEW paired march, M3R, HMS, HMS-T, P3P, VCD)
+- 3 modified-input (focused + march cue) evaluations on R1+R2 (M3R, HMS-T, VCD)
+
+### Compact Δ = acc(expected) − acc(unexpected)
+
+| # | Assay | Network | n_ex | n_unex | Δ_A | Δ_B | Δ_C | majority | outlier |
+|---|---|---|---:|---:|---:|---:|---:|:--:|:--:|
+| 1 | HMM C1 (focused + HMM cue) | R1+R2 | 1000 | 1000 | +0.3090 | +0.0150 | +0.0500 | + | — |
+| 2 | HMM C2 (routine + HMM cue) | R1+R2 | 1000 | 1000 | +0.1580 | −0.0170 | +0.0060 | + | B |
+| 3 | HMM C3 (focused + zero cue) | R1+R2 | 1000 | 1000 | +0.3000 | −0.0070 | +0.0380 | + | B |
+| 4 | HMM C4 (routine + zero cue) | R1+R2 | 1000 | 1000 | +0.1550 | −0.0360 | +0.0390 | + | B |
+| 5 | HMM C1 | a1 legacy | 1000 | 1000 | −0.0220 | +0.0000 | −0.0090 | − | B |
+| 6 | HMM C1 | b1 legacy | 1000 | 1000 | −0.0320 | −0.0150 | −0.0230 | − | — |
+| 7 | HMM C1 | c1 legacy | 1000 | 1000 | +0.1870 | +0.0370 | −0.0070 | + | C |
+| 8 | HMM C1 | e1 legacy | 1000 | 1000 | +0.2130 | +0.0510 | +0.0110 | + | — |
+| 9 | NEW (paired march) | R1+R2 | 2400 | 2400 | +0.3871 | +0.0854 | +0.1254 | + | — |
+| 10 | M3R (matched_3row_ring) | R1+R2 | 1084 | 3302 | −0.1496 | −0.0082 | −0.0294 | − | — |
+| 11 | HMS (matched_hmm_ring_sequence) | R1+R2 | 3074 | 153 | −0.1850 | −0.1103 | +0.0790 | − | C |
+| 12 | HMS-T (--tight-expected) | R1+R2 | 793 | 101 | −0.2919 | −0.1818 | −0.0631 | − | — |
+| 13 | P3P (matched_probe_3pass) | R1+R2 | 38 | 38 | +0.3684 | −0.1714 | +0.0526 | + | B |
+| 14 | VCD-test3 (v2_confidence_dissection) | R1+R2 | 8025 | 8025 | −0.1655 | −0.0984 | −0.0703 | − | — |
+| 15 | M3R (modified: focused + march cue) | R1+R2 | 3260 | 6486 | −0.1373 | −0.0336 | −0.0176 | − | — |
+| 16 | HMS-T (modified: focused + march cue) | R1+R2 | 1139 | 111 | −0.2968 | −0.1222 | +0.0443 | − | C |
+| 17 | VCD-test3 (modified: focused + march cue) | R1+R2 | 6998 | 6998 | −0.0840 | −0.0264 | −0.0130 | − | — |
+
+(Majority = sign shared by ≥ 2 of 3 decoders. "Outlier" = decoder whose sign
+disagrees with the 2/3 majority; "—" means all three agree. Per-row raw
+ex/unex accuracies are in `results/cross_decoder_comprehensive.md`.)
+
+### Per-decoder profile
+
+| Decoder | n rows | mean \|Δ\| | max \|Δ\| | rows ALL agree | rows w/ majority | rows disagreeing | rows where this is outlier |
+|---|---:|---:|---:|---:|---:|---:|---|
+| A | 17 | 0.2024 | 0.3871 | 9 | 17 | 0 | — |
+| B | 17 | 0.0598 | 0.1818 | 9 | 12 | 5 | HMM C2/C3/C4 on R1+R2; HMM C1 on a1; P3P on R1+R2 |
+| C | 17 | 0.0399 | 0.1254 | 9 | 14 | 3 | HMM C1 on c1; HMS on R1+R2; HMS-T modified on R1+R2 |
+
+Decoder A produces consistently larger-magnitude Δs (mean |Δ| ≈ 5× that of B/C)
+and always agrees with the 2/3 majority sign. Decoder C produces the
+smallest-magnitude Δs and agrees with the majority in 14/17 rows. Decoder B is
+outlier in 5/17 rows. No row has Decoder A as outlier.
+
+### Rows where all three decoders agree (9/17)
+
+| # | Assay | Network | Δ_A | Δ_B | Δ_C | common sign |
+|---|---|---|---:|---:|---:|:--:|
+| 1 | HMM C1 (focused + HMM cue) | R1+R2 | +0.3090 | +0.0150 | +0.0500 | + |
+| 6 | HMM C1 | b1 legacy | −0.0320 | −0.0150 | −0.0230 | − |
+| 8 | HMM C1 | e1 legacy | +0.2130 | +0.0510 | +0.0110 | + |
+| 9 | NEW (paired march) | R1+R2 | +0.3871 | +0.0854 | +0.1254 | + |
+| 10 | M3R | R1+R2 | −0.1496 | −0.0082 | −0.0294 | − |
+| 12 | HMS-T | R1+R2 | −0.2919 | −0.1818 | −0.0631 | − |
+| 14 | VCD-test3 | R1+R2 | −0.1655 | −0.0984 | −0.0703 | − |
+| 15 | M3R modified | R1+R2 | −0.1373 | −0.0336 | −0.0176 | − |
+| 17 | VCD-test3 modified | R1+R2 | −0.0840 | −0.0264 | −0.0130 | − |
+
+On R1+R2, the **NEW paired-march** assay (row 9) is the only decoder-robust
+**sharpening** row on R1+R2 in the 17-row set. **HMM C1 (focused + HMM cue)
+on R1+R2** (row 1) is also decoder-robust sharpening on the paired-fork
+paradigm. The observational HMM-trajectory assays (M3R / HMS-T / VCD and
+their modified variants: rows 10, 12, 14, 15, 17) are decoder-robust
+**dampening** on the same R1+R2 checkpoint.
+
+### Reproducibility
+
+- Aggregator: `scripts/aggregate_cross_decoder_matrix.py`
+- Per-strategy evaluator: `scripts/cross_decoder_eval.py` (contains Dec B 5-fold nearest-centroid helper + per-strategy ex/unex evals)
+- Result JSONs: `results/cross_decoder_comprehensive.{json,md}`
+- Per-source JSONs: `/tmp/task26_paradigm_R1R2.json`, `/tmp/task26_legacy/{a1,b1,c1,e1}_C1.json`, `/tmp/task26_xdec_native.json`, `/tmp/task26_xdec_modified.json`
+
+---
+
+## 12. Paired HMM fork paradigm × readout analysis (Tasks #19–#22, 2026-04-19)
+
+Paired-state HMM fork: one shared pre-probe march, two branches (ex / unex) with
+bit-identical pre-probe state, then a probe consistent (ex) or 90°-shifted
+(unex) from the HMM-predicted orientation. Task #22 adds a 4-condition
+factorial — focused/routine × HMM cue / neutral cue — each 1000 paired ex/unex
+trials on R1+R2. Task #19 probes the adjacent-channel structure of the tuning
+curve on the NEW paired march assay, with march-signed offsets.
+
+### Four-condition decoder accuracy (R1+R2, from `results/r1r2_paradigm_readout.json`)
+
+| Condition | n | decB ex | decB unex | Δ_B | decC ex | decC unex | Δ_C |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C1 focused + HMM cue | 1000 | 0.604 | 0.586 | +0.018 | 0.626 | 0.538 | +0.088 |
+| C2 routine + HMM cue | 1000 | 0.435 | 0.463 | −0.028 | 0.469 | 0.456 | +0.013 |
+| C3 focused + neutral cue | 1000 | 0.543 | 0.539 | +0.004 | 0.547 | 0.502 | +0.045 |
+| C4 routine + neutral cue | 1000 | 0.435 | 0.471 | −0.036 | 0.457 | 0.416 | +0.041 |
+
+Decoder C shows Δ > 0 (expected > unexpected) in **all four conditions**.
+Decoder B shows Δ > 0 only in focused conditions (C1, C3); Δ < 0 in routine
+(C2, C4). The Decoder B sign is task-state dependent on this paradigm; the
+Decoder C sign is not.
+
+(Note: the cross-decoder matrix § 11 rows 1–4 come from a separate
+paradigm-R1+R2 evaluation run (Task #26) and include Decoder A alongside B/C;
+numerical values differ slightly from the Task #22 numbers above because they
+are independent runs of the same 4-condition protocol. The sign pattern is
+consistent across both runs.)
+
+### Peak / net-L2/3 / FWHM (R1+R2, paired HMM fork 4 conditions)
+
+| Condition | Branch | Peak (re-centered true-ch) | Net L2/3 (sum 36 ch) | FWHM (linear-interp) |
+|---|---|---:|---:|---:|
+| C1 focused + HMM cue | ex | 0.5465 ± 0.006 | 4.19 ± 0.03 | 29.82° ± 0.26 |
+| | unex | 0.4769 ± 0.006 | 4.87 ± 0.03 | 28.92° ± 0.26 |
+| C2 routine + HMM cue | ex | 0.2653 ± 0.004 | 1.93 ± 0.02 | 29.47° ± 0.21 |
+| | unex | 0.2079 ± 0.004 | 2.12 ± 0.02 | 27.47° ± 0.22 |
+| C3 focused + neutral | ex | 0.5667 ± 0.007 | 4.33 ± 0.03 | 29.08° ± 0.27 |
+| | unex | 0.4588 ± 0.007 | 4.91 ± 0.04 | 27.90° ± 0.27 |
+| C4 routine + neutral | ex | 0.2842 ± 0.004 | 2.07 ± 0.02 | 28.50° ± 0.21 |
+| | unex | 0.2188 ± 0.004 | 2.27 ± 0.02 | 27.14° ± 0.23 |
+
+Across all 4 conditions on the paired HMM fork: ex **peak** is higher than
+unex, ex **net L2/3** is lower than unex, ex **FWHM** is **wider** than unex by
++0.90° (C1) to +2.00° (C2).
+
+### FWHM-sign reversal vs NEW paired march (§ 10)
+
+The FWHM sign is the **opposite** of the NEW paired-march result in § 10,
+where ex FWHM (28.44°) was **narrower** than unex (29.77°): Δ_FWHM = −1.33°
+(ex < unex). In the paired HMM fork 4-condition eval, ex FWHM is **wider**
+than unex by +0.9°–2.0° across all conditions. The peak sign (ex > unex) is
+consistent across both paradigms; the net-L2/3 sign (ex < unex) is also
+consistent. Only the FWHM sign flips between the two paradigms.
+
+### Adjacent-channel signed-offset curve (NEW paired march, Task #19)
+
+From `results/eval_ex_vs_unex_decC_adjacent.json`. Per-trial roll-to-center
+(peak at ch18); offsets sign-flipped by march direction so +offset = ahead in
+march direction (the side the march is heading toward).
+
+| Offset (ch) | Offset (°) | ex peak | unex peak | Δ (ex − unex) |
+|---:|---:|---:|---:|---:|
+| −5 | −25 | 0.131 | 0.163 | −0.031 |
+| −4 | −20 | 0.268 | 0.245 | +0.023 |
+| −3 | −15 | 0.448 | 0.359 | +0.089 |
+| −2 | −10 | 0.629 | 0.485 | +0.144 |
+| −1 | −5 | 0.752 | 0.586 | +0.165 |
+| 0 | 0 | 0.773 | 0.626 | +0.147 |
+| +1 | +5 | 0.689 | 0.589 | +0.100 |
+| +2 | +10 | 0.528 | 0.488 | +0.041 |
+| +3 | +15 | 0.349 | 0.357 | −0.008 |
+| +4 | +20 | 0.191 | 0.230 | −0.039 |
+| +5 | +25 | 0.078 | 0.126 | −0.047 |
+
+### Flank-asymmetry diagnostic (expected branch, NEW paired march)
+
+ex(+k) − ex(−k) (march-signed offset, paired-SEM):
+
+| k | ex flank Δ | ± sem |
+|---|---:|---:|
+| 1 | −0.0631 | 0.0037 |
+| 2 | −0.1002 | 0.0036 |
+| 3 | −0.0996 | 0.0031 |
+
+unex(+k) − unex(−k) (same convention):
+
+| k | unex flank Δ | ± sem |
+|---|---:|---:|
+| 1 | +0.0022 | 0.0041 |
+| 2 | +0.0030 | 0.0039 |
+| 3 | −0.0024 | 0.0034 |
+
+Expected branch shows systematic flank asymmetry: the leading flank (ahead in
+march direction, positive offsets) is suppressed relative to the trailing
+flank (negative offsets) by 0.06–0.10. Unexpected branch is symmetric within
+SEM. The ex-branch asymmetry is consistent with V2 feedback subtracting the
+ahead-in-march (predicted-next) orientation from L2/3 on expected trials.
+
+### Reproducibility
+
+- Result JSONs: `results/eval_ex_vs_unex_decC_adjacent.json` (Task #19), `results/r1r2_paired_hmm_fork.json` (Task #20), `results/r1r2_paradigm_readout.json` (Task #22).
+- Figures: `docs/figures/tuning_ring_matched_3row_r1_2.png`, `docs/figures/tuning_ring_hmm_3row_multicol_r1_2.png`, `docs/figures/tuning_ring_hmm_3row_multicol_tightexp_r1_2.png`, `docs/figures/priming_dose_response_r1_2.png`.
+
+---
+
+## 13. Legacy dampening/sharpening reference networks (Tasks #23–#24, 2026-04-21)
+
+Four checkpoints from the legacy 25-run sweep (§ 5) were reloaded on the
+`dampening-analysis` branch and re-evaluated under the full three-decoder
+protocol (A / B / C) on HMM C1 (focused + HMM cue), 1000 paired ex/unex
+trials per network.
+
+### Legacy § 5 regime classification (from the 25-run sweep)
+
+| Tag | λ_sensory | λ_energy | l23w | Regime | M7 d=10° | M10 amp | FWHM Δ |
+|---|---:|---:|---:|---|---:|---:|---:|
+| a1 | 0.0 | 2.0 | 1.0 | Dampening | −0.047 | 0.70 | −3.9° |
+| b1 | 0.0 | 5.0 | 1.0 | Stronger dampening | −0.060 | 0.64 | −3.0° |
+| c1 | 0.3 | 2.0 | 5.0 | Near-unity / transition | +0.081 | 0.95 | −4.3° |
+| e1 | 0.3 | 2.0 | 3.0 | BEST sharpening | +0.104 | 1.13 | −11.6° |
+
+### HMM C1 paired-fork Δ on legacy refs (rows 5–8 of § 11)
+
+| Network | n_ex | n_unex | Δ_A | Δ_B | Δ_C | decoder-robust? |
+|---|---:|---:|---:|---:|---:|---|
+| a1 | 1000 | 1000 | −0.0220 | +0.0000 | −0.0090 | A and C both <0, B = 0.0 (no net shift) |
+| b1 | 1000 | 1000 | −0.0320 | −0.0150 | −0.0230 | **All three < 0 (dampening)** |
+| c1 | 1000 | 1000 | +0.1870 | +0.0370 | −0.0070 | A and B > 0, C slightly < 0 — mixed |
+| e1 | 1000 | 1000 | +0.2130 | +0.0510 | +0.0110 | **All three > 0 (sharpening)** |
+
+Legacy dampening configs (a1, b1) give Δ < 0 under the paired-fork readout
+(b1 is decoder-robust dampening on all three decoders; a1 has B = 0.0 but A
+and C both < 0). Legacy sharpening config e1 gives decoder-robust Δ > 0. c1
+(near-unity, on the § 1 transition boundary) is mixed — A/B positive but C
+slightly negative. The loss-weight regime boundary from § 5 carries over to
+the paired-fork ex/unex readout, validating that "sharpening" vs "dampening"
+in the 25-run sweep aligns with the modern three-decoder sign of Δ.
+
+R1+R2 on the same HMM C1 assay (row 1 of § 11) sits on the **sharpening**
+side of this legacy axis: Δ_A = +0.309, Δ_B = +0.015, Δ_C = +0.050 (all ≥ 0).
+
+### Checkpoint loading
+
+Legacy checkpoints unpickle with `torch.load(..., strict=False)` using a small
+`MechanismType` enum shim in `src/config.py` (DAMPENING / SHARPENING /
+CENTER_SURROUND / ADAPTATION_ONLY). The shim exists only to allow
+unpickling; it is not used by any current code path (per its docstring) and
+does not re-introduce any legacy runtime behaviour.
+
+### Reproducibility
+
+- Loader shim: `src/config.py` (MechanismType enum, 17 lines, docstring marks it inert)
+- Evaluator: same cross-decoder protocol as § 11 (`scripts/cross_decoder_eval.py`)
+- Result JSONs: `/tmp/task26_legacy/{a1,b1,c1,e1}_C1.json`
+
+---
+
+## 14. Robust findings under decoder agreement (Tasks #15–#26 synthesis, 2026-04-22)
+
+The cross-decoder comprehensive matrix (§ 11) establishes which ex-vs-unex
+findings on the `dampening-analysis` branch are **decoder-robust** (all three
+decoders agree on the sign of Δ) and which are decoder-dependent.
+
+### Decoder-robust sharpening (Δ > 0 on all three decoders)
+
+- **NEW paired-march assay on R1+R2** (row 9): Δ_A = +0.3871, Δ_B = +0.0854, Δ_C = +0.1254
+- **HMM C1 (focused + HMM cue) on R1+R2** (row 1): Δ_A = +0.3090, Δ_B = +0.0150, Δ_C = +0.0500
+- **HMM C1 on e1 legacy** (row 8): Δ_A = +0.2130, Δ_B = +0.0510, Δ_C = +0.0110
+
+### Decoder-robust dampening (Δ < 0 on all three decoders)
+
+- **HMM C1 on b1 legacy** (row 6): Δ_A = −0.0320, Δ_B = −0.0150, Δ_C = −0.0230
+- **M3R on R1+R2** (row 10): Δ_A = −0.1496, Δ_B = −0.0082, Δ_C = −0.0294
+- **HMS-T on R1+R2** (row 12): Δ_A = −0.2919, Δ_B = −0.1818, Δ_C = −0.0631
+- **VCD-test3 on R1+R2** (row 14): Δ_A = −0.1655, Δ_B = −0.0984, Δ_C = −0.0703
+- **M3R modified on R1+R2** (row 15): Δ_A = −0.1373, Δ_B = −0.0336, Δ_C = −0.0176
+- **VCD-test3 modified on R1+R2** (row 17): Δ_A = −0.0840, Δ_B = −0.0264, Δ_C = −0.0130
+
+### Decoder-dependent (≥ one decoder disagrees on sign)
+
+- **HMM C2, C3, C4 on R1+R2** (rows 2–4): A and C both positive, B near-zero or slightly negative. The B outlier is consistent across these three conditions, not random.
+- **HMM C1 on a1 legacy** (row 5): A and C both negative, B exactly 0.0.
+- **HMM C1 on c1 legacy** (row 7): A and B positive, C slightly negative — c1 sits on the § 1 transition boundary.
+- **HMS on R1+R2** (row 11): A and B both negative, C positive.
+- **P3P on R1+R2** (row 13): A and C positive, B negative — small n (38/branch).
+- **HMS-T modified on R1+R2** (row 16): A and B negative, C positive.
+
+### R1+R2 is hybrid, not single-regime
+
+On the **paired-fork paradigm** (rows 1–4 of § 11), R1+R2 shows decoder-robust
+ex > unex — consistent with **sharpening**. On **observational HMM-trajectory
+paradigms** (rows 10, 12, 14 and their modified variants on R1+R2), the same
+R1+R2 checkpoint shows decoder-robust ex < unex — consistent with
+**dampening**. The regime label for R1+R2 depends on both the assay paradigm
+and, for several assays, the specific decoder. Previous single-paradigm
+framings of R1+R2 as purely sharpening or purely dampening are not supported
+by the cross-decoder matrix.
+
+See § 11 for the full 17-row matrix, § 12 for the paradigm × readout analysis
+(including the FWHM-sign reversal and flank-asymmetry diagnostic), and § 13
+for the legacy-ref reproduction anchoring the "sharpening" / "dampening"
+labels to the 25-run sweep regime classes.

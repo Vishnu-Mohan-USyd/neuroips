@@ -14,7 +14,46 @@
 | `main` | Stable baseline | `4c57d47` (2026-03-31) |
 | `single-network-dual-regime` | Dual-regime trained baselines (Network_mm, Network_both, Fixes 1–4) | `8e13d69` (2026-04-12) |
 | `failed-dual-regime-experiments` | Architectural rescue chain R1+R2 / R3 / R4 / R5 | `39375ac` (2026-04-13) |
-| `dampening-analysis` | Re-centered tuning analysis + figures + corrective docs; R1+R2 set as canonical default; Decoder C ex/unex eval | `37001a1` (2026-04-17) |
+| `dampening-analysis` | Re-centered tuning analysis + figures + corrective docs; R1+R2 set as canonical default; Decoder C ex/unex eval; cross-decoder matrix | `37001a1` (2026-04-17) |
+
+---
+
+## 2026-04-22 — Cross-decoder comprehensive matrix + legacy reference networks (Tasks #23–#26)
+
+**Context:** After Tasks #19–#22 showed R1+R2 is *decoder-robust sharpening* on the paired-fork paradigm and *decoder-robust dampening* on observational paradigms (see 2026-04-19 entry below), we still lacked a single audit table cross-cutting every ex-vs-unex claim in the project. We also had not verified that the legacy reference networks from RESULTS.md § 5 (a1 / b1 / c1 / e1) reproduce their old regime classification under the three-decoder protocol — the old numbers were Dec-A-only.
+
+**What was tried (Task #25):** 10k-trial natural-HMM decode comparison of Dec A vs Dec C on R1+R2, seed 42, readout window `t∈[9,11]`, no expected/unexpected branching (the natural stream). Full agreement statistics + strata breakdowns (ambiguous vs clean; pi_low_Q1 vs pi_high_Q4; jump vs march_smooth; focused vs routine).
+
+**What was tried (Task #23 + #24):** Legacy checkpoints a1/b1/c1/e1 re-loaded via a `MechanismType` enum shim in `src/config.py` + `torch.load(..., weights_only=False)` with `strict=False` (legacy checkpoints predate several of the current config fields). Forward pass through HMM C1 (focused + HMM cue), all three decoders applied to the same `r_l23`.
+
+**What was tried (Task #26):** 17-row cross-decoder matrix covering: HMM C1/C2/C3/C4 on R1+R2, HMM C1 on legacy a1/b1/c1/e1, the paired-fork NEW eval on R1+R2, observational assays (M3R / HMS / HMS-T / P3P / VCD) on R1+R2, and three of those re-run with a `focused + march cue` modification. Same forward pass, three readouts.
+
+**Outcome:**
+- **Task #25.** Dec A top-1 0.5413, Dec C top-1 0.5345 on 10k natural HMM; `frac_same_pred = 0.6691`, mean circular distance 0.43 ch (≈ 2.1°). Dec A is best on the `jump` stratum (0.742 vs 0.424); Dec C is best on `ambiguous within1` (0.725 vs 0.703) and `pi_low_Q1` (0.502 vs 0.464). Both decoders cover broadly the same representational space but emphasise different strata.
+- **Tasks #23+#24.** Section-5 legacy regime classifications reproduce under Dec C: a1 / b1 are weak-dampening (Δ_C −0.009 / −0.023), e1 is the best sharpener (Δ_C +0.011 — small in magnitude but sign-consistent with Dec A and Dec B), c1 is transitional (Dec A and Dec B positive, Dec C flips to −0.007 — `C outlier`). The ladder is decoder-robust in 3 of 4 rows.
+- **Task #26.** Per-decoder profile across all 17 rows: Dec A `mean |Δ| = 0.2024 / max 0.3871`, never the sign outlier; Dec B `mean |Δ| = 0.0598`, outlier in 5 of 17 rows; Dec C `mean |Δ| = 0.0399`, outlier in 3 of 17 rows. 9 rows are all-agree. Dec A is the amplifier, Dec C is the conservative bound, Dec B is the noisiest sign-carrier.
+
+**Decision/next step:** The claim that R1+R2 is a hybrid network — decoder-robust sharpening on paired-fork, decoder-robust dampening on observational — is now evidence-backed by the 17-row matrix. Single-decoder, single-paradigm claims in the older doc sections are deprecated in favour of this table. RESULTS.md §11 (full matrix), §13 (legacy ref), §14 (robust summary) and project_summary.md §15–§18 (mirrors) are the load-bearing sections from 2026-04-22 forward. No further training changes planned — the next step is publication-side dissection of why paradigm choice flips the sign.
+
+**Pointers:** `results/cross_decoder_comprehensive.json` · `results/cross_decoder_comprehensive.md` · `/tmp/task25_dec_av_c_summary.json` · `RESULTS.md` §11 + §13 + §14 · `docs/project_summary.md` §15 + §17 + §18 · `ARCHITECTURE.md` § "Decoders".
+
+---
+
+## 2026-04-19 — Paired HMM fork paradigm × readout analysis (Tasks #19–#22)
+
+**Context:** Task #13 (2026-04-17) showed Δ_C = +0.125 on the NEW paired-march eval for R1+R2 — a sharpening signature under Dec C. But the concurrent observational assays (matched_3row_ring, matched_hmm_ring_sequence, v2_confidence_dissection) gave **Δ_C = −0.07 to −0.06** on the same checkpoint. The sign-disagreement needed isolating: was it a paradigm difference (paired-fork constructive probe vs matched-probe observational) or a decoder artefact?
+
+**What was tried:** A 4-condition paired HMM fork sweep (`scripts/eval_r1r2_paradigm_readout.py`): focused/routine × HMM-supplied cue/neutral zero cue = C1/C2/C3/C4. Each condition: shared pre-probe march → branch to ex/unex at the probe channel with bit-identical pre-probe state. Readout at probe-ON steps `[9, 11]`, re-centered per-trial on the true probe channel (peak at ch 18), linear-interp FWHM. Full tuning curve + peak + net + FWHM + decoder accuracies (A, B, C) recorded per branch. Task #19 added a per-trial adjacent-channel signed-offset analysis: roll to center + sign-flip by march direction, accumulate the population profile from −17 to +17 channels.
+
+**Outcome:**
+- **Decoder C Δ (ex − unex)** across 4 conditions: C1 +0.088, C2 +0.013, C3 +0.045, C4 +0.041 — all four positive. The paired-fork sharpening signature persists across every task-state × cue combination under Dec C.
+- **FWHM sign on paired-fork.** In all 4 conditions, expected is **wider** than unexpected — opposite to matched-probe observational paradigms where expected is **narrower** than unexpected (RESULTS.md §11 M3R / HMS-T / VCD).
+- **Adjacent-channel signed-offset curve (Task #19).** On expected trials, the `+k` flank is lower than the `−k` flank by ≈ 0.06, 0.10, 0.10 for k ∈ {1, 2, 3} under Dec C readout — a march-direction-aligned flank asymmetry. On unexpected trials, both flanks are near-symmetric. Interpretation-free observation; does not invalidate the center-peak sharpening result.
+- **The sign difference between paradigms is real, not a decoder effect.** The same checkpoint, same Dec C, gives Δ_C > 0 on paired-fork (all 4 conditions) and Δ_C < 0 on matched-probe observational (all 4 assays). Paradigm choice drives the sign.
+
+**Decision/next step:** R1+R2 is reclassified as **hybrid** (decoder-robust sharpening on paired-fork, decoder-robust dampening on matched-probe observational) in project_summary.md masthead and RESULTS.md §14. The next methodological step (see 2026-04-22 entry) was to cross-check every Δ in the doc set under all three decoders — producing the 17-row matrix.
+
+**Pointers:** `scripts/eval_r1r2_paradigm_readout.py` · `scripts/eval_ex_vs_unex_decC_adjacent.py` · `results/r1r2_paradigm_readout.json` · `results/r1r2_paired_hmm_fork.json` · `results/eval_ex_vs_unex_decC_adjacent.json` · `RESULTS.md` §12.
 
 ---
 

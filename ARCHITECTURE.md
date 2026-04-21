@@ -168,22 +168,58 @@ correcting the earlier "subtractive predictive coding" interpretation.
 ## Decoders (orientation readout from L2/3)
 
 Three orientation decoders exist in this project. Only Decoder A is part of
-the trained network; B and C are post-hoc analysis tools.
+the trained network; B and C are post-hoc analysis tools. All three are
+applied to the same per-trial `r_l23` (single forward pass, three readouts)
+whenever cross-decoder evaluation is performed.
 
-| Decoder | Type | Training data | Where used |
-|---|---|---|---|
-| **A** | `Linear(36, 36)` saved with each Stage-1 checkpoint, frozen in Stage 2. | The natural HMM-march distribution that Stage 1 trains on (real `r_l23` activations during training). | Original sensory loss head; default decoder for representation analyses through 2026-04-13. |
-| **B** | 5-fold nearest-centroid CV, computed on demand per analysis. | The same `r_l23` activations being analysed (no separate training). | Decoder-template robustness check. |
-| **C** | Standalone `Linear(36, 36)` with bias. | 100k synthetic orientation-bump patterns (50k single-orientation σ=3 ch, amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02). Trained with Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. Saved at `checkpoints/decoder_c.pt`. | **Preferred decoder for expectation-suppression analyses on the `dampening-analysis` branch (set 2026-04-17).** |
+### Full taxonomy (updated 2026-04-22 from Tasks #15–#26)
 
-**Decoder A artefact (2026-04-17).** On R1+R2, the matched-probe-3pass
-Δdec(ex−unex)=+0.32 measured under Decoder A collapses to Δ≈+0.04 (within
-per-fold noise) under Decoder B. Root cause: Decoder A's fixed templates,
-trained on the natural-march distribution, are out-of-distribution for the
-synthetic Pass B compound bumps. Network_mm / Network_both / HMM
-Expected-vs-Unexpected numbers that used Decoder A are decoder-dependent
-and should be re-checked under Decoder C before publication.
+| Decoder | Type | Training data | Samples | Sees unexpected in training? | 10k natural-HMM top-1 (R1+R2) | Stratified strengths |
+|---|---|---|---|---|---|---|
+| **A** | `Linear(36, 36)` saved with each Stage-1 checkpoint, frozen in Stage 2. | Natural HMM-march `r_l23` activations during Stage-1 training. | All Stage-1 training trials. | **Yes** — natural march already includes jumps/unexpected transitions at the task-state switching rate. | **0.5413** | Best on `jump` stratum (top-1 0.742 vs decC 0.424); best overall `within3` on non-ambiguous trials; weaker than decC on `pi_low_Q1` (0.464 vs 0.502). |
+| **B** | 5-fold nearest-centroid CV, computed on demand per analysis. | The same `r_l23` activations being analysed (no separate training). | Varies per-assay (set under evaluation). | Inherits exposure from the assay itself (sees whatever trials the analysis contains). | — (not applicable — CV over analysis set) | Robustness control; flips sign in 5 of 17 cross-decoder rows, so not a safe stand-alone reference. |
+| **C** | Standalone `Linear(36, 36)` with bias. | 100k synthetic orientation-bump patterns (50k single-orientation σ=3 ch, amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02). Trained Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. Saved at `checkpoints/decoder_c.pt`. | 100k synthetic. | **No** — trained on clean synthetic bumps only; never sees network `r_l23` or HMM-march context. | **0.5345** | Best on `ambiguous within1` (0.725 vs decA 0.703); best on `pi_low_Q1` (0.502 vs decA 0.464); weaker on `jump` (0.424 vs decA 0.742); best `top1` on `march_smooth` (0.552 vs decA 0.510). |
 
-**Decoder C accuracy.** Held-out synthetic test 0.81 (single 0.98 / multi
-0.65). Real-network natural-HMM R1+R2 0.66 (non-ambiguous trials) / 0.53
-(all trials).
+Agreement between Dec A and Dec C on the 10k natural HMM stream:
+`frac_same_pred = 0.6691`, mean circular distance 0.43 channels (≈ 2.1°).
+Both decoders are at chance ≈ 0.028 on random orientations. Source:
+`/tmp/task25_dec_av_c_summary.json` (Task #25; 10 000 trials, seed 42,
+readout window `t∈[9,11]`).
+
+### Cross-decoder bias flags (from Task #26, 17-row matrix)
+
+Measured on `results/cross_decoder_comprehensive.json` (17 ex/unex
+comparisons spanning HMM C1–C4, legacy a1/b1/c1/e1, paired-fork, and four
+observational assays M3R / HMS / HMS-T / P3P / VCD on R1+R2):
+
+- **Dec A:** `mean |Δ| = 0.2024`, `max |Δ| = 0.3871`; never the single
+  sign-outlier. Always aligns with the row majority — but largest Δ of the
+  three decoders in every row, which means A consistently amplifies
+  whatever effect is present.
+- **Dec B:** `mean |Δ| = 0.0598`, `max |Δ| = 0.1818`; outlier in **5 of 17
+  rows** (HMM C2 / C3 / C4 on R1+R2, a1 legacy, P3P on R1+R2). B is the
+  noisiest sign-carrier.
+- **Dec C:** `mean |Δ| = 0.0399`, `max |Δ| = 0.1254`; outlier in **3 of 17
+  rows** (c1 legacy, HMS on R1+R2, HMS-T with focused+march cue on R1+R2).
+  Smallest-magnitude Δ in most rows, consistent with "untrained-on-network,
+  no march exposure."
+
+All three decoders agree on sign in 9 of 17 rows. See RESULTS.md §11 for
+the full matrix.
+
+### Decoder A artefact (carried over from 2026-04-17)
+
+On R1+R2, the matched-probe-3pass Δdec(ex−unex)=+0.32 measured under
+Decoder A collapses to Δ≈+0.04 (within per-fold noise) under Decoder B.
+Root cause: Decoder A's fixed templates, trained on the natural-march
+distribution, are out-of-distribution for the synthetic Pass B compound
+bumps. Network_mm / Network_both / HMM Expected-vs-Unexpected numbers that
+used Decoder A are decoder-dependent and should be re-checked under
+Decoder C before publication.
+
+### Decoder C accuracy summary
+
+- Held-out synthetic test: 0.81 (single-orientation 0.98 / multi-orientation
+  0.65).
+- R1+R2 natural-HMM (10k, Task #25): **0.5345 top-1 / 0.896 within1 /
+  0.956 within2**; 0.66 top-1 on the non-ambiguous slice (7040 trials).

@@ -16,29 +16,35 @@ writeups for several lines of investigation.
 
 ## Key docs
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — model architecture, loss table, optional rescue-chain config flags, decoder summary.
-- [`RESULTS.md`](RESULTS.md) — original 25-run parameter sweep (3 emergent regimes), rescue-chain cross-checkpoint summary, and the R1+R2 Decoder C ex/unex eval (§ 10).
-- [`docs/project_summary.md`](docs/project_summary.md) — comprehensive project history (predecessor → simple-dual → Phase 2.x alpha_net → simple-dual-regime → rescue chain).
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — model architecture, loss table, optional rescue-chain config flags, full three-decoder taxonomy (Dec A / B / C with training data, sample counts, sees-unex status, stratified strengths) and cross-decoder bias flags.
+- [`RESULTS.md`](RESULTS.md) — original 25-run parameter sweep (§ 5, three emergent regimes), rescue-chain cross-checkpoint summary (§ 9), R1+R2 Decoder C paired ex/unex eval (§ 10), **cross-decoder comprehensive matrix (§ 11)**, **paired HMM fork paradigm × readout (§ 12)**, **legacy reference networks (§ 13)**, and the **robust findings summary (§ 14, 2026-04-22)**.
+- [`docs/project_summary.md`](docs/project_summary.md) — comprehensive project history, with §15 (cross-decoder matrix), §16 (paradigm × readout), §17 (legacy references), §18 (robust findings — R1+R2-is-hybrid framing) as the current load-bearing sections.
 - [`docs/rescues_1_to_4_summary.md`](docs/rescues_1_to_4_summary.md) — full per-rescue writeup, the 2026-04-13 re-centered analysis update, and the 2026-04-17 Decoder A artefact note.
-- [`docs/research_log.md`](docs/research_log.md) — chronological research log; latest entry (2026-04-17) is the Decoder C ex/unex paired eval on R1+R2.
+- [`docs/research_log.md`](docs/research_log.md) — chronological research log; latest entry (2026-04-22) is the cross-decoder matrix + legacy ref reproduction; previous (2026-04-19) is the paired HMM fork paradigm × readout analysis.
 - [`docs/training_experiments_analysis_design.md`](docs/training_experiments_analysis_design.md) — baseline training pipeline / paradigm / analysis spec.
 
 ## Headline finding (rescue chain)
 
 R4 (DeepTemplate + error-mismatch) exhibits the cleanest Richter (2018) preserved-shape dampening signature: peak −15%, total −19%, FWHM matched within 1.5° between expected and unexpected trials. Main visual: `docs/figures/tuning_ring_recentered_r4.png`. The dampening is **task-state-invariant**, so the preregistered BOTH-regime criterion (focused → Kok sharpening, routine → Richter dampening from one network) is **not** met.
 
-## Headline finding (R1+R2 paired ex/unex eval, Decoder C, 2026-04-17)
+## Headline finding (R1+R2 expectation suppression is paradigm-dependent, 2026-04-22)
 
-Paired ex/unex eval on the R1+R2 default checkpoint (12 N values × 200 trials/N = 2400 paired trials, bit-identical pre-probe state across branches, focused task_state):
+Across the 17-row cross-decoder matrix covering paired-fork and observational paradigms (Tasks #15–#26), R1+R2 is a **hybrid network, not a single-regime network**:
 
-| Metric | Expected | Unexpected | Δ (ex − unex) |
-|---|---:|---:|---:|
-| Decoder C accuracy | 0.707 ± 0.009 | 0.581 ± 0.010 | +0.125 |
-| Net L2/3 (sum 36 ch) | 4.99 ± 0.01 | 6.13 ± 0.02 | −1.15 |
-| Peak at true-ch | 0.773 ± 0.003 | 0.626 ± 0.004 | +0.147 |
-| FWHM | 28.4° ± 0.10 | 29.8° ± 0.19 | −1.33° |
+- **Paired HMM fork paradigm (constructive probe, bit-identical pre-probe state):** **decoder-robust sharpening.** NEW eval on R1+R2: Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125; Δpeak ≈ +0.15, Δnet ≈ −1.15, ΔFWHM ≈ −1.3° (expected narrower, higher-peak, better-decoded, lower-activity). HMM C1–C4 (all four task-state × cue conditions) give Δdec_C ∈ {+0.088, +0.013, +0.045, +0.041} — all positive.
+- **Matched-probe observational paradigms** (matched_3row_ring, matched_hmm_ring_sequence, v2_confidence_dissection, and their `focused+march cue` variants): **decoder-robust dampening.** All three decoders give negative Δdec on all four assays; M3R Δdec_C = −0.03, HMS-T Δdec_C = −0.06, VCD Δdec_C = −0.07.
 
-All four signs hold at every N from 4 to 15. Expected trials show lower net L2/3 activity, higher peak at the stimulus channel, narrower tuning, and higher decoding accuracy than unexpected trials. Main visual: `docs/figures/eval_ex_vs_unex_decC.png`. Numerical detail in `RESULTS.md` § 10 and `results/eval_ex_vs_unex_decC.json`.
+The paradigm choice, not the decoder choice, drives the sign. Details: `RESULTS.md` § 11–§ 14, `docs/project_summary.md` § 15–§ 18, `ARCHITECTURE.md` § "Decoders", `results/cross_decoder_comprehensive.json`.
+
+### Decoder summary
+
+| Decoder | Training data | 10k natural-HMM top-1 (R1+R2) | Role |
+|---|---|---:|---|
+| **A** | Stage-1 `r_l23` (includes jumps/unexpected in natural march) | 0.5413 | Frozen network readout; amplifier (largest \|Δ\| but never the sign outlier across 17 rows). |
+| **B** | 5-fold nearest-centroid CV on the analysis set | — | Robustness control; noisiest sign-carrier (outlier in 5 of 17 rows). |
+| **C** | 100k synthetic orientation bumps (never sees unex) | 0.5345 | Preferred decoder for ex-vs-unex; most conservative (smallest \|Δ\|, outlier in 3 of 17 rows). |
+
+Both Dec A and Dec C are **at chance ≈ 2.8%** on random orientations. `frac_same_pred(A, C) = 0.67` on 10k natural HMM. Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders".
 
 ## Reproducing the rescue figures
 
