@@ -32,7 +32,7 @@ R4 (DeepTemplate + error-mismatch) exhibits the cleanest Richter (2018) preserve
 Across the 17-row cross-decoder matrix covering paired-fork and observational paradigms (Tasks #15–#26), R1+R2 is a **hybrid network, not a single-regime network**:
 
 - **Paired HMM fork paradigm (constructive probe, bit-identical pre-probe state):** **decoder-robust sharpening.** NEW eval on R1+R2: Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125; Δpeak ≈ +0.15, Δnet ≈ −1.15, ΔFWHM ≈ −1.3° (expected narrower, higher-peak, better-decoded, lower-activity). HMM C1–C4 (all four task-state × cue conditions) give Δdec_C ∈ {+0.088, +0.013, +0.045, +0.041} — all positive.
-- **Matched-probe observational paradigms** (matched_3row_ring, matched_hmm_ring_sequence, v2_confidence_dissection, and their `focused+march cue` variants): **decoder-robust dampening.** All three decoders give negative Δdec on all four assays; M3R Δdec_C = −0.03, HMS-T Δdec_C = −0.06, VCD Δdec_C = −0.07.
+- **Matched-probe observational paradigms** — specifically M3R (`matched_3row_ring`), HMS-T (`matched_hmm_ring_sequence --tight-expected`), VCD (`v2_confidence_dissection`), plus the M3R and VCD `focused + march cue` variants: **decoder-robust dampening.** All three decoders give negative Δdec on these 5 rows; M3R Δdec_C = −0.029, HMS-T Δdec_C = −0.063, VCD Δdec_C = −0.070. The plain HMS variant (`matched_hmm_ring_sequence` without `--tight-expected`, row 11) and HMS-T modified (row 16) are NOT decoder-robust — Dec C flips positive on both — so they are excluded from this list.
 
 The paradigm choice, not the decoder choice, drives the sign. Details: `RESULTS.md` § 11–§ 14, `docs/project_summary.md` § 15–§ 18, `ARCHITECTURE.md` § "Decoders", `results/cross_decoder_comprehensive.json`.
 
@@ -44,7 +44,7 @@ The paradigm choice, not the decoder choice, drives the sign. Details: `RESULTS.
 | **B** | 5-fold nearest-centroid CV on the analysis set | — | Robustness control; noisiest sign-carrier (outlier in 5 of 17 rows). |
 | **C** | 100k synthetic orientation bumps (never sees unex) | 0.5345 | Preferred decoder for ex-vs-unex; most conservative (smallest \|Δ\|, outlier in 3 of 17 rows). |
 
-Both Dec A and Dec C are **at chance ≈ 2.8%** on random orientations. `frac_same_pred(A, C) = 0.67` on 10k natural HMM. Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders".
+**Chance baseline = 1/36 ≈ 2.8%** for 36-way orientation classification. Dec A (top-1 = 0.5413) and Dec C (top-1 = 0.5345) on the 10k natural HMM stream are both ≈ **19× above chance**, well above random performance. `frac_same_pred(A, C) = 0.67` on the same 10k stream. Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders".
 
 ## Reproducing the rescue figures
 

@@ -477,12 +477,14 @@ outlier in 5/17 rows. No row has Decoder A as outlier.
 | 15 | M3R modified | R1+R2 | −0.1373 | −0.0336 | −0.0176 | − |
 | 17 | VCD-test3 modified | R1+R2 | −0.0840 | −0.0264 | −0.0130 | − |
 
-On R1+R2, the **NEW paired-march** assay (row 9) is the only decoder-robust
-**sharpening** row on R1+R2 in the 17-row set. **HMM C1 (focused + HMM cue)
-on R1+R2** (row 1) is also decoder-robust sharpening on the paired-fork
-paradigm. The observational HMM-trajectory assays (M3R / HMS-T / VCD and
-their modified variants: rows 10, 12, 14, 15, 17) are decoder-robust
-**dampening** on the same R1+R2 checkpoint.
+On R1+R2, **two assays are decoder-robust sharpening** (Δ > 0 on all three
+decoders): row 1 (HMM C1, focused + HMM cue) and row 9 (NEW paired march).
+On the same R1+R2 checkpoint, **five assays are decoder-robust dampening**
+(Δ < 0 on all three decoders): rows 10 (M3R), 12 (HMS-T), 14 (VCD), 15
+(M3R modified), and 17 (VCD modified). Note that row 11 (plain HMS) and
+row 16 (HMS-T modified) are NOT decoder-robust — Dec C flips positive on
+both — so they are not in the dampening list. The legacy reference rows
+(6: b1 dampening; 8: e1 sharpening) are described in § 13.
 
 ### Reproducibility
 
@@ -589,8 +591,13 @@ unex(+k) − unex(−k) (same convention):
 Expected branch shows systematic flank asymmetry: the leading flank (ahead in
 march direction, positive offsets) is suppressed relative to the trailing
 flank (negative offsets) by 0.06–0.10. Unexpected branch is symmetric within
-SEM. The ex-branch asymmetry is consistent with V2 feedback subtracting the
-ahead-in-march (predicted-next) orientation from L2/3 on expected trials.
+SEM. **UNTESTED MECHANISM HYPOTHESIS** (no isolating experiment yet): the
+ex-branch asymmetry could be consistent with V2 feedback subtracting the
+ahead-in-march (predicted-next) orientation from L2/3 on expected trials,
+but this has not been confirmed by ablating feedback or by direct
+inspection of feedback weights against the asymmetry pattern. The
+observation itself — the asymmetry — is empirical; the feedback-subtraction
+explanation is a candidate hypothesis only.
 
 ### Reproducibility
 
@@ -619,18 +626,20 @@ trials per network.
 
 | Network | n_ex | n_unex | Δ_A | Δ_B | Δ_C | decoder-robust? |
 |---|---:|---:|---:|---:|---:|---|
-| a1 | 1000 | 1000 | −0.0220 | +0.0000 | −0.0090 | A and C both <0, B = 0.0 (no net shift) |
-| b1 | 1000 | 1000 | −0.0320 | −0.0150 | −0.0230 | **All three < 0 (dampening)** |
-| c1 | 1000 | 1000 | +0.1870 | +0.0370 | −0.0070 | A and B > 0, C slightly < 0 — mixed |
-| e1 | 1000 | 1000 | +0.2130 | +0.0510 | +0.0110 | **All three > 0 (sharpening)** |
+| a1 | 1000 | 1000 | −0.0220 | +0.0000 | −0.0090 | **B outlier** (B = 0.0; A and C both < 0) — matches § 11 row 5 |
+| b1 | 1000 | 1000 | −0.0320 | −0.0150 | −0.0230 | **All three < 0 (decoder-robust dampening)** |
+| c1 | 1000 | 1000 | +0.1870 | +0.0370 | −0.0070 | **C outlier** — A and B > 0, C slightly < 0 |
+| e1 | 1000 | 1000 | +0.2130 | +0.0510 | +0.0110 | **All three > 0 (decoder-robust sharpening)** |
 
-Legacy dampening configs (a1, b1) give Δ < 0 under the paired-fork readout
+Legacy dampening configs (a1, b1) give Δ ≤ 0 under the paired-fork readout
 (b1 is decoder-robust dampening on all three decoders; a1 has B = 0.0 but A
-and C both < 0). Legacy sharpening config e1 gives decoder-robust Δ > 0. c1
-(near-unity, on the § 1 transition boundary) is mixed — A/B positive but C
-slightly negative. The loss-weight regime boundary from § 5 carries over to
-the paired-fork ex/unex readout, validating that "sharpening" vs "dampening"
-in the 25-run sweep aligns with the modern three-decoder sign of Δ.
+and C both < 0 — a1 is therefore not strictly decoder-robust under the
+all-three-agree definition, but A and C agree). Legacy sharpening config
+e1 gives decoder-robust Δ > 0. c1 (near-unity, on the § 1 transition
+boundary) is mixed — A/B positive but C slightly negative. The loss-weight
+regime classification from § 5 carries over to the paired-fork ex/unex
+readout under Dec A and Dec C in 3 of 4 rows (a1, b1, e1); only c1 has
+A vs C disagreement.
 
 R1+R2 on the same HMM C1 assay (row 1 of § 11) sits on the **sharpening**
 side of this legacy axis: Δ_A = +0.309, Δ_B = +0.015, Δ_C = +0.050 (all ≥ 0).

@@ -182,7 +182,10 @@ whenever cross-decoder evaluation is performed.
 
 Agreement between Dec A and Dec C on the 10k natural HMM stream:
 `frac_same_pred = 0.6691`, mean circular distance 0.43 channels (≈ 2.1°).
-Both decoders are at chance ≈ 0.028 on random orientations. Source:
+**Chance baseline = 1/36 ≈ 0.028** for 36-way orientation classification;
+both decoders (top-1 0.5413 and 0.5345) operate ≈ 19× above chance —
+they are NOT at chance, they are well-trained classifiers whose
+predictions agree on 67% of trials. Source:
 `/tmp/task25_dec_av_c_summary.json` (Task #25; 10 000 trials, seed 42,
 readout window `t∈[9,11]`).
 
@@ -207,15 +210,32 @@ observational assays M3R / HMS / HMS-T / P3P / VCD on R1+R2):
 All three decoders agree on sign in 9 of 17 rows. See RESULTS.md §11 for
 the full matrix.
 
-### Decoder A artefact (carried over from 2026-04-17)
+### Decoder magnitude amplification (originally framed as "Decoder A artefact" 2026-04-17; re-evaluated 2026-04-22 under Task #26)
 
-On R1+R2, the matched-probe-3pass Δdec(ex−unex)=+0.32 measured under
-Decoder A collapses to Δ≈+0.04 (within per-fold noise) under Decoder B.
-Root cause: Decoder A's fixed templates, trained on the natural-march
-distribution, are out-of-distribution for the synthetic Pass B compound
-bumps. Network_mm / Network_both / HMM Expected-vs-Unexpected numbers that
-used Decoder A are decoder-dependent and should be re-checked under
-Decoder C before publication.
+**Original 2026-04-17 framing.** On R1+R2, the matched-probe-3pass
+Δdec(ex−unex)=+0.32 measured under Decoder A collapsed to Δ≈+0.04 under
+Decoder B (5-fold nearest-centroid CV). The original interpretation was
+that Decoder A's fixed templates, trained on the natural-march
+distribution, were out-of-distribution for the synthetic Pass B compound
+bumps used in matched-probe-3pass — and that A's number was therefore
+artefactual.
+
+**Task #26 update (2026-04-22).** The cross-decoder matrix
+(`results/cross_decoder_comprehensive.json`, row 13: P3P on R1+R2) measured
+the full three-decoder profile on the same matched-probe-3pass evaluation:
+**Δ_A = +0.3684, Δ_B = −0.1714, Δ_C = +0.0526** (n_ex = n_unex = 38).
+Decoders A and C agree on sign (positive); Decoder B is the single
+sign-outlier. Across the full 17-row matrix, Dec A is the largest-magnitude
+Δ in every row (mean |Δ| = 0.20, vs B mean = 0.06, C mean = 0.04) but is
+**never the sign-outlier** — A consistently amplifies whatever effect is
+present, rather than producing artefactual sign-flips.
+
+**Current operational rule.** Treat Dec A as the magnitude-amplifying
+readout (largest |Δ|) and Dec C as the conservative sign-only check
+(smallest |Δ|). Dec B has the highest sign-outlier rate (5 of 17 rows) and
+should not be used as a stand-alone reference. Cross-decoder sign
+agreement (the all-agree rows; 9 of 17 in the current matrix) is the
+operational definition of a "decoder-robust" finding on this branch.
 
 ### Decoder C accuracy summary
 
