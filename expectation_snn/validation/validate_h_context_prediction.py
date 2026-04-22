@@ -74,11 +74,16 @@ Contract
         run spanning all three onsets (each update logged in the
         provided list).
 
-  [12] namespace_and_imports_are_stable
+  [12] pred_uniform_bias_and_config_roundtrip
+        `pred_e_uniform_bias_pA` defaults to 0 for backward compatibility;
+        a nonzero config writes uniform, label-blind H_prediction E
+        `I_bias`; JSON config roundtrip preserves drive and bias.
+
+  [13] namespace_and_imports_are_stable
         Public API: `HContextPredictionConfig`, `HContextPrediction`,
         `build_h_context_prediction`, `set_direction`,
         `silence_direction`, `apply_modulatory_update`,
-        `make_modulatory_gate_operation`.
+        `make_modulatory_gate_operation`, and config JSON helpers.
 
 NOTE: the primary Sprint 5e-Fix go/no-go (post-training
 ``P(argmax H_pred == expected_trailer) ≥ 0.7``) is deferred to the
@@ -100,7 +105,7 @@ if str(_pkg_root) not in sys.path:
     sys.path.insert(0, str(_pkg_root))
 
 # Brian2 is expensive to import — do it once up-front.
-from brian2 import Hz, Network, defaultclock, ms, start_scope
+from brian2 import Hz, Network, defaultclock, ms, pA, start_scope
 
 from expectation_snn.brian2_model.h_context_prediction import (
     DEFAULT_N_DIRECTION_AFFERENTS,
@@ -109,11 +114,14 @@ from expectation_snn.brian2_model.h_context_prediction import (
     HContextPredictionConfig,
     apply_modulatory_update,
     build_h_context_prediction,
+    h_context_prediction_config_from_json,
+    h_context_prediction_config_to_json,
     make_modulatory_gate_operation,
     set_direction,
     silence_direction,
 )
 from expectation_snn.brian2_model.h_ring import (
+    HRingConfig,
     N_CHANNELS as H_N_CHANNELS,
     N_E_PER_CHANNEL as H_N_E_PER,
     pulse_channel,
@@ -465,14 +473,55 @@ def assay_modulatory_gate_operation_fires_once_per_trailer() -> None:
     # Each entry must be a dict from apply_modulatory_update.
     for entry in log:
         assert {"w_mean_before", "w_mean_after",
-                "n_capped"}.issubset(entry.keys()), (
+                "n_capped", "k", "t_ms"}.issubset(entry.keys()), (
             f"log entry missing expected keys: {entry.keys()}"
         )
-    print(f"    3 onsets → {len(log)} updates  PASS")
+    gate_t = np.asarray([entry["t_ms"] for entry in log], dtype=np.float64)
+    delta = gate_t - np.asarray(trailer_onsets, dtype=np.float64)
+    assert np.all(delta >= -1e-9), (
+        f"M-gate fired before trailer onset: deltas={delta}"
+    )
+    assert np.all(delta <= bundle.config.m_window_ms + 1e-9), (
+        f"M-gate fired outside post-onset window: deltas={delta}"
+    )
+    print(f"    3 onsets → {len(log)} updates; "
+          f"delta_ms={delta.tolist()}  PASS")
+
+
+def assay_pred_uniform_bias_and_config_roundtrip() -> None:
+    print("[12] pred_uniform_bias_and_config_roundtrip")
+    start_scope()
+    defaultclock.dt = 0.1 * ms
+    cfg = HContextPredictionConfig(
+        ctx_cfg=HRingConfig(inh_rho_hz=12.0),
+        pred_cfg=HRingConfig(w_inh_e_init=1.0, inh_w_max=3.0),
+        drive_amp_ctx_pred_pA=400.0,
+        pred_e_uniform_bias_pA=100.0,
+    )
+    bundle = build_h_context_prediction(
+        config=cfg, rng=np.random.default_rng(SEED),
+    )
+    pred_bias = np.asarray(bundle.pred.e.I_bias / pA, dtype=np.float64)
+    assert pred_bias.shape == (N_E_EXPECTED,)
+    assert np.allclose(pred_bias, 100.0), (
+        f"H_prediction I_bias should be uniformly 100 pA, got "
+        f"[{pred_bias.min():.3f}, {pred_bias.max():.3f}]"
+    )
+
+    payload = h_context_prediction_config_to_json(cfg)
+    restored = h_context_prediction_config_from_json(payload)
+    assert restored.drive_amp_ctx_pred_pA == 400.0
+    assert restored.pred_e_uniform_bias_pA == 100.0
+    assert restored.ctx_cfg is not None
+    assert restored.pred_cfg is not None
+    assert restored.ctx_cfg.inh_rho_hz == 12.0
+    assert restored.pred_cfg.w_inh_e_init == 1.0
+    assert restored.pred_cfg.inh_w_max == 3.0
+    print("    uniform pred I_bias + JSON config roundtrip preserve drive/bias  PASS")
 
 
 def assay_namespace_and_imports_are_stable() -> None:
-    print("[12] namespace_and_imports_are_stable")
+    print("[13] namespace_and_imports_are_stable")
     from expectation_snn.brian2_model import h_context_prediction as mod
     required = [
         "HContextPredictionConfig",
@@ -482,6 +531,8 @@ def assay_namespace_and_imports_are_stable() -> None:
         "silence_direction",
         "apply_modulatory_update",
         "make_modulatory_gate_operation",
+        "h_context_prediction_config_to_json",
+        "h_context_prediction_config_from_json",
     ]
     for name in required:
         assert hasattr(mod, name), f"public API missing: {name}"
@@ -492,14 +543,15 @@ def assay_namespace_and_imports_are_stable() -> None:
     assert cfg.gamma == 1e-4
     assert cfg.w_max == 1.0
     assert cfg.w_row_max == 3.0
-    assert cfg.w_init_frac == 0.05
-    # Researcher Fix C spec: W_target = 0.05 * w_max (soft-decay to
-    # the init-uniform mean, Vogels 2011 iSTDP precedent).
-    assert cfg.w_target == 0.05, (
-        f"w_target should be 0.05 (= w_init_frac · w_max), got {cfg.w_target}"
+    assert cfg.w_init_frac == 0.015
+    assert cfg.pred_e_uniform_bias_pA == 0.0
+    # Sprint 5e attempt #4: W_target matches the post-fix init-uniform mean
+    # to avoid a uniform up-pump into the row cap.
+    assert cfg.w_target == 0.0075, (
+        f"w_target should be 0.0075 (= init mean), got {cfg.w_target}"
     )
-    assert cfg.tau_coinc_ms == 20.0, (
-        f"tau_coinc_ms should be 20 (fast pre/post filter), got {cfg.tau_coinc_ms}"
+    assert cfg.tau_coinc_ms == 500.0, (
+        f"tau_coinc_ms should be 500 (leader->trailer bridge), got {cfg.tau_coinc_ms}"
     )
     assert cfg.m_window_ms == 75.0, (
         f"m_window_ms should be 75 (Yagishita 2014), got {cfg.m_window_ms}"
@@ -522,6 +574,7 @@ def main() -> int:
         assay_row_cap_rescales_offending_rows,
         assay_direction_CW_CCW_silence,
         assay_modulatory_gate_operation_fires_once_per_trailer,
+        assay_pred_uniform_bias_and_config_roundtrip,
         assay_namespace_and_imports_are_stable,
     ]
     failed = []

@@ -48,9 +48,9 @@ Per-synapse eligibility:
     on_pre  :   I_e_post += w * drive_amp ; xpre += 1 ; elig += xpost
     on_post :   xpost += 1 ;                              elig += xpre
 
-Weight update, applied as a NetworkOperation at each trailer onset
-(M(t) window = ±75 ms around trailer onset — cholinergic /
-dopaminergic learning gate, Yagishita 2014):
+    Weight update, applied once at trailer onset as a NetworkOperation
+    (M(t) integral covers the intended ±75 ms teaching pulse around trailer
+    onset — cholinergic / dopaminergic learning gate, Yagishita 2014):
 
     w += eta * elig * M_integral  -  gamma * (w - w_target) * dt_trial
     w  = clip(w, 0, w_max)
@@ -71,8 +71,9 @@ References
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Sequence, Tuple
+import json
+from dataclasses import dataclass, field, fields
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from brian2 import (
@@ -145,6 +146,7 @@ DEFAULT_W_INIT_FRAC = 0.015           # uniform(0, w_init_frac * w_max).
 DEFAULT_M_WINDOW_MS = 75.0            # half-width of M(t) pulse around
                                       # each trailer onset.
 DEFAULT_M_AMPLITUDE = 1.0             # amplitude of M(t) inside the window.
+H_CONTEXT_PREDICTION_CONFIG_SCHEMA_VERSION = 1
 
 
 # -- config -----------------------------------------------------------------
@@ -166,6 +168,10 @@ class HContextPredictionConfig:
         H_ctx → H_pred spike. Sized so a single pre spike delivers a
         sub-threshold EPSP at w = 1.0; the learned weight scales up
         from small init values.
+    pred_e_uniform_bias_pA : float
+        Uniform, label-blind excitability bias for H_prediction E cells.
+        This changes tonic responsiveness but carries no orientation or
+        transition content.
     tau_coinc_ms : float
         Fast coincidence-trace time constant (pre/post window).
     tau_elig_ms : float
@@ -208,6 +214,7 @@ class HContextPredictionConfig:
 
     # H_ctx -> H_pred learned transform
     drive_amp_ctx_pred_pA: float = 25.0
+    pred_e_uniform_bias_pA: float = 0.0
     tau_coinc_ms: float = DEFAULT_TAU_COINC_MS
     tau_elig_ms: float = DEFAULT_TAU_ELIG_MS
     eta: float = DEFAULT_ETA
@@ -223,6 +230,104 @@ class HContextPredictionConfig:
     n_direction_afferents: int = DEFAULT_N_DIRECTION_AFFERENTS
     drive_amp_dir_pA: float = 16.0    # ≈ 0.2 × V1→H (80 pA)
     w_dir_init: float = 0.5
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-serializable equivalent for scalar config values."""
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    return value
+
+
+def _hring_config_to_dict(cfg: Optional[HRingConfig]) -> Optional[dict]:
+    """Serialize an optional :class:`HRingConfig` into JSON-safe scalars."""
+    if cfg is None:
+        return None
+    return {
+        f.name: _json_safe(getattr(cfg, f.name))
+        for f in fields(HRingConfig)
+    }
+
+
+def _hring_config_from_dict(data: Optional[dict]) -> Optional[HRingConfig]:
+    """Restore an optional :class:`HRingConfig` from a tolerant dict payload."""
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise TypeError(f"HRingConfig payload must be dict or None, got {type(data)!r}")
+    allowed = {f.name for f in fields(HRingConfig)}
+    kwargs = {k: v for k, v in data.items() if k in allowed}
+    return HRingConfig(**kwargs)
+
+
+def h_context_prediction_config_to_dict(
+    cfg: HContextPredictionConfig,
+) -> dict:
+    """Serialize :class:`HContextPredictionConfig` into JSON-safe metadata.
+
+    The full nested config is stored so Stage-1 checkpoints can recreate
+    the exact effective ctx/pred ring settings at assay runtime. Unknown
+    future fields are ignored by the restore helper; missing legacy fields
+    fall back to dataclass defaults.
+    """
+    payload: dict[str, Any] = {
+        "schema_version": H_CONTEXT_PREDICTION_CONFIG_SCHEMA_VERSION,
+    }
+    for f in fields(HContextPredictionConfig):
+        value = getattr(cfg, f.name)
+        if f.name in ("ctx_cfg", "pred_cfg"):
+            value = _hring_config_to_dict(value)
+        payload[f.name] = _json_safe(value)
+    return payload
+
+
+def h_context_prediction_config_from_dict(
+    payload: dict,
+) -> HContextPredictionConfig:
+    """Restore :class:`HContextPredictionConfig` from checkpoint metadata."""
+    if not isinstance(payload, dict):
+        raise TypeError(
+            f"HContextPredictionConfig payload must be dict, got {type(payload)!r}"
+        )
+    allowed = {f.name for f in fields(HContextPredictionConfig)}
+    kwargs: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in allowed:
+            continue
+        if key in ("ctx_cfg", "pred_cfg"):
+            value = _hring_config_from_dict(value)
+        kwargs[key] = value
+    return HContextPredictionConfig(**kwargs)
+
+
+def h_context_prediction_config_to_json(
+    cfg: HContextPredictionConfig,
+) -> str:
+    """Return a stable JSON string for checkpoint storage."""
+    return json.dumps(h_context_prediction_config_to_dict(cfg), sort_keys=True)
+
+
+def h_context_prediction_config_from_json(
+    payload: object,
+) -> HContextPredictionConfig:
+    """Restore config from a JSON string/bytes payload stored in ``npz``."""
+    if isinstance(payload, np.ndarray):
+        payload = payload.item()
+    if isinstance(payload, np.bytes_):
+        payload = bytes(payload).decode("utf-8")
+    elif isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    if not isinstance(payload, str):
+        raise TypeError(
+            f"ctx_pred config JSON must be str/bytes/0d ndarray, got {type(payload)!r}"
+        )
+    return h_context_prediction_config_from_dict(json.loads(payload))
 
 
 # -- container --------------------------------------------------------------
@@ -406,6 +511,7 @@ def build_h_context_prediction(
     # pred per spec), recurrent E↔E pair-STDP, and Vogels iSTDP.
     ctx = _build_h_ring(ctx_name, ctx_cfg)
     pred = _build_h_ring(pred_name, pred_cfg)
+    pred.e.I_bias = cfg.pred_e_uniform_bias_pA * pA
 
     # Silence H_pred's cue afferents — by spec, H_pred is NOT
     # cue-driven. The cue PoissonGroup still exists (kept so the
@@ -559,9 +665,9 @@ def make_modulatory_gate_operation(
     """Build a ``NetworkOperation`` that fires the M(t) gate update.
 
     The operation runs every ``dt_op_ms`` during the sim; when the
-    current time lies inside ``±m_window_ms`` around the NEXT
-    unconsumed trailer onset, the update is applied once and that
-    onset is marked consumed.
+    current time reaches the NEXT unconsumed trailer onset and remains
+    within its post-onset gate window, the update is applied once and
+    that onset is marked consumed.
 
     Parameters
     ----------
@@ -589,14 +695,14 @@ def make_modulatory_gate_operation(
                        name=f"{bundle.ctx.name}_{bundle.pred.name}_mgate")
     def _gate_step():
         t_now = float(defaultclock.t / ms)
-        # Find the smallest unconsumed onset within ±half_w of now.
+        # Find the smallest unconsumed onset whose post-onset gate is open.
         remaining = np.flatnonzero(~consumed)
         if remaining.size == 0:
             return
-        # Earliest unconsumed whose window has opened by now.
+        # Earliest unconsumed whose post-onset window has opened by now.
         for k in remaining:
             t_on = float(onsets[k])
-            if t_on - half_w <= t_now <= t_on + half_w:
+            if t_on <= t_now <= t_on + half_w:
                 stats = apply_modulatory_update(
                     bundle,
                     m_integral=m_integral,
@@ -606,7 +712,7 @@ def make_modulatory_gate_operation(
                     log.append({"k": int(k), "t_ms": t_now, **stats})
                 consumed[k] = True
                 return
-            if t_now < t_on - half_w:
+            if t_now < t_on:
                 break   # next onsets haven't opened yet
 
     return _gate_step

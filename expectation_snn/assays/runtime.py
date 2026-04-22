@@ -40,6 +40,7 @@ from ..brian2_model.v1_ring import (
 )
 from ..brian2_model.feedback_routes import (
     FeedbackRoutes, FeedbackRoutesConfig, build_feedback_routes,
+    ctx_pred_feedback_config,
 )
 from ..brian2_model.feedforward_v1_to_h import (
     V1ToH, V1ToHConfig, build_v1_to_h_feedforward,
@@ -49,6 +50,7 @@ from ..brian2_model.h_clamp import (
 )
 from ..brian2_model.h_context_prediction import (
     HContextPrediction, HContextPredictionConfig, build_h_context_prediction,
+    h_context_prediction_config_from_json,
     set_direction as _hcp_set_direction,
     silence_direction as _hcp_silence_direction,
 )
@@ -332,6 +334,20 @@ def _load_stage1_ctx_pred_into(
     }
 
 
+def _load_ctx_pred_config_from_checkpoint(
+    ckpt_path: str,
+) -> Optional[HContextPredictionConfig]:
+    """Restore ctx_pred config metadata from a Stage-1 checkpoint if present.
+
+    Older ctx_pred checkpoints predate config metadata; those cleanly return
+    None so callers can use the legacy fallback construction path.
+    """
+    data = np.load(ckpt_path)
+    if "ctx_pred_config_json" not in data.files:
+        return None
+    return h_context_prediction_config_from_json(data["ctx_pred_config_json"])
+
+
 def _build_frozen_cue_pathway(
     h: HRing,
 ) -> Tuple[PoissonGroup, PoissonGroup, Synapses, Synapses]:
@@ -518,6 +534,34 @@ def build_frozen_network(
     if with_cue and not os.path.isfile(stage2_ckpt):
         raise FileNotFoundError(f"Stage-2 checkpoint missing: {stage2_ckpt}")
 
+    resolved_ctx_pred_cfg: Optional[HContextPredictionConfig] = None
+    ctx_pred_config_source = "not_applicable"
+    ctx_pred_config_meta = {}
+    if architecture == "ctx_pred":
+        if ctx_pred_cfg is not None:
+            resolved_ctx_pred_cfg = ctx_pred_cfg
+            ctx_pred_config_source = "explicit"
+        else:
+            resolved_ctx_pred_cfg = _load_ctx_pred_config_from_checkpoint(
+                stage1_ckpt,
+            )
+            if resolved_ctx_pred_cfg is not None:
+                ctx_pred_config_source = "checkpoint"
+            else:
+                resolved_ctx_pred_cfg = HContextPredictionConfig(
+                    ctx_cfg=h_cfg, pred_cfg=h_cfg,
+                )
+                ctx_pred_config_source = "legacy_fallback"
+        ctx_pred_config_meta = {
+            "ctx_pred_config_source": ctx_pred_config_source,
+            "ctx_pred_drive_amp_ctx_pred_pA": float(
+                resolved_ctx_pred_cfg.drive_amp_ctx_pred_pA,
+            ),
+            "ctx_pred_pred_e_uniform_bias_pA": float(
+                resolved_ctx_pred_cfg.pred_e_uniform_bias_pA,
+            ),
+        }
+
     # --- rings -----------------------------------------------------------
     v1 = build_v1_ring(config=v1_cfg)
     ctx_pred_bundle: Optional[HContextPrediction] = None
@@ -529,13 +573,10 @@ def build_frozen_network(
         h = build_h_t(config=h_cfg)
         v1_to_h_target = h
     else:  # ctx_pred
-        cp_cfg = ctx_pred_cfg or HContextPredictionConfig(
-            ctx_cfg=h_cfg, pred_cfg=h_cfg,
-        )
         # Distinct Brian2 name prefix avoids collisions if somebody
         # stacks an assay on top of a legacy bundle in the same session.
         ctx_pred_bundle = build_h_context_prediction(
-            config=cp_cfg,
+            config=resolved_ctx_pred_cfg,
             ctx_name=f"s5a_ctx_seed{seed}",
             pred_name=f"s5a_pred_seed{seed}",
         )
@@ -573,7 +614,12 @@ def build_frozen_network(
 
     # --- feedback routes (H → V1) ---------------------------------------
     # Source ring = `h` (= pred under ctx_pred; h_r/h_t ring otherwise).
-    fb_cfg_eff = fb_cfg or FeedbackRoutesConfig(g_total=g_total, r=r)
+    if fb_cfg is not None:
+        fb_cfg_eff = fb_cfg
+    elif architecture == "ctx_pred":
+        fb_cfg_eff = ctx_pred_feedback_config(g_total=g_total, r=r)
+    else:
+        fb_cfg_eff = FeedbackRoutesConfig(g_total=g_total, r=r)
     fb = build_feedback_routes(
         h, v1, fb_cfg_eff, name_prefix=f"s5a_{h_kind}",
     )
@@ -702,11 +748,14 @@ def build_frozen_network(
             "n_fb_som": int(fb.kernel_w_som.size),
             "g_direct": float(fb.g_direct),
             "g_SOM": float(fb.g_SOM),
+            "fb_direct_kernel_mode": str(fb.config.direct_kernel_mode),
+            "fb_som_kernel_mode": str(fb.config.som_kernel_mode),
             "with_v1_to_h": v1_to_h_mode,
             "v1_to_h_mode": v1_to_h_mode,
             "with_feedback_routes": bool(with_feedback_routes),
             "with_h_clamp": bool(with_h_clamp is not None),
             "with_preprobe_h_mon": bool(with_preprobe_h_mon),
+            **ctx_pred_config_meta,
             **v1_to_h_meta,
             **h_clamp_meta,
             **cue_meta,

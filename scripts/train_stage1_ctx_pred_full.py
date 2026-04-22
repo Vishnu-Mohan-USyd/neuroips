@@ -41,6 +41,7 @@ if str(_pkg_root) not in sys.path:
 
 from expectation_snn.brian2_model.train import (
     Stage1CtxPredResult, run_stage_1_ctx_pred, CHECKPOINT_DIR_DEFAULT,
+    _stage1_h_cfg,
 )
 from expectation_snn.brian2_model.h_ring import HRingConfig
 from expectation_snn.brian2_model.h_context_prediction import HContextPredictionConfig
@@ -74,8 +75,28 @@ N_TRIALS = 360
 #       no_runaway <= 80 Hz
 #
 #   This is the LAST iteration budget. Zero remaining if attempt #4 fails.
-H_CFG = HRingConfig()
-CTX_PRED_CFG = HContextPredictionConfig(ctx_cfg=H_CFG, pred_cfg=H_CFG)
+H_CFG = _stage1_h_cfg(HRingConfig())
+PRED_H_CFG = _stage1_h_cfg(HRingConfig())
+PRED_H_CFG.w_inh_e_init = 1.0
+PRED_H_CFG.inh_w_max = 3.0
+# Production candidate calibrated by Lorentz's combined diagnostic:
+#   - 400 pA ctx->pred per-spike drive restores useful forecast drive.
+#   - 100 pA uniform H_prediction E bias is label-blind excitability, not
+#     transition content.
+#   - stronger local inhibition is prediction-ring only here; H_context
+#     stays on the existing Stage-1 H_CFG.
+#   - zero initial ctx->pred weights keep H_prediction silent during the
+#     leader when the V1->H_pred teacher is off; learning is assigned by
+#     the delayed trailer-offset M-gate. This candidate passed saved Stage-1
+#     and no-override feedback assays; future full checkpoints should
+#     serialize these values in ctx_pred config metadata.
+CTX_PRED_CFG = HContextPredictionConfig(
+    ctx_cfg=H_CFG,
+    pred_cfg=PRED_H_CFG,
+    drive_amp_ctx_pred_pA=400.0,
+    pred_e_uniform_bias_pA=100.0,
+    w_init_frac=0.0,
+)
 ATTEMPT = 4
 
 
@@ -100,7 +121,18 @@ def main() -> int:
     print(f"  Fix C (b5ba400): w_target = {CTX_PRED_CFG.w_target:.5f}  "
           f"(was 0.05; match post-fix init mean)")
     print(f"  Carry-over (5ef422b): w_init_frac = {CTX_PRED_CFG.w_init_frac:.3f}  "
-          f"(was 0.05; avoid init row-cap collapse)")
+          f"(production candidate zero-init; avoid leader-window copy drive)")
+    print(f"  Lorentz timing fix: Stage-1 ctx_pred M-gate fires at trailer offset/end, "
+          f"after trailer H_pred response")
+    print(f"  Production candidate: drive_amp_ctx_pred = "
+          f"{CTX_PRED_CFG.drive_amp_ctx_pred_pA:.1f} pA; "
+          f"pred_e_uniform_bias = {CTX_PRED_CFG.pred_e_uniform_bias_pA:.1f} pA "
+          f"(Lorentz combined diagnostic)")
+    print(f"  Prediction ring inhibition: w_inh_e_init = "
+          f"{PRED_H_CFG.w_inh_e_init:.2f}; inh_w_max = "
+          f"{PRED_H_CFG.inh_w_max:.2f} "
+          f"(context w_inh_e_init={H_CFG.w_inh_e_init:.2f}, "
+          f"context inh_w_max={H_CFG.inh_w_max:.2f})")
     print(f"init row sum = "
           f"{CTX_PRED_CFG.w_init_frac * CTX_PRED_CFG.w_max / 2 * 192:.3f} "
           f"(cap = {CTX_PRED_CFG.w_row_max:.1f})")
@@ -137,6 +169,12 @@ def main() -> int:
             "HContextPredictionConfig.w_target": CTX_PRED_CFG.w_target,
             "HContextPredictionConfig.w_init_frac": CTX_PRED_CFG.w_init_frac,
             "HContextPredictionConfig.w_row_max": CTX_PRED_CFG.w_row_max,
+            "HContextPredictionConfig.drive_amp_ctx_pred_pA": CTX_PRED_CFG.drive_amp_ctx_pred_pA,
+            "HContextPredictionConfig.pred_e_uniform_bias_pA": CTX_PRED_CFG.pred_e_uniform_bias_pA,
+            "HContextPredictionConfig.pred_cfg.w_inh_e_init": PRED_H_CFG.w_inh_e_init,
+            "HContextPredictionConfig.pred_cfg.inh_w_max": PRED_H_CFG.inh_w_max,
+            "HContextPredictionConfig.ctx_cfg.w_inh_e_init": H_CFG.w_inh_e_init,
+            "HContextPredictionConfig.ctx_cfg.inh_w_max": H_CFG.inh_w_max,
             "init_row_sum_expected": CTX_PRED_CFG.w_init_frac * CTX_PRED_CFG.w_max / 2 * 192,
         },
         "seed": SEED,

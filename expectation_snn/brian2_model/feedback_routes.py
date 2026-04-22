@@ -2,11 +2,9 @@
 
 Two routes, topology + signs + weights FIXED (not plastic):
 
-1. Direct route: H_E -> V1_E apical (modulatory, feature-matched Gaussian).
-   - Feature-matched Gaussian over channel distance with
-     sigma = `sigma_channels` (default 1.0 channel = 15 deg):
-       w(H_E[c_i] -> V1_E[c_j]) ∝ exp( -d(c_i, c_j)^2 / (2 sigma^2) ),
-     where d(.,.) is minimum wrap-around channel distance.
+1. Direct route: H_E -> V1_E apical (modulatory, feature-matched).
+   - Default legacy topology is a feature-matched Gaussian over channel
+     distance. The ctx_pred production topology uses a center-only kernel.
    - Deposits into `I_ap_e_post` (apical compartment) so the feedback
      is modulatory (gates somatic drive via V1E's sigmoid apical-to-
      soma gate), NOT a direct somatic drive. Matches Larkum 2013
@@ -17,7 +15,10 @@ Two routes, topology + signs + weights FIXED (not plastic):
 2. Suppressive route: H_E -> V1_SOM (feature-linked, excitatory onto SOM
    which then inhibits V1_E via the existing within-channel SOM->E
    synapse in v1_ring).
-   - Same Gaussian profile (feature-matched, sigma_channels).
+   - Default legacy topology is Gaussian. The ctx_pred production
+     topology is label-blind d1/d2 local surround: each predicted channel
+     recruits SOM at ±1 with 0.4 each and ±2 with 0.1 each after row
+     normalization; center receives 0.
    - Deposits into SOM's `I_e_post`. Normal AMPA kinetics (tau_e=5 ms).
    - Scaled by `g_SOM`.
 
@@ -91,6 +92,10 @@ DEFAULT_DRIVE_AMP_H_TO_V1SOM_PA = 40.0
 DEFAULT_SIGMA_CHANNELS = 1.0
 # Drop kernel tail below this fraction of peak to keep connectivity bounded.
 DEFAULT_CONNECTIVITY_FLOOR = 1e-3
+DIRECT_KERNEL_GAUSSIAN = "gaussian"
+DIRECT_KERNEL_CENTER = "center"
+SOM_KERNEL_GAUSSIAN = "gaussian"
+SOM_KERNEL_D1_D2_SURROUND = "d1_d2_surround"
 
 
 # -- config -----------------------------------------------------------------
@@ -111,10 +116,20 @@ class FeedbackRoutesConfig:
         Per-spike current deposited into `I_e_post` on V1_SOM.
     sigma_channels : float
         Std. dev. of Gaussian feature-matched topology, in channels.
-        Default 1.0 (15 deg). Both routes share this sigma.
+        Default 1.0 (15 deg). Used by routes whose kernel mode is
+        ``"gaussian"``.
     connectivity_floor : float
         Relative kernel weight below which synapses are dropped
         (determinism, keeps connection counts bounded).
+    direct_kernel_mode : str
+        ``"gaussian"`` for legacy feature-matched feedback or ``"center"``
+        for center-only direct apical feedback.
+    som_kernel_mode : str
+        ``"gaussian"`` for legacy feedback or ``"d1_d2_surround"`` for
+        the ctx_pred local-surround SOM route.
+    som_surround_d1_weight, som_surround_d2_weight : float
+        Raw local-surround weights before row normalization. The production
+        values 0.4 and 0.1 already sum to 1.0 across ±1/±2.
     """
 
     g_total: float = 1.0
@@ -123,6 +138,10 @@ class FeedbackRoutesConfig:
     drive_amp_h_to_v1som_pA: float = DEFAULT_DRIVE_AMP_H_TO_V1SOM_PA
     sigma_channels: float = DEFAULT_SIGMA_CHANNELS
     connectivity_floor: float = DEFAULT_CONNECTIVITY_FLOOR
+    direct_kernel_mode: str = DIRECT_KERNEL_GAUSSIAN
+    som_kernel_mode: str = SOM_KERNEL_GAUSSIAN
+    som_surround_d1_weight: float = 0.4
+    som_surround_d2_weight: float = 0.1
 
 
 # -- container --------------------------------------------------------------
@@ -136,6 +155,8 @@ class FeedbackRoutes:
     g_direct: float              # scalar gain applied to route 1
     g_SOM: float                 # scalar gain applied to route 2
     kernel: np.ndarray = field(default_factory=lambda: np.array([]))
+    kernel_direct: np.ndarray = field(default_factory=lambda: np.array([]))
+    kernel_som: np.ndarray = field(default_factory=lambda: np.array([]))
     kernel_w_direct: np.ndarray = field(default_factory=lambda: np.array([]))
     kernel_w_som: np.ndarray = field(default_factory=lambda: np.array([]))
     groups: List[object] = field(default_factory=list)
@@ -169,6 +190,80 @@ def balance_weights(g_total: float, r: float) -> Tuple[float, float]:
     g_som = g_total / (1.0 + r)
     g_direct = g_total - g_som
     return float(g_direct), float(g_som)
+
+
+def ctx_pred_feedback_config(
+    *,
+    g_total: float = 1.0,
+    r: float = 1.0,
+    drive_amp_h_to_v1e_apical_pA: float = DEFAULT_DRIVE_AMP_H_TO_V1E_APICAL_PA,
+    drive_amp_h_to_v1som_pA: float = DEFAULT_DRIVE_AMP_H_TO_V1SOM_PA,
+) -> FeedbackRoutesConfig:
+    """Return the production ctx_pred H_prediction -> V1 feedback topology."""
+    return FeedbackRoutesConfig(
+        g_total=float(g_total),
+        r=float(r),
+        drive_amp_h_to_v1e_apical_pA=float(drive_amp_h_to_v1e_apical_pA),
+        drive_amp_h_to_v1som_pA=float(drive_amp_h_to_v1som_pA),
+        direct_kernel_mode=DIRECT_KERNEL_CENTER,
+        som_kernel_mode=SOM_KERNEL_D1_D2_SURROUND,
+    )
+
+
+def _wrap_distance_matrix(n_channels: int) -> np.ndarray:
+    ch = np.arange(n_channels)
+    d = np.abs(ch[:, None] - ch[None, :])
+    return np.minimum(d, n_channels - d).astype(np.float64)
+
+
+def _row_normalize_kernel(kernel: np.ndarray, *, label: str) -> np.ndarray:
+    row_sum = kernel.sum(axis=1, keepdims=True)
+    assert np.all(row_sum > 0), f"All-zero row in {label} feedback kernel."
+    return kernel / row_sum
+
+
+def _gaussian_kernel(cfg: FeedbackRoutesConfig) -> np.ndarray:
+    assert cfg.sigma_channels > 0.0, (
+        f"sigma_channels must be > 0, got {cfg.sigma_channels}"
+    )
+    d = _wrap_distance_matrix(H_N_CHANNELS)
+    kernel = np.exp(-0.5 * (d / cfg.sigma_channels) ** 2)
+    kernel[kernel < cfg.connectivity_floor] = 0.0
+    return _row_normalize_kernel(kernel, label="gaussian")
+
+
+def _center_kernel() -> np.ndarray:
+    return np.eye(H_N_CHANNELS, dtype=np.float64)
+
+
+def _d1_d2_surround_kernel(cfg: FeedbackRoutesConfig) -> np.ndarray:
+    d1 = float(cfg.som_surround_d1_weight)
+    d2 = float(cfg.som_surround_d2_weight)
+    assert d1 >= 0.0 and d2 >= 0.0 and (d1 > 0.0 or d2 > 0.0), (
+        "SOM d1/d2 surround weights must be non-negative with positive mass"
+    )
+    kernel = np.zeros((H_N_CHANNELS, H_N_CHANNELS), dtype=np.float64)
+    for ci in range(H_N_CHANNELS):
+        kernel[ci, (ci - 1) % H_N_CHANNELS] = d1
+        kernel[ci, (ci + 1) % H_N_CHANNELS] = d1
+        kernel[ci, (ci - 2) % H_N_CHANNELS] = d2
+        kernel[ci, (ci + 2) % H_N_CHANNELS] = d2
+    return _row_normalize_kernel(kernel, label="d1/d2 surround")
+
+
+def _build_route_kernel(mode: str, cfg: FeedbackRoutesConfig, *, route: str) -> np.ndarray:
+    mode_norm = str(mode).strip().lower()
+    if mode_norm == DIRECT_KERNEL_GAUSSIAN:
+        return _gaussian_kernel(cfg)
+    if mode_norm in (DIRECT_KERNEL_CENTER, "center_only"):
+        return _center_kernel()
+    if mode_norm in (SOM_KERNEL_D1_D2_SURROUND, "local_surround_d1_d2"):
+        return _d1_d2_surround_kernel(cfg)
+    raise ValueError(
+        f"unknown {route} feedback kernel mode {mode!r}; expected "
+        f"{DIRECT_KERNEL_GAUSSIAN!r}, {DIRECT_KERNEL_CENTER!r}, or "
+        f"{SOM_KERNEL_D1_D2_SURROUND!r}"
+    )
 
 
 # -- builder ----------------------------------------------------------------
@@ -221,22 +316,14 @@ def build_feedback_routes(
     # Resolve balance
     g_direct, g_som = balance_weights(cfg.g_total, cfg.r)
 
-    # Pre-compute Gaussian kernel over channel distance (wrap-around).
-    # Also store indices (src_ch -> mask of (tgt_ch, kernel_val)) so the
-    # two routes can reuse the same topology at different scalar gains.
-    ch = np.arange(H_N_CHANNELS)
-    # pairwise min wrap-around distance in channels:
-    d = np.abs(ch[:, None] - ch[None, :])
-    d = np.minimum(d, H_N_CHANNELS - d).astype(np.float64)
-    kernel = np.exp(-0.5 * (d / cfg.sigma_channels) ** 2)
-    kernel[kernel < cfg.connectivity_floor] = 0.0
-    # Normalize so the total kernel mass per source channel is 1.0.
+    # Pre-compute row-normalized kernels over wrapped channel distance.
     # This keeps the net feedback drive per H spike invariant across
-    # sigma values: each H spike deposits (g_direct * drive_amp) pA
-    # distributed over matched and neighbouring channels.
-    row_sum = kernel.sum(axis=1, keepdims=True)
-    assert np.all(row_sum > 0), "All-zero row in kernel -- sigma too small."
-    kernel /= row_sum
+    # topologies: each H spike deposits (g_route * drive_amp) pA
+    # distributed according to that route's label-blind kernel.
+    kernel_direct = _build_route_kernel(
+        cfg.direct_kernel_mode, cfg, route="direct",
+    )
+    kernel_som = _build_route_kernel(cfg.som_kernel_mode, cfg, route="SOM")
 
     # --- Route 1: H_E -> V1_E apical (direct, modulatory) --------------
     hr_to_v1e = Synapses(
@@ -251,7 +338,7 @@ def build_feedback_routes(
     for ci in range(H_N_CHANNELS):
         h_src_idx = np.flatnonzero(h_ring.e_channel == ci)
         for cj in range(H_N_CHANNELS):
-            k = float(kernel[ci, cj])
+            k = float(kernel_direct[ci, cj])
             if k == 0.0:
                 continue
             v1_e_idx = np.flatnonzero(v1_ring.e_channel == cj)
@@ -279,7 +366,7 @@ def build_feedback_routes(
     for ci in range(H_N_CHANNELS):
         h_src_idx = np.flatnonzero(h_ring.e_channel == ci)
         for cj in range(H_N_CHANNELS):
-            k = float(kernel[ci, cj])
+            k = float(kernel_som[ci, cj])
             if k == 0.0:
                 continue
             v1_som_idx = np.flatnonzero(v1_ring.som_channel == cj)
@@ -300,7 +387,11 @@ def build_feedback_routes(
         config=cfg,
         g_direct=g_direct,
         g_SOM=g_som,
-        kernel=kernel,
+        # Backward-compatible alias: legacy callers that inspect
+        # ``kernel`` see the direct-route kernel.
+        kernel=kernel_direct,
+        kernel_direct=kernel_direct,
+        kernel_som=kernel_som,
         kernel_w_direct=np.asarray(w_src1, dtype=np.float64),
         kernel_w_som=np.asarray(w_src2, dtype=np.float64),
     )

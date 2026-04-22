@@ -56,6 +56,10 @@ Contract (from runtime.build_frozen_network docstring + Fix C/D spec):
         ``bundle.groups`` contains ctx-side and pred-side synapse /
         neuron objects (by Brian2 name) plus the plastic ctx_pred
         synapse and the direction PoissonGroup.
+
+  [11] default_ctx_pred_feedback_topology
+        The default ctx_pred runtime feedback uses center-only direct
+        H_pred→V1_E and wrapped d1/d2 local-surround H_pred→V1_SOM.
 """
 from __future__ import annotations
 
@@ -71,19 +75,23 @@ if str(_pkg_root) not in sys.path:
 
 from brian2 import (
     Hz, Network, SpikeMonitor, defaultclock, ms, mV, pA, prefs,
-    seed as b2_seed,
+    seed as b2_seed, start_scope,
 )
 
 from expectation_snn.assays.runtime import (
     DEFAULT_CKPT_DIR, build_frozen_network, set_grating,
 )
 from expectation_snn.brian2_model.h_context_prediction import HContextPrediction
+from expectation_snn.brian2_model.feedback_routes import (
+    DIRECT_KERNEL_CENTER, SOM_KERNEL_D1_D2_SURROUND,
+)
 
 
 SEED = 42
 
 
 def _setup() -> None:
+    start_scope()
     prefs.codegen.target = "numpy"
     defaultclock.dt = 0.1 * ms
     b2_seed(SEED)
@@ -302,6 +310,33 @@ def assay_groups_include_both_rings_and_ctx_pred() -> None:
           f"direction, dir_to_ctx  PASS")
 
 
+def assay_default_ctx_pred_feedback_topology() -> None:
+    print("[11] default_ctx_pred_feedback_topology")
+    _setup()
+    b = build_frozen_network(architecture="ctx_pred", seed=SEED)
+    assert b.fb.config.direct_kernel_mode == DIRECT_KERNEL_CENTER, (
+        b.fb.config.direct_kernel_mode
+    )
+    assert b.fb.config.som_kernel_mode == SOM_KERNEL_D1_D2_SURROUND, (
+        b.fb.config.som_kernel_mode
+    )
+    expected_direct = np.eye(12, dtype=np.float64)
+    expected_som = np.zeros((12, 12), dtype=np.float64)
+    for ci in range(12):
+        expected_som[ci, (ci - 1) % 12] = 0.4
+        expected_som[ci, (ci + 1) % 12] = 0.4
+        expected_som[ci, (ci - 2) % 12] = 0.1
+        expected_som[ci, (ci + 2) % 12] = 0.1
+    assert np.allclose(b.fb.kernel_direct, expected_direct), b.fb.kernel_direct
+    assert np.allclose(b.fb.kernel_som, expected_som), b.fb.kernel_som
+    assert b.meta["fb_direct_kernel_mode"] == DIRECT_KERNEL_CENTER
+    assert b.meta["fb_som_kernel_mode"] == SOM_KERNEL_D1_D2_SURROUND
+    print(
+        "    direct=center-only SOM=d1/d2 surround "
+        f"n_direct={b.meta['n_fb_direct']} n_som={b.meta['n_fb_som']} PASS"
+    )
+
+
 def main() -> int:
     assays = [
         assay_ctx_pred_builds_with_default_seed,
@@ -314,6 +349,7 @@ def main() -> int:
         assay_reset_h_clears_both_rings_on_ctx_pred,
         assay_short_run_drives_ctx_from_v1,
         assay_groups_include_both_rings_and_ctx_pred,
+        assay_default_ctx_pred_feedback_topology,
     ]
     failed = []
     for a in assays:

@@ -57,9 +57,11 @@ from .h_ring import (
     N_E_PER_CHANNEL as H_N_E_PER,
 )
 from .h_context_prediction import (
+    H_CONTEXT_PREDICTION_CONFIG_SCHEMA_VERSION,
     HContextPrediction,
     HContextPredictionConfig,
     build_h_context_prediction,
+    h_context_prediction_config_to_json,
     make_modulatory_gate_operation,
     silence_direction,
 )
@@ -958,7 +960,8 @@ class Stage1CtxPredResult:
 
     Mirrors :class:`Stage1Result` but carries the additional checkpoint-
     schema artefacts that the ctx_pred architecture introduces:
-    W_ctx_pred (init + final), modulatory-gate log, and trailer onsets.
+    W_ctx_pred (init + final), modulatory-gate log, trailer onsets, and
+    effective ctx_pred gate times.
     """
     grammar: str
     seed: int
@@ -1010,12 +1013,15 @@ def run_stage_1_ctx_pred(
 
     Architecture (Sprint 5e Fix C, Researcher spec for Task #45):
         - H_context (ctx): bump-attractor ring, cue + V1→H_ctx driven.
-        - H_prediction (pred): parallel ring, NOT cue-driven; gets only
-          V1→H_pred moderate teacher + the plastic ctx→pred transform.
+        - H_prediction (pred): parallel ring, NOT cue-driven; gets
+          trailer-window V1→H_pred teacher drive + the plastic ctx→pred
+          transform. The pred teacher is silent during the leader window,
+          so the pre-trailer probe tests a prediction rather than a
+          direct copy of the current sensory input.
         - W_ctx_pred: all-to-all plastic synapse from ctx_E to pred_E,
           Frémaux-Gerstner 2015 three-factor eligibility-trace rule.
-          Updated at each trailer onset via an M(t) ±75 ms window
-          (Yagishita 2014 cholinergic gating).
+          Updated after each trailer response, at trailer offset/end, via
+          an M(t) ±75 ms window (Yagishita 2014 cholinergic gating).
 
     Workflow
     --------
@@ -1028,16 +1034,19 @@ def run_stage_1_ctx_pred(
     3. Wire V1 → H_ctx (strong, g=``v1_to_hctx_g``) and V1 → H_pred
        (moderate, g=``v1_to_hpred_g``) feedforward teachers. Both are
        feature-matched Gaussian-over-channel fixed synapses
-       (``feedforward_v1_to_h``); the pred teacher is deliberately
-       weaker so pred's spiking is driven predominantly by the learned
-       ctx→pred transform, not directly by V1.
+       (``feedforward_v1_to_h``); the pred teacher is active only during
+       trailer epochs, so pred receives actual-next teaching spikes but
+       is not clamped to the leader during the forecast window. H_context
+       external drive is disabled during trailer epochs, forcing the
+       ctx side of W_ctx_pred to be the persisted leader state at the
+       delayed M-gate.
     4. Generate the Richter biased deranged-permutation schedule
        (Sprint 5e Fix A). Pre-settle the ctx ring under broadband
        Poisson noise (V1 silenced) so recurrent iSTDP / E→E STDP equilibrate.
-    5. Compute ``trailer_onsets_ms`` = ``schedule_start_abs_ms + k *
-       trial_ms + leader_ms`` for ``k ∈ [0, n_trials)``, and attach the
-       modulatory-gate :class:`NetworkOperation` (cadence
-       ``m_gate_dt_ms`` << half of ``m_window_ms``).
+    5. Compute ``trailer_onsets_ms`` for replay bookkeeping and
+       ``ctx_pred_gate_times_ms = trailer_onsets_ms + trailer_ms`` for
+       learning. The M-gate is deliberately consumed after trailer
+       H_pred spikes exist, not at trailer onset.
     6. Run the schedule with per-item V1 stimulus + ctx cue drive.
     7. Probe ``bundle.pred.e`` at the gate window — H_pred carries the
        forecast in this architecture. With ``gate_window="pre_trailer"``
@@ -1069,6 +1078,7 @@ def run_stage_1_ctx_pred(
     if ctx_pred_cfg.pred_cfg is None:
         ctx_pred_cfg.pred_cfg = h_cfg
     v1_cfg = v1_cfg or V1RingConfig()
+    ctx_pred_config_json = h_context_prediction_config_to_json(ctx_pred_cfg)
 
     # ---- Stage-0 checkpoint (V1 I_bias + PV weights) ------------------
     ckpt_dir = checkpoint_dir or CHECKPOINT_DIR_DEFAULT
@@ -1097,12 +1107,19 @@ def run_stage_1_ctx_pred(
         f"  schedule: richter_biased p_bias={p_bias:.2f}  "
         f"derangement={derangement}  "
         f"{plan.total_ms/1000.0:.1f} s sim time",
-        f"  V1→H_ctx g={v1_to_hctx_g:.2f}  V1→H_pred g={v1_to_hpred_g:.2f}",
+        f"  V1→H_ctx g={v1_to_hctx_g:.2f}  "
+        f"V1→H_pred g={v1_to_hpred_g:.2f} teacher_window=trailer_only",
+        f"  H_context drive: leader_on trailer_off "
+        f"(cue + V1→H_ctx disabled during trailer)",
         f"  gate_window={gate_window}  probe_window={probe_window_ms:.0f}ms",
+        f"  ctx_pred M-gate: trailer_offset/end "
+        f"(leader+trailer={leader_ms + trailer_ms:.0f}ms into trial)",
         f"  ctx_pred: tau_coinc={ctx_pred_cfg.tau_coinc_ms:.0f}ms "
         f"tau_elig={ctx_pred_cfg.tau_elig_ms:.0f}ms "
         f"eta={ctx_pred_cfg.eta:.2e} "
-        f"w_target={ctx_pred_cfg.w_target:.3f}",
+        f"w_target={ctx_pred_cfg.w_target:.3f} "
+        f"drive_amp={ctx_pred_cfg.drive_amp_ctx_pred_pA:.1f}pA "
+        f"pred_bias={ctx_pred_cfg.pred_e_uniform_bias_pA:.1f}pA",
     ]
 
     # ---- Build V1 + Stage-0 load + freeze -----------------------------
@@ -1136,6 +1153,15 @@ def run_stage_1_ctx_pred(
         config=V1ToHConfig(g_v1_to_h=v1_to_hpred_g),
         name_prefix="s1cp_v1_hpred",
     )
+    # H_pred is the forecast population. During the leader epoch, a direct
+    # V1->H_pred teacher would copy the current leader into pred and destroy
+    # the distinction between memory and prediction. It is enabled only for
+    # trailer epochs below, where actual-next spikes can teach W_ctx_pred.
+    # Conversely, H_context is externally driven only during the leader.
+    # During trailer epochs both direct ctx cue drive and V1->H_ctx are off,
+    # so W_ctx_pred sees the persisted leader state at the delayed gate.
+    v1_hctx.set_active(False)
+    v1_hpred.set_active(False)
 
     # ---- Monitors + postsyn normalizers (ctx only; pred E→E also) ----
     ctx_e_mon = SpikeMonitor(bundle.ctx.e, name="s1cp_ctx_e")
@@ -1184,9 +1210,10 @@ def run_stage_1_ctx_pred(
         + np.arange(n_trials, dtype=np.float64) * trial_ms
         + leader_ms
     )
+    ctx_pred_gate_times_ms = trailer_onsets_ms + trailer_ms
     gate_log: List[dict] = []
     mgate = make_modulatory_gate_operation(
-        bundle, trailer_onsets_ms,
+        bundle, ctx_pred_gate_times_ms,
         dt_trial_s=trial_ms / 1000.0,
         dt_op_ms=m_gate_dt_ms,
         log=gate_log,
@@ -1200,21 +1227,94 @@ def run_stage_1_ctx_pred(
     ).copy()
 
     # ---- Schedule run -------------------------------------------------
+    ctx_pred_iti_w_backup: Optional[np.ndarray] = None
+    ctx_pred_transmission_disabled_iti_count = 0
+    ctx_pred_transmission_disabled_iti_ms = 0.0
+    ctx_pred_iti_disabled_w_max = 0.0
+    ctx_quiesced_iti_count = 0
+    iti_gate_flush_ms = min(float(m_gate_dt_ms), float(iti_ms)) if iti_ms > 0 else 0.0
+
+    def _restore_ctx_pred_transmission() -> None:
+        nonlocal ctx_pred_iti_w_backup
+        if ctx_pred_iti_w_backup is not None:
+            bundle.ctx_pred.w[:] = ctx_pred_iti_w_backup
+            ctx_pred_iti_w_backup = None
+
+    def _disable_ctx_pred_transmission_for_iti() -> None:
+        nonlocal ctx_pred_iti_w_backup
+        nonlocal ctx_pred_transmission_disabled_iti_count
+        nonlocal ctx_pred_iti_disabled_w_max
+        if ctx_pred_iti_w_backup is None:
+            ctx_pred_iti_w_backup = np.asarray(
+                bundle.ctx_pred.w[:], dtype=np.float64,
+            ).copy()
+            bundle.ctx_pred.w[:] = 0.0
+            ctx_pred_transmission_disabled_iti_count += 1
+        ctx_pred_iti_disabled_w_max = max(
+            ctx_pred_iti_disabled_w_max,
+            float(np.max(np.asarray(bundle.ctx_pred.w[:], dtype=np.float64))),
+        )
+
+    def _quiesce_h_context_state_for_iti() -> None:
+        """Silence H_context activity without touching H_prediction state."""
+        nonlocal ctx_quiesced_iti_count
+        silence_cue(bundle.ctx)
+        bundle.ctx.e.V = -70.0 * mV
+        bundle.ctx.e.I_e = 0.0 * pA
+        bundle.ctx.e.I_i = 0.0 * pA
+        bundle.ctx.e.g_nmda_h = 0.0 * nS
+        bundle.ctx.inh.V = -65.0 * mV
+        bundle.ctx.inh.I_e = 0.0 * pA
+        bundle.ctx.inh.I_i = 0.0 * pA
+        ctx_quiesced_iti_count += 1
+
     t_wall0 = time.time()
     for item in plan.items:
         if item.kind == "iti" or item.theta_rad is None:
             silence_cue(bundle.ctx)
             v1_ring.stim.rates = 0 * Hz
-        else:
+            v1_hctx.set_active(False)
+            v1_hpred.set_active(False)
+            remaining_ms = float(item.duration_ms)
+            # The delayed M-gate is scheduled at trailer offset. Let the
+            # gate operation consume that boundary with ctx->pred intact,
+            # then suppress H_context and ctx->pred only for the post-gate
+            # blank/ITI interval.
+            gate_flush_ms = min(iti_gate_flush_ms, remaining_ms)
+            if gate_flush_ms > 0.0:
+                net.run(gate_flush_ms * ms)
+                remaining_ms -= gate_flush_ms
+            _quiesce_h_context_state_for_iti()
+            _disable_ctx_pred_transmission_for_iti()
+            if remaining_ms > 0.0:
+                ctx_pred_transmission_disabled_iti_ms += remaining_ms
+                net.run(remaining_ms * ms)
+            continue
+        elif item.kind == "leader":
+            _restore_ctx_pred_transmission()
             _drive_h_cue_gaussian(
                 bundle.ctx, item.theta_rad,
                 peak_rate_hz=cue_peak_hz, sigma_deg=cue_sigma_deg,
             )
             set_stimulus(v1_ring, theta_rad=item.theta_rad, contrast=v1_contrast)
+            v1_hctx.set_active(True)
+            v1_hpred.set_active(False)
+        elif item.kind == "trailer":
+            _restore_ctx_pred_transmission()
+            silence_cue(bundle.ctx)
+            set_stimulus(v1_ring, theta_rad=item.theta_rad, contrast=v1_contrast)
+            v1_hctx.set_active(False)
+            v1_hpred.set_active(True)
+        else:
+            raise ValueError(f"unexpected Stage-1 ctx_pred item kind: {item.kind!r}")
         net.run(item.duration_ms * ms)
+    _restore_ctx_pred_transmission()
+    ctx_pred_restored_after_schedule = ctx_pred_iti_w_backup is None
     sim_wall_s = time.time() - t_wall0
     silence_cue(bundle.ctx)
     v1_ring.stim.rates = 0 * Hz
+    v1_hctx.set_active(False)
+    v1_hpred.set_active(False)
 
     # ---- Per-trial probe on H_pred -----------------------------------
     spike_i = np.asarray(pred_e_mon.i[:], dtype=np.int64)
@@ -1234,17 +1334,39 @@ def run_stage_1_ctx_pred(
 
     if trials_used_tail is None:
         trials_used_tail = max(n_trials // 2, 36)
+    trials_used_tail = min(int(trials_used_tail), int(n_trials))
     start_k = max(0, n_trials - trials_used_tail)
 
     h_argmax_pred_per_trial_6 = np.empty(trials_used_tail, dtype=np.int64)
     h_argmax_ctx_per_trial_6 = np.empty(trials_used_tail, dtype=np.int64)
+    h_argmax_ctx_at_gate_6 = np.empty(trials_used_tail, dtype=np.int64)
     leader_idx_used = np.empty(trials_used_tail, dtype=np.int64)
+    trailer_idx_used = np.empty(trials_used_tail, dtype=np.int64)
     expected_trailer_used = np.empty(trials_used_tail, dtype=np.int64)
+    ctx_gate_leader_rate_hz = np.empty(trials_used_tail, dtype=np.float64)
+    ctx_gate_trailer_rate_hz = np.empty(trials_used_tail, dtype=np.float64)
+    ctx_gate_expected_rate_hz = np.empty(trials_used_tail, dtype=np.float64)
+    iti_ctx_e_rate_hz = np.empty(trials_used_tail, dtype=np.float64)
+    iti_pred_e_rate_hz = np.empty(trials_used_tail, dtype=np.float64)
 
     # Also gather ctx argmax (for comparison + debug telemetry).
     spike_i_ctx = np.asarray(ctx_e_mon.i[:], dtype=np.int64)
     spike_t_ms_ctx = np.asarray(ctx_e_mon.t / ms, dtype=np.float64)
     ctx_channel = bundle.ctx.e_channel
+
+    def _population_e_rate_in_window(
+        spike_t: np.ndarray,
+        t_start_ms: float,
+        t_end_ms: float,
+        n_e: int,
+    ) -> float:
+        if t_end_ms <= t_start_ms:
+            return float("nan")
+        dur_s = (t_end_ms - t_start_ms) / 1000.0
+        count = int(np.count_nonzero(
+            (spike_t >= t_start_ms) & (spike_t < t_end_ms),
+        ))
+        return float(count / (n_e * dur_s))
 
     for kk, k in enumerate(range(start_k, n_trials)):
         rates_pred_12 = _per_channel_rate_in_window(
@@ -1263,44 +1385,186 @@ def run_stage_1_ctx_pred(
         h_argmax_ctx_per_trial_6[kk] = int(np.argmax(
             rates_ctx_12[H_ORIENT_CHANNELS]
         ))
+        rates_ctx_gate_12 = _per_channel_rate_in_window(
+            spike_i_ctx, spike_t_ms_ctx, ctx_channel,
+            ctx_pred_gate_times_ms[k] - probe_window_ms,
+            ctx_pred_gate_times_ms[k],
+            H_N_CHANNELS, H_N_E_PER,
+        )
+        rates_ctx_gate_6 = rates_ctx_gate_12[H_ORIENT_CHANNELS]
+        h_argmax_ctx_at_gate_6[kk] = int(np.argmax(rates_ctx_gate_6))
         leader_idx_used[kk] = int(pairs[k, 0])
+        trailer_idx_used[kk] = int(pairs[k, 1])
         expected_trailer_used[kk] = int(expected_trailer_all[k])
+        ctx_gate_leader_rate_hz[kk] = float(
+            rates_ctx_gate_6[leader_idx_used[kk]]
+        )
+        ctx_gate_trailer_rate_hz[kk] = float(
+            rates_ctx_gate_6[trailer_idx_used[kk]]
+        )
+        ctx_gate_expected_rate_hz[kk] = float(
+            rates_ctx_gate_6[expected_trailer_used[kk]]
+        )
+        iti_start_abs = trailer_end_abs[k] + iti_gate_flush_ms
+        iti_end_abs = trial_start_abs[k] + trial_ms
+        iti_ctx_e_rate_hz[kk] = _population_e_rate_in_window(
+            spike_t_ms_ctx,
+            iti_start_abs,
+            iti_end_abs,
+            H_N_CHANNELS * H_N_E_PER,
+        )
+        iti_pred_e_rate_hz[kk] = _population_e_rate_in_window(
+            spike_t_ms,
+            iti_start_abs,
+            iti_end_abs,
+            H_N_CHANNELS * H_N_E_PER,
+        )
 
-    # ---- Post-training pred bump persistence probe -------------------
-    # Drive pred via V1 at `persist_probe_theta_rad` for persist_pulse_ms,
-    # then silence and measure. Use V1→pred moderate teacher (already
-    # wired); ctx is NOT driven in this probe to isolate pred persistence.
+    ctx_gate_leader_match_frac = float(np.mean(
+        h_argmax_ctx_at_gate_6 == leader_idx_used,
+    )) if trials_used_tail else float("nan")
+    ctx_gate_trailer_match_frac = float(np.mean(
+        h_argmax_ctx_at_gate_6 == trailer_idx_used,
+    )) if trials_used_tail else float("nan")
+    ctx_gate_expected_match_frac = float(np.mean(
+        h_argmax_ctx_at_gate_6 == expected_trailer_used,
+    )) if trials_used_tail else float("nan")
+    log.append(
+        f"  ctx at delayed gate: argmax==leader {ctx_gate_leader_match_frac:.3f}, "
+        f"argmax==trailer {ctx_gate_trailer_match_frac:.3f}; "
+        f"mean rates leader/trailer/expected="
+        f"{ctx_gate_leader_rate_hz.mean():.2f}/"
+        f"{ctx_gate_trailer_rate_hz.mean():.2f}/"
+        f"{ctx_gate_expected_rate_hz.mean():.2f} Hz"
+    )
+    iti_ctx_e_rate_mean_hz = (
+        float(np.nanmean(iti_ctx_e_rate_hz))
+        if np.any(np.isfinite(iti_ctx_e_rate_hz))
+        else float("nan")
+    )
+    iti_pred_e_rate_mean_hz = (
+        float(np.nanmean(iti_pred_e_rate_hz))
+        if np.any(np.isfinite(iti_pred_e_rate_hz))
+        else float("nan")
+    )
+    log.append(
+        f"  ITI quiescence: H_context E mean={iti_ctx_e_rate_mean_hz:.2f} Hz, "
+        f"H_prediction E mean={iti_pred_e_rate_mean_hz:.2f} Hz, "
+        f"ctx->pred disabled windows={ctx_pred_transmission_disabled_iti_count}, "
+        f"disabled_ms={ctx_pred_transmission_disabled_iti_ms:.1f}, "
+        f"max_disabled_w={ctx_pred_iti_disabled_w_max:.6f}"
+    )
+
+    # Training-only recurrent normalizers must not run during validation
+    # probes. They mutate learned recurrent weights at fixed cadence and
+    # can artificially sustain post-training bumps.
+    ctx_ee_norm.active = False
+    pred_ee_norm.active = False
+    recurrent_normalizers_active_during_post_probes = bool(
+        ctx_ee_norm.active or pred_ee_norm.active
+    )
+    log.append(
+        f"  post-training probes: recurrent normalizers active="
+        f"{recurrent_normalizers_active_during_post_probes}"
+    )
+
+    # ---- Post-training split persistence probes ----------------------
+    # In the split architecture, the Stage-1 memory band belongs to
+    # H_context. H_prediction is a forecast/readout population and should
+    # not be required to autonomously persist without ctx input.
+    #
+    # Snapshot ctx->pred traces before probes: diagnostic pulses can update
+    # event-driven xpre/xpost/elig even with no remaining M-gates. Restore
+    # them before plasticity diagnostics/checkpointing so saved ctx_pred
+    # state remains the post-training state, not the probe-contaminated one.
+    ctx_pred_w_pre_probe = np.asarray(bundle.ctx_pred.w[:], dtype=np.float64).copy()
+    ctx_pred_xpre_pre_probe = np.asarray(bundle.ctx_pred.xpre[:], dtype=np.float64).copy()
+    ctx_pred_xpost_pre_probe = np.asarray(bundle.ctx_pred.xpost[:], dtype=np.float64).copy()
+    ctx_pred_elig_pre_probe = np.asarray(bundle.ctx_pred.elig[:], dtype=np.float64).copy()
+
+    # H_context memory probe: drive ctx directly with the same Stage-1 cue
+    # shape, then silence all external ctx inputs and measure the ctx bump.
     silence_cue(bundle.ctx); silence_cue(bundle.pred); silence_direction(bundle)
     v1_ring.stim.rates = 0 * Hz
+    v1_hctx.set_active(False)
+    v1_hpred.set_active(False)
     net.run(200 * ms)
-    t_pulse_start = float(net.t / ms)
+    _drive_h_cue_gaussian(
+        bundle.ctx,
+        persist_probe_theta_rad,
+        peak_rate_hz=cue_peak_hz,
+        sigma_deg=cue_sigma_deg,
+    )
+    net.run(persist_pulse_ms * ms)
+    t_ctx_pulse_end = float(net.t / ms)
+    silence_cue(bundle.ctx)
+    net.run(persist_post_ms * ms)
+
+    spike_i_ctx2 = np.asarray(ctx_e_mon.i[:], dtype=np.int64)
+    spike_t_ms_ctx2 = np.asarray(ctx_e_mon.t / ms, dtype=np.float64)
+    peak_rates_ctx_probe = _per_channel_rate_in_window(
+        spike_i_ctx2, spike_t_ms_ctx2, ctx_channel,
+        t_ctx_pulse_end - 100.0, t_ctx_pulse_end,
+        H_N_CHANNELS, H_N_E_PER,
+    )
+    peak_ch_ctx_probe = int(np.argmax(peak_rates_ctx_probe))
+    bin_ms = 10.0
+    ctx_probe_series = _peak_channel_ms_series(
+        spike_i_ctx2, spike_t_ms_ctx2, ctx_channel,
+        t_ctx_pulse_end, t_ctx_pulse_end + persist_post_ms,
+        peak_ch_ctx_probe, H_N_E_PER, bin_ms=bin_ms,
+    )
+    h_context_persistence_ms = compute_bump_persistence_ms(
+        ctx_probe_series, offset_idx=0, dt_ms=bin_ms, floor_hz=2.0,
+    )
+    log.append(
+        f"  post-training ctx memory probe: peak_ch={peak_ch_ctx_probe} "
+        f"(cued theta={np.rad2deg(persist_probe_theta_rad):.0f}deg), "
+        f"persistence={h_context_persistence_ms:.1f} ms"
+    )
+
+    # H_prediction autonomous diagnostic: drive pred via V1->H_pred, then
+    # measure decay with ctx->pred disabled so persistent ctx activity cannot
+    # prop up pred. This value is diagnostic only, not a Stage-1 pass gate.
+    silence_cue(bundle.ctx); silence_cue(bundle.pred); silence_direction(bundle)
+    v1_ring.stim.rates = 0 * Hz
+    v1_hctx.set_active(False)
+    v1_hpred.set_active(False)
+    net.run(200 * ms)
+    bundle.ctx_pred.w[:] = 0.0
+    v1_hpred.set_active(True)
     set_stimulus(v1_ring, theta_rad=persist_probe_theta_rad, contrast=v1_contrast)
     net.run(persist_pulse_ms * ms)
-    t_pulse_end = float(net.t / ms)
+    t_pred_pulse_end = float(net.t / ms)
     v1_ring.stim.rates = 0 * Hz
+    v1_hpred.set_active(False)
     net.run(persist_post_ms * ms)
 
     spike_i_pred2 = np.asarray(pred_e_mon.i[:], dtype=np.int64)
     spike_t_ms_pred2 = np.asarray(pred_e_mon.t / ms, dtype=np.float64)
     peak_rates_probe = _per_channel_rate_in_window(
         spike_i_pred2, spike_t_ms_pred2, pred_channel,
-        t_pulse_end - 100.0, t_pulse_end,
+        t_pred_pulse_end - 100.0, t_pred_pulse_end,
         H_N_CHANNELS, H_N_E_PER,
     )
     peak_ch_probe = int(np.argmax(peak_rates_probe))
-    bin_ms = 10.0
     probe_series = _peak_channel_ms_series(
         spike_i_pred2, spike_t_ms_pred2, pred_channel,
-        t_pulse_end, t_pulse_end + persist_post_ms,
+        t_pred_pulse_end, t_pred_pulse_end + persist_post_ms,
         peak_ch_probe, H_N_E_PER, bin_ms=bin_ms,
     )
-    persistence_med = compute_bump_persistence_ms(
+    h_pred_autonomous_persistence_ms = compute_bump_persistence_ms(
         probe_series, offset_idx=0, dt_ms=bin_ms, floor_hz=2.0,
     )
+    bundle.ctx_pred.w[:] = ctx_pred_w_pre_probe
+    bundle.ctx_pred.xpre[:] = ctx_pred_xpre_pre_probe
+    bundle.ctx_pred.xpost[:] = ctx_pred_xpost_pre_probe
+    bundle.ctx_pred.elig[:] = ctx_pred_elig_pre_probe
     log.append(
-        f"  post-training pred probe: peak_ch={peak_ch_probe} "
+        f"  post-training pred autonomous diagnostic: peak_ch={peak_ch_probe} "
         f"(cued theta={np.rad2deg(persist_probe_theta_rad):.0f}deg), "
-        f"persistence={persistence_med:.1f} ms"
+        f"persistence={h_pred_autonomous_persistence_ms:.1f} ms "
+        f"(ctx→pred disabled during pulse+decay; diagnostic only)"
     )
 
     # ---- Layer rates during schedule ---------------------------------
@@ -1342,8 +1606,8 @@ def run_stage_1_ctx_pred(
 
     # ---- Gate aggregation --------------------------------------------
     fake_series_bin_ms = 10.0
-    fake_high_bins = max(1, int(round(persistence_med / fake_series_bin_ms))) \
-        if not np.isnan(persistence_med) else 0
+    fake_high_bins = max(1, int(round(h_context_persistence_ms / fake_series_bin_ms))) \
+        if not np.isnan(h_context_persistence_ms) else 0
     fake_series = np.concatenate([
         np.full(fake_high_bins, 5.0),
         np.zeros(200),
@@ -1419,14 +1683,51 @@ def run_stage_1_ctx_pred(
         architecture=np.bytes_("ctx_pred"),
         n_trials=np.int32(n_trials),
         leader_idx=leader_idx_used,
+        trailer_idx=trailer_idx_used,
         h_argmax_pred=h_argmax_pred_per_trial_6,
         h_argmax_ctx=h_argmax_ctx_per_trial_6,
+        h_argmax_ctx_at_gate=h_argmax_ctx_at_gate_6,
         expected_trailer_idx=expected_trailer_used,
+        ctx_gate_leader_rate_hz=ctx_gate_leader_rate_hz,
+        ctx_gate_trailer_rate_hz=ctx_gate_trailer_rate_hz,
+        ctx_gate_expected_rate_hz=ctx_gate_expected_rate_hz,
+        ctx_gate_probe_window_ms=np.float64(probe_window_ms),
+        ctx_gate_leader_match_frac=np.float64(ctx_gate_leader_match_frac),
+        ctx_gate_trailer_match_frac=np.float64(ctx_gate_trailer_match_frac),
+        ctx_gate_expected_match_frac=np.float64(ctx_gate_expected_match_frac),
+        iti_gate_flush_ms=np.float64(iti_gate_flush_ms),
+        iti_ctx_e_rate_hz=iti_ctx_e_rate_hz,
+        iti_pred_e_rate_hz=iti_pred_e_rate_hz,
+        iti_ctx_e_rate_mean_hz=np.float64(iti_ctx_e_rate_mean_hz),
+        iti_pred_e_rate_mean_hz=np.float64(iti_pred_e_rate_mean_hz),
+        ctx_quiesced_iti_count=np.int32(ctx_quiesced_iti_count),
+        ctx_pred_transmission_disabled_iti_count=np.int32(
+            ctx_pred_transmission_disabled_iti_count,
+        ),
+        ctx_pred_transmission_disabled_iti_ms=np.float64(
+            ctx_pred_transmission_disabled_iti_ms,
+        ),
+        ctx_pred_iti_disabled_w_max=np.float64(ctx_pred_iti_disabled_w_max),
+        ctx_pred_restored_after_schedule=np.bool_(
+            ctx_pred_restored_after_schedule,
+        ),
         gate_window=np.bytes_(gate_window),
         schedule=np.bytes_("richter_biased"),
         p_bias=np.float64(p_bias),
         derangement=np.asarray(derangement, dtype=np.int64),
-        persistence_med_ms=np.float64(persistence_med),
+        # Backward-compatible name: in ctx_pred this is H_context memory
+        # persistence, not H_prediction autonomous persistence.
+        persistence_med_ms=np.float64(h_context_persistence_ms),
+        h_context_persistence_ms=np.float64(h_context_persistence_ms),
+        h_pred_autonomous_persistence_ms=np.float64(
+            h_pred_autonomous_persistence_ms,
+        ),
+        h_bump_persistence_source=np.bytes_("h_context"),
+        recurrent_normalizers_active_during_post_probes=np.bool_(
+            recurrent_normalizers_active_during_post_probes,
+        ),
+        ctx_ee_norm_active_during_post_probes=np.bool_(ctx_ee_norm.active),
+        pred_ee_norm_active_during_post_probes=np.bool_(pred_ee_norm.active),
         ctx_e_rate_hz=np.float64(ctx_e_rate),
         pred_e_rate_hz=np.float64(pred_e_rate),
         ctx_inh_rate_hz=np.float64(ctx_inh_rate),
@@ -1440,8 +1741,20 @@ def run_stage_1_ctx_pred(
         W_ctx_pred_init=w_ctx_pred_init,
         W_ctx_pred_final=w_ctx_pred,
         elig_final=elig_final,
+        # Effective ctx_pred config for assay-time reconstruction:
+        ctx_pred_config_schema_version=np.int32(
+            H_CONTEXT_PREDICTION_CONFIG_SCHEMA_VERSION,
+        ),
+        ctx_pred_config_json=np.bytes_(ctx_pred_config_json),
+        ctx_pred_drive_amp_ctx_pred_pA=np.float64(
+            ctx_pred_cfg.drive_amp_ctx_pred_pA,
+        ),
+        ctx_pred_pred_e_uniform_bias_pA=np.float64(
+            ctx_pred_cfg.pred_e_uniform_bias_pA,
+        ),
         # Schedule bookkeeping for assay replay:
         trailer_onsets_ms=trailer_onsets_ms,
+        ctx_pred_gate_times_ms=ctx_pred_gate_times_ms,
         schedule_start_abs_ms=np.float64(schedule_start_abs_ms),
         leader_ms=np.float64(leader_ms),
         trailer_ms=np.float64(trailer_ms),
@@ -1467,7 +1780,12 @@ def run_stage_1_ctx_pred(
         grammar="richter_ctx_pred", seed=seed,
         report=report, h_cfg=h_cfg, ctx_pred_cfg=ctx_pred_cfg,
         diagnostics={
-            "persistence_med_ms": persistence_med,
+            "persistence_med_ms": h_context_persistence_ms,
+            "h_context_persistence_ms": h_context_persistence_ms,
+            "h_pred_autonomous_persistence_ms": h_pred_autonomous_persistence_ms,
+            "recurrent_normalizers_active_during_post_probes": float(
+                recurrent_normalizers_active_during_post_probes,
+            ),
             "ctx_e_rate_hz": ctx_e_rate,
             "pred_e_rate_hz": pred_e_rate,
             "ctx_inh_rate_hz": ctx_inh_rate,
@@ -1479,6 +1797,25 @@ def run_stage_1_ctx_pred(
             "W_ctx_pred_max_final": float(w_ctx_pred.max()),
             "elig_mean_final": float(elig_final.mean()),
             "n_gate_updates": float(len(gate_log)),
+            "ctx_gate_leader_match_frac": ctx_gate_leader_match_frac,
+            "ctx_gate_trailer_match_frac": ctx_gate_trailer_match_frac,
+            "ctx_gate_expected_match_frac": ctx_gate_expected_match_frac,
+            "ctx_gate_leader_rate_hz": float(ctx_gate_leader_rate_hz.mean()),
+            "ctx_gate_trailer_rate_hz": float(ctx_gate_trailer_rate_hz.mean()),
+            "ctx_gate_expected_rate_hz": float(ctx_gate_expected_rate_hz.mean()),
+            "iti_ctx_e_rate_mean_hz": iti_ctx_e_rate_mean_hz,
+            "iti_pred_e_rate_mean_hz": iti_pred_e_rate_mean_hz,
+            "ctx_quiesced_iti_count": float(ctx_quiesced_iti_count),
+            "ctx_pred_transmission_disabled_iti_count": float(
+                ctx_pred_transmission_disabled_iti_count,
+            ),
+            "ctx_pred_transmission_disabled_iti_ms": (
+                ctx_pred_transmission_disabled_iti_ms
+            ),
+            "ctx_pred_iti_disabled_w_max": ctx_pred_iti_disabled_w_max,
+            "ctx_pred_restored_after_schedule": float(
+                ctx_pred_restored_after_schedule,
+            ),
             "sim_wall_s": sim_wall_s,
         },
         checkpoint_path=ckpt_path,

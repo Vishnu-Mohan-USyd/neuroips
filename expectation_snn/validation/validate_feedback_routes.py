@@ -6,15 +6,18 @@ Five assays per Lead Sprint 4.5 dispatch:
 
   [1] matched/unmatched V1 gain ratio > 1.1 at r=1.0
       (feature-matched feedback preserves/enhances channel preference)
-  [2] direct-only (r=4) vs SOM-only (r=0.25): opposite signs on V1 gain
+  [2] ctx_pred route primitive: low-r dampens the local center+d1/d2
+      neighborhood, while r=4 produces strict center-up and local-flank-down
+      sharpening
   [3] total-off (g_total=0): no feedback modulation
   [4] sub-threshold claim: H bump + grating OFF -> V1_E < 1 Hz
-  [5] balance sweep preview: monotonic shift across {0.25, 0.5, 1, 2, 4}
+  [5] balance sweep preview: monotonic local-neighborhood shift across
+      {0.25, 0.5, 1, 2, 4}
 
 Also retained from the prior topological checks:
 
-  [6] topology determinism: Gaussian kernel, channel-matched, both
-      routes use the same kernel, connectivity count matches floor.
+  [6] topology determinism: ctx_pred direct route is center-only, SOM
+      route is wrapped d1/d2 surround, and both rows are normalized.
 
 Uses seed=42, Brian2 numpy codegen, dt=0.1 ms. Each assay re-builds the
 network cleanly.
@@ -27,7 +30,7 @@ import numpy as np
 
 from brian2 import (
     Network, SpikeMonitor, defaultclock, prefs, ms, Hz,
-    seed as b2_seed,
+    seed as b2_seed, start_scope,
 )
 
 _pkg_root = Path(__file__).resolve().parents[2]
@@ -41,8 +44,7 @@ from expectation_snn.brian2_model.v1_ring import (
     build_v1_ring, set_stimulus,
 )
 from expectation_snn.brian2_model.feedback_routes import (
-    build_feedback_routes, set_balance,
-    balance_weights, FeedbackRoutesConfig,
+    build_feedback_routes, balance_weights, ctx_pred_feedback_config,
 )
 
 
@@ -52,17 +54,14 @@ RUN_PRE_MS = 200.0
 RUN_TRIAL_MS = 1500.0
 H_PULSE_RATE_HZ = 300.0
 
-# Target bands per Lead Sprint 4.5 spec:
-DIRECT_ONLY_GAIN_MIN = 5.0   # pct
-DIRECT_ONLY_GAIN_MAX = 15.0
-SOM_ONLY_GAIN_MAX = -5.0     # i.e. gain <= -5 (more negative)
-SOM_ONLY_GAIN_MIN = -15.0    # i.e. gain >= -15
-BAND_TOLERANCE_PCT = 5.0     # pct-point slack for discrete-spike resolution
+# One V1_E spike in one channel over the 1.5 s window is 1/(16*1.5) Hz.
+MIN_ROUTE_DELTA_HZ = 0.04
 
 
 # -- helpers ----------------------------------------------------------------
 
 def _setup_brian():
+    start_scope()
     prefs.codegen.target = "numpy"
     defaultclock.dt = DT_MS * ms
     b2_seed(SEED)
@@ -83,11 +82,10 @@ def _run_trial(
     _setup_brian()
     h = build_h_r()
     v = build_v1_ring()
-    cfg = FeedbackRoutesConfig(
+    cfg = ctx_pred_feedback_config(
         g_total=g_total, r=r_val,
         drive_amp_h_to_v1e_apical_pA=drive_direct_pA,
         drive_amp_h_to_v1som_pA=drive_som_pA,
-        sigma_channels=1.0,
     )
     fb = build_feedback_routes(h, v, cfg)
 
@@ -140,6 +138,16 @@ def _gain_pct(trial_hz: float, baseline_hz: float) -> float:
     return (trial_hz / baseline_hz - 1.0) * 100.0
 
 
+def _local_flank_mean(rate: np.ndarray) -> float:
+    """Mean of the d1/d2 local flank channels around predicted channel 0."""
+    return float(np.mean(rate[[1, 11, 2, 10]]))
+
+
+def _local_neighborhood_mean(rate: np.ndarray) -> float:
+    """Mean of center plus d1/d2 local surround around predicted channel 0."""
+    return float(np.mean(rate[[0, 1, 11, 2, 10]]))
+
+
 # -- assays -----------------------------------------------------------------
 
 def assay_1_matched_unmatched_ratio_at_r1() -> bool:
@@ -164,26 +172,39 @@ def assay_1_matched_unmatched_ratio_at_r1() -> bool:
     return passed
 
 
-def assay_2_direct_vs_som_opposite_signs() -> bool:
-    """[2] direct-only (r=4) vs SOM-only (r=0.25): opposite signs."""
+def assay_2_ctx_pred_dampen_and_sharpen_primitive() -> bool:
+    """[2] Low-r local dampening; r=4 center-up/local-flank-down.
+
+    The d1/d2 SOM kernel has zero center weight for a delta-function
+    prediction. Therefore low-r suppression is evaluated over the local
+    center+d1/d2 neighborhood. Strict sharpening at r=4 is evaluated as
+    center-up together with local-flank-down.
+    """
     baseline = _run_trial(drive_direct_pA=0.0, drive_som_pA=0.0,
                           r_val=1.0, g_total=0.0)
-    baseline_matched = baseline["v1_e_matched_hz"]
+    low_r = _run_trial(r_val=0.25)
+    high_r = _run_trial(r_val=4.0)
 
-    direct_only = _run_trial(r_val=4.0)
-    som_only = _run_trial(r_val=0.25)
+    baseline_center = baseline["v1_e_matched_hz"]
+    baseline_local = _local_neighborhood_mean(baseline["v1_e_hz"])
+    low_local_delta = _local_neighborhood_mean(low_r["v1_e_hz"]) - baseline_local
+    high_center_delta = high_r["v1_e_matched_hz"] - baseline_center
+    baseline_flank = _local_flank_mean(baseline["v1_e_hz"])
+    high_flank_delta = _local_flank_mean(high_r["v1_e_hz"]) - baseline_flank
 
-    dg = _gain_pct(direct_only["v1_e_matched_hz"], baseline_matched)
-    sg = _gain_pct(som_only["v1_e_matched_hz"], baseline_matched)
-
-    # Opposite signs: direct > 0, SOM < 0.
-    opposite = (dg > 0.0) and (sg < 0.0)
-    # Allow for a small buffer given discrete spike counts.
-    passed = opposite and (dg >= DIRECT_ONLY_GAIN_MIN - BAND_TOLERANCE_PCT) \
-             and (sg <= SOM_ONLY_GAIN_MAX + BAND_TOLERANCE_PCT)
-    detail = (f"direct-only(r=4)={dg:+.2f}%, som-only(r=0.25)={sg:+.2f}%; "
-              f"baseline={baseline_matched:.2f} Hz")
-    print(f"[2] direct_vs_som_opposite:    "
+    passed = (
+        low_local_delta <= -MIN_ROUTE_DELTA_HZ
+        and high_center_delta >= MIN_ROUTE_DELTA_HZ
+        and high_flank_delta <= -MIN_ROUTE_DELTA_HZ
+    )
+    detail = (
+        f"low-r local_neighborhood_delta={low_local_delta:+.3f} Hz; "
+        f"r=4 center_delta={high_center_delta:+.3f} Hz, "
+        f"local_flank_delta={high_flank_delta:+.3f} Hz; "
+        f"baseline center/flank/local="
+        f"{baseline_center:.3f}/{baseline_flank:.3f}/{baseline_local:.3f} Hz"
+    )
+    print(f"[2] ctx_pred_route_primitive:  "
           f"{'PASS' if passed else 'FAIL'} -- {detail}")
     return passed
 
@@ -223,15 +244,15 @@ def assay_4_sub_threshold_no_firing() -> bool:
 
 
 def assay_5_monotonic_balance_sweep() -> bool:
-    """[5] matched-channel gain monotone non-decreasing across r sweep."""
+    """[5] local-neighborhood gain monotone non-decreasing across r sweep."""
     baseline = _run_trial(drive_direct_pA=0.0, drive_som_pA=0.0,
                           r_val=1.0, g_total=0.0)
-    bm = baseline["v1_e_matched_hz"]
+    bm = _local_neighborhood_mean(baseline["v1_e_hz"])
     r_vals = [0.25, 0.50, 1.00, 2.00, 4.00]
     gains = []
     for rv in r_vals:
         t = _run_trial(r_val=rv)
-        gains.append(_gain_pct(t["v1_e_matched_hz"], bm))
+        gains.append(_gain_pct(_local_neighborhood_mean(t["v1_e_hz"]), bm))
     # Monotone non-decreasing (discrete resolution causes ties)
     mono = all(gains[i + 1] >= gains[i] - 1e-6 for i in range(len(gains) - 1))
     # First and last must have opposite signs (SOM-dominant vs direct-dominant)
@@ -240,47 +261,60 @@ def assay_5_monotonic_balance_sweep() -> bool:
     detail = ("  ".join(f"r={rv:.2f}:{g:+.2f}%"
                          for rv, g in zip(r_vals, gains)))
     print(f"[5] monotonic_balance_sweep:   "
-          f"{'PASS' if passed else 'FAIL'} -- baseline={bm:.2f}  {detail}")
+          f"{'PASS' if passed else 'FAIL'} -- local_baseline={bm:.2f}  {detail}")
     return passed
 
 
 def assay_6_topology_determinism() -> bool:
-    """[6] topology: both routes use the same Gaussian kernel, channel-matched.
-
-    Retained from prior validation: structural check that build yields
-    deterministic, feature-matched connectivity.
-    """
+    """[6] topology: center direct route + wrapped d1/d2 SOM surround."""
     _setup_brian()
     h = build_h_r()
     v = build_v1_ring()
-    fb = build_feedback_routes(h, v, FeedbackRoutesConfig(
-        g_total=1.0, r=1.0, sigma_channels=1.0,
-    ))
-    # Direct route: verify strongest connections are channel-matched.
+    fb = build_feedback_routes(h, v, ctx_pred_feedback_config(g_total=1.0, r=1.0))
+    _net = Network(*h.groups, *v.groups, *fb.groups)
+    _net.run(0 * ms)
+    kd = fb.kernel_direct
+    ks = fb.kernel_som
+    expected_direct = np.eye(12)
+    expected_som = np.zeros((12, 12), dtype=np.float64)
+    for ci in range(12):
+        expected_som[ci, (ci - 1) % 12] = 0.4
+        expected_som[ci, (ci + 1) % 12] = 0.4
+        expected_som[ci, (ci - 2) % 12] = 0.1
+        expected_som[ci, (ci + 2) % 12] = 0.1
+    passed_kernel = (
+        np.allclose(kd, expected_direct)
+        and np.allclose(ks, expected_som)
+        and np.allclose(kd.sum(axis=1), 1.0)
+        and np.allclose(ks.sum(axis=1), 1.0)
+    )
+
+    # Direct route connects only same-channel H_E -> V1_E.
     i1 = np.asarray(fb.hr_to_v1e.i[:])
     j1 = np.asarray(fb.hr_to_v1e.j[:])
-    w1 = np.asarray(fb.hr_to_v1e.w[:])
     ci = h.e_channel[i1]
     cj = v.e_channel[j1]
-    mask_same_ch = ci == cj
-    w_same = w1[mask_same_ch].mean() if mask_same_ch.any() else 0.0
-    w_neighbor = w1[np.abs(ci - cj) == 1].mean() if \
-        np.any(np.abs(ci - cj) == 1) else 0.0
-    # Same-channel should be largest; ± 1 channel next; more distant smaller.
-    passed_kernel = w_same > w_neighbor > 0.0
-    # Second route shares the topology
+    passed_direct_topology = bool(np.all(ci == cj))
+
+    # SOM route connects exactly d1/d2 wrapped targets and excludes center.
     i2 = np.asarray(fb.hr_to_v1som.i[:])
     j2 = np.asarray(fb.hr_to_v1som.j[:])
     ci2 = h.e_channel[i2]
     cj2 = v.som_channel[j2]
-    # Every connection: source and target channels agree with kernel (nonzero)
-    # Check: max kernel[ci2, cj2] should be same-ch; never cross to orthogonal.
     d = np.abs(ci2 - cj2)
     d = np.minimum(d, 12 - d)
-    passed_som_topology = d.max() <= 3    # floor kicks in beyond 3 channels
-    passed = passed_kernel and passed_som_topology
-    detail = (f"direct-route w_same={w_same:.4f} > w_neighbor={w_neighbor:.4f}; "
-              f"som-route max channel-distance={d.max()}")
+    passed_som_topology = bool(
+        np.all(np.isin(d, [1, 2]))
+        and not np.any(d == 0)
+        and int(fb.kernel_w_som.size) == 12 * 16 * 4 * 4
+    )
+    passed = passed_kernel and passed_direct_topology and passed_som_topology
+    detail = (
+        f"direct center_only={passed_direct_topology} n={fb.kernel_w_direct.size}; "
+        f"SOM d={sorted(set(d.tolist()))} n={fb.kernel_w_som.size}; "
+        f"row_sums direct/SOM={kd.sum(axis=1).min():.1f}/"
+        f"{ks.sum(axis=1).min():.1f}; row0 SOM={ks[0].tolist()}"
+    )
     print(f"[6] topology_determinism:      "
           f"{'PASS' if passed else 'FAIL'} -- {detail}")
     return passed
@@ -291,7 +325,7 @@ def assay_6_topology_determinism() -> bool:
 def main() -> int:
     assays = [
         ("matched_unmatched_ratio_r1", assay_1_matched_unmatched_ratio_at_r1),
-        ("direct_vs_som_opposite",     assay_2_direct_vs_som_opposite_signs),
+        ("ctx_pred_route_primitive",   assay_2_ctx_pred_dampen_and_sharpen_primitive),
         ("total_off_no_modulation",    assay_3_total_off_no_modulation),
         ("sub_threshold_no_firing",    assay_4_sub_threshold_no_firing),
         ("monotonic_balance_sweep",    assay_5_monotonic_balance_sweep),
