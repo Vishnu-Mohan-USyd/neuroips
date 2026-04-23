@@ -1,6 +1,6 @@
 # Project Summary: Laminar V1-V2 Expectation Suppression Model
 
-**Last updated:** 2026-04-22
+**Last updated:** 2026-04-23
 **Branch:** `dampening-analysis` (active for analysis); `single-network-dual-regime` (training baselines).
 **Default checkpoint for ex-vs-unex / dampening-vs-sharpening analysis (set 2026-04-17):** R1+R2 simple_dual emergent_seed42 (`results/simple_dual/emergent_seed42/checkpoint.pt` on the remote). Network_mm / Network_both remain valid for the per-regime feedback question but are no longer the default model for ex-vs-unex analysis.
 **R1+R2 regime characterisation (2026-04-22, Tasks #15–#26):** **hybrid, not single-regime.** On the paired-fork paradigm (constructive probe, bit-identical pre-probe state), R1+R2 shows **decoder-robust sharpening** in the decoding sign (Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125 on the NEW eval; all signs positive). FWHM behaviour on the paired-fork is paradigm-internally split: the NEW eval has ex FWHM **narrower** than unex (Δ = −1.33°), but the 4-condition `paradigm_readout` paired HMM fork has ex FWHM **wider** than unex (+0.9° to +2.0°) — same paradigm family, different cue/task-state combinations. On observational paradigms (matched_3row_ring, matched_hmm_ring_sequence with --tight-expected, v2_confidence_dissection, plus M3R and VCD with focused+march cue), R1+R2 shows **decoder-robust dampening** in the decoding sign — Δdec_C ∈ {−0.029, −0.063, −0.070, −0.018, −0.013} on those 5 rows. The sign difference between paired-fork (sharpening on decoding) and observational (dampening on decoding) is real, not a decoder artefact. See RESULTS.md §11–§14 for the full evidence.
@@ -507,15 +507,18 @@ No mechanism interpretation beyond these literal comparisons.
 
 **Coverage.** 17 rows — HMM C1/C2/C3/C4 on R1+R2 (4); HMM C1 on legacy a1/b1/c1/e1 (4); the paired-fork assay on R1+R2 (1, the NEW eval); four observational assays on R1+R2 — M3R, HMS, HMS-T, P3P, VCD (5); three of those observational assays re-run with `focused + march cue` modification (3).
 
-**Per-decoder profile (n=17).**
+**Per-decoder profile (n=17, except Dec A′ which is R1+R2-only n=13).**
 
-| Decoder | mean \|Δ\| | max \|Δ\| | rows that agree with row-majority sign | rows where this decoder is the single outlier |
-|---|---:|---:|---:|---:|
-| A | 0.2024 | 0.3871 | 17 / 17 | 0 |
-| B | 0.0598 | 0.1818 | 12 / 17 | 5 |
-| C | 0.0399 | 0.1254 | 14 / 17 | 3 |
+| Decoder | n rows | mean \|Δ\| | max \|Δ\| | rows that agree with row-majority sign | rows where this decoder is the single outlier |
+|---|---:|---:|---:|---:|---:|
+| A | 17 | 0.2024 | 0.3871 | 17 / 17 | 0 |
+| A′ (R1+R2 only) | 13 | 0.2138 | 0.3902 | 13 / 13 (all signs same as Dec A on the same 13 rows) | 0 |
+| B | 17 | 0.0598 | 0.1818 | 12 / 17 | 5 |
+| C | 17 | 0.0399 | 0.1254 | 14 / 17 | 3 |
 
 9 of 17 rows are **all-agree** (every decoder agrees on sign). Dec A amplifies effects the most; Dec C is the most conservative. See RESULTS.md §11 for the full 17-row long-form table (ex/unex/Δ per decoder) and the compact Δ side-by-side with outlier flags.
+
+**Dec A → Dec A′ swap (2026-04-23).** Dec A is trained jointly with L2/3 during Stage 1 (moving target — L2/3 changes each step). Dec A′ is a fresh `Linear(36, 36)` retrained for 5000 Adam steps on `r_l23` streamed through the fully-trained, **frozen** R1+R2 network (stable target; 10k-HMM top-1 = 0.5486 vs Dec A 0.5413; `frac_same_pred(A, A′) = 0.820`). Replacing Dec A with Dec A′ on the 13 R1+R2 rows produces **zero Δ-sign flips**; `|Δ_A′ − Δ_A|` ≤ 0.094 with median 0.025; holding Δ_B / Δ_C fixed at their original-run values, zero rows change sign-agreement class. The Dec A training-schedule concern does not materially change the 13-row dampening-vs-sharpening pattern. Sources: `checkpoints/decoder_a_prime.pt`, `results/decoder_a_prime_training.json`, `results/decoder_a_prime_stratified_eval.json`, `results/cross_decoder_comprehensive_decAprime.{json,md}`, `results/cross_decoder_comprehensive_decAprime_diff.{json,md}`. Full taxonomy now in `ARCHITECTURE.md` § "Decoders" (4 decoder rows: A / A′ / B / C).
 
 ---
 

@@ -40,11 +40,12 @@ The paradigm choice, not the decoder choice, drives the sign. Details: `RESULTS.
 
 | Decoder | Training data | 10k natural-HMM top-1 (R1+R2) | Role |
 |---|---|---:|---|
-| **A** | Stage-1 `r_l23` (includes jumps/unexpected in natural march) | 0.5413 | Frozen network readout; amplifier (largest \|Δ\| but never the sign outlier across 17 rows). |
+| **A** | Stage-1 `r_l23` during L2/3 training (moving target — L2/3 changes each step). | 0.5413 | Frozen network readout; amplifier (largest \|Δ\| but never the sign outlier across 17 rows). |
+| **A′** | 5000 Adam steps on `r_l23` from the **frozen, fully-trained** R1+R2 network (stable target; 2026-04-23). | 0.5486 | Stable-target sanity check on Dec A. Zero Δ-sign flips across all 13 R1+R2 rows; `frac_same_pred(A, A′) = 0.820`. |
 | **B** | 5-fold nearest-centroid CV on the analysis set | — | Robustness control; noisiest sign-carrier (outlier in 5 of 17 rows). |
 | **C** | 100k synthetic orientation bumps (never sees unex) | 0.5345 | Preferred decoder for ex-vs-unex; most conservative (smallest \|Δ\|, outlier in 3 of 17 rows). |
 
-**Chance baseline = 1/36 ≈ 2.8%** for 36-way orientation classification. Dec A (top-1 = 0.5413) and Dec C (top-1 = 0.5345) on the 10k natural HMM stream are both ≈ **19× above chance**, well above random performance. `frac_same_pred(A, C) = 0.67` on the same 10k stream. Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders".
+**Chance baseline = 1/36 ≈ 2.8%** for 36-way orientation classification. Dec A (top-1 = 0.5413), Dec A′ (top-1 = 0.5486), and Dec C (top-1 = 0.5345) on the 10k natural HMM stream are all ≈ **19× above chance**, well above random performance. `frac_same_pred(A, C) = 0.67`; `frac_same_pred(A, A′) = 0.82` on the same 10k stream. Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders".
 
 ## Reproducing the rescue figures
 
