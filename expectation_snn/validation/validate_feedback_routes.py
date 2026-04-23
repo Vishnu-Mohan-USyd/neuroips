@@ -24,12 +24,13 @@ network cleanly.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 import numpy as np
 
 from brian2 import (
-    Network, SpikeMonitor, defaultclock, prefs, ms, Hz,
+    Network, SpikeMonitor, defaultclock, device, ms, Hz,
     seed as b2_seed, start_scope,
 )
 
@@ -40,6 +41,7 @@ if str(_pkg_root) not in sys.path:
 from expectation_snn.brian2_model.h_ring import (
     build_h_r, pulse_channel, silence_cue,
 )
+from expectation_snn.brian2_model.backend import configure_backend, selected_backend
 from expectation_snn.brian2_model.v1_ring import (
     build_v1_ring, set_stimulus,
 )
@@ -56,16 +58,68 @@ H_PULSE_RATE_HZ = 300.0
 
 # One V1_E spike in one channel over the 1.5 s window is 1/(16*1.5) Hz.
 MIN_ROUTE_DELTA_HZ = 0.04
+_STANDALONE_BUILD_INDEX = 0
 
 
 # -- helpers ----------------------------------------------------------------
 
+def _next_standalone_dir(backend_name: str) -> Path:
+    """Return a fresh standalone build directory for this validator process."""
+    global _STANDALONE_BUILD_INDEX
+    _STANDALONE_BUILD_INDEX += 1
+    root = os.environ.get("EXPECTATION_SNN_STANDALONE_DIR")
+    if root:
+        base = Path(root).expanduser()
+    else:
+        base = Path("/tmp") / "expectation_snn_brian2" / f"{backend_name}_{os.getpid()}"
+    return base / f"build_{_STANDALONE_BUILD_INDEX:03d}"
+
+
 def _setup_brian():
     start_scope()
-    prefs.codegen.target = "numpy"
+    backend_name = selected_backend()
+    if backend_name == "numpy":
+        backend_cfg = configure_backend()
+    else:
+        backend_cfg = configure_backend(
+            build_on_run=False,
+            directory=_next_standalone_dir(backend_name),
+        )
     defaultclock.dt = DT_MS * ms
     b2_seed(SEED)
     np.random.seed(SEED)
+    return backend_cfg
+
+
+def _is_standalone(backend_cfg) -> bool:
+    return backend_cfg.name != "numpy"
+
+
+def _build_standalone(backend_cfg) -> None:
+    if backend_cfg.directory is None:
+        raise RuntimeError("Standalone backend requires a build directory")
+    device.build(directory=str(backend_cfg.directory), compile=True, run=True)
+
+
+def _reset_standalone_device() -> None:
+    device.reinit()
+    device.activate()
+
+
+def _trial_rates(e_mon, som_mon, h_mon, v, h) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # Per-channel rates over the TRIAL window only.
+    def _per_ch(mon, ch_map, n_per_ch):
+        t = np.asarray(mon.t / ms)
+        i = np.asarray(mon.i[:])
+        intr = t >= RUN_PRE_MS
+        counts = np.bincount(ch_map[i[intr]], minlength=12)
+        return counts / (n_per_ch * RUN_TRIAL_MS * 1e-3)
+
+    return (
+        _per_ch(e_mon, v.e_channel, 16),
+        _per_ch(som_mon, v.som_channel, 4),
+        _per_ch(h_mon, h.e_channel, 16),
+    )
 
 
 def _run_trial(
@@ -79,7 +133,8 @@ def _run_trial(
     grating_contrast: float = 1.0,
 ) -> dict:
     """Build network, run trial, return per-channel V1_E + V1_SOM counts."""
-    _setup_brian()
+    backend_cfg = _setup_brian()
+    standalone = _is_standalone(backend_cfg)
     h = build_h_r()
     v = build_v1_ring()
     cfg = ctx_pred_feedback_config(
@@ -99,26 +154,25 @@ def _run_trial(
 
     silence_cue(h)
     net.run(RUN_PRE_MS * ms)
-    n_e_pre = e_mon.num_spikes
-    n_s_pre = som_mon.num_spikes
-    n_h_pre = h_mon.num_spikes
+    if not standalone:
+        n_e_pre = e_mon.num_spikes
+        n_s_pre = som_mon.num_spikes
+        n_h_pre = h_mon.num_spikes
 
     if h_pulse_on:
         pulse_channel(h, channel=0, rate_hz=H_PULSE_RATE_HZ)
     net.run(RUN_TRIAL_MS * ms)
     silence_cue(h)
 
-    # Per-channel rates over the TRIAL window only.
-    def _per_ch(mon, ch_map, n_per_ch):
-        t = np.asarray(mon.t / ms)
-        i = np.asarray(mon.i[:])
-        intr = t >= RUN_PRE_MS
-        counts = np.bincount(ch_map[i[intr]], minlength=12)
-        return counts / (n_per_ch * RUN_TRIAL_MS * 1e-3)
+    if standalone:
+        try:
+            _build_standalone(backend_cfg)
+            rate_e, rate_s, rate_h = _trial_rates(e_mon, som_mon, h_mon, v, h)
+        finally:
+            _reset_standalone_device()
+    else:
+        rate_e, rate_s, rate_h = _trial_rates(e_mon, som_mon, h_mon, v, h)
 
-    rate_e = _per_ch(e_mon, v.e_channel, 16)
-    rate_s = _per_ch(som_mon, v.som_channel, 4)
-    rate_h = _per_ch(h_mon, h.e_channel, 16)
 
     return {
         "v1_e_hz": rate_e,
@@ -267,57 +321,65 @@ def assay_5_monotonic_balance_sweep() -> bool:
 
 def assay_6_topology_determinism() -> bool:
     """[6] topology: center direct route + wrapped d1/d2 SOM surround."""
-    _setup_brian()
+    backend_cfg = _setup_brian()
+    standalone = _is_standalone(backend_cfg)
     h = build_h_r()
     v = build_v1_ring()
     fb = build_feedback_routes(h, v, ctx_pred_feedback_config(g_total=1.0, r=1.0))
     _net = Network(*h.groups, *v.groups, *fb.groups)
     _net.run(0 * ms)
-    kd = fb.kernel_direct
-    ks = fb.kernel_som
-    expected_direct = np.eye(12)
-    expected_som = np.zeros((12, 12), dtype=np.float64)
-    for ci in range(12):
-        expected_som[ci, (ci - 1) % 12] = 0.4
-        expected_som[ci, (ci + 1) % 12] = 0.4
-        expected_som[ci, (ci - 2) % 12] = 0.1
-        expected_som[ci, (ci + 2) % 12] = 0.1
-    passed_kernel = (
-        np.allclose(kd, expected_direct)
-        and np.allclose(ks, expected_som)
-        and np.allclose(kd.sum(axis=1), 1.0)
-        and np.allclose(ks.sum(axis=1), 1.0)
-    )
+    try:
+        if standalone:
+            _build_standalone(backend_cfg)
 
-    # Direct route connects only same-channel H_E -> V1_E.
-    i1 = np.asarray(fb.hr_to_v1e.i[:])
-    j1 = np.asarray(fb.hr_to_v1e.j[:])
-    ci = h.e_channel[i1]
-    cj = v.e_channel[j1]
-    passed_direct_topology = bool(np.all(ci == cj))
+        kd = fb.kernel_direct
+        ks = fb.kernel_som
+        expected_direct = np.eye(12)
+        expected_som = np.zeros((12, 12), dtype=np.float64)
+        for ci in range(12):
+            expected_som[ci, (ci - 1) % 12] = 0.4
+            expected_som[ci, (ci + 1) % 12] = 0.4
+            expected_som[ci, (ci - 2) % 12] = 0.1
+            expected_som[ci, (ci + 2) % 12] = 0.1
+        passed_kernel = (
+            np.allclose(kd, expected_direct)
+            and np.allclose(ks, expected_som)
+            and np.allclose(kd.sum(axis=1), 1.0)
+            and np.allclose(ks.sum(axis=1), 1.0)
+        )
 
-    # SOM route connects exactly d1/d2 wrapped targets and excludes center.
-    i2 = np.asarray(fb.hr_to_v1som.i[:])
-    j2 = np.asarray(fb.hr_to_v1som.j[:])
-    ci2 = h.e_channel[i2]
-    cj2 = v.som_channel[j2]
-    d = np.abs(ci2 - cj2)
-    d = np.minimum(d, 12 - d)
-    passed_som_topology = bool(
-        np.all(np.isin(d, [1, 2]))
-        and not np.any(d == 0)
-        and int(fb.kernel_w_som.size) == 12 * 16 * 4 * 4
-    )
-    passed = passed_kernel and passed_direct_topology and passed_som_topology
-    detail = (
-        f"direct center_only={passed_direct_topology} n={fb.kernel_w_direct.size}; "
-        f"SOM d={sorted(set(d.tolist()))} n={fb.kernel_w_som.size}; "
-        f"row_sums direct/SOM={kd.sum(axis=1).min():.1f}/"
-        f"{ks.sum(axis=1).min():.1f}; row0 SOM={ks[0].tolist()}"
-    )
-    print(f"[6] topology_determinism:      "
-          f"{'PASS' if passed else 'FAIL'} -- {detail}")
-    return passed
+        # Direct route connects only same-channel H_E -> V1_E.
+        i1 = np.asarray(fb.hr_to_v1e.i[:])
+        j1 = np.asarray(fb.hr_to_v1e.j[:])
+        ci = h.e_channel[i1]
+        cj = v.e_channel[j1]
+        passed_direct_topology = bool(np.all(ci == cj))
+
+        # SOM route connects exactly d1/d2 wrapped targets and excludes center.
+        i2 = np.asarray(fb.hr_to_v1som.i[:])
+        j2 = np.asarray(fb.hr_to_v1som.j[:])
+        ci2 = h.e_channel[i2]
+        cj2 = v.som_channel[j2]
+        d = np.abs(ci2 - cj2)
+        d = np.minimum(d, 12 - d)
+        passed_som_topology = bool(
+            np.all(np.isin(d, [1, 2]))
+            and not np.any(d == 0)
+            and int(fb.kernel_w_som.size) == 12 * 16 * 4 * 4
+        )
+        passed = passed_kernel and passed_direct_topology and passed_som_topology
+        detail = (
+            f"direct center_only={passed_direct_topology} n={fb.kernel_w_direct.size}; "
+            f"SOM d={sorted(set(d.tolist()))} n={fb.kernel_w_som.size}; "
+            f"row_sums direct/SOM={kd.sum(axis=1).min():.1f}/"
+            f"{ks.sum(axis=1).min():.1f}; row0 SOM={ks[0].tolist()}"
+        )
+        print(f"[6] topology_determinism:      "
+              f"{'PASS' if passed else 'FAIL'} -- {detail}")
+        return passed
+    finally:
+        if standalone:
+            _reset_standalone_device()
 
 
 # -- runner -----------------------------------------------------------------

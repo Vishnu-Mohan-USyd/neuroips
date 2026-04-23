@@ -218,8 +218,16 @@ def _build_h_ring(name: str, config: Optional[HRingConfig]) -> HRing:
     # Re-assign by (pre,post) channel pair: within-channel = strong,
     # |dc| == 1 mod N = weak, else = 0 (but keep the synapse to allow
     # STDP to find feature-similarity statistics if the caller wants).
-    i_vec = np.asarray(ee.i[:])
-    j_vec = np.asarray(ee.j[:])
+    # Brian2 standalone devices cannot read Synapses.i/j before build. This
+    # matches connect(condition="i != j"): for each pre index, all post indices
+    # in ascending order except self.
+    all_pre = np.repeat(np.arange(n_e, dtype=np.int64), n_e)
+    all_post = np.tile(np.arange(n_e, dtype=np.int64), n_e)
+    non_self = all_pre != all_post
+    i_vec = all_pre[non_self]
+    j_vec = all_post[non_self]
+    assert i_vec.shape == (n_e * (n_e - 1),)
+    assert j_vec.shape == i_vec.shape
     ci = e_channel[i_vec]
     cj = e_channel[j_vec]
     dc = np.abs(ci - cj)

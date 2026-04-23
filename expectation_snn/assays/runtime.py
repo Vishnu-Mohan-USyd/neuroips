@@ -237,17 +237,55 @@ class FrozenBundle:
 
 # Checkpoint loaders -------------------------------------------------------
 
+def _required_checkpoint_vector(
+    data,
+    key: str,
+    expected_shape: Tuple[int, ...],
+    label: str,
+) -> np.ndarray:
+    """Return a required flat checkpoint vector with deterministic shape check."""
+    if key not in data.files:
+        raise KeyError(
+            f"{label} checkpoint missing key {key!r} "
+            f"(found keys: {sorted(data.files)})"
+        )
+    arr = np.asarray(data[key], dtype=np.float64)
+    if arr.shape != tuple(expected_shape):
+        raise ValueError(
+            f"{label} {key} shape {arr.shape} != expected {tuple(expected_shape)}"
+        )
+    return arr
+
+
+def _expected_v1_pv_to_e_shape(v1: V1Ring) -> Tuple[int]:
+    """PV→E is all-to-all: every broad PV cell targets every V1 E cell."""
+    return (int(len(v1.pv)) * int(len(v1.e)),)
+
+
+def _expected_h_ee_shape(h: HRing) -> Tuple[int]:
+    """H E→E uses connect(condition='i != j') on one H E population."""
+    n_e = int(len(h.e))
+    return (n_e * (n_e - 1),)
+
+
+def _expected_ctx_pred_shape(bundle: HContextPrediction) -> Tuple[int]:
+    """H_context→H_prediction is all-to-all between distinct E groups."""
+    return (int(len(bundle.ctx.e)) * int(len(bundle.pred.e)),)
+
+
+def _expected_stage2_cue_shape(h: HRing) -> Tuple[int]:
+    """Each Stage-2 cue pool is all-to-all onto H E."""
+    return (int(STAGE2_N_CUE_AFFERENTS) * int(len(h.e)),)
+
+
 def _load_stage0_into_v1(v1: V1Ring, ckpt_path: str) -> Tuple[float, int]:
     """Restore V1 E I_bias + PV→E weights from Stage-0 checkpoint."""
     data = np.load(ckpt_path)
     bias = float(data["bias_pA"])
     v1.e.I_bias = bias * pA
-    pv_w = np.asarray(data["pv_to_e_w"], dtype=np.float64)
-    live = np.asarray(v1.pv_to_e.w[:])
-    if pv_w.shape != live.shape:
-        raise ValueError(
-            f"Stage-0 pv_to_e_w shape {pv_w.shape} != live {live.shape}"
-        )
+    pv_w = _required_checkpoint_vector(
+        data, "pv_to_e_w", _expected_v1_pv_to_e_shape(v1), "Stage-0",
+    )
     v1.pv_to_e.w[:] = pv_w
     return bias, pv_w.size
 
@@ -259,12 +297,9 @@ def _load_stage1_into_h(h: HRing, ckpt_path: str) -> int:
     store the same-shape ``ee_w_final`` on the shared 12-channel ring.
     """
     data = np.load(ckpt_path)
-    ee_w = np.asarray(data["ee_w_final"], dtype=np.float64)
-    live = np.asarray(h.ee.w[:])
-    if ee_w.shape != live.shape:
-        raise ValueError(
-            f"Stage-1 ee_w_final shape {ee_w.shape} != live {live.shape}"
-        )
+    ee_w = _required_checkpoint_vector(
+        data, "ee_w_final", _expected_h_ee_shape(h), "Stage-1",
+    )
     h.ee.w[:] = ee_w
     return ee_w.size
 
@@ -296,32 +331,17 @@ def _load_stage1_ctx_pred_into(
     source of truth for W_ctx_pred during assays.
     """
     data = np.load(ckpt_path)
-    required = ("ctx_ee_w_final", "pred_ee_w_final", "W_ctx_pred_final")
-    for k in required:
-        if k not in data.files:
-            raise KeyError(
-                f"Stage-1 ctx_pred checkpoint missing key {k!r} "
-                f"(found keys: {sorted(data.files)})"
-            )
-    ctx_w = np.asarray(data["ctx_ee_w_final"], dtype=np.float64)
-    pred_w = np.asarray(data["pred_ee_w_final"], dtype=np.float64)
-    ctx_pred_w = np.asarray(data["W_ctx_pred_final"], dtype=np.float64)
-
-    live_ctx = np.asarray(bundle.ctx.ee.w[:])
-    live_pred = np.asarray(bundle.pred.ee.w[:])
-    live_cp = np.asarray(bundle.ctx_pred.w[:])
-    if ctx_w.shape != live_ctx.shape:
-        raise ValueError(
-            f"ctx_ee_w_final shape {ctx_w.shape} != live {live_ctx.shape}"
-        )
-    if pred_w.shape != live_pred.shape:
-        raise ValueError(
-            f"pred_ee_w_final shape {pred_w.shape} != live {live_pred.shape}"
-        )
-    if ctx_pred_w.shape != live_cp.shape:
-        raise ValueError(
-            f"W_ctx_pred_final shape {ctx_pred_w.shape} != live {live_cp.shape}"
-        )
+    h_ee_shape = _expected_h_ee_shape(bundle.ctx)
+    ctx_w = _required_checkpoint_vector(
+        data, "ctx_ee_w_final", h_ee_shape, "Stage-1 ctx_pred",
+    )
+    pred_w = _required_checkpoint_vector(
+        data, "pred_ee_w_final", h_ee_shape, "Stage-1 ctx_pred",
+    )
+    ctx_pred_w = _required_checkpoint_vector(
+        data, "W_ctx_pred_final", _expected_ctx_pred_shape(bundle),
+        "Stage-1 ctx_pred",
+    )
     bundle.ctx.ee.w[:] = ctx_w
     bundle.pred.ee.w[:] = pred_w
     bundle.ctx_pred.w[:] = ctx_pred_w
@@ -658,15 +678,13 @@ def build_frozen_network(
     if with_cue:
         cue_A, cue_B, cue_A_to_h, cue_B_to_h = _build_frozen_cue_pathway(h)
         ck2 = np.load(stage2_ckpt)
-        wA = np.asarray(ck2["cue_A_w_final"], dtype=np.float64)
-        wB = np.asarray(ck2["cue_B_w_final"], dtype=np.float64)
-        liveA = np.asarray(cue_A_to_h.w[:])
-        liveB = np.asarray(cue_B_to_h.w[:])
-        if wA.shape != liveA.shape or wB.shape != liveB.shape:
-            raise ValueError(
-                f"Stage-2 cue_{{A,B}}_w_final shape {wA.shape}/{wB.shape} "
-                f"!= live {liveA.shape}/{liveB.shape}"
-            )
+        cue_shape = _expected_stage2_cue_shape(h)
+        wA = _required_checkpoint_vector(
+            ck2, "cue_A_w_final", cue_shape, "Stage-2",
+        )
+        wB = _required_checkpoint_vector(
+            ck2, "cue_B_w_final", cue_shape, "Stage-2",
+        )
         cue_A_to_h.w[:] = wA
         cue_B_to_h.w[:] = wB
         cue_meta = {

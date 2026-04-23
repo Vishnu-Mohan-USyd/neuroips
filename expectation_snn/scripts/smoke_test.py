@@ -12,6 +12,9 @@ Usage:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
 
 from brian2 import (
@@ -23,14 +26,19 @@ from brian2 import (
     defaultclock,
     mV,
     ms,
-    prefs,
     run,
     seed,
 )
 
+_pkg_root = Path(__file__).resolve().parents[2]
+if str(_pkg_root) not in sys.path:
+    sys.path.insert(0, str(_pkg_root))
+
+from expectation_snn.brian2_model.backend import configure_backend
+
 
 def main() -> int:
-    prefs.codegen.target = "numpy"
+    configure_backend()
     defaultclock.dt = 0.1 * ms
     seed(42)
     np.random.seed(42)

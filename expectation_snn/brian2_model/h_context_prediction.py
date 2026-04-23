@@ -423,7 +423,10 @@ def _build_ctx_pred_synapses(
     # since they live in separate NeuronGroups, so no self-connection
     # risk; we keep connectivity explicit for clarity).
     ctx_pred.connect(True)
-    n_syn = len(ctx_pred)
+    # Brian2 standalone devices cannot read Synapses.N before build. This
+    # connectivity is all-to-all between distinct E groups, so the size is
+    # deterministic from the source/target group sizes.
+    n_syn = int(len(ctx.e)) * int(len(pred.e))
     w_init = rng.uniform(
         low=0.0,
         high=cfg.w_init_frac * cfg.w_max,

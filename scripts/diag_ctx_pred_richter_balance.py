@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
-from brian2 import Network, SpikeMonitor, defaultclock, ms, prefs
+from brian2 import Network, SpikeMonitor, defaultclock, device, ms
 from brian2 import pA
 from brian2 import seed as b2_seed
 
@@ -44,6 +45,11 @@ from expectation_snn.assays.runtime import (
     set_grating,
 )
 from expectation_snn.brian2_model.h_context_prediction import HContextPredictionConfig
+from expectation_snn.brian2_model.backend import (
+    STANDALONE_DIR_ENV,
+    configure_backend,
+    selected_backend,
+)
 from expectation_snn.brian2_model.stimulus import N_CHANNELS as V1_N_CHANNELS
 
 
@@ -68,6 +74,48 @@ def _snapshot(mon: SpikeMonitor) -> np.ndarray:
     return np.asarray(mon.count[:], dtype=np.int64).copy()
 
 
+def _counts_from_windows(
+    mon: SpikeMonitor,
+    n_cells: int,
+    windows_ms: List[Tuple[float, float]],
+) -> np.ndarray:
+    """Return per-cell spike counts for absolute [start, end) windows.
+
+    Shape is ``(n_cells, n_windows)`` to match the existing snapshot arrays.
+    This is the post-hoc extraction path needed by Brian2 standalone devices,
+    where monitor values are only available after the explicit build/run.
+    """
+    spike_i = np.asarray(mon.i[:], dtype=np.int64)
+    spike_t_ms = np.asarray(mon.t / ms, dtype=np.float64)
+    out = np.zeros((int(n_cells), len(windows_ms)), dtype=np.int64)
+    for k, (start_ms, end_ms) in enumerate(windows_ms):
+        mask = (spike_t_ms >= float(start_ms)) & (spike_t_ms < float(end_ms))
+        if mask.any():
+            out[:, k] = np.bincount(spike_i[mask], minlength=int(n_cells))
+    return out
+
+
+def _h_rate_from_windows(
+    mon: SpikeMonitor,
+    h_ring: Any,
+    windows_ms: List[Tuple[float, float]],
+) -> np.ndarray:
+    """Return per-H-channel rates from post-hoc monitor windows."""
+    counts = _counts_from_windows(mon, int(h_ring.e.N), windows_ms)
+    ch = np.asarray(h_ring.e_channel, dtype=np.int64)
+    n_ch = int(ch.max()) + 1
+    rate = np.zeros((len(windows_ms), n_ch), dtype=np.float64)
+    for k, (start_ms, end_ms) in enumerate(windows_ms):
+        window_s = (float(end_ms) - float(start_ms)) * 1e-3
+        if window_s <= 0.0:
+            raise ValueError(f"invalid posthoc window [{start_ms}, {end_ms}) ms")
+        for c in range(n_ch):
+            mask = (ch == c)
+            if mask.any():
+                rate[k, c] = counts[mask, k].sum() / mask.sum() / window_s
+    return rate
+
+
 def _parse_r_values(text: str) -> List[float]:
     vals = [float(v.strip()) for v in str(text).split(",") if v.strip()]
     if not vals:
@@ -78,6 +126,30 @@ def _parse_r_values(text: str) -> List[float]:
 def _brian_name_tag(r: float, feedback_routes: bool) -> str:
     r_tag = f"{float(r):g}".replace("-", "m").replace(".", "p")
     return f"r{r_tag}_fb{int(feedback_routes)}"
+
+
+def _standalone_condition_dir(backend_name: str, tag: str) -> Path:
+    root = os.environ.get(STANDALONE_DIR_ENV)
+    if root:
+        return Path(root).expanduser() / tag
+    return Path("/tmp") / "expectation_snn_brian2" / f"{backend_name}_{os.getpid()}" / tag
+
+
+def _configure_condition_backend(count_mode: str, tag: str):
+    backend_name = selected_backend()
+    if count_mode == "snapshot" and backend_name != "numpy":
+        raise RuntimeError(
+            "diag_ctx_pred_richter_balance count_mode='snapshot' reads "
+            "SpikeMonitor.count inside the trial loop and is only supported "
+            "with EXPECTATION_SNN_BACKEND=numpy. Use --count-mode posthoc "
+            "for standalone backends."
+        )
+    if count_mode == "posthoc" and backend_name != "numpy":
+        return configure_backend(
+            build_on_run=False,
+            directory=_standalone_condition_dir(backend_name, tag),
+        )
+    return configure_backend()
 
 
 def _channel_for_theta(theta_rad: float, n_channels: int = V1_N_CHANNELS) -> int:
@@ -330,9 +402,16 @@ def run_condition(
     iti_ms: float,
     preprobe_window_ms: float,
     contrast: float,
+    count_mode: str = "snapshot",
 ) -> Dict[str, Any]:
     """Run one frozen ctx_pred condition and return raw arrays + summaries."""
-    prefs.codegen.target = "numpy"
+    if count_mode not in ("snapshot", "posthoc"):
+        raise ValueError("count_mode must be 'snapshot' or 'posthoc'")
+    use_posthoc = count_mode == "posthoc"
+
+    tag = _brian_name_tag(r, feedback_routes)
+    backend_cfg = _configure_condition_backend(count_mode, tag)
+    standalone = backend_cfg.name != "numpy"
     defaultclock.dt = 0.1 * ms
     b2_seed(seed)
     np.random.seed(seed)
@@ -357,7 +436,6 @@ def run_condition(
     if pred_bias_pA:
         bundle.ctx_pred.pred.e.I_bias = float(pred_bias_pA) * pA
 
-    tag = _brian_name_tag(r, feedback_routes)
     e_mon = SpikeMonitor(bundle.v1_ring.e, name=f"diag_v1_e_{tag}")
     som_mon = SpikeMonitor(bundle.v1_ring.som, name=f"diag_v1_som_{tag}")
     pv_mon = SpikeMonitor(bundle.v1_ring.pv, name=f"diag_v1_pv_{tag}")
@@ -396,6 +474,12 @@ def run_condition(
     if pre_leader_ms < 0:
         raise ValueError("preprobe_window_ms must be <= leader_ms")
 
+    leader_windows_ms: List[Tuple[float, float]] = []
+    preprobe_windows_ms: List[Tuple[float, float]] = []
+    trailer_windows_ms: List[Tuple[float, float]] = []
+    trial_windows_ms: List[Tuple[float, float]] = []
+    time_ms = 0.0
+
     for k, item in enumerate(schedule):
         theta_l[k] = item["theta_L"]
         theta_expected[k] = item["theta_expected"]
@@ -410,50 +494,98 @@ def run_condition(
             bundle.v1_to_h.set_active(True)
 
         set_grating(bundle.v1_ring, theta_rad=item["theta_L"], contrast=contrast)
-        pre_e = _snapshot(e_mon)
+        leader_start_ms = time_ms
+        if not use_posthoc:
+            pre_e = _snapshot(e_mon)
         if pre_leader_ms > 0:
             net.run(pre_leader_ms * ms)
-        ctx_before = _snapshot(ctx_mon)
-        pred_before = _snapshot(pred_mon)
+            time_ms += float(pre_leader_ms)
+        preprobe_start_ms = time_ms
+        if not use_posthoc:
+            ctx_before = _snapshot(ctx_mon)
+            pred_before = _snapshot(pred_mon)
         if preprobe_window_ms > 0:
             net.run(preprobe_window_ms * ms)
-        ctx_after = _snapshot(ctx_mon)
-        pred_after = _snapshot(pred_mon)
-        leader_counts_e[:, k] = _snapshot(e_mon) - pre_e
+            time_ms += float(preprobe_window_ms)
+        leader_windows_ms.append((leader_start_ms, time_ms))
+        preprobe_windows_ms.append((preprobe_start_ms, time_ms))
+        if not use_posthoc:
+            ctx_after = _snapshot(ctx_mon)
+            pred_after = _snapshot(pred_mon)
+            leader_counts_e[:, k] = _snapshot(e_mon) - pre_e
 
-        h_ctx_preprobe_rate_hz[k, :] = _h_rate_from_counts(
-            ctx_before, ctx_after, bundle.ctx_pred.ctx, preprobe_window_ms,
-        )
-        h_pred_preprobe_rate_hz[k, :] = _h_rate_from_counts(
-            pred_before, pred_after, bundle.ctx_pred.pred, preprobe_window_ms,
-        )
+            h_ctx_preprobe_rate_hz[k, :] = _h_rate_from_counts(
+                ctx_before, ctx_after, bundle.ctx_pred.ctx, preprobe_window_ms,
+            )
+            h_pred_preprobe_rate_hz[k, :] = _h_rate_from_counts(
+                pred_before, pred_after, bundle.ctx_pred.pred, preprobe_window_ms,
+            )
 
         set_grating(bundle.v1_ring, theta_rad=item["theta_T"], contrast=contrast)
         if context_only:
             bundle.v1_to_h.set_active(False)
-        pre_e = _snapshot(e_mon)
-        pre_som = _snapshot(som_mon)
-        pre_pv = _snapshot(pv_mon)
-        ctx_before_trailer = _snapshot(ctx_mon)
-        pred_before_trailer = _snapshot(pred_mon)
+        trailer_start_ms = time_ms
+        if not use_posthoc:
+            pre_e = _snapshot(e_mon)
+            pre_som = _snapshot(som_mon)
+            pre_pv = _snapshot(pv_mon)
+            ctx_before_trailer = _snapshot(ctx_mon)
+            pred_before_trailer = _snapshot(pred_mon)
         net.run(float(trailer_ms) * ms)
-        ctx_after_trailer = _snapshot(ctx_mon)
-        pred_after_trailer = _snapshot(pred_mon)
-        trailer_counts_e[:, k] = _snapshot(e_mon) - pre_e
-        trailer_counts_som[:, k] = _snapshot(som_mon) - pre_som
-        trailer_counts_pv[:, k] = _snapshot(pv_mon) - pre_pv
-        h_ctx_trailer_rate_hz[k, :] = _h_rate_from_counts(
-            ctx_before_trailer, ctx_after_trailer, bundle.ctx_pred.ctx, trailer_ms,
-        )
-        h_pred_trailer_rate_hz[k, :] = _h_rate_from_counts(
-            pred_before_trailer, pred_after_trailer, bundle.ctx_pred.pred, trailer_ms,
-        )
+        time_ms += float(trailer_ms)
+        trailer_windows_ms.append((trailer_start_ms, time_ms))
+        if not use_posthoc:
+            ctx_after_trailer = _snapshot(ctx_mon)
+            pred_after_trailer = _snapshot(pred_mon)
+            trailer_counts_e[:, k] = _snapshot(e_mon) - pre_e
+            trailer_counts_som[:, k] = _snapshot(som_mon) - pre_som
+            trailer_counts_pv[:, k] = _snapshot(pv_mon) - pre_pv
+            h_ctx_trailer_rate_hz[k, :] = _h_rate_from_counts(
+                ctx_before_trailer, ctx_after_trailer, bundle.ctx_pred.ctx, trailer_ms,
+            )
+            h_pred_trailer_rate_hz[k, :] = _h_rate_from_counts(
+                pred_before_trailer, pred_after_trailer, bundle.ctx_pred.pred, trailer_ms,
+            )
 
         set_grating(bundle.v1_ring, theta_rad=None, contrast=0.0)
         if context_only:
             bundle.v1_to_h.set_active(True)
         if iti_ms > 0:
             net.run(float(iti_ms) * ms)
+            time_ms += float(iti_ms)
+        trial_windows_ms.append((leader_start_ms, time_ms))
+
+    if use_posthoc and standalone:
+        if backend_cfg.directory is None:
+            raise RuntimeError("standalone backend requires a build directory")
+        try:
+            device.build(directory=str(backend_cfg.directory), compile=True, run=True)
+        except Exception:
+            device.reinit()
+            device.activate()
+            raise
+
+    if use_posthoc:
+        leader_counts_e[:, :] = _counts_from_windows(e_mon, n_e, leader_windows_ms)
+        trailer_counts_e[:, :] = _counts_from_windows(e_mon, n_e, trailer_windows_ms)
+        trailer_counts_som[:, :] = _counts_from_windows(
+            som_mon, n_som, trailer_windows_ms,
+        )
+        trailer_counts_pv[:, :] = _counts_from_windows(
+            pv_mon, n_pv, trailer_windows_ms,
+        )
+        h_ctx_preprobe_rate_hz[:, :] = _h_rate_from_windows(
+            ctx_mon, bundle.ctx_pred.ctx, preprobe_windows_ms,
+        )
+        h_pred_preprobe_rate_hz[:, :] = _h_rate_from_windows(
+            pred_mon, bundle.ctx_pred.pred, preprobe_windows_ms,
+        )
+        h_ctx_trailer_rate_hz[:, :] = _h_rate_from_windows(
+            ctx_mon, bundle.ctx_pred.ctx, trailer_windows_ms,
+        )
+        h_pred_trailer_rate_hz[:, :] = _h_rate_from_windows(
+            pred_mon, bundle.ctx_pred.pred, trailer_windows_ms,
+        )
 
     channel_e = np.asarray(bundle.v1_ring.e_channel, dtype=np.int64)
     v1_summary = _summarize_v1(
@@ -468,7 +600,7 @@ def run_condition(
         expected_idx6, trailer_idx6,
     )
 
-    return {
+    result = {
         "condition": {
             "r": float(r),
             "g_total": float(g_total),
@@ -480,6 +612,12 @@ def run_condition(
             "pred_bias_pA": float(pred_bias_pA),
             "g_direct": float(bundle.meta["g_direct"]),
             "g_SOM": float(bundle.meta["g_SOM"]),
+            "count_mode": str(count_mode),
+            "backend": str(backend_cfg.name),
+            "standalone_dir": (
+                None if backend_cfg.directory is None
+                else str(backend_cfg.directory)
+            ),
         },
         "summary": {
             **{f"v1_{k}": v for k, v in v1_summary.items() if k != "v1_channel_rate_hz" and k != "pref_rank"},
@@ -509,9 +647,17 @@ def run_condition(
             "dtheta_step": dtheta_step,
             "expected_idx6": expected_idx6,
             "trailer_idx6": trailer_idx6,
+            "leader_windows_ms": np.asarray(leader_windows_ms, dtype=np.float64),
+            "preprobe_windows_ms": np.asarray(preprobe_windows_ms, dtype=np.float64),
+            "trailer_windows_ms": np.asarray(trailer_windows_ms, dtype=np.float64),
+            "trial_windows_ms": np.asarray(trial_windows_ms, dtype=np.float64),
         },
         "bundle_meta": bundle.meta,
     }
+    if standalone:
+        device.reinit()
+        device.activate()
+    return result
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -544,6 +690,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     ap.add_argument("--trailer-ms", type=float, default=500.0)
     ap.add_argument("--iti-ms", type=float, default=1500.0)
     ap.add_argument("--preprobe-window-ms", type=float, default=100.0)
+    ap.add_argument(
+        "--count-mode",
+        choices=("snapshot", "posthoc"),
+        default="snapshot",
+        help=(
+            "Count extraction mode. snapshot preserves the current in-loop "
+            "SpikeMonitor.count path; posthoc computes counts from monitor "
+            "spike times after the queued run."
+        ),
+    )
     ap.add_argument("--contrast", type=float, default=1.0)
     ap.add_argument(
         "--v1-to-h-mode",
@@ -573,6 +729,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             "trailer_ms": float(args.trailer_ms),
             "iti_ms": float(args.iti_ms),
             "preprobe_window_ms": float(args.preprobe_window_ms),
+            "count_mode": str(args.count_mode),
             "contrast": float(args.contrast),
             "ctx_pred_drive_pA": (
                 None if args.ctx_pred_drive_pA is None
@@ -601,6 +758,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             iti_ms=args.iti_ms,
             preprobe_window_ms=args.preprobe_window_ms,
             contrast=args.contrast,
+            count_mode=args.count_mode,
         )
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(_jsonable(results), indent=2), encoding="utf-8")
@@ -622,6 +780,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 iti_ms=args.iti_ms,
                 preprobe_window_ms=args.preprobe_window_ms,
                 contrast=args.contrast,
+                count_mode=args.count_mode,
             )
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(_jsonable(results), indent=2), encoding="utf-8")
