@@ -1,0 +1,10 @@
+[phase_a] building fresh V2Network (seed=42, no training)
+[phase_a] network built — n_params=246912
+[phase_a] orientation tuning (12 × 20 × 500 ms) ...
+  rate_median=3.545 hz  fwhm_median=60.0°  frac_resp=1.00  n_pref_bins=10/12  r_som=8.47 hz  [2.3s]
+[phase_a] contrast response (6 × 3 × 10) ...
+  r2_median=0.999  r2_frac>0.7=1.00  n_units_fit=256/256  [3.3s]
+[phase_a] surround suppression (3 × 2 × 10) ...
+  si_median=-0.209  si_frac>0.1=0.00  [1.7s]
+[phase_a] wrote logs/task74/phase_a_static_sanity.json  wall=8.1s
+PhaseA rate_median=3.545 rate_fraction_responsive=1.000 fwhm_median=60.0 n_preferred_bins=10 contrast_R2_median=0.999 suppression_index_median=-0.209 suppression_frac_above_0.1=0.000 r_som=8.47

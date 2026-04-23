@@ -1,0 +1,46 @@
+Clean-march unfiltered (is_clean_march & ~is_amb): n=535
+  (matches matched_probe_3pass meta n_clean_march_unfiltered=774)
+  Pass A: r shape=(535, 36), label classes (target_true_ch) = 36
+  Pass B: r shape=(535, 36), label classes (unexp_ch)        = 36
+HMM march_jump unmasked: n=484
+  (matches matched_hmm_ring_sequence meta n_march_jump_passA_unmasked=907 if no amb filter)
+  HMM march_jump: r shape=(484, 36), label classes (probe_true_ch) = 12
+
+==============================================================================
+DECODER B (5-fold CV nearest-centroid, seed=42, src.analysis.decoding.cross_validated_decoding)
+==============================================================================
+
+DECODER A REFERENCE (stored argmax of trained linear readout)
+
+======================================================================================
+condition                 decoder        n        ±0        ±1        ±2        Δ(A−B)
+--------------------------------------------------------------------------------------
+Clean-march Pass A        B (CV)       535    0.5103    0.9439    0.9907
+Clean-march Pass A        A (lin)      535    0.6804    0.9925    1.0000
+Clean-march Pass B        B (CV)       535    0.4748    0.8991    0.9383
+Clean-march Pass B        A (lin)      535    0.3551    0.8729    0.9439
+HMM march_jump            B (CV)       484    0.9229    0.9229    0.9229
+HMM march_jump            A (lin)      484    0.9628    0.9628    0.9628
+--------------------------------------------------------------------------------------
+Δ(Pass A − Pass B)        B (CV)         -   +0.0355   +0.0449   +0.0523
+Δ(Pass A − Pass B)        A (lin)        -   +0.3252   +0.1196   +0.0561
+======================================================================================
+
+DECODER B per-fold breakdown (mean ± std across 5 folds):
+
+  Clean-march Pass A  (n=535, n/fold=107, classes_in_sample=36)
+    ±0 tol  per-fold: ['0.5701', '0.4860', '0.4486', '0.4860', '0.5607']  mean=0.5103  std=0.0527
+    ±1 tol  per-fold: ['0.9626', '0.9439', '0.9533', '0.9252', '0.9346']  mean=0.9439  std=0.0148
+    ±2 tol  per-fold: ['1.0000', '0.9813', '1.0000', '0.9813', '0.9907']  mean=0.9907  std=0.0093
+
+  Clean-march Pass B  (n=535, n/fold=107, classes_in_sample=36)
+    ±0 tol  per-fold: ['0.4673', '0.5047', '0.4766', '0.4393', '0.4860']  mean=0.4748  std=0.0242
+    ±1 tol  per-fold: ['0.8785', '0.8785', '0.9252', '0.9065', '0.9065']  mean=0.8991  std=0.0203
+    ±2 tol  per-fold: ['0.9346', '0.9065', '0.9813', '0.9346', '0.9346']  mean=0.9383  std=0.0269
+
+  HMM march_jump  (n=484, n/fold=96, classes_in_sample=12)
+    ±0 tol  per-fold: ['0.8958', '0.8750', '0.9583', '0.9271', '0.9583']  mean=0.9229  std=0.0373
+    ±1 tol  per-fold: ['0.8958', '0.8750', '0.9583', '0.9271', '0.9583']  mean=0.9229  std=0.0373
+    ±2 tol  per-fold: ['0.8958', '0.8750', '0.9583', '0.9271', '0.9583']  mean=0.9229  std=0.0373
+
+Saved: /mnt/c/Users/User/codingproj/freshstart/results/task9_decoder_b_sweep_r1_2.json

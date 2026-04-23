@@ -1,0 +1,133 @@
+
+========================================================================
+=== Claim 5: full-state Jacobian |λ|max across 3 stim conditions ===
+========================================================================
+
+Interpretation:
+  Per-population Jacobians bound |λ| of blocks; the full inter-population
+  Jacobian includes cross-blocks. If full |λ|max > per-pop bound, the stability
+  guard is incomplete.
+
+### warmup = 0 ###
+--- Claim 5 × warmup=0 × blank ---
+  state.max|.| (op point) = 0.000e+00
+  J shape                  = (496, 496)
+  J Frobenius              = 1.576e+01
+  full top 5 |λ|           = 1.0345, 0.9108, 0.9100, 0.9100, 0.9093
+  |λ|max > 1.0 → UNSTABLE (growth × 1.0345/step)
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.8909
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9365
+
+--- Claim 5 × warmup=0 × grating ---
+  state.max|.| (op point) = 0.000e+00
+  J shape                  = (496, 496)
+  J Frobenius              = 1.576e+01
+  full top 5 |λ|           = 1.0345, 0.9108, 0.9100, 0.9100, 0.9093
+  |λ|max > 1.0 → UNSTABLE (growth × 1.0345/step)
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.8909
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9365
+
+--- Claim 5 × warmup=0 × procedural ---
+  state.max|.| (op point) = 0.000e+00
+  J shape                  = (496, 496)
+  J Frobenius              = 1.576e+01
+  full top 5 |λ|           = 1.0345, 0.9108, 0.9100, 0.9100, 0.9093
+  |λ|max > 1.0 → UNSTABLE (growth × 1.0345/step)
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.8909
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9365
+
+
+### warmup = 5 ###
+--- Claim 5 × warmup=5 × blank ---
+  state.max|.| (op point) = 8.510e-01
+  J shape                  = (496, 496)
+  J Frobenius              = 3.314e+01
+  full top 5 |λ|           = 0.9366, 0.9108, 0.9101, 0.9101, 0.9093
+  |λ|max ≤ 1.0 → locally stable
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.7500
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9366
+
+--- Claim 5 × warmup=5 × grating ---
+  state.max|.| (op point) = 2.366e+00
+  J shape                  = (496, 496)
+  J Frobenius              = 4.100e+01
+  full top 5 |λ|           = 0.9366, 0.9108, 0.9101, 0.9101, 0.9093
+  |λ|max ≤ 1.0 → locally stable
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.7500
+     r_pv: 0.3681
+    r_som: 0.7500
+      r_h: 0.9366
+
+--- Claim 5 × warmup=5 × procedural ---
+  state.max|.| (op point) = 2.594e+00
+  J shape                  = (496, 496)
+  J Frobenius              = 4.176e+01
+  full top 5 |λ|           = 0.9366, 0.9108, 0.9100, 0.9100, 0.9093
+  |λ|max ≤ 1.0 → locally stable
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.7500
+     r_pv: 0.3681
+    r_som: 0.7500
+      r_h: 0.9366
+
+
+### warmup = 10 ###
+--- Claim 5 × warmup=10 × blank ---
+  state.max|.| (op point) = 1.788e-01
+  J shape                  = (496, 496)
+  J Frobenius              = 1.575e+01
+  full top 5 |λ|           = 0.9365, 0.9108, 0.9100, 0.9100, 0.9093
+  |λ|max ≤ 1.0 → locally stable
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.7500
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9365
+
+--- Claim 5 × warmup=10 × grating ---
+  state.max|.| (op point) = 2.557e-01
+  J shape                  = (496, 496)
+  J Frobenius              = 1.575e+01
+  full top 5 |λ|           = 0.9366, 0.9108, 0.9101, 0.9101, 0.9093
+  |λ|max ≤ 1.0 → locally stable
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.7500
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9366
+
+--- Claim 5 × warmup=10 × procedural ---
+  state.max|.| (op point) = 1.904e-01
+  J shape                  = (496, 496)
+  J Frobenius              = 1.575e+01
+  full top 5 |λ|           = 0.9365, 0.9108, 0.9101, 0.9101, 0.9093
+  |λ|max ≤ 1.0 → locally stable
+  per-population block |λ|max:
+     r_l4: 0.5000
+    r_l23: 0.7500
+     r_pv: 0.3679
+    r_som: 0.7500
+      r_h: 0.9365
+
+

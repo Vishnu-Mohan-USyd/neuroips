@@ -1,0 +1,25 @@
+{
+  "ckpt": "checkpoints/v2/phase2/phase2_validated_substrate_s42/phase2_s42/step_3000.pt",
+  "seed": 42,
+  "g0": 0.3,
+  "pref_tol_deg": 15.0,
+  "cue_mapping": {
+    "0": 135.0,
+    "1": 45.0
+  },
+  "mean_r_matched": 0.4362183213233948,
+  "mean_r_mismatched": 0.5230211615562439,
+  "delta_r": -0.08680284023284912,
+  "r_sign": "correct",
+  "matches_toy": true,
+  "pref_exp": 1.0436909794807434,
+  "pref_unexp": 1.7263888716697693,
+  "nonpref_exp": 0.011961899697780609,
+  "nonpref_unexp": 0.008922578301280737,
+  "asym_sign": "correct",
+  "n_suppressed_per_cue": {
+    "0": 47,
+    "1": 51
+  },
+  "verdict": "pass"
+}

@@ -1,0 +1,74 @@
+{
+  "gate_1_rate_distribution": {
+    "gate": "1_rate_distribution",
+    "median_rate": 0.0005903411656618118,
+    "acceptable_band": [
+      0.05,
+      0.5
+    ],
+    "mean_rate": 0.0005905036814510822,
+    "std_rate": 7.526338322350057e-06,
+    "passed": false
+  },
+  "gate_2_contrast_response": {
+    "gate": "2_contrast_response",
+    "contrasts": [
+      0.1,
+      0.3,
+      0.5,
+      0.7,
+      1.0
+    ],
+    "responses": [
+      0.04485352709889412,
+      0.05277442932128906,
+      0.05656144395470619,
+      0.05886133387684822,
+      0.06095722317695618
+    ],
+    "fit": {
+      "Rmax": 0.08754769495069953,
+      "n": 0.34157413335564263,
+      "c50": 0.08686501988500203,
+      "r_squared": 0.9997159667589891
+    },
+    "monotonic": true,
+    "passed": true
+  },
+  "gate_3_surround_suppression": {
+    "gate": "3_surround_suppression",
+    "si_threshold": 0.1,
+    "frac_units_with_si_above_threshold": 0.0,
+    "si_mean": -0.23451796174049377,
+    "si_median": -0.23451806604862213,
+    "passed": false
+  },
+  "gate_4_next_step_prediction_beats_copy_last": {
+    "gate": "4_prediction_beats_copy_last",
+    "network_mse": 0.05334743557614274,
+    "copy_last_mse": 4.716361858551241e-05,
+    "relative_improvement": -1130.114133649827,
+    "improvement_floor": 0.15,
+    "passed": false
+  },
+  "gate_5a_orientation_localizer": {
+    "gate": "5a_orientation_localizer",
+    "n_orientations": 12,
+    "fwhm_median_deg": 30.0,
+    "fwhm_mean_deg": 30.99609375,
+    "frac_units_fwhm_below": 1.0,
+    "fwhm_max_deg": 120.0,
+    "preferred_orientation_mean": 91.40625,
+    "passed": true
+  },
+  "gate_5b_identity_localizer": {
+    "gate": "5b_identity_localizer",
+    "svm_accuracy": 1.0,
+    "accuracy_floor": 0.25,
+    "within_token_mean_dist": 0.025484422221779823,
+    "between_token_mean_dist": 0.466522216796875,
+    "rsa_passed": true,
+    "passed": true
+  },
+  "all_passed": false
+}

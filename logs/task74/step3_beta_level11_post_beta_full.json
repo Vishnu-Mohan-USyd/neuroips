@@ -1,0 +1,33 @@
+{
+  "ckpt": "checkpoints/v2/phase3_kok_beta_full_s42/phase3_kok_s42.pt",
+  "seed": 42,
+  "cue_mapping": {
+    "0": 135.0,
+    "1": 45.0
+  },
+  "final_mean_gain_pref": 0.09999999403953552,
+  "final_mean_gain_nonpref": 0.7058679163455963,
+  "per_cue": {
+    "0": {
+      "n_pref": 47,
+      "g_pref": 0.09999998658895493,
+      "g_nonpref": 0.7009384036064148
+    },
+    "1": {
+      "n_pref": 51,
+      "g_pref": 0.10000000149011612,
+      "g_nonpref": 0.7107974290847778
+    }
+  },
+  "mean_r_matched": 0.21758665144443512,
+  "mean_r_mismatched": 0.5235980749130249,
+  "delta_r": -0.3060114234685898,
+  "delta_r_sign": "correct",
+  "magnitude": 0.3060114234685898,
+  "pref_exp": 0.17926650494337082,
+  "pref_unexp": 1.7026976346969604,
+  "nonpref_exp": 0.2405705824494362,
+  "nonpref_unexp": 0.04035940580070019,
+  "asym_sign": "correct",
+  "verdict": "pass"
+}

@@ -1,0 +1,13 @@
+[fresh_init] θ_mean=0.0000 W_rec_norm=1.74 cos_Wrec_pref=0.992±0.001 n_bins=6 rate_med=3.5990 W_pred_H=905.03 W_l23_som_mean=-4.500
+[step_100] θ_mean=0.0000 W_rec_norm=1.72 cos_Wrec_pref=0.995±0.000 n_bins=1 rate_med=1.1777 W_pred_H=724.08 W_l23_som_mean=-4.500
+[step_500] θ_mean=0.0000 W_rec_norm=1.68 cos_Wrec_pref=0.990±0.001 n_bins=4 rate_med=0.6709 W_pred_H=723.95 W_l23_som_mean=-4.500
+[step_1500] θ_mean=-0.0001 W_rec_norm=1.65 cos_Wrec_pref=0.975±0.004 n_bins=2 rate_med=0.8073 W_pred_H=720.73 W_l23_som_mean=-4.500
+[step_3000] θ_mean=-0.0003 W_rec_norm=1.63 cos_Wrec_pref=0.960±0.007 n_bins=2 rate_med=0.7090 W_pred_H=702.39 W_l23_som_mean=-4.500
+
+[TASK#70 ref] n_bins=4 rate_med=0.2228 θ_mean=-0.0009 cos_Wrec_pref=0.969
+
+=== SUMMARY NUMBERS ===
+H1: h1_verdict=FALSIFIED theta_init=0.0000 theta_final=-0.0003 theta_drift=-0.0003 target_rate=None observed_final_rate=0.7001
+H2: h2_verdict=FALSIFIED cos_init=0.9920 cos_final=0.9600 W_rec_norm_init=1.7369 W_rec_norm_final=1.6350 bin_count_init=6 bin_count_final=2
+H3: h3_verdict=CONFIRMED loss_init_med=0.0029 loss_final_med=0.0040 loss_init_mean=0.0045 loss_final_mean=0.7936 W_pred_H_norm=(905.03,702.39) W_pred_C_norm=(783.90,627.04)
+H4: h4_verdict=CONFIRMED fixE_bin_collapse=True task70_bin_count=4 (task70_bin_collapse=False)

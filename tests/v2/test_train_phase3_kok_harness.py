@@ -7,7 +7,8 @@ Task-#40 critical invariants:
 * The driver runs end-to-end on an untrained net without crashing.
 * ``frozen_sensory_core_sha`` is identical before and after training.
 * Every non-plastic Parameter is left bitwise-identical.
-* The two task weights (``W_qm_task``, ``W_mh_task``) remain finite.
+* The three task weights (``W_qm_task``, ``W_mh_task_exc``,
+  ``W_mh_task_inh``) remain finite.
 * Running under the wrong phase raises :class:`PhaseFrozenError` before
   any weight mutation can happen.
 """
@@ -82,9 +83,11 @@ def test_tiny_training_runs_and_preserves_frozen_invariants(
     )
 
     qm_after = net.context_memory.W_qm_task
-    mh_after = net.context_memory.W_mh_task
+    mh_exc_after = net.context_memory.W_mh_task_exc
+    mh_inh_after = net.context_memory.W_mh_task_inh
     assert torch.all(torch.isfinite(qm_after)), "W_qm_task has NaN/Inf"
-    assert torch.all(torch.isfinite(mh_after)), "W_mh_task has NaN/Inf"
+    assert torch.all(torch.isfinite(mh_exc_after)), "W_mh_task_exc has NaN/Inf"
+    assert torch.all(torch.isfinite(mh_inh_after)), "W_mh_task_inh has NaN/Inf"
 
     # Frozen generic + prediction-head weights must be bitwise identical.
     assert torch.equal(net.context_memory.W_hm_gen, hm_gen_before), (

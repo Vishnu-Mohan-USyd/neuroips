@@ -1,0 +1,165 @@
+{
+  "assay": "eval_kok",
+  "n_trials_per_condition": 60,
+  "cue_mapping": {
+    "0": 45.0,
+    "1": 135.0
+  },
+  "orientations_deg": [
+    45.0,
+    135.0
+  ],
+  "per_cell_mean_l23": {
+    "expected": [
+      3.5419256687164307,
+      3.5841872692108154,
+      3.549318790435791,
+      3.5404908657073975
+    ],
+    "unexpected": [
+      3.5411884784698486,
+      3.583552598953247,
+      3.548569917678833,
+      3.5397450923919678
+    ],
+    "all": [
+      3.5415570735931396,
+      3.5838699340820312,
+      3.5489442348480225,
+      3.5401179790496826
+    ]
+  },
+  "n_cell_groups": 4,
+  "svm": {
+    "all": {
+      "mean_accuracy": 1.0,
+      "std_accuracy": 0.0,
+      "per_fold": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "expected": {
+      "mean_accuracy": 1.0,
+      "std_accuracy": 0.0,
+      "per_fold": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "unexpected": {
+      "mean_accuracy": 1.0,
+      "std_accuracy": 0.0,
+      "per_fold": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "pref_nonpref": {
+    "pref_expected": 3.578243374824524,
+    "pref_unexpected": 3.5759209394454956,
+    "nonpref_expected": 3.5284963846206665,
+    "nonpref_unexpected": 3.529388189315796,
+    "asymmetry": 0.003214240074157715,
+    "n_units_pref_hi": 124,
+    "n_units_pref_lo": 132
+  },
+  "localizer": {
+    "n_orients": 12,
+    "n_trials_per_orient": 20,
+    "orients_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "tuning_curve_mean_per_orient": [
+      3.547278034966439,
+      3.558050887938589,
+      3.5368844504002483,
+      3.5518664159346374,
+      3.54752821624279,
+      3.564740101061761,
+      3.5506416927091777,
+      3.5581930694170296,
+      3.5378340424969794,
+      3.5467068339232357,
+      3.5304105257615443,
+      3.5515574146062137
+    ],
+    "mean_fwhm_deg_population": 71.67800911268334,
+    "fraction_units_tuned": 1.0,
+    "orientation_decoder_train_acc": 1.0,
+    "orientation_decoder_tolerance_deg": 15.0
+  },
+  "fine_discrim": {
+    "offsets_deg": [
+      -10.0,
+      10.0
+    ],
+    "n_trials_per_sub_condition": 60,
+    "tolerance_deg": 15.0,
+    "acc_expected": 1.0,
+    "acc_unexpected": 1.0,
+    "delta_acc": 0.0,
+    "n_expected": 240,
+    "n_unexpected": 240,
+    "bootstrap_delta_acc": {
+      "mean_diff": 0.0,
+      "ci_lo": 0.0,
+      "ci_hi": 0.0,
+      "n_a": 240,
+      "n_b": 240,
+      "n_resamples": 500
+    },
+    "permutation_p_two_sided": 1.0
+  },
+  "pref_nonpref_localizer": {
+    "pref_expected": 3.617825150489807,
+    "pref_unexpected": 3.6088730096817017,
+    "nonpref_expected": 3.539433479309082,
+    "nonpref_unexpected": 3.5469510555267334,
+    "asymmetry": 0.016469717025756836,
+    "n_units_pref_lo": 33,
+    "n_units_pref_hi": 26,
+    "anchor_tolerance_deg": 15.0,
+    "bootstrap_asymmetry": {
+      "mean_asymmetry": 0.016486202001571654,
+      "ci_lo": 0.014738315343856811,
+      "ci_hi": 0.018273282051086425,
+      "n_resamples": 500
+    }
+  },
+  "fwhm_per_condition": {
+    "fwhm_expected_deg": 71.45536105518522,
+    "fwhm_unexpected_deg": 71.45454990730416,
+    "delta_fwhm_deg": 0.0008111478810661765,
+    "bootstrap_delta_fwhm": {
+      "mean_diff": 0.0008111478810661765,
+      "ci_lo": -0.003846557699157316,
+      "ci_hi": 0.005498449583845042,
+      "n_a": 120,
+      "n_b": 120,
+      "n_resamples": 500
+    },
+    "permutation_p_two_sided": 0.716566866267465
+  }
+}

@@ -1,0 +1,496 @@
+## Researcher Report: Codebase Mapping for Context-Switch Planning
+======================================================================
+Branch: fix-legacy-references-post-cleanup   HEAD: bcfe07b
+Cleanup baseline: 1987fab ("Remove all legacy code: VIP, apical gain,
+basis functions, coincidence gate, MechanismType")
+Hypothesis under consideration: task-relevance / effective precision is
+the switch variable between sharpening (Kok 2012) and dampening
+(Richter 2018) in a SINGLE trained checkpoint.
+
+NO FILE EDITS. READ-ONLY MAPPING.
+
+----------------------------------------------------------------------
+## 1. task_state plumbing (generation → network → loss)
+----------------------------------------------------------------------
+
+Generation (random, uncorrelated):
+- src/stimulus/sequences.py:379-383 — sequence-level one-hot [B, T, 2],
+  random ~50/50 per sequence, broadcast identically across all T steps.
+  NOT correlated with ambiguity, cue validity, reliability drop,
+  contrast, or HMM state.
+
+      task_relevant = torch.rand(B, generator=generator) < 0.5  # [B]
+      task_states = torch.zeros(B, seq_length, 2)
+      task_states[task_relevant, :, 0] = 1.0
+      task_states[~task_relevant, :, 1] = 1.0
+
+Temporal expansion:
+- src/training/trainer.py:187 — broadcast across steps_on+steps_isi:
+  `metadata.task_states.unsqueeze(2).expand(-1, -1, steps_per, -1)`.
+
+Packing into network input:
+- src/training/stage2_feedback.py:365 —
+  `packed = net.pack_inputs(stim_seq, cue_seq, task_seq)`.
+- src/model/network.py:169-190 (`pack_inputs`) —
+  concatenates along the feature dim into [B, T, N+N+2].
+- src/model/network.py:229 —
+  `task_state_seq = packed_input[:, :, 2*N:]` unpacked per-step.
+- src/model/network.py:264 — passed into step():
+  `self.step(stimulus_seq[:,t], cue_seq[:,t], task_state_seq[:,t], state)`
+
+Consumption in V2 (ONLY consumer inside the network):
+- src/model/network.py:123-125 — `self.v2(r_l4, state.r_l23, cue,
+  task_state, state.h_v2)`.
+- src/model/v2_context.py:94-99 — task_state is concatenated into the
+  GRU input vector:
+
+      if self.v2_input_mode == 'l23':
+          v2_input = torch.cat([r_l23_prev, cue, task_state], dim=-1)
+      elif self.v2_input_mode == 'l4':
+          v2_input = torch.cat([r_l4, cue, task_state], dim=-1)
+      elif self.v2_input_mode == 'l4_l23':
+          v2_input = torch.cat([r_l4, r_l23_prev, cue, task_state], dim=-1)
+
+  The GRU input_dim in all three modes ends in `+ 2` (v2_context.py:40/42/44).
+
+Critical dead-ends:
+- task_state does NOT reach the feedback E/I split in network.step()
+  (lines 135-141 use only `feedback_scale` and the raw V2 head output).
+- task_state does NOT reach the loss function.
+  Verified: `grep -n task_state src/training/losses.py` → 0 matches.
+  `loss_fn(...)` call in stage2_feedback.py:461-474 has no task_state
+  keyword.
+
+Consequences: task_state can only influence the network through whatever
+V2 learns to encode in its hidden state. There is NO path from task_state
+to a per-sample loss weight, to a feedback gain, or to the L2/3 E/I
+balance. Any switch behaviour has to be implicit in V2's feedback_signal
+output.
+
+Changes needed for a task-state-conditioned regime switch:
+- Make task_state informative during training (currently independent of
+  stimulus distribution): either (a) correlate task_state with cue
+  validity / ambiguity in sequences.py, or (b) interleave homogeneous
+  task_state batches that differ in loss weighting.
+- Route task_state into the E/I split (network.py:135-138) as a
+  multiplicative gain, OR mix it into pi_pred's role (see §2).
+- Pass a [B] task_relevance vector into the loss module so that
+  orientation-specific losses (sensory, sharp, local_disc) scale
+  per-sample. Currently loss signature in losses.py:473 has no such
+  argument.
+
+----------------------------------------------------------------------
+## 2. pi_pred plumbing — where does the V2 precision actually land?
+----------------------------------------------------------------------
+
+Source:
+- src/model/v2_context.py:102 —
+  `pi_pred = torch.clamp(F.softplus(self.head_pi(h_v2)), max=self.pi_max)`.
+  Shape [B, 1]. Returned as the 2nd element of V2.forward().
+
+Consumption in network.step():
+- src/model/network.py:123 unpack: `mu_pred, pi_pred_raw, feedback_signal, h_v2`
+- src/model/network.py:131 — `pi_pred_eff = pi_pred_raw * self.feedback_scale`
+  (feedback_scale is the warmup ramp buffer, lines 40-41).
+- src/model/network.py:144 —
+  `deep_tmpl = q_pred * pi_pred_eff`
+  This is the ONLY downstream use of pi_pred_eff in the forward pass.
+
+Crucially:
+- Line 135 — `scaled_fb = feedback_signal * self.feedback_scale`
+  The E/I split is scaled by `feedback_scale` (warmup), NOT by pi_pred.
+- Lines 136-137 —
+      center_exc  = torch.relu(scaled_fb)
+      som_drive_fb = torch.relu(-scaled_fb)
+  No pi_pred multiplier anywhere in the split.
+- Line 141 — `r_l23 = self.l23(r_l4, state.r_l23, center_exc, r_som, r_pv)`
+  L2/3 receives center_exc (no pi gate).
+
+Where does deep_tmpl go?
+- It is stored in NetworkState.deep_template (network.py:154) so that the
+  forward() loop can stack it into `deep_template_all`.
+- It is exported to outputs at stage2_feedback.py:381 —
+  `"deep_template": aux["deep_template_all"]`.
+- It then enters ONLY `energy_cost()` in losses.py (referenced via
+  `outputs["deep_template"].abs().mean()` — from my earlier audit of
+  losses.py). No other loss consumes it. It provides a weak L1 pressure
+  on pi_pred toward zero and nothing else.
+
+pi_pred in losses:
+- `grep -n pi_pred src/training/losses.py` → 0 matches.
+- pi_pred does NOT appear in any loss term directly.
+
+Verdict (flags advisor claim):
+- Advisor claim: "pi_pred scales the placeholder deep_template rather
+  than the actual E/I split" — **CONFIRMED CORRECT**.
+  pi_pred only multiplies the dead deep_tmpl placeholder; it has no
+  causal effect on the center_exc / SOM-drive branches. The only way
+  pi_pred influences training at all is through the weak energy L1 on
+  `deep_template_all` — effectively a pressure toward zero that never
+  shapes the feedback waveform.
+
+Changes needed:
+- If we want pi_pred to actually gate feedback, line 135 needs to become
+  something like
+      scaled_fb = feedback_signal * self.feedback_scale * pi_pred_eff
+  (or gate only the center_exc branch, or only the SOM branch — each
+  has different biological interpretations).
+- Delete deep_tmpl (lines 144, 154) once pi_pred is repurposed, OR keep
+  it as a debug readout only.
+
+----------------------------------------------------------------------
+## 3. Feedback E/I split — current behaviour vs what a switch needs
+----------------------------------------------------------------------
+
+Current code (network.py:131-141):
+
+    pi_pred_eff  = pi_pred_raw * self.feedback_scale          # [B, 1]
+    scaled_fb    = feedback_signal * self.feedback_scale      # [B, N]
+    center_exc   = torch.relu(scaled_fb)                      # [B, N]
+    som_drive_fb = torch.relu(-scaled_fb)                     # [B, N]
+    r_som        = self.som(som_drive_fb, state.r_som)        # [B, N]
+    ...
+    r_l23        = self.l23(r_l4, state.r_l23, center_exc, r_som, r_pv)
+
+Properties:
+- Symmetric split by sign. `feedback_signal` is one learned linear head
+  (v2_context.py:55: `self.head_feedback = nn.Linear(H, N)`).
+- Both halves gated by the SAME scalar warmup buffer `feedback_scale`.
+  No separate excitation gain vs inhibition gain — all the asymmetry V2
+  can produce must come from the sign and magnitude of the raw head.
+- No pi_pred gating.
+- No task_state gating.
+- `populations.py:252` confirms L2/3 uses `template_modulation`
+  (= center_exc) as a purely additive excitatory input; L2/3 knows
+  nothing about task_state.
+
+To express sharpening AND dampening in one checkpoint via task_state:
+- Minimum plumbing change: insert a [B, 1] multiplicative gain into the
+  E and I branches derived from task_state (and optionally pi_pred).
+  Two credible parameterisations:
+    (a) Asymmetric branch gains:
+          g_E = f_E(task_state, pi_pred)   # [B, 1]
+          g_I = f_I(task_state, pi_pred)   # [B, 1]
+          center_exc   = g_E * torch.relu(scaled_fb)
+          som_drive_fb = g_I * torch.relu(-scaled_fb)
+        With `g_E high / g_I low` → sharpening; `g_E low / g_I high` →
+        dampening. Both are differentiable; f_E, f_I can be a tiny MLP.
+    (b) Rotation on the (exc, inh) plane:
+          alpha = f(task_state, pi_pred) ∈ [0, 1]
+          center_exc   = alpha * torch.relu(scaled_fb)
+          som_drive_fb = (1 - alpha) * (...same raw signal or mirror)
+- Either lives entirely inside network.step() at lines 135-141 and
+  requires no changes to V2, losses, or stimulus generation.
+- Must be combined with §4/§5 changes so the task_state bit is
+  correlated with something learning can optimise.
+
+----------------------------------------------------------------------
+## 4. Loss conditioning — current reductions and per-sample routing
+----------------------------------------------------------------------
+
+Loss signature (losses.py:473):
+
+    def forward(self, outputs, true_theta_windows, true_next_theta_windows,
+                r_l23_windows, q_pred_windows, state_logits_windows=None,
+                true_states_windows=None, p_cw_windows=None, model=None,
+                is_expected=None, predicted_theta=None, use_e_total=True,
+                fb_scale=1.0, r_l4_windows=None, mismatch_labels=None,
+                mismatch_mask=None):
+
+There is NO `task_state` argument. All reductions are global:
+- sensory_readout_loss → F.cross_entropy(..., reduction="mean")
+- homeostasis_penalty → `.mean()`
+- energy_cost → `.abs().mean()` on r_l4, r_l23, r_pv, r_som, deep_template
+- prior_kl → `F.kl_div(..., reduction="batchmean")`
+- mismatch → `F.cross_entropy(..., reduction="mean")`
+
+Consequence: there is NO per-sample weighting mechanism. A task_state
+bit cannot modulate individual sample losses without code changes.
+
+Current lambda weights (config.py:87-102, defaults shown):
+- lambda_sensory=1.0, lambda_pred=0.5, lambda_energy=0.01,
+  lambda_homeo=1.0, lambda_state=0.25
+- lambda_surprise=0.0, lambda_error=0.0, lambda_detection=0.0,
+  lambda_l4_sensory=0.0, lambda_mismatch=0.0
+- **lambda_sharp=0.0** — losses.py:42/584, config.py:97. Calls
+  `tuning_sharpness_loss` (losses.py:249), reduced with `.mean()`.
+- **lambda_local_disc=0.0** — losses.py:43/592, config.py:98. Calls
+  `local_discrimination_loss` (losses.py:277), uses a learned
+  `local_disc_head = nn.Linear(7, 7)` at losses.py:79.
+- lambda_pred_suppress=0.0, lambda_fb_energy=0.0
+- l2_energy=False, l23_energy_weight=1.0
+
+Flag (advisor claim):
+- Advisor claim: "lambda_sharp / lambda_local_disc may not exist
+  post-cleanup" — **INCORRECT**. Both weights, their config entries,
+  their loss functions, and their parameter heads are all present in
+  the current HEAD. They are simply *disabled by default* (0.0). You can
+  turn them on via YAML without touching code.
+
+Minimum-diff path for per-sample task-conditioned losses:
+1. Add `task_state_windows=None` to loss_fn.forward() signature
+   (losses.py:473).
+2. Inside each orientation-specific term, compute a per-sample loss
+   tensor (reduction='none') and multiply by a [B, 1] task weight
+   derived from task_state before calling `.mean()`.
+3. Thread task_state_windows through at stage2_feedback.py:461-474.
+4. Decide whether task-relevant and task-irrelevant samples should see
+   the SAME λ per term, or different ones (different λ is the more
+   interesting experiment — it is exactly the crossed design that maps
+   to Kok's sharpening vs Richter's dampening experimental conditions).
+
+Alternative (no loss signature change): run two Stage-2 passes with
+different YAML configs and different task_state bits forced, but this
+cannot yield a SINGLE trained checkpoint that switches on-line — which
+is precisely what the hypothesis asks for.
+
+----------------------------------------------------------------------
+## 5. Stimulus conditioning — where task_state is not (yet) informative
+----------------------------------------------------------------------
+
+HMMSequenceGenerator (sequences.py constructor, defaults):
+- contrast_range             (inherited from TrainingConfig)
+- ambiguous_fraction = 0.15
+- ambiguous_offset = 15.0
+- reliability_drop_prob = 0.05
+- reliability_drop_value = 0.50
+- cue_dim = 2
+- n_states = 3
+- cue_valid_fraction = 0.0
+
+task_state bit generation (sequences.py:379-383): independent
+Bernoulli(0.5), NOT conditioned on any of the above. Consequences:
+
+- Training currently marginalises over task_state → V2 has no incentive
+  to route information differently across the two task_state modes.
+- Even if we wire task_state into the E/I split or into the loss, V2
+  only has one functional niche to learn because both task_state values
+  see the same stimulus distribution AND the same loss.
+
+For a regime switch, task_state must co-vary with either (or both):
+  (i) Loss weights (§4). Simplest: relevant ↔ lambda_sensory HIGH,
+      irrelevant ↔ lambda_sensory LOW + lambda_energy HIGH. This maps
+      directly to the Kok↔Richter distinction (predicted feature is
+      task-critical vs orthogonal).
+  (ii) Stimulus reliability. E.g., relevant samples come from the sharp
+      end of ambiguous_fraction / cue_valid_fraction, irrelevant from
+      the noisy end. This is biologically motivated (tasks change
+      uncertainty structure) but requires mirroring the split inside
+      sequences.py.
+
+Minimum-diff path (loss-side only): zero changes to sequences.py if we
+do the cue-free version. task_state stays as a random [B] bit; it still
+enters V2's GRU (existing path) AND it routes loss weights per-sample.
+The crossed design gets run at analysis time via TaskRelevanceParadigm
+(§7).
+
+----------------------------------------------------------------------
+## 6. VIP status — is there a dormant VIP slot?
+----------------------------------------------------------------------
+
+populations.py (239 lines, 289 lines long in file): classes defined are
+`V1L4Ring`, `PVPool`, `V1L23Ring`, `SOMRing` only. Verified with
+`grep -n "class |def " src/model/populations.py`:
+  21 class V1L4Ring
+  95 class PVPool
+  179 class V1L23Ring
+  290 class SOMRing
+`grep -n "VIP|DeepTemplate|apical|vip_" src/model/populations.py` →
+0 matches in the first 20 hits (spot-checked full file).
+
+network.py imports at line 14:
+  `from src.model.populations import V1L4Ring, PVPool, V1L23Ring, SOMRing`
+No VIPRing import. `__init__` (lines 31-50) creates l4, pv, l23, som, v2
+and a `feedback_scale` buffer — no VIP module.
+
+The ONLY residual trace of VIP is a zero-filled tensor in NetworkState:
+- network.py:151 — `r_vip=torch.zeros(B, N, device=device)` injected into
+  the new NetworkState every step. This exists to keep the NetworkState
+  dataclass field alive so downstream analysis code that reads
+  `aux["r_vip_all"]` doesn't crash; it has no module, no weights, and
+  no gradients.
+
+config.py:170-172 explicitly *drops* legacy VIP keys when loading YAML:
+  `for legacy_key in ('mechanism', 'n_basis', 'max_apical_gain', 'tau_vip',
+                      'simple_feedback', 'template_gain'):`
+
+Flag (advisor claim):
+- Advisor claim: "there is a dormant VIP slot" — **MISLEADING / WRONG**
+  in the sense that matters. There is a zero-filled tensor named r_vip
+  in NetworkState, but no VIPRing class, no VIP weights, no tau_vip in
+  config, and no code path that could exercise it without re-introducing
+  the deleted class. Any plan that reads "we can just re-enable VIP"
+  must instead say "we can restore VIPRing from commit 1987fab^1". Not
+  trivially dormant.
+
+If VIP disinhibition is desired as the switch mechanism (a biologically
+very natural fit — Lee & Mrsic-Flogel 2016; Karnani et al. 2014), it
+must be re-implemented as a new module (or cherry-picked from
+1987fab^1), wired into SOMRing's drive, and given its own tau_vip and
+weight parameters. That is an architectural change, not a flag flip.
+
+----------------------------------------------------------------------
+## 7. Analysis pipeline — task_state conditioning & time windows
+----------------------------------------------------------------------
+
+scripts/analyze_representation.py:
+- `grep -n task_state|task_relevant` → 0 matches. The metric battery
+  (M1-M14) treats all trials identically regardless of task_state; it
+  does not split expected/unexpected by a task_state factor.
+- Early-vs-late temporal machinery is ALREADY present:
+    Metric 8 (lines ~1168-1252): early = slice(0, 4), late = slice(-3,
+    None); produces early/late summaries for peak, fwhm, flank ratios.
+    Metric 13 (lines ~1655-1749): time-resolved decoder accuracy with
+    explicit early(0-7) / mid(8-17) / late(18-24) bins. This is
+    precisely the decomposition you need to check whether sharpening is
+    an early-window phenomenon and dampening a late-window one.
+- Metric 7 (lines ~1002, ~2252): trained LogReg decoder on match vs
+  near-miss at small δ (±5°, ±10°, ±15°). This is the M7 in the sweep
+  table. Already batched over (expected, unexpected) × (feedback ON,
+  feedback OFF). Does NOT split by task_state.
+
+Task-state-aware experimental paradigm already exists (at inference
+time, read-only on the net):
+- src/experiments/task_relevance.py — `TaskRelevanceParadigm`. Produces
+  a crossed 2×2 design: {relevant, irrelevant} × {expected, unexpected}.
+  Builds TrialSet.task_state as a deterministic one-hot vector
+  (lines 62-65) per condition and forwards it through `pack_inputs`
+  (paradigm_base.py:207) and `net.forward(packed)`.
+- This means the infrastructure to TEST a switch is already here; what's
+  missing is (a) a task_state signal that actually does something inside
+  the network (§2, §3) and (b) a training signal that makes it do
+  different things in the two modes (§4, §5).
+
+What analyze_representation.py would need for a crossed-design audit:
+- A wrapper that runs the full M1-M14 battery TWICE — once with
+  task_state=[1,0], once with task_state=[0,1] — and prints a
+  side-by-side table.
+- Alternatively, integrate the existing TaskRelevanceParadigm:
+  run four runs (relevant_expected, relevant_unexpected,
+  irrelevant_expected, irrelevant_unexpected) and compute:
+    sharpening signature = M7/M10/fwhm (relevant_exp − relevant_unexp)
+    dampening signature  = M7/M10/fwhm (irrelevant_exp − irrelevant_unexp)
+  A single checkpoint passes the hypothesis iff sharpening_signature > 0
+  in the relevant cell AND dampening_signature < 0 in the irrelevant
+  cell — same weights, just a flipped 2-dim bit.
+
+----------------------------------------------------------------------
+## Minimum-diff path to a task-state-conditioned regime switch
+----------------------------------------------------------------------
+
+Phase 0 (sanity, no code): verify the current checkpoint. Run
+`TaskRelevanceParadigm` on the e1 configuration. Expected result:
+essentially no difference between relevant and irrelevant cells,
+because task_state currently enters ONLY the V2 GRU and V2 has no
+training incentive to use it. If this is confirmed, it falsifies the
+"just train longer and it'll learn to switch" framing and motivates
+Phase 1.
+
+Phase 1 (loss-side only, simplest possible diff): make task_state
+control per-sample loss weights. No architectural change.
+  Touches:
+    src/training/losses.py       — add task_state_windows arg to
+                                    Stage2Loss.forward(); inside sensory
+                                    / sharp / local_disc terms, compute
+                                    per-sample losses and weight by a
+                                    function of task_state.
+    src/training/stage2_feedback.py:461-474 — pass task_seq window into
+                                    loss_fn.
+    src/training/trainer.py or equivalent — add an `extract_readout_data`
+                                    step for task_seq (grab one row per
+                                    presentation since it's sequence-
+                                    constant; lines 186-187 make this
+                                    trivial).
+  Zero changes to: network.py, v2_context.py, populations.py,
+  sequences.py, analyze_representation.py (the existing M8/M13 time
+  windows are reusable).
+  Hypothesis this tests: "V2's GRU input is sufficient to encode a
+  task_state-conditioned feedback waveform if the training loss
+  rewards different waveforms in the two modes." I rate this credible
+  but NOT certain, because the GRU would have to learn to change
+  `head_feedback` outputs as a function of a 2-dim input that enters
+  additively; one linear head may not be expressive enough. Validator
+  should check feedback_signal correlations with task_state post-train.
+
+Phase 2 (only if Phase 1 is insufficient): add a multiplicative E/I
+gain driven by (task_state, pi_pred).
+  Touches:
+    src/model/network.py:131-141 — replace lines 135-141 with the
+                                    gated version (either (a)
+                                    asymmetric branch gains or (b)
+                                    rotation on the (exc, inh) plane
+                                    from §3).
+    src/model/network.py:__init__  — register the tiny gating MLP
+                                    (1-2 params per branch).
+    tests/test_network.py          — add shape + symmetry tests.
+  This is the "pi_pred actually gates the E/I split, not just the
+  placeholder deep_tmpl" change the advisor correctly identified.
+  Pairs naturally with deleting the deep_tmpl placeholder (§2), though
+  deep_tmpl can be left as a debug readout for continuity.
+
+Phase 3 (only if Phases 1+2 do not cross the biological benchmark):
+stimulus correlations. Correlate task_state with cue validity /
+ambiguity fraction inside HMMSequenceGenerator so that V2 sees different
+input statistics in the two modes. Minimally invasive version: leave
+generation random but gate cue_seq or ambiguous_fraction by the sampled
+task_state bit.
+
+DO NOT recommend:
+- Touching populations.py. None of Phases 1-3 require it.
+- Re-introducing VIP to implement the switch until Phases 1 and 2 are
+  proven insufficient — it is a bigger architectural change and the
+  simpler gain-only mechanism may already be enough.
+- Adding new loss terms before reusing the existing (lambda_sharp,
+  lambda_local_disc) disabled-by-default machinery. They were built for
+  exactly this kind of experiment.
+
+----------------------------------------------------------------------
+## Advisor-claim audit (summary)
+----------------------------------------------------------------------
+
+| Claim                                                           | Status      | Evidence |
+|------------------------------------------------------------------|-------------|----------|
+| pi_pred scales deep_template, not the real E/I split             | CORRECT     | network.py:144 vs 135-138 |
+| There is a dormant VIP slot to re-enable                         | MISLEADING  | populations.py has no VIPRing; network.py:151 only zero-fills r_vip; config.py:170-172 pops legacy keys. A re-enable is a restore, not a flag. |
+| lambda_sharp / lambda_local_disc may not exist post-cleanup      | WRONG       | config.py:97-98, losses.py:42-43, 79, 584-597 all present; just 0.0 by default |
+| task_state is already routed into the loss                       | WRONG       | grep task_state losses.py → 0; loss_fn signature losses.py:473 has no task_state arg |
+| feedback_scale acts as a precision gate on E/I                   | HALF TRUE   | feedback_scale is a warmup ramp buffer (network.py:41, 135), NOT pi_pred. It is global across both branches and not derived from V2. |
+
+----------------------------------------------------------------------
+## Risks / unknowns for the Lead
+----------------------------------------------------------------------
+
+1. Even with Phase 1 + Phase 2, the task_state bit is sequence-level
+   (constant within a sequence, sequences.py:379-383). If you want
+   *within-sequence* switching (e.g., task changes mid-trial), the
+   generator has to be rewritten to produce a per-presentation
+   task_state. This is a sequences.py + trainer.py change, not a
+   network change.
+
+2. The current `feedback_scale` warmup mechanism means that very early
+   in training, E and I are both strongly damped. Any Phase 2 gain MLP
+   will see near-zero gradient until feedback_scale reaches 1.0 at
+   ~burnin_steps=5000 (config.py:80). Schedule the gain MLP LR and
+   init accordingly.
+
+3. `TaskRelevanceParadigm` uses a `deep_template` field inside
+   ConditionData (paradigm_base.py:57) that is always zero in the
+   current forward path; removing deep_tmpl in Phase 2 will break that
+   dataclass. Minor — just make it optional.
+
+4. Validator should add a regression test that `grep task_state
+   src/training/losses.py` returns non-zero after Phase 1, and that
+   `feedback_signal` per-sample mean differs between task_state=[1,0]
+   and task_state=[0,1] after training in Phase 1. These are cheap
+   guard rails that directly falsify the "nothing changed" failure
+   mode.
+
+5. Biological benchmark targets (Richter 2018 dampening ~M7=-0.02,
+   M10=0.85; Kok 2012 sharpening ~M7=+0.10, fwhm narrowing ~12°) fall
+   BETWEEN already-tested sweep rows (a1 dampening vs e1 sharpening).
+   A single checkpoint has to reproduce BOTH cells in its crossed
+   table — i.e., the per-sample loss split must be large enough to
+   move e1-style M7 into a1-style M7 for the irrelevant half. Neither
+   the sweep nor any existing run has demonstrated this kind of split
+   is achievable from one set of weights. This is the key scientific
+   risk of the whole plan, independent of plumbing.

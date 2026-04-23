@@ -1,0 +1,59 @@
+[setup] checkpoint=/home/vishnu/neuroips/rescue_1_2/freshstart/results/simple_dual/emergent_seed42/checkpoint.pt
+[setup] config=config/sweep/sweep_rescue_1_2.yaml
+[setup] decoder_c_path=checkpoints/decoder_c.pt
+[setup] device=cuda  n_batches=40  seed=42  n_trials_per_N=200
+[setup] strategies=['NEW', 'M3R', 'HMS', 'HMS-T', 'P3P', 'VCD']
+
+=== NEW eval ===
+[NEW] N= 4  decA Δ=+0.3350  decC Δ=+0.0750  n=200
+[NEW] N= 5  decA Δ=+0.3400  decC Δ=+0.0700  n=200
+[NEW] N= 6  decA Δ=+0.3850  decC Δ=+0.1500  n=200
+[NEW] N= 7  decA Δ=+0.3650  decC Δ=+0.0850  n=200
+[NEW] N= 8  decA Δ=+0.4000  decC Δ=+0.0550  n=200
+[NEW] N= 9  decA Δ=+0.3900  decC Δ=+0.0850  n=200
+[NEW] N=10  decA Δ=+0.4000  decC Δ=+0.0900  n=200
+[NEW] N=11  decA Δ=+0.4100  decC Δ=+0.1500  n=200
+[NEW] N=12  decA Δ=+0.3900  decC Δ=+0.1900  n=200
+[NEW] N=13  decA Δ=+0.3800  decC Δ=+0.1700  n=200
+[NEW] N=14  decA Δ=+0.4250  decC Δ=+0.2050  n=200
+[NEW] N=15  decA Δ=+0.4250  decC Δ=+0.1800  n=200
+
+=== M3R ===
+[M3R] expected    n=1089  decA=0.696969696969697  decC=0.7373737373737373
+[M3R] unexpected  n=3293  decA=0.8533252353477072  decC=0.7734588521105376
+[M3R] omission    n=206  decA=0.1262135922330097  decC=0.08737864077669903
+
+=== HMS ===
+[HMS (matched_hmm_ring_sequence)] expected    n=3080  decA=0.7918831168831169  decC=0.7912337662337663
+[HMS (matched_hmm_ring_sequence)] unexpected  n=151  decA=0.9801324503311258  decC=0.7350993377483444
+[HMS (matched_hmm_ring_sequence)] omission    n=190  decA=0.15789473684210525  decC=0.05263157894736842
+
+=== HMS-T ===
+[HMS-T (matched_hmm_ring_sequence --tight-expected)] expected    n=798  decA=0.6691729323308271  decC=0.6641604010025063
+[HMS-T (matched_hmm_ring_sequence --tight-expected)] unexpected  n=106  decA=0.9716981132075472  decC=0.7358490566037735
+[HMS-T (matched_hmm_ring_sequence --tight-expected)] omission    n=355  decA=0.14084507042253522  decC=0.04225352112676056
+
+=== P3P ===
+[P3P] expected    n=40  decA=0.725  decC=0.825
+[P3P] unexpected  n=40  decA=0.3  decC=0.775
+[P3P] omission    n=40  decA=0.2  decC=0.025
+
+=== VCD test3 ===
+  batch 10/40
+  batch 20/40
+  batch 30/40
+  batch 40/40
+[VCD] n_pairs=8013  decA Δ=-0.1640  decC Δ=-0.0653
+
+[json] wrote results/cross_decoder_r1_2.json  (138.1s)
+
+==============================================================================
+ Strategy            |   n_ex |  n_unex |  decA Δ  |  decC Δ  | native
+------------------------------------------------------------------------------
+ NEW                 |   2400 |    2400 |  +0.3871 |  +0.1254 | C
+ M3R                 |   1089 |    3293 |  -0.1564 |  -0.0361 | A
+ HMS                 |   3080 |     151 |  -0.1882 |  +0.0561 | A
+ HMS-T               |    798 |     106 |  -0.3025 |  -0.0717 | A
+ P3P                 |     40 |      40 |  +0.4250 |  +0.0500 | A
+ VCD                 |   8013 |    8013 |  -0.1640 |  -0.0653 | A
+==============================================================================

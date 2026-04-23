@@ -1,0 +1,48 @@
+{
+  "c5": {
+    "n_trials": 300,
+    "label_balance_p1": 0.5166666666666667,
+    "shuffle_control_acc": 0.5166666666666667,
+    "c_decode_at_cue_end": [
+      0.5166666666666667,
+      0.0
+    ],
+    "c_expected_decode_acc": 0.5166666666666667,
+    "c_expected_decode_std": 0.0,
+    "h_decode_at_cue_end": [
+      0.5166666666666667,
+      0.0
+    ],
+    "h_expected_decode_acc": 0.52,
+    "b_l23_expected_decode_acc": 0.5166666666666667,
+    "W_qm_task_norm": 0.4647018313407898,
+    "W_mh_task_norm": 0.13681669533252716,
+    "diag_c": {
+      "name": "c_delay",
+      "var_across_trials_mean": 3.3603610063437372e-06,
+      "class_mean_diff_mean": 0.0004185980651527643,
+      "class_mean_diff_max": 0.002697005867958069,
+      "X_min": 0.0,
+      "X_max": 0.060440175235271454,
+      "X_std": 0.010415622964501381
+    },
+    "diag_h": {
+      "name": "h_delay",
+      "var_across_trials_mean": 0.0009246607078239322,
+      "class_mean_diff_mean": 0.004985250532627106,
+      "class_mean_diff_max": 0.005057565867900848,
+      "X_min": 0.011839152313768864,
+      "X_max": 0.1935989111661911,
+      "X_std": 0.03041052259504795
+    },
+    "diag_b": {
+      "name": "b_l23_delay",
+      "var_across_trials_mean": 1.3318961009645136e-06,
+      "class_mean_diff_mean": 0.0003929833183065057,
+      "class_mean_diff_max": 0.0018084347248077393,
+      "X_min": -0.022224709391593933,
+      "X_max": 0.02864924632012844,
+      "X_std": 0.0073333485051989555
+    }
+  }
+}

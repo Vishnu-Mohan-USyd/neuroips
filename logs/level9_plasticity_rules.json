@@ -1,0 +1,63 @@
+{
+  "version": "level_9_plasticity_rules_v1",
+  "seed": 42,
+  "rule1_urbanczik": {
+    "verdict": "pass",
+    "dw_norm": 0.034402236342430115,
+    "n_cells": 256,
+    "sign_correct_pct": 1.0,
+    "mag_err_median": 0.0,
+    "mag_err_max": 1.2778207125537196e-07,
+    "mag_err_mean": 2.9377326016672438e-08,
+    "n_hit_clamp": 0,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "rule2_vogels": {
+    "verdict": "pass",
+    "row_sign_profile_code_convention_pct": 1.0,
+    "row_sign_profile_lead_convention_pct": 0.0,
+    "note": "Code convention: post>\u03c1 \u2192 \u0394raw>0 (Dale \u2212softplus(raw)). Lead dispatch stated the opposite; this probe uses the code/test convention (tests/v2/test_plasticity_vogels.py confirms).",
+    "n_cells": 128,
+    "sign_correct_pct": 1.0,
+    "mag_err_median": 0.0,
+    "mag_err_max": 0.0,
+    "mag_err_mean": 0.0,
+    "n_hit_clamp": 0,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "rule3_homeostasis": {
+    "verdict": "pass",
+    "deadband_ok": true,
+    "scale": 0.101,
+    "deadband_half_width": 0.2,
+    "n_in_deadband": 4,
+    "n_cells": 16,
+    "sign_correct_pct": 1.0,
+    "mag_err_median": 0.0,
+    "mag_err_max": 0.0,
+    "mag_err_mean": 0.0,
+    "n_hit_clamp": 0,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "rule4_fixJ": {
+    "verdict": "pass",
+    "spot_checks": {
+      "dw[0,0]_obs": -0.009999999776482582,
+      "dw[0,0]_exp": -0.009999999776482582,
+      "dw[15,3]_obs": -0.003000000026077032,
+      "dw[15,3]_exp": -0.003000000026077032
+    },
+    "n_cells": 64,
+    "sign_correct_pct": 1.0,
+    "mag_err_median": 0.0,
+    "mag_err_max": 1.1641532985003145e-07,
+    "mag_err_mean": 8.45752365841066e-09,
+    "n_hit_clamp": 2,
+    "any_nan": false,
+    "any_inf": false
+  },
+  "overall_verdict": "pass"
+}

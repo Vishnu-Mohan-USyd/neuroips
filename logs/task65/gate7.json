@@ -1,0 +1,10 @@
+{
+  "gate": "7_c_load_bearing",
+  "n_trajectories": 8,
+  "n_steps_per_traj": 20,
+  "mse_with_c": 0.05334743557614274,
+  "mse_without_c": 0.05334743557614274,
+  "relative_degradation": 0.0,
+  "degradation_floor": 0.05,
+  "passed": false
+}

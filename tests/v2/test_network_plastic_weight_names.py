@@ -32,13 +32,18 @@ def test_phase2_includes_generic_weights(net):
         ("l23_e", "W_pv_l23_raw"),
         ("l23_e", "W_som_l23_raw"),
         ("l23_e", "W_fb_apical_raw"),
-        ("l23_pv", "W_pre_raw"),
-        ("l23_som", "W_l23_som_raw"),
-        ("l23_som", "W_fb_som_raw"),
+        # Task #74 Fix Q: l23_pv.W_pre_raw (L23E→L23PV, E→I) is frozen at
+        # init; Vogels iSTDP is an I→E rule and inverts sign on E→I,
+        # driving L23E collapse. No rule touches it in Phase-2.
+        # Task #74 Fix D-simpler: L23SOM excitatory inputs
+        # (W_l23_som_raw, W_fb_som_raw) are frozen at init; no rule
+        # updates them in Phase-2. They do not appear in the manifest.
         ("h_e", "W_l23_h_raw"),
         ("h_e", "W_rec_raw"),
         ("h_e", "W_pv_h_raw"),
-        ("h_pv", "W_pre_raw"),
+        # Task #74 Fix Q': h_pv.W_pre_raw (HE→HPV, E→I) is frozen at
+        # init by analogy with Fix Q's l23_pv treatment — same E→I +
+        # Vogels sign-inversion structural bug.
         ("context_memory", "W_hm_gen"),
         ("context_memory", "W_mm_gen"),
         ("context_memory", "W_mh_gen"),
@@ -54,29 +59,32 @@ def test_phase2_includes_generic_weights(net):
     task_weights = {
         ("context_memory", "W_qm_task"),
         ("context_memory", "W_lm_task"),
-        ("context_memory", "W_mh_task"),
+        ("context_memory", "W_mh_task_exc"),
+        ("context_memory", "W_mh_task_inh"),
     }
     leaks = task_weights & names
     assert not leaks, f"task-specific weights leaked into phase2 manifest: {leaks}"
 
 
 def test_phase3_kok_only_task_weights(net):
-    """Phase 3 Kok exposes only Kok task weights (+ shared W_mh_task)."""
+    """Phase 3 Kok exposes only Kok task weights (+ shared W_mh_task_{exc,inh})."""
     net.set_phase("phase3_kok")
     names = set(net.plastic_weight_names())
     assert names == {
         ("context_memory", "W_qm_task"),
-        ("context_memory", "W_mh_task"),
+        ("context_memory", "W_mh_task_exc"),
+        ("context_memory", "W_mh_task_inh"),
     }, f"phase3_kok manifest wrong: {names}"
 
 
 def test_phase3_richter_only_task_weights(net):
-    """Phase 3 Richter exposes only Richter task weights (+ shared W_mh_task)."""
+    """Phase 3 Richter exposes only Richter task weights (+ shared W_mh_task_{exc,inh})."""
     net.set_phase("phase3_richter")
     names = set(net.plastic_weight_names())
     assert names == {
         ("context_memory", "W_lm_task"),
-        ("context_memory", "W_mh_task"),
+        ("context_memory", "W_mh_task_exc"),
+        ("context_memory", "W_mh_task_inh"),
     }, f"phase3_richter manifest wrong: {names}"
 
 

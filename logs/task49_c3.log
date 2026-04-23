@@ -1,0 +1,17 @@
+
+========================================================================
+=== C3 empirical: m.norm at N=2 (driver) vs N=200 (continuous) ===
+========================================================================
+
+m.norm(t):
+      t     driver (2-step reset)     continuous (no reset)
+      0                0.0000e+00                0.0000e+00
+      1                0.0000e+00                0.0000e+00
+      2                0.0000e+00                0.0000e+00
+     10                0.0000e+00                2.1370e-02
+     50                0.0000e+00                6.2120e+02
+    100                0.0000e+00                3.1600e+12
+    200                0.0000e+00                       inf
+
+At t=200: continuous/driver ratio = inf
+  (continuous allows C to integrate beyond window bound)

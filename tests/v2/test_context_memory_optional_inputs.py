@@ -27,8 +27,8 @@ def test_none_equivalent_to_explicit_zero_q() -> None:
     h = torch.randn(B, cm.n_h)
     lead = torch.randn(B, cm.n_leader)
 
-    m_a, b_a = cm(m, h, q_t=None, leader_t=lead)
-    m_b, b_b = cm(m, h, q_t=torch.zeros(B, cm.n_cue), leader_t=lead)
+    m_a, b_a, _b_a_inh = cm(m, h, q_t=None, leader_t=lead)
+    m_b, b_b, _b_b_inh = cm(m, h, q_t=torch.zeros(B, cm.n_cue), leader_t=lead)
 
     torch.testing.assert_close(m_a, m_b, atol=0.0, rtol=0.0)
     torch.testing.assert_close(b_a, b_b, atol=0.0, rtol=0.0)
@@ -41,8 +41,8 @@ def test_none_equivalent_to_explicit_zero_leader() -> None:
     h = torch.randn(B, cm.n_h)
     q = torch.randn(B, cm.n_cue)
 
-    m_a, b_a = cm(m, h, q_t=q, leader_t=None)
-    m_b, b_b = cm(m, h, q_t=q, leader_t=torch.zeros(B, cm.n_leader))
+    m_a, b_a, _b_a_inh = cm(m, h, q_t=q, leader_t=None)
+    m_b, b_b, _b_b_inh = cm(m, h, q_t=q, leader_t=torch.zeros(B, cm.n_leader))
 
     torch.testing.assert_close(m_a, m_b, atol=0.0, rtol=0.0)
     torch.testing.assert_close(b_a, b_b, atol=0.0, rtol=0.0)
@@ -54,8 +54,8 @@ def test_both_none_equivalent_to_both_explicit_zero() -> None:
     m = torch.randn(B, cm.n_m)
     h = torch.randn(B, cm.n_h)
 
-    m_a, b_a = cm(m, h)
-    m_b, b_b = cm(
+    m_a, b_a, _b_a_inh = cm(m, h)
+    m_b, b_b, _b_b_inh = cm(
         m, h,
         q_t=torch.zeros(B, cm.n_cue),
         leader_t=torch.zeros(B, cm.n_leader),
@@ -78,13 +78,13 @@ def test_nontrivial_task_weights_reveal_input_effect() -> None:
     m = torch.randn(B, cm.n_m)
     h = torch.randn(B, cm.n_h)
 
-    m_no_q, _ = cm(m, h)
+    m_no_q, _, _ = cm(m, h)
     q = torch.rand(B, cm.n_cue) + 0.5                                  # strictly positive drive
-    m_with_q, _ = cm(m, h, q_t=q)
+    m_with_q, _, _ = cm(m, h, q_t=q)
 
     # Different drive ⇒ different next-memory (outside numerical noise).
     assert not torch.allclose(m_no_q, m_with_q, atol=1e-6)
 
     # But None ≡ zero tensor still holds under the same populated weights.
-    m_zero_q, _ = cm(m, h, q_t=torch.zeros(B, cm.n_cue))
+    m_zero_q, _, _ = cm(m, h, q_t=torch.zeros(B, cm.n_cue))
     torch.testing.assert_close(m_no_q, m_zero_q, atol=0.0, rtol=0.0)

@@ -39,13 +39,16 @@ def _hpv_factory() -> HPV:
     return HPV(n_units=2, n_h_e=5, tau_ms=10.0, dt_ms=5.0, seed=0)
 
 
+# Task #74 Fix D-simpler: L23SOM excludes its excitatory-input raws
+# (W_l23_som_raw, W_fb_som_raw) — they are frozen at init in every phase
+# and are therefore absent from both plastic and frozen manifests at the
+# population level. Dedicated tests below guard that invariant.
 POP_FACTORIES: list[tuple[str, Callable, set[str]]] = [
     ("L23E", _l23e_factory, {
         "W_l4_l23_raw", "W_rec_raw", "W_pv_l23_raw",
         "W_som_l23_raw", "W_fb_apical_raw",
     }),
     ("L23PV", _l23pv_factory, {"W_l23_pv_raw"}),
-    ("L23SOM", _l23som_factory, {"W_l23_som_raw", "W_fb_som_raw"}),
     ("HE", _he_factory, {"W_l23_h_raw", "W_rec_raw", "W_pv_h_raw"}),
     ("HPV", _hpv_factory, {"W_h_pv_raw"}),
 ]
@@ -97,6 +100,30 @@ def test_plastic_and_frozen_cover_all_weights() -> None:
                 f"{name} @ {phase}: missing {expected - covered} "
                 f"or extra {covered - expected}"
             )
+
+
+def test_l23som_always_frozen_in_every_phase() -> None:
+    """Task #74 Fix D-simpler: L23SOM excitatory inputs are frozen in all phases.
+
+    Both plastic and frozen manifests at the population level are empty.
+    The two underlying tensors (W_l23_som_raw, W_fb_som_raw) exist as
+    :class:`nn.Parameter`s but no rule writes to them; the Phase-2
+    driver snapshots + asserts they stay bit-exact.
+    """
+    for phase in ("phase2", "phase3_kok", "phase3_richter"):
+        pop = _l23som_factory()
+        pop.set_phase(phase)
+        assert pop.plastic_weight_names() == [], (
+            f"L23SOM plastic non-empty in {phase!r}: "
+            f"{pop.plastic_weight_names()}"
+        )
+        assert pop.frozen_weight_names() == [], (
+            f"L23SOM frozen non-empty in {phase!r}: "
+            f"{pop.frozen_weight_names()}"
+        )
+        # The parameter tensors still exist.
+        assert hasattr(pop, "W_l23_som_raw")
+        assert hasattr(pop, "W_fb_som_raw")
 
 
 def test_unknown_phase_raises() -> None:

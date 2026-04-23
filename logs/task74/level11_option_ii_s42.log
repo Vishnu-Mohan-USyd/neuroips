@@ -1,0 +1,4 @@
+level11_sign_gate: mean_r_exp=0.5233 mean_r_unexp=0.5233 Δr_sign=null decode_exp=1.000 decode_unexp=1.000 Δdecode_sign=null asym_sign=inverse verdict=fail
+  pref_exp=1.7257 pref_unexp=1.7258 nonpref_exp=0.0119 nonpref_unexp=0.0120
+  delta_r=+1.6689e-06 delta_dec=+0.0000
+  JSON: logs/task74/level11_option_ii_s42.json

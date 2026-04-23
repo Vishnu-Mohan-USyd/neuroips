@@ -1,0 +1,13 @@
+SWEEP COMPLETE — ALL 19 RUNS TRAINED + ANALYZED
+======================================================================
+Time: 2026-04-10 ~06:40 UTC
+
+All groups: COMPLETE
+  Group A (7 runs): results/sweep/group_a_results.txt
+  Group B (5 runs): results/sweep/group_b_results.txt
+  Groups C+E (4 runs): results/sweep/group_ce_results.txt
+  Group D (3 runs): results/sweep/group_d_results.txt
+  Full summary: results/sweep/sweep_summary.txt
+
+HEADLINE: Best config is e1 (λ_sens=0.3, l23w=3.0)
+  M10=1.13 (near-unity), M7=+0.104, FWHM=-11.6° (strongest sharpening)

@@ -15,14 +15,14 @@ from src.v2_model.context_memory import ContextMemory
 
 def _make(seed: int = 0) -> ContextMemory:
     return ContextMemory(
-        n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12,
+        n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12, n_out_som=9,
         tau_m_ms=500.0, dt_ms=5.0, seed=seed,
     )
 
 
 WEIGHT_NAMES = (
     "W_hm_gen", "W_mm_gen", "W_mh_gen",
-    "W_qm_task", "W_lm_task", "W_mh_task",
+    "W_qm_task", "W_lm_task", "W_mh_task_exc", "W_mh_task_inh",
 )
 
 
@@ -52,8 +52,8 @@ def test_task_input_weights_seed_dependent_and_small() -> None:
     They must vary with seed (so Phase-3 bootstrap gets a real signal) and
     their magnitudes stay under a loose ``|W|_max < 1.0`` cap — Task #70
     raised init_std to 0.3 and added a cue_gain multiplier in forward, so
-    the old 0.05 cap no longer reflects the construction. W_mh_task stays
-    at exact zero regardless of seed.
+    the old 0.05 cap no longer reflects the construction.
+    W_mh_task_{exc,inh} stay at exact zero regardless of seed.
     """
     cm_a = _make(seed=0)
     cm_b = _make(seed=1)
@@ -67,10 +67,11 @@ def test_task_input_weights_seed_dependent_and_small() -> None:
         assert not torch.equal(p_a, p_b), f"{name} identical across seeds"
         assert float(p_a.abs().max().item()) < 2.0
         assert float(p_b.abs().max().item()) < 2.0
-    # Output readout task weight stays at exact zero until Phase-3 plasticity.
+    # Output readout task weights stay at exact zero until Phase-3 plasticity.
     for seed in (0, 1, 42, 9999):
         cm = _make(seed=seed)
-        assert torch.all(cm.W_mh_task == 0.0)
+        assert torch.all(cm.W_mh_task_exc == 0.0)
+        assert torch.all(cm.W_mh_task_inh == 0.0)
 
 
 def test_forward_bit_exact_across_calls() -> None:
@@ -81,10 +82,11 @@ def test_forward_bit_exact_across_calls() -> None:
     q = torch.randn(B, cm.n_cue)
     lead = torch.randn(B, cm.n_leader)
 
-    m1, b1 = cm(m, h, q, lead)
-    m2, b2 = cm(m, h, q, lead)
+    m1, b1e, b1i = cm(m, h, q, lead)
+    m2, b2e, b2i = cm(m, h, q, lead)
     torch.testing.assert_close(m1, m2, atol=0.0, rtol=0.0)
-    torch.testing.assert_close(b1, b2, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(b1e, b2e, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(b1i, b2i, atol=0.0, rtol=0.0)
 
 
 def test_forward_bit_exact_across_instances() -> None:
@@ -93,10 +95,11 @@ def test_forward_bit_exact_across_instances() -> None:
     B = 3
     m = torch.randn(B, cm1.n_m)
     h = torch.randn(B, cm1.n_h)
-    m1, b1 = cm1(m, h)
-    m2, b2 = cm2(m, h)
+    m1, b1e, b1i = cm1(m, h)
+    m2, b2e, b2i = cm2(m, h)
     torch.testing.assert_close(m1, m2, atol=0.0, rtol=0.0)
-    torch.testing.assert_close(b1, b2, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(b1e, b2e, atol=0.0, rtol=0.0)
+    torch.testing.assert_close(b1i, b2i, atol=0.0, rtol=0.0)
 
 
 def test_set_phase_does_not_perturb_forward() -> None:
@@ -106,9 +109,10 @@ def test_set_phase_does_not_perturb_forward() -> None:
     m = torch.randn(B, cm.n_m)
     h = torch.randn(B, cm.n_h)
 
-    ref_m_next, ref_b = cm(m, h)
+    ref_m_next, ref_b_exc, ref_b_inh = cm(m, h)
     for phase in ("phase3_kok", "phase3_richter", "phase2"):
         cm.set_phase(phase)                                           # type: ignore[arg-type]
-        mn, bn = cm(m, h)
+        mn, be, bi = cm(m, h)
         torch.testing.assert_close(mn, ref_m_next, atol=0.0, rtol=0.0)
-        torch.testing.assert_close(bn, ref_b, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(be, ref_b_exc, atol=0.0, rtol=0.0)
+        torch.testing.assert_close(bi, ref_b_inh, atol=0.0, rtol=0.0)

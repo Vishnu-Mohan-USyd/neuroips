@@ -1,0 +1,66 @@
+=== Batch 3: Template manipulation at mag=0.5 (12 runs) ===
+Start time: Wed Apr  8 10:04:03 AEST 2026
+
+=== Wave A (4 runs, staggered) — Wed Apr  8 10:04:03 AEST 2026 ===
+  [10:04:03] Starting: true_s42
+  RAM: 4679 MB used
+  [10:05:37] Starting: true_s123
+  RAM: 4852 MB used
+  [10:07:14] Starting: wrong_s42
+  RAM: 6335 MB used
+  [10:08:51] Starting: wrong_s123
+  [11:26:41] Finished: true_s42 (exit=0)
+  [11:29:10] Finished: true_s123 (exit=0)
+  [11:30:53] Finished: wrong_s42 (exit=0)
+  [11:32:05] Finished: wrong_s123 (exit=0)
+=== Wave A done — Wed Apr  8 11:32:05 AEST 2026 ===
+  RAM: 2492 MB used
+
+=== Wave B (4 runs, staggered) — Wed Apr  8 11:32:05 AEST 2026 ===
+  [11:32:05] Starting: true_s456
+  RAM: 4093 MB used
+  [11:33:44] Starting: wrong_s456
+  RAM: 4804 MB used
+  [11:35:23] Starting: random_s42
+  RAM: 6320 MB used
+  [11:36:58] Starting: random_s123
+  [12:54:13] Finished: true_s456 (exit=0)
+  [12:57:30] Finished: wrong_s456 (exit=0)
+  [12:59:20] Finished: random_s42 (exit=0)
+  [13:00:12] Finished: random_s123 (exit=0)
+=== Wave B done — Wed Apr  8 13:00:12 AEST 2026 ===
+  RAM: 2493 MB used
+
+=== Wave C (4 runs, staggered) — Wed Apr  8 13:00:12 AEST 2026 ===
+  [13:00:12] Starting: random_s456
+  RAM: 4068 MB used
+  [13:01:48] Starting: uniform_s42
+  RAM: 4770 MB used
+  [13:03:26] Starting: uniform_s123
+  RAM: 6270 MB used
+  [13:05:01] Starting: uniform_s456
+  [14:23:22] Finished: random_s456 (exit=0)
+  [14:26:06] Finished: uniform_s42 (exit=0)
+  [14:27:46] Finished: uniform_s123 (exit=0)
+  [14:28:43] Finished: uniform_s456 (exit=0)
+=== Wave C done — Wed Apr  8 14:28:43 AEST 2026 ===
+  RAM: 2502 MB used
+
+=== All 12 runs complete ===
+End time: Wed Apr  8 14:28:43 AEST 2026
+
+=== Checkpoint verification ===
+  OK: true_s42
+  OK: true_s123
+  OK: true_s456
+  OK: wrong_s42
+  OK: wrong_s123
+  OK: wrong_s456
+  OK: random_s42
+  OK: random_s123
+  OK: random_s456
+  OK: uniform_s42
+  OK: uniform_s123
+  OK: uniform_s456
+
+Results: 12 OK, 0 missing out of 12

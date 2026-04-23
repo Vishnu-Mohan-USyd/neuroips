@@ -158,6 +158,31 @@ def _assert_snapshot_unchanged(
             )
 
 
+# Task #74 (Fix A_homeo): defense-in-depth check for θ buffer immutability
+# during Phase-3 — mirrors the Kok trainer.
+
+def _snapshot_theta(net: V2Network) -> dict[str, Tensor]:
+    """Snapshot sensory-core excitatory θ buffers (L2/3 E, H E)."""
+    return {
+        "l23_e": net.l23_e.homeostasis.theta.detach().clone(),
+        "h_e": net.h_e.homeostasis.theta.detach().clone(),
+    }
+
+
+def _assert_theta_unchanged(
+    net: V2Network, snaps: dict[str, Tensor],
+) -> None:
+    for pop_name, theta_before in snaps.items():
+        theta_after = getattr(net, pop_name).homeostasis.theta.data
+        if not torch.equal(theta_before, theta_after):
+            max_abs_delta = float((theta_after - theta_before).abs().max().item())
+            raise RuntimeError(
+                f"frozen homeostasis θ on {pop_name} was mutated during "
+                f"Phase-3 Richter training (phase={net.phase!r}, "
+                f"max|Δθ|={max_abs_delta:.3e})"
+            )
+
+
 def _assert_plastic(net: V2Network, module: str, wname: str) -> None:
     if (module, wname) not in net.plastic_weight_names():
         raise PhaseFrozenError(
@@ -178,6 +203,10 @@ def run_richter_trial(
     timing: RichterTiming, rule: ThreeFactorRule,
     noise_std: float = 0.0, device: str = "cpu",
     apply_plasticity: bool = True,
+    som_modulator: Optional[Tensor] = None,
+    lr_mh_scale: float = 1.0,
+    lr_lm_scale: float = 1.0,
+    weight_clamp: float = 8.0,
 ) -> dict[str, Tensor]:
     """Run one Richter trial through the network; apply plasticity at end.
 
@@ -190,7 +219,8 @@ def run_richter_trial(
     computed for logging but not written to parameters.
     """
     _assert_plastic(net, "context_memory", "W_lm_task")
-    _assert_plastic(net, "context_memory", "W_mh_task")
+    _assert_plastic(net, "context_memory", "W_mh_task_exc")
+    _assert_plastic(net, "context_memory", "W_mh_task_inh")
 
     if not (0 <= leader_pos < N_LEAD_TRAIL):
         raise ValueError(f"leader_pos out of range: {leader_pos}")
@@ -213,6 +243,7 @@ def run_richter_trial(
     m_start_trailer: Optional[Tensor] = None
     b_l23_pre_trailer: Optional[Tensor] = None
     trailer_l23: list[Tensor] = []
+    trailer_som: list[Tensor] = []
 
     leader_end = timing.leader_steps
     trailer_end = leader_end + timing.trailer_steps
@@ -232,14 +263,11 @@ def run_richter_trial(
 
         _x_hat, state, info = net(frame, state, leader_t=ld_t)
 
-        # Task #43 — θ homeostasis must track activity during Phase-3
-        # assays (matches Phase-2 driver). Homeostasis mutates buffers,
-        # NOT nn.Parameters — the frozen-sensory-core-SHA invariant
-        # (Parameter-only) is preserved; θ is a running setpoint, not a
-        # learned weight.
-        with torch.no_grad():
-            net.l23_e.homeostasis.update(state.r_l23)
-            net.h_e.homeostasis.update(state.r_h)
+        # Task #74 (Fix A_homeo) — θ homeostasis is DISABLED during Phase-3.
+        # Rationale: CHECK 3 on Task#70 Kok ckpt showed θ drift was the
+        # causal mechanism collapsing L2/3 coverage entropy; same gate
+        # applies to the Richter driver. Phase-2 drivers still call
+        # `homeostasis.update` — this gate is Phase-3-only.
 
         if t == leader_end - 1:
             m_end_leader = state.m.clone()
@@ -248,12 +276,16 @@ def run_richter_trial(
             b_l23_pre_trailer = info["b_l23"].clone()
         if leader_end <= t < trailer_end:
             trailer_l23.append(info["r_l23"].clone())
+            trailer_som.append(info["r_som"].clone())
 
     assert m_end_leader is not None and m_start_trailer is not None
-    assert b_l23_pre_trailer is not None and trailer_l23
+    assert b_l23_pre_trailer is not None and trailer_l23 and trailer_som
 
+    # --- W_lm_task: leader → memory (three-factor, delta_qm) -------------
     memory_error_lm = m_end_leader - m_pre_trial                    # [1, n_m]
-    dw_lm = rule.delta_qm(
+    eff_lr_lm = float(rule.lr) * float(lr_lm_scale)
+    lm_rule = ThreeFactorRule(lr=eff_lr_lm, weight_decay=float(rule.weight_decay))
+    dw_lm = lm_rule.delta_qm(
         cue=leader_v, memory=m_end_leader, memory_error=memory_error_lm,
         weights=net.context_memory.W_lm_task,
     )
@@ -263,19 +295,49 @@ def run_richter_trial(
         # Kok-side cap (Task #58 / debugger Task #49 Claim 4).
         net.context_memory.W_lm_task.data.clamp_(min=-1.0, max=1.0)
 
+    # --- W_mh_task_{exc,inh}: memory → L2/3 (Task #74 Fix B+C) -----------
+    eff_lr_mh = float(rule.lr) * float(lr_mh_scale)
+    mh_rule = ThreeFactorRule(lr=eff_lr_mh, weight_decay=float(rule.weight_decay))
+
     r_l23_trailer_mean = torch.stack(trailer_l23, dim=0).mean(dim=0)  # [1, n_l23]
+    r_som_trailer_mean = torch.stack(trailer_som, dim=0).mean(dim=0)  # [1, n_som]
+
+    # Fix C: secondary readout to L23 E apical.
     probe_error_mh = r_l23_trailer_mean - b_l23_pre_trailer         # [1, n_l23]
-    dw_mh = rule.delta_mh(
+    dw_mh_exc = mh_rule.delta_mh(
         memory=m_start_trailer, probe_error=probe_error_mh,
-        weights=net.context_memory.W_mh_task,
+        weights=net.context_memory.W_mh_task_exc,
     )
     if apply_plasticity:
-        net.context_memory.W_mh_task.data.add_(dw_mh)
+        net.context_memory.W_mh_task_exc.data.add_(dw_mh_exc)
+        net.context_memory.W_mh_task_exc.data.clamp_(
+            min=-float(weight_clamp), max=float(weight_clamp),
+        )
+
+    # Fix C: MAIN readout to L23 SOM. For Richter the caller controls the
+    # SOM modulator (see run_phase3_richter_training); when None the inh
+    # update is a pure weight-decay step.
+    n_som = int(net.context_memory.n_out_som)
+    if som_modulator is None:
+        som_mod = torch.zeros(1, n_som, device=device, dtype=torch.float32)
+    else:
+        som_mod = som_modulator
+    dw_mh_inh = mh_rule.delta_mh_inh(
+        memory=m_start_trailer, som_modulator=som_mod,
+        weights=net.context_memory.W_mh_task_inh,
+    )
+    if apply_plasticity:
+        net.context_memory.W_mh_task_inh.data.add_(dw_mh_inh)
+        net.context_memory.W_mh_task_inh.data.clamp_(
+            min=-float(weight_clamp), max=float(weight_clamp),
+        )
 
     return {
         "dw_lm_abs_mean": dw_lm.abs().mean().detach(),
-        "dw_mh_abs_mean": dw_mh.abs().mean().detach(),
+        "dw_mh_exc_abs_mean": dw_mh_exc.abs().mean().detach(),
+        "dw_mh_inh_abs_mean": dw_mh_inh.abs().mean().detach(),
         "trailer_r_l23_mean": r_l23_trailer_mean.mean().detach(),
+        "r_som_trailer_mean": r_som_trailer_mean.detach(),   # [1, n_som]
         "m_end_leader_mean": m_end_leader.mean().detach(),
     }
 
@@ -291,8 +353,10 @@ class TrainStepMetrics:
     trial: int
     leader_pos: int
     trailer_pos: int
+    is_expected: bool
     dw_lm_abs_mean: float
-    dw_mh_abs_mean: float
+    dw_mh_exc_abs_mean: float
+    dw_mh_inh_abs_mean: float
     trailer_r_l23_mean: float
     wall_time_s: float
 
@@ -328,6 +392,10 @@ def run_phase3_richter_training(
     permutation: Optional[tuple[int, ...]] = None,
     metrics_path: Optional[Path] = None,
     log_every: int = 50,
+    lr_mh_scale: float = 1.0,
+    lr_lm_scale: float = 1.0,
+    som_ema_alpha: float = 0.01,
+    weight_clamp: float = 8.0,
 ) -> RichterHistory:
     """Run the two-sub-phase Richter trainer in-place on ``net``.
 
@@ -337,9 +405,13 @@ def run_phase3_richter_training(
       with probability ``reliability_scan``; otherwise trailer is drawn
       uniformly from the other five.
 
-    The caller owns ``net``; this function mutates ``W_lm_task`` and
-    ``W_mh_task`` in place. No other Parameter is touched — an integrity
-    check at exit asserts this.
+    The caller owns ``net``; this function mutates ``W_lm_task``,
+    ``W_mh_task_exc`` and ``W_mh_task_inh`` in place. No other Parameter
+    is touched — an integrity check at exit asserts this.
+
+    Task #74 Fix B+C: maintains per-(leader × expected) running EMAs of
+    trailer r_som activity. The SOM modulator into :meth:`delta_mh_inh`
+    on trial ``t`` is ``ema_exp[leader_t] − ema_unexp[leader_t]``.
     """
     if net.phase != "phase3_richter":
         raise PhaseFrozenError(
@@ -365,6 +437,7 @@ def run_phase3_richter_training(
     sha_at_start = net.frozen_sensory_core_sha()
     frozen_keys = _frozen_params(net)
     frozen_snaps = _snapshot_weights(net, frozen_keys)
+    theta_snaps = _snapshot_theta(net)  # Task #74 Fix A_homeo
 
     np_rng = np.random.default_rng(int(seed))
     history = RichterHistory()
@@ -372,6 +445,18 @@ def run_phase3_richter_training(
     if metrics_path is not None:
         metrics_path.parent.mkdir(parents=True, exist_ok=True)
         metrics_fh = metrics_path.open("w")
+
+    # Task #74 Fix C: per-(leader × expected) running EMAs of trailer r_som.
+    # Keyed on (leader_pos, is_expected); each buffer shape [n_l23_som].
+    n_som = int(net.context_memory.n_out_som)
+    device = str(cfg.device)
+    som_ema: dict[tuple[int, bool], Tensor] = {
+        (ld, is_exp): torch.zeros(n_som, device=device, dtype=torch.float32)
+        for ld in range(N_LEAD_TRAIL) for is_exp in (True, False)
+    }
+    alpha = float(som_ema_alpha)
+    if not (0.0 < alpha <= 1.0):
+        raise ValueError(f"som_ema_alpha must be in (0, 1]; got {alpha}")
 
     t_start = time.monotonic()
     try:
@@ -385,20 +470,50 @@ def run_phase3_richter_training(
                 trailer_pos = _pick_scan_trailer(
                     leader_pos, permutation, reliab, np_rng,
                 )
+                is_expected = (
+                    int(trailer_pos) == int(permutation[int(leader_pos)])
+                )
+
+                if n_som > 0:
+                    som_mod = (
+                        som_ema[(leader_pos, True)]
+                        - som_ema[(leader_pos, False)]
+                    ).unsqueeze(0)
+                else:
+                    som_mod = None
+
                 info = run_richter_trial(
                     net, bank,
                     leader_pos=leader_pos, trailer_pos=trailer_pos,
                     timing=timing, rule=rule,
                     noise_std=float(noise_std), device=str(cfg.device),
                     apply_plasticity=apply_plast,
+                    som_modulator=som_mod,
+                    lr_mh_scale=float(lr_mh_scale),
+                    lr_lm_scale=float(lr_lm_scale),
+                    weight_clamp=float(weight_clamp),
                 )
+
+                if n_som > 0:
+                    r_som = info["r_som_trailer_mean"].squeeze(0)  # [n_som]
+                    key = (int(leader_pos), bool(is_expected))
+                    som_ema[key] = (
+                        (1.0 - alpha) * som_ema[key] + alpha * r_som
+                    )
+
                 if k % max(int(log_every), 1) == 0 or k == n_trials - 1:
                     m = TrainStepMetrics(
                         phase_name=sub_phase, trial=k,
                         leader_pos=int(leader_pos),
                         trailer_pos=int(trailer_pos),
+                        is_expected=bool(is_expected),
                         dw_lm_abs_mean=float(info["dw_lm_abs_mean"].item()),
-                        dw_mh_abs_mean=float(info["dw_mh_abs_mean"].item()),
+                        dw_mh_exc_abs_mean=float(
+                            info["dw_mh_exc_abs_mean"].item()
+                        ),
+                        dw_mh_inh_abs_mean=float(
+                            info["dw_mh_inh_abs_mean"].item()
+                        ),
                         trailer_r_l23_mean=float(
                             info["trailer_r_l23_mean"].item()
                         ),
@@ -419,6 +534,7 @@ def run_phase3_richter_training(
             "training — LGN/L4 mutated (forbidden)"
         )
     _assert_snapshot_unchanged(net, frozen_snaps)
+    _assert_theta_unchanged(net, theta_snaps)  # Task #74 Fix A_homeo
     return history
 
 
@@ -459,6 +575,20 @@ def _cli() -> argparse.ArgumentParser:
     p.add_argument("--weight-decay", type=float, default=1e-5)
     p.add_argument("--noise-std", type=float, default=0.0)
     p.add_argument("--log-every", type=int, default=50)
+    # Task #74 Fix B + Fix C-v2:
+    p.add_argument("--lr-mh-scale", type=float, default=1.0,
+                   help="Fix B: outer multiplier on the W_mh_task_{exc,inh} lr. "
+                        "Fix C-v2: default reset to 1.0 because W_mh_task_inh "
+                        "is now routed through a softplus-bounded gain; raise "
+                        "to 5-10 only if mid-run Δsvm signal is weak.")
+    p.add_argument("--lr-lm-scale", type=float, default=1.0,
+                   help="Outer multiplier on the W_lm_task lr.")
+    p.add_argument("--som-ema-alpha", type=float, default=0.01,
+                   help="Fix C: EMA rate for per-(leader, expected) r_som buffers.")
+    p.add_argument("--weight-clamp", type=float, default=8.0,
+                   help="Fix C-v2: |W_mh_task_{exc,inh}| per-element cap. The "
+                        "downstream softplus(.).clamp(max=4.0) bounds the gain "
+                        "signal, so tight weight clamps are no longer critical.")
     p.add_argument(
         "--out-dir", type=Path,
         default=Path("checkpoints/v2/phase3_richter"),
@@ -496,6 +626,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         permutation=permutation,
         metrics_path=metrics_path,
         log_every=int(args.log_every),
+        lr_mh_scale=float(args.lr_mh_scale),
+        lr_lm_scale=float(args.lr_lm_scale),
+        som_ema_alpha=float(args.som_ema_alpha),
+        weight_clamp=float(args.weight_clamp),
     )
     _save_checkpoint(
         net, args.n_trials_learning + args.n_trials_scan,

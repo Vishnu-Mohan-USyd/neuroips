@@ -1,0 +1,14 @@
+toy_baseline: mean_r_matched=0.52331 mean_r_mismatched=0.52331 delta=-1.192e-07 Δsign=null asym_sign=inverse pref_exp=1.7259 pref_unexp=1.7258 nonpref_exp=0.0119 nonpref_unexp=0.0120
+toy_beta g0=0.10: mean_r_matched=0.49318 mean_r_mismatched=0.52320 delta=-3.002e-02 Δsign=correct asym_sign=correct pref_exp=1.4939 pref_unexp=1.7261 nonpref_exp=0.0119 nonpref_unexp=0.0108
+toy_beta g0=0.30: mean_r_matched=0.43622 mean_r_mismatched=0.52302 delta=-8.680e-02 Δsign=correct asym_sign=correct pref_exp=1.0437 pref_unexp=1.7264 nonpref_exp=0.0120 nonpref_unexp=0.0089
+toy_beta g0=0.50: mean_r_matched=0.38457 mean_r_mismatched=0.52294 delta=-1.384e-01 Δsign=correct asym_sign=correct pref_exp=0.6235 pref_unexp=1.7265 nonpref_exp=0.0120 nonpref_unexp=0.0080
+toy_alpha alpha=0.30: mean_r_matched=0.45317 mean_r_mismatched=0.52059 delta=-6.742e-02 Δsign=correct asym_sign=correct pref_exp=1.3977 pref_unexp=1.7277 nonpref_exp=0.0120 nonpref_unexp=0.0083
+toy_alpha alpha=0.50: mean_r_matched=0.40819 mean_r_mismatched=0.51917 delta=-1.110e-01 Δsign=correct asym_sign=correct pref_exp=1.1833 pref_unexp=1.7282 nonpref_exp=0.0121 nonpref_unexp=0.0080
+toy_alpha alpha=0.80: mean_r_matched=0.34401 mean_r_mismatched=0.51728 delta=-1.733e-01 Δsign=correct asym_sign=correct pref_exp=0.8707 pref_unexp=1.7284 nonpref_exp=0.0125 nonpref_unexp=0.0079
+toy_alpha alpha=1.00: mean_r_matched=0.30389 mean_r_mismatched=0.51624 delta=-2.123e-01 Δsign=correct asym_sign=correct pref_exp=0.6719 pref_unexp=1.7282 nonpref_exp=0.0144 nonpref_unexp=0.0079
+
+=== SUMMARY ===
+toy_beta_best=toy_beta g0=0.50 delta=-1.384e-01 sign=correct asym=correct
+toy_alpha_best=toy_alpha alpha=1.00 delta=-2.123e-01 sign=correct asym=correct
+mechanisms_validated=['beta', 'alpha']
+JSON: logs/task74/toy_level11.json

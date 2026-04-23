@@ -1,0 +1,21 @@
+loading phase-2 step_3000 ckpt: checkpoints/v2/phase2/phase2_task70_s42/phase2_s42/step_3000.pt
+homeostasis.update disabled on l23_e, h_e
+running run_phase3_kok_training with n_trials_learning=100
+training done in 64.0s
+computing coverage entropy on resulting (no-homeo-drift) net
+[coverage] orient=0.0° done=1/12 trials=15/180 elapsed=0.14min
+[coverage] orient=15.0° done=2/12 trials=30/180 elapsed=0.29min
+[coverage] orient=30.0° done=3/12 trials=45/180 elapsed=0.43min
+[coverage] orient=45.0° done=4/12 trials=60/180 elapsed=0.57min
+[coverage] orient=60.0° done=5/12 trials=75/180 elapsed=0.71min
+[coverage] orient=75.0° done=6/12 trials=90/180 elapsed=0.85min
+[coverage] orient=90.0° done=7/12 trials=105/180 elapsed=0.99min
+[coverage] orient=105.0° done=8/12 trials=120/180 elapsed=1.12min
+[coverage] orient=120.0° done=9/12 trials=135/180 elapsed=1.26min
+[coverage] orient=135.0° done=10/12 trials=150/180 elapsed=1.40min
+[coverage] orient=150.0° done=11/12 trials=165/180 elapsed=1.53min
+[coverage] orient=165.0° done=12/12 trials=180/180 elapsed=1.67min
+  entropy_no_homeo_drift = 1.636 nats  n_bins = 5/12
+
+=== SUMMARY ===
+entropy_no_homeo_drift=1.636 n_bins=5/12 (compare: phase3_kok_baseline=0.558, phase2_task70=<see parallel job>)

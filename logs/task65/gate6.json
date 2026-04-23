@@ -1,0 +1,139 @@
+{
+  "phase_switched_to": "phase3_kok",
+  "kok": {
+    "assay": "kok_null",
+    "per_class": {
+      "A_45deg": {
+        "mean_expected": 0.000252201618673098,
+        "mean_unexpected": 0.000252201618673098,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1.0000000000086255e-09,
+        "delta_over_sem": 0.0,
+        "passed": true,
+        "n_trials": 160
+      },
+      "B_135deg": {
+        "mean_expected": 0.000252201618673098,
+        "mean_unexpected": 0.000252201618673098,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1.0000000000086255e-09,
+        "delta_over_sem": 0.0,
+        "passed": true,
+        "n_trials": 160
+      }
+    },
+    "tolerance_sem": 1.0,
+    "passed": true
+  },
+  "richter": {
+    "assay": "richter_null",
+    "per_token_amplitude": {
+      "token_00": {
+        "mean_expected": 0.8020053684711456,
+        "mean_unexpected": 0.8020053684711457,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000496506832e-09,
+        "delta_over_sem": 1.1102229695018277e-07,
+        "passed": true
+      },
+      "token_01": {
+        "mean_expected": 0.8007230386137962,
+        "mean_unexpected": 0.8007230386137962,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1e-09,
+        "delta_over_sem": 0.0,
+        "passed": true
+      },
+      "token_02": {
+        "mean_expected": 0.8023833900690078,
+        "mean_unexpected": 0.8023833900690079,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000496506832e-09,
+        "delta_over_sem": 1.1102229695018277e-07,
+        "passed": true
+      },
+      "token_03": {
+        "mean_expected": 0.8055397734045983,
+        "mean_unexpected": 0.8055397734045983,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1e-09,
+        "delta_over_sem": 0.0,
+        "passed": true
+      },
+      "token_04": {
+        "mean_expected": 0.8004098489880562,
+        "mean_unexpected": 0.8004098489880561,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000496506832e-09,
+        "delta_over_sem": 1.1102229695018277e-07,
+        "passed": true
+      },
+      "token_05": {
+        "mean_expected": 0.8052274644374847,
+        "mean_unexpected": 0.8052274644374847,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1e-09,
+        "delta_over_sem": 0.0,
+        "passed": true
+      },
+      "token_06": {
+        "mean_expected": 0.8000060975551605,
+        "mean_unexpected": 0.8000060975551605,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1e-09,
+        "delta_over_sem": 0.0,
+        "passed": true
+      },
+      "token_07": {
+        "mean_expected": 0.8063196197152137,
+        "mean_unexpected": 0.8063196197152138,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000496506832e-09,
+        "delta_over_sem": 1.1102229695018277e-07,
+        "passed": true
+      },
+      "token_08": {
+        "mean_expected": 0.8049776062369347,
+        "mean_unexpected": 0.8049776062369346,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000496506832e-09,
+        "delta_over_sem": 1.1102229695018277e-07,
+        "passed": true
+      },
+      "token_09": {
+        "mean_expected": 0.8054531961679459,
+        "mean_unexpected": 0.8054531961679459,
+        "delta_amplitude": 0.0,
+        "sem_pooled": 1e-09,
+        "delta_over_sem": 0.0,
+        "passed": true
+      },
+      "token_10": {
+        "mean_expected": 0.8027215167880059,
+        "mean_unexpected": 0.802721516788006,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000453246652e-09,
+        "delta_over_sem": 1.1102229743046719e-07,
+        "passed": true
+      },
+      "token_11": {
+        "mean_expected": 0.8035901457071305,
+        "mean_unexpected": 0.8035901457071304,
+        "delta_amplitude": 1.1102230246251565e-16,
+        "sem_pooled": 1.0000000496506832e-09,
+        "delta_over_sem": 1.1102229695018277e-07,
+        "passed": true
+      }
+    },
+    "amplitude_passed": true,
+    "svm": {
+      "accuracy_expected": 0.9444444444444444,
+      "accuracy_unexpected": 1.0,
+      "delta_accuracy": 0.05555555555555558,
+      "tolerance": 0.02,
+      "passed": false
+    },
+    "passed": false
+  },
+  "passed": false
+}

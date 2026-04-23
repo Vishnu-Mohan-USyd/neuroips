@@ -1,0 +1,55 @@
+Building dataset: 50000 single + 50000 multi = 100000 total
+  split: train n=90000, val n=10000
+Training: epochs<=30, batch=256, LR=0.001, patience=3
+  epoch 00  train_loss=2.7396  train_acc=0.2983  val_loss=2.2869  val_acc=0.4473 *
+  epoch 01  train_loss=2.1069  train_acc=0.5451  val_loss=1.9748  val_acc=0.6172 *
+  epoch 02  train_loss=1.8878  train_acc=0.6690  val_loss=1.8158  val_acc=0.6993 *
+  epoch 03  train_loss=1.7617  train_acc=0.7206  val_loss=1.7130  val_acc=0.7258 *
+  epoch 04  train_loss=1.6755  train_acc=0.7429  val_loss=1.6391  val_acc=0.7406 *
+  epoch 05  train_loss=1.6112  train_acc=0.7557  val_loss=1.5820  val_acc=0.7605 *
+  epoch 06  train_loss=1.5605  train_acc=0.7655  val_loss=1.5376  val_acc=0.7587
+  epoch 07  train_loss=1.5190  train_acc=0.7719  val_loss=1.4975  val_acc=0.7715 *
+  epoch 08  train_loss=1.4842  train_acc=0.7773  val_loss=1.4645  val_acc=0.7772 *
+  epoch 09  train_loss=1.4541  train_acc=0.7804  val_loss=1.4372  val_acc=0.7824 *
+  epoch 10  train_loss=1.4277  train_acc=0.7848  val_loss=1.4114  val_acc=0.7840 *
+  epoch 11  train_loss=1.4047  train_acc=0.7875  val_loss=1.3896  val_acc=0.7874 *
+  epoch 12  train_loss=1.3839  train_acc=0.7909  val_loss=1.3692  val_acc=0.7904 *
+  epoch 13  train_loss=1.3652  train_acc=0.7926  val_loss=1.3516  val_acc=0.7935 *
+  epoch 14  train_loss=1.3482  train_acc=0.7953  val_loss=1.3348  val_acc=0.7937 *
+  epoch 15  train_loss=1.3326  train_acc=0.7968  val_loss=1.3205  val_acc=0.7942 *
+  epoch 16  train_loss=1.3182  train_acc=0.7990  val_loss=1.3063  val_acc=0.7975 *
+  epoch 17  train_loss=1.3049  train_acc=0.8000  val_loss=1.2924  val_acc=0.7976 *
+  epoch 18  train_loss=1.2926  train_acc=0.8021  val_loss=1.2810  val_acc=0.7999 *
+  epoch 19  train_loss=1.2811  train_acc=0.8045  val_loss=1.2693  val_acc=0.8034 *
+  epoch 20  train_loss=1.2705  train_acc=0.8048  val_loss=1.2588  val_acc=0.8051 *
+  epoch 21  train_loss=1.2602  train_acc=0.8065  val_loss=1.2487  val_acc=0.8054 *
+  epoch 22  train_loss=1.2507  train_acc=0.8076  val_loss=1.2400  val_acc=0.8052
+  epoch 23  train_loss=1.2418  train_acc=0.8079  val_loss=1.2309  val_acc=0.8088 *
+  epoch 24  train_loss=1.2329  train_acc=0.8094  val_loss=1.2221  val_acc=0.8110 *
+  epoch 25  train_loss=1.2250  train_acc=0.8098  val_loss=1.2136  val_acc=0.8124 *
+  epoch 26  train_loss=1.2171  train_acc=0.8116  val_loss=1.2074  val_acc=0.8093
+  epoch 27  train_loss=1.2097  train_acc=0.8129  val_loss=1.1994  val_acc=0.8114
+  epoch 28  train_loss=1.2026  train_acc=0.8139  val_loss=1.1922  val_acc=0.8144 *
+  epoch 29  train_loss=1.1958  train_acc=0.8147  val_loss=1.1850  val_acc=0.8145 *
+Best val_acc=0.8145 @ epoch 29
+
+Saved checkpoint -> checkpoints/decoder_c.pt
+
+=== Validation 1: held-out synthetic ===
+  n=10000  acc=0.8145
+
+=== Validation 2: real-network natural HMM forward ===
+  loading network: results/simple_dual/emergent_seed42/checkpoint.pt
+  N=36, seq_length=25, batch=32, steps_per=16, readout window=[9:11]
+  batch 1/4 done
+  batch 2/4 done
+  batch 3/4 done
+  batch 4/4 done
+  acc (non-amb, +-0): 0.6635   acc (+-1): 0.9714   acc (+-2): 0.9803
+  acc (all,     +-0): 0.5334   acc (+-1): 0.8906   acc (+-2): 0.9616
+  target=0.50  passed_target=True  below_flag=False
+
+=== Validation 3: Pass A / Pass B synthetic emulation ===
+  pass_A_synth: argmax=ch18 (logit +2.9614), top2=ch19 (logit +2.6777), margin top1-top2=0.2837
+  pass_B_synth: argmax=ch18 (logit +0.9217), top2=ch19 (logit +0.8039), margin top1-top2=0.1178
+Wrote validation JSON -> results/decoder_c_validation.json

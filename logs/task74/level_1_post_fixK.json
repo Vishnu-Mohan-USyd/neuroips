@@ -1,0 +1,70 @@
+{
+  "version": "level_1_lgn_l4_v2_recalibrated",
+  "seed": 42,
+  "n_l4e": 128,
+  "n_ori_bank": 8,
+  "retino_side": 4,
+  "pool_h": 8,
+  "pool_w": 8,
+  "grid_h": 32,
+  "grid_w": 32,
+  "probe_A": {
+    "orients_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "peak_rate_median": 0.21533676981925964,
+    "trough_rate_median": 0.008254468441009521,
+    "peak_minus_trough_median": 0.20352061837911606,
+    "pref_orient_frac_defined": 1.0,
+    "fwhm_median_deg": 45.0,
+    "fwhm_p25_deg": 30.0,
+    "fwhm_p75_deg": 45.0,
+    "pref_circ_offset_median_deg": 3.75
+  },
+  "probe_B": {
+    "contrasts": [
+      0.1,
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1.0
+    ],
+    "contrast_mono_frac_rho_ge_0p7": 1.0,
+    "rho_median": 1.0
+  },
+  "probe_C": {
+    "pos_grid": 4,
+    "patch_sigma_px": 1.5,
+    "probe_cx_px": [
+      -12.0,
+      -4.0,
+      4.0,
+      12.0
+    ],
+    "probe_cy_px": [
+      -12.0,
+      -4.0,
+      4.0,
+      12.0
+    ],
+    "criterion": "argmax_within_pm1_pool_cell",
+    "rf_com_frac_localized": 0.9375,
+    "anchor_argmax_offset_px_median": 0.0,
+    "anchor_com_offset_px_median": 8.441864951195981,
+    "n_silent_units": 0
+  },
+  "verdict": "pass",
+  "issue_if_fail": "none"
+}

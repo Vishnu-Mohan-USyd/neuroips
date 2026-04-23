@@ -1,0 +1,205 @@
+{
+  "rule": "rule1",
+  "rule_formula": "\u0394W=-\u03b7\u00b7cue\u00b7r\u00b7sign(matched); clamp[gmin,gmax]",
+  "ckpt": "checkpoints/v2/phase2/phase2_validated_substrate_s42/phase2_s42/step_3000.pt",
+  "seed": 42,
+  "n_trials": 400,
+  "validity": 0.75,
+  "lr": 0.001,
+  "homeostasis_gamma": 0.003,
+  "gain_clamp": [
+    0.1,
+    1.0
+  ],
+  "g0": 0.3,
+  "target_pref": 0.7,
+  "target_nonpref": 1.0,
+  "mean_gain_pref": 0.7838071584701538,
+  "mean_gain_nonpref": 0.9671733975410461,
+  "matches_target": true,
+  "iterations_to_converge": -1,
+  "per_cue_final": {
+    "cue0": {
+      "pref_gain": 0.774147093296051,
+      "nonpref_gain": 0.965150773525238,
+      "n_pref": 47
+    },
+    "cue1": {
+      "pref_gain": 0.7934672236442566,
+      "nonpref_gain": 0.9691960215568542,
+      "n_pref": 51
+    }
+  },
+  "history": [
+    {
+      "trial": 0,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.013948939740657806,
+      "mean_gain_pref_cue0": 1.0,
+      "mean_gain_nonpref_cue0": 1.0,
+      "mean_gain_pref_cue1": 0.9983051419258118,
+      "mean_gain_nonpref_cue1": 0.9997668862342834
+    },
+    {
+      "trial": 25,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.013740725815296173,
+      "mean_gain_pref_cue0": 0.9757675528526306,
+      "mean_gain_nonpref_cue0": 0.9966108202934265,
+      "mean_gain_pref_cue1": 0.986591100692749,
+      "mean_gain_nonpref_cue1": 0.9982372522354126
+    },
+    {
+      "trial": 50,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.013522474095225334,
+      "mean_gain_pref_cue0": 0.9606480598449707,
+      "mean_gain_nonpref_cue0": 0.9946671724319458,
+      "mean_gain_pref_cue1": 0.9734176397323608,
+      "mean_gain_nonpref_cue1": 0.9965092539787292
+    },
+    {
+      "trial": 75,
+      "cue": 1,
+      "matched": false,
+      "dnorm": 0.0008430462330579758,
+      "mean_gain_pref_cue0": 0.9458135962486267,
+      "mean_gain_nonpref_cue0": 0.9926296472549438,
+      "mean_gain_pref_cue1": 0.9605002403259277,
+      "mean_gain_nonpref_cue1": 0.994818925857544
+    },
+    {
+      "trial": 100,
+      "cue": 0,
+      "matched": true,
+      "dnorm": 0.012924795970320702,
+      "mean_gain_pref_cue0": 0.9329028129577637,
+      "mean_gain_nonpref_cue0": 0.9908304214477539,
+      "mean_gain_pref_cue1": 0.9477935433387756,
+      "mean_gain_nonpref_cue1": 0.9930896162986755
+    },
+    {
+      "trial": 125,
+      "cue": 1,
+      "matched": false,
+      "dnorm": 0.0009089974919334054,
+      "mean_gain_pref_cue0": 0.9218061566352844,
+      "mean_gain_nonpref_cue0": 0.9892758727073669,
+      "mean_gain_pref_cue1": 0.9337527751922607,
+      "mean_gain_nonpref_cue1": 0.9911527037620544
+    },
+    {
+      "trial": 150,
+      "cue": 1,
+      "matched": false,
+      "dnorm": 0.0009127773810178041,
+      "mean_gain_pref_cue0": 0.9108630418777466,
+      "mean_gain_nonpref_cue0": 0.9876816868782043,
+      "mean_gain_pref_cue1": 0.9200108647346497,
+      "mean_gain_nonpref_cue1": 0.9892446994781494
+    },
+    {
+      "trial": 175,
+      "cue": 0,
+      "matched": true,
+      "dnorm": 0.012357420288026333,
+      "mean_gain_pref_cue0": 0.897046685218811,
+      "mean_gain_nonpref_cue0": 0.9856253266334534,
+      "mean_gain_pref_cue1": 0.9140464067459106,
+      "mean_gain_nonpref_cue1": 0.9884853363037109
+    },
+    {
+      "trial": 200,
+      "cue": 0,
+      "matched": false,
+      "dnorm": 0.0008924884023144841,
+      "mean_gain_pref_cue0": 0.8805254697799683,
+      "mean_gain_nonpref_cue0": 0.9831274151802063,
+      "mean_gain_pref_cue1": 0.9021236896514893,
+      "mean_gain_nonpref_cue1": 0.986724317073822
+    },
+    {
+      "trial": 225,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.012165135703980923,
+      "mean_gain_pref_cue0": 0.8614842891693115,
+      "mean_gain_nonpref_cue0": 0.9799574017524719,
+      "mean_gain_pref_cue1": 0.8889447450637817,
+      "mean_gain_nonpref_cue1": 0.9847096800804138
+    },
+    {
+      "trial": 250,
+      "cue": 0,
+      "matched": true,
+      "dnorm": 0.011533346958458424,
+      "mean_gain_pref_cue0": 0.8430101275444031,
+      "mean_gain_nonpref_cue0": 0.9770830273628235,
+      "mean_gain_pref_cue1": 0.8803086876869202,
+      "mean_gain_nonpref_cue1": 0.9833983182907104
+    },
+    {
+      "trial": 275,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.011849294416606426,
+      "mean_gain_pref_cue0": 0.8319127559661865,
+      "mean_gain_nonpref_cue0": 0.9752613306045532,
+      "mean_gain_pref_cue1": 0.8690045475959778,
+      "mean_gain_nonpref_cue1": 0.9817241430282593
+    },
+    {
+      "trial": 300,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.011576155200600624,
+      "mean_gain_pref_cue0": 0.8196343183517456,
+      "mean_gain_nonpref_cue0": 0.973148763179779,
+      "mean_gain_pref_cue1": 0.8509523868560791,
+      "mean_gain_nonpref_cue1": 0.9788492918014526
+    },
+    {
+      "trial": 325,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.011340186931192875,
+      "mean_gain_pref_cue0": 0.8049530386924744,
+      "mean_gain_nonpref_cue0": 0.9706224799156189,
+      "mean_gain_pref_cue1": 0.836061418056488,
+      "mean_gain_nonpref_cue1": 0.9763874411582947
+    },
+    {
+      "trial": 350,
+      "cue": 1,
+      "matched": false,
+      "dnorm": 0.0017830990254878998,
+      "mean_gain_pref_cue0": 0.7971012592315674,
+      "mean_gain_nonpref_cue0": 0.9692633748054504,
+      "mean_gain_pref_cue1": 0.8163082599639893,
+      "mean_gain_nonpref_cue1": 0.9730647206306458
+    },
+    {
+      "trial": 375,
+      "cue": 0,
+      "matched": true,
+      "dnorm": 0.010665643028914928,
+      "mean_gain_pref_cue0": 0.785494863986969,
+      "mean_gain_nonpref_cue0": 0.9671467542648315,
+      "mean_gain_pref_cue1": 0.8035181760787964,
+      "mean_gain_nonpref_cue1": 0.970938503742218
+    },
+    {
+      "trial": 399,
+      "cue": 1,
+      "matched": true,
+      "dnorm": 0.010707261972129345,
+      "mean_gain_pref_cue0": 0.774147093296051,
+      "mean_gain_nonpref_cue0": 0.965150773525238,
+      "mean_gain_pref_cue1": 0.7934672236442566,
+      "mean_gain_nonpref_cue1": 0.9691960215568542
+    }
+  ]
+}

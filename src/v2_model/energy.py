@@ -131,10 +131,30 @@ class EnergyPenalty(nn.Module):
         weights: Tensor,
         pre_activity: Tensor,
         mask: Optional[Tensor] = None,
+        *,
+        raw_prior: Optional[Tensor] = None,
     ) -> Tensor:
-        """Per-weight shrinkage proportional to squared presynaptic activity.
+        """Per-weight shrinkage toward ``raw_prior`` proportional to squared
+        presynaptic activity.
 
-        Closed form: ``Δw_ij = −β · mean_b(a_pre_i²) · w_ij``.
+        Closed form (implicit-Euler, Task #62): ``w_new = raw_prior + (w -
+        raw_prior) / (1 + β · mean_b(a_pre²))``, i.e.
+
+            Δw_ij = −(w_ij − prior_ij) · shrink / (1 + shrink)
+
+        where ``shrink = β · mean_b(a_pre_i²)``. With ``raw_prior=None``
+        (default, backward-compat) this reduces to the original Task-#62
+        form ``Δw = −w · shrink / (1 + shrink)`` (shrinkage toward zero).
+
+        Task #74 Fix P (2026-04-22): anchor shrinkage at the weight's
+        init value rather than zero. Shrinking a weight with strongly
+        negative init (e.g. ``W_pv_l23_raw`` init ≈ −6.5 under Fix-L2,
+        or ``W_pred_*`` init = −8) toward zero would *grow* the effective
+        softplus output of that weight and drive E/I imbalance. Shrinking
+        toward the init leaves the weight inert at init and restores the
+        biological reading of the L2 penalty as "regularise *deviations
+        from the resting configuration* proportional to the metabolic
+        cost of carrying current", not "pull every weight toward zero".
 
         Args:
             weights:      `[n_post, n_pre]` current weight tensor. Any real
@@ -143,6 +163,9 @@ class EnergyPenalty(nn.Module):
             pre_activity: `[B, n_pre]` presynaptic activity over the batch.
             mask:         Optional `[n_post, n_pre]` boolean mask. Entries
                 where `mask` is False become exactly 0 in the output.
+            raw_prior:    Optional `[n_post, n_pre]` tensor or scalar giving
+                the shrinkage target (typically the weight's init value).
+                ``None`` ≡ shrink toward zero (legacy behaviour).
 
         Returns:
             `[n_post, n_pre]` tensor of weight-update contributions.
@@ -162,13 +185,26 @@ class EnergyPenalty(nn.Module):
                 f"pre_activity last dim {pre_activity.shape[1]} must equal "
                 f"weights n_pre = {n_pre}"
             )
+        if raw_prior is not None:
+            if not isinstance(raw_prior, Tensor):
+                raise ValueError(
+                    f"raw_prior must be a Tensor; got {type(raw_prior).__name__}"
+                )
+            if raw_prior.shape != weights.shape:
+                raise ValueError(
+                    f"raw_prior shape {tuple(raw_prior.shape)} must match "
+                    f"weights shape {tuple(weights.shape)}"
+                )
         # mean over batch of a_pre² → shape [n_pre]; broadcast to [n_post, n_pre].
         # Implicit-Euler-equivalent shrinkage (Task #62): the explicit-Euler
         # form dw = -β·pre²·w overshoots for large pre² and drives oscillatory
         # weight explosion. Equivalent implicit form w_new = w / (1 + β·pre²)
         # gives dw = -w · shrink / (1 + shrink), which is always bounded
-        # |dw| ≤ |w| for any non-negative shrink_factor.
+        # |dw| ≤ |w| for any non-negative shrink_factor. Task #74 Fix P:
+        # replace `w` with `(w - raw_prior)` so shrinkage targets the init,
+        # not zero.
         pre_sq_mean = (pre_activity * pre_activity).mean(dim=0)        # [n_pre]
         shrink_factor = self.beta * pre_sq_mean.view(1, -1)            # [1, n_pre]
-        dw = -weights * shrink_factor / (1.0 + shrink_factor)          # [n_post, n_pre]
+        offset = weights if raw_prior is None else (weights - raw_prior)
+        dw = -offset * shrink_factor / (1.0 + shrink_factor)           # [n_post, n_pre]
         return _apply_mask(dw, mask)

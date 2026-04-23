@@ -1,0 +1,81 @@
+{
+  "task": "task74_diagnostics",
+  "version": 1,
+  "checkpoint": "checkpoints/v2/phase2_s42/step_200.pt",
+  "paradigm": "kok",
+  "phase": "phase2",
+  "seed": 42,
+  "coverage": {
+    "n_orientations": 12,
+    "n_units": 256,
+    "orientations_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "per_orientation_n_pref_units": [
+      0,
+      40,
+      0,
+      51,
+      0,
+      9,
+      27,
+      45,
+      0,
+      40,
+      0,
+      44
+    ],
+    "per_orientation_pct": [
+      0.0,
+      15.625,
+      0.0,
+      19.921875,
+      0.0,
+      3.515625,
+      10.546875,
+      17.578125,
+      0.0,
+      15.625,
+      0.0,
+      17.1875
+    ],
+    "entropy_nats": 1.8647077721816474,
+    "entropy_bits": 2.6902046556335697,
+    "max_entropy_nats": 2.4849066497880004,
+    "max_entropy_bits": 3.584962500721156,
+    "n_bins_geq_5pct": 6,
+    "thresholds": {
+      "pass_strong_nats": 1.74,
+      "pass_weak_nats": 1.5,
+      "n_bins_5pct": 8
+    },
+    "pass_strong": false,
+    "pass_weak": true,
+    "pass_bins": false
+  },
+  "rule_magnitude": {
+    "skipped": true
+  },
+  "readout_alignment": {
+    "skipped": true
+  },
+  "thresholds": {
+    "coverage_pass_strong_nats": 1.74,
+    "coverage_pass_weak_nats": 1.5,
+    "coverage_n_bins_5pct": 8,
+    "rule_magnitude_gate": 0.05,
+    "rule_magnitude_target": 1.7,
+    "readout_cos": 0.3
+  }
+}

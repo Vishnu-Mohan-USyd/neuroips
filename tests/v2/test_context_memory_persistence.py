@@ -35,7 +35,7 @@ def test_zero_drive_decays_by_exact_leak_factor_one_step() -> None:
     B = 4
     m = torch.randn(B, cm.n_m)
     h_zero = torch.zeros(B, cm.n_h)                                # no H drive
-    m_next, _ = cm(m, h_zero)                                      # q, leader = None
+    m_next, _, _ = cm(m, h_zero)                                   # q, leader = None
     expected = math.exp(-5.0 / 500.0) * m
     torch.testing.assert_close(m_next, expected, atol=1e-7, rtol=0.0)
 
@@ -55,7 +55,7 @@ def test_zero_drive_decay_over_550_ms_matches_closed_form() -> None:
     n_steps = 110                                                  # 110 · 5 ms = 550 ms
 
     for _ in range(n_steps):
-        m, _ = cm(m, h_zero)
+        m, _, _ = cm(m, h_zero)
 
     expected = math.exp(-n_steps * 5.0 / 500.0) * m0
     torch.testing.assert_close(m, expected, atol=1e-5, rtol=0.0)
@@ -71,7 +71,7 @@ def test_memory_content_still_retrievable_after_550_ms() -> None:
     h_zero = torch.zeros(B, cm.n_h)
 
     for _ in range(110):                                            # 550 ms
-        m, _ = cm(m, h_zero)
+        m, _, _ = cm(m, h_zero)
 
     # Closed-form amplitude ratio = exp(-550/500) = exp(-1.1) ≈ 0.333 — well above noise.
     ratio = (m.norm() / m0.norm()).item()
@@ -96,7 +96,7 @@ def test_decay_rate_scales_with_tau() -> None:
         cm = _cm(tau_m_ms=tau, dt_ms=5.0)
         m = m0.clone()
         for _ in range(n_steps):
-            m, _ = cm(m, h_zero)
+            m, _, _ = cm(m, h_zero)
         results[tau] = (m.norm() / m0.norm()).item()
 
     # Stronger retention at τ=800 than τ=300.
@@ -122,7 +122,7 @@ def test_positive_initial_memory_stays_positive_under_zero_drive() -> None:
     m = torch.rand(3, cm.n_m) + 0.01                                # strictly positive
     h_zero = torch.zeros(3, cm.n_h)
     for _ in range(50):
-        m, _ = cm(m, h_zero)
+        m, _, _ = cm(m, h_zero)
     assert (m > 0).all()
 
 
@@ -138,6 +138,6 @@ def test_memory_state_has_zero_norm_when_driven_only_by_recurrence_from_zero() -
     m = torch.zeros(B, cm.n_m)
     h_zero = torch.zeros(B, cm.n_h)
     for _ in range(20):
-        m, _ = cm(m, h_zero)
+        m, _, _ = cm(m, h_zero)
     # φ(0) = rectified_softplus(0) = 0 exactly; decay factor × 0 = 0.
     assert torch.all(m == 0.0)

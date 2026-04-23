@@ -1,0 +1,32 @@
+{
+  "H1_refined": {
+    "verdict": "CONFIRMED",
+    "cos_raw_demeaned_per_class": {
+      "0": 0.6725701093673706,
+      "1": 0.9524844288825989
+    },
+    "cos_eff_demeaned_per_class": {
+      "0": 0.0,
+      "1": 0.0
+    },
+    "mean_cos_raw_demeaned": 0.8125272691249847,
+    "mean_cos_eff_demeaned": 0.0,
+    "som_gain_eff_mean_per_class": {
+      "0": 4.0,
+      "1": 4.0
+    },
+    "som_gain_eff_std_per_class": {
+      "0": 0.0,
+      "1": 0.0
+    },
+    "som_gain_eff_pct_at_clamp_per_class": {
+      "0": 1.0,
+      "1": 1.0
+    },
+    "shuffle_ctrl_mean": 0.0010863222692441455,
+    "shuffle_ctrl_std": 0.17418843712898177,
+    "gap": -0.0010863222692441455,
+    "W_pct_at_pos_clamp": 0.8958333333333334,
+    "W_pct_near_zero": 0.020833333333333332
+  }
+}

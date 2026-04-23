@@ -1,0 +1,92 @@
+{
+  "assay": "eval_feedback_decoder_isolation",
+  "checkpoint": "checkpoints/v2/phase3_kok_beta_full_s42/phase3_kok_s42.pt",
+  "seed": 42,
+  "cue_mapping": {
+    "0": 135.0,
+    "1": 45.0
+  },
+  "n_voxels": 64,
+  "noise_std": 0.5,
+  "contrast_range": [
+    0.1,
+    0.3
+  ],
+  "n_warmup_steps": 50,
+  "n_readout_steps": 5,
+  "n_trials_localizer_total": 1600,
+  "n_trials_matched": 800,
+  "n_trials_mismatched": 800,
+  "q1": {
+    "baseline_mean_abs_per_voxel": 0.4365620017051697,
+    "baseline_l1_over_nvox": 0.4365620017051697,
+    "baseline_sigma_trial_median": 0.024243786931037903,
+    "shift_median_matched_vs_none_over_sigma": 4.77187442779541,
+    "shift_median_mismatched_vs_none_over_sigma": 4.510109901428223,
+    "shift_median_matched_vs_mismatched_over_sigma": 0.26521626114845276,
+    "frac_voxels_above_2sigma_matched_vs_none": 0.703125,
+    "frac_voxels_above_2sigma_mismatched_vs_none": 0.671875,
+    "frac_voxels_above_2sigma_matched_vs_mismatched": 0.0,
+    "corr_matched_mismatched": 0.9994215907406732,
+    "corr_matched_none": 0.0142740661969762,
+    "corr_mismatched_none": 0.0317126924346551,
+    "n_voxels": 64,
+    "verdict": "feedback_alive"
+  },
+  "q2": {
+    "localizer_cv_acc_mean": 0.92125,
+    "localizer_cv_acc_std": 0.016464924840399367,
+    "decoder_weight_l2_norm": 24.454633949347873,
+    "projections": {
+      "none": {
+        "mean": -0.7644873093187091,
+        "std": 1.6174114756040605,
+        "per_class_means": {
+          "0": -2.094935035098493,
+          "1": 0.565960416461075
+        },
+        "class_separation_index": -1.645156777786428
+      },
+      "matched": {
+        "mean": 2.662008722153463,
+        "std": 21.767022977354763,
+        "per_class_means": {
+          "0": 24.412353111360133,
+          "1": -19.088335667053208
+        },
+        "class_separation_index": 1.9984675361288087
+      },
+      "mismatched": {
+        "mean": 2.5564603323615143,
+        "std": 22.693886029191933,
+        "per_class_means": {
+          "0": -20.11968444266899,
+          "1": 25.23260510739202
+        },
+        "class_separation_index": -1.9984364727893136
+      }
+    },
+    "cosine_delta_matched_vs_w": 0.10935153332539725,
+    "cosine_delta_mismatched_vs_w": 0.1088229412245362,
+    "rel_delta_matched_over_w": 0.05239682309974756,
+    "rel_delta_mismatched_over_w": 0.051029417728595754,
+    "verdict": "cue_shift_orthogonal_to_decoder"
+  },
+  "q3": {
+    "acc_matched": 0.0,
+    "acc_mismatched": 1.0,
+    "delta": {
+      "mean": -1.0,
+      "ci": [
+        -1.0,
+        -1.0
+      ],
+      "n_bootstrap": 1000,
+      "permutation_p_two_sided": 0.000999000999000999,
+      "n_permutations": 1000,
+      "eps": 0.02
+    },
+    "verdict": "dampening"
+  },
+  "combined_verdict": "feedback_alive but Q2=cue_shift_orthogonal_to_decoder, |\u0394|>eps \u2014 report raw numbers; the three blocks disagree."
+}

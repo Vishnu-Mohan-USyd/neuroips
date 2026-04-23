@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/_debug_task73_dx3_proper.py", line 33, in <module>
+    from scripts.v2.train_phase3_kok_learning import (
+ImportError: cannot import name 'Phase3Config' from 'scripts.v2.train_phase3_kok_learning' (/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/train_phase3_kok_learning.py)

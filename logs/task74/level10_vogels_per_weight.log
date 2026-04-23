@@ -1,0 +1,62 @@
+[all_on] wall=4.0s
+[vogels_pv_l23_only] wall=3.4s
+[vogels_som_l23_only] wall=3.3s
+[vogels_pv_h_only] wall=3.2s
+[vogels_ipop_l23_only] wall=3.1s
+[vogels_ipop_h_only] wall=3.1s
+[vogels_all_off] wall=3.2s
+
+=== INIT (post-warmup) ===
+  l23_e.W_pv_l23_raw: raw_mean=-6.5008 eff_mean=0.00151
+  l23_e.W_som_l23_raw: raw_mean=-5.0026 eff_mean=0.00673
+  h_e.W_pv_h_raw: raw_mean=-4.9945 eff_mean=0.00678
+  l23_pv.W_pre_raw: raw_mean=-1.0016 eff_mean=0.31379
+  h_pv.W_pre_raw: raw_mean=+2.9951 eff_mean=3.04412
+
+=== STEP-1 dw SIGN (per isolated-active-weight condition) ===
+  all_on                 l23_e.W_pv_l23_raw: dw_mean=-0.006371 sign=- |dw|=0.007036
+  all_on                 l23_e.W_som_l23_raw: dw_mean=-0.000033 sign=- |dw|=0.000033
+  all_on                 h_e.W_pv_h_raw: dw_mean=-0.000046 sign=- |dw|=0.000201
+  all_on                 l23_pv.W_pre_raw: dw_mean=+0.000763 sign=+ |dw|=0.000763
+  all_on                 h_pv.W_pre_raw: dw_mean=+0.000014 sign=+ |dw|=0.000014
+  vogels_pv_l23_only     l23_e.W_pv_l23_raw: dw_mean=-0.006371 sign=- |dw|=0.007036
+  vogels_som_l23_only    l23_e.W_som_l23_raw: dw_mean=-0.000033 sign=- |dw|=0.000033
+  vogels_pv_h_only       h_e.W_pv_h_raw: dw_mean=-0.000046 sign=- |dw|=0.000201
+  vogels_ipop_l23_only   l23_pv.W_pre_raw: dw_mean=+0.000763 sign=+ |dw|=0.000763
+  vogels_ipop_h_only     h_pv.W_pre_raw: dw_mean=+0.000014 sign=+ |dw|=0.000014
+
+=== L23E TRAJECTORY + collapse verdict ===
+  ablation=all_on                 l23e_s1=0.328 s100=0.353 s300=0.279 s500=0.282 drives_collapse=F
+  ablation=vogels_pv_l23_only     l23e_s1=0.328 s100=0.367 s300=0.317 s500=0.348 drives_collapse=F
+  ablation=vogels_som_l23_only    l23e_s1=0.328 s100=0.349 s300=0.301 s500=0.330 drives_collapse=F
+  ablation=vogels_pv_h_only       l23e_s1=0.328 s100=0.349 s300=0.301 s500=0.330 drives_collapse=F
+  ablation=vogels_ipop_l23_only   l23e_s1=0.328 s100=0.336 s300=0.267 s500=0.272 drives_collapse=F
+  ablation=vogels_ipop_h_only     l23e_s1=0.328 s100=0.349 s300=0.301 s500=0.330 drives_collapse=F
+  ablation=vogels_all_off         l23e_s1=0.328 s100=0.349 s300=0.301 s500=0.330 drives_collapse=F
+
+=== EFFECTIVE WEIGHT CHANGE s1→s500 (all_on) ===
+  l23_e.W_pv_l23_raw: eff_s1=0.00150 eff_s500=0.00136 ratio=0.910×
+  l23_e.W_som_l23_raw: eff_s1=0.00673 eff_s500=0.00665 ratio=0.988×
+  h_e.W_pv_h_raw: eff_s1=0.00678 eff_s500=0.00667 ratio=0.983×
+  l23_pv.W_pre_raw: eff_s1=0.31400 eff_s500=0.43855 ratio=1.397×
+  h_pv.W_pre_raw: eff_s1=3.04413 eff_s500=3.05007 ratio=1.002×
+
+[total wall=23.3s]
+Traceback (most recent call last):
+  File "/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/_debug_task74_vogels_per_weight.py", line 205, in <module>
+    main()
+  File "/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/_debug_task74_vogels_per_weight.py", line 200, in main
+    out.write_text(json.dumps(results, indent=2, default=str))
+  File "/usr/lib/python3.10/json/__init__.py", line 238, in dumps
+    **kw).encode(obj)
+  File "/usr/lib/python3.10/json/encoder.py", line 201, in encode
+    chunks = list(chunks)
+  File "/usr/lib/python3.10/json/encoder.py", line 429, in _iterencode
+    yield from _iterencode_list(o, _current_indent_level)
+  File "/usr/lib/python3.10/json/encoder.py", line 325, in _iterencode_list
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 405, in _iterencode_dict
+    yield from chunks
+  File "/usr/lib/python3.10/json/encoder.py", line 376, in _iterencode_dict
+    raise TypeError(f'keys must be str, int, float, bool or None, '
+TypeError: keys must be str, int, float, bool or None, not tuple

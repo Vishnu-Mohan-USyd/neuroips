@@ -1,0 +1,158 @@
+{
+  "task": "task74_diagnostics",
+  "version": 1,
+  "checkpoint": "checkpoints/v2/phase3_richter_task74D/phase3_richter_s42.pt",
+  "untrained_init": false,
+  "paradigm": "richter",
+  "phase": "phase3_richter",
+  "seed": 42,
+  "coverage": {
+    "n_orientations": 12,
+    "n_units": 256,
+    "orientations_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "per_orientation_n_pref_units": [
+      0,
+      0,
+      66,
+      0,
+      62,
+      0,
+      0,
+      0,
+      58,
+      0,
+      70,
+      0
+    ],
+    "per_orientation_pct": [
+      0.0,
+      0.0,
+      25.78125,
+      0.0,
+      24.21875,
+      0.0,
+      0.0,
+      0.0,
+      22.65625,
+      0.0,
+      27.34375,
+      0.0
+    ],
+    "entropy_nats": 1.3838496850979718,
+    "entropy_bits": 1.9964730780265976,
+    "max_entropy_nats": 2.4849066497880004,
+    "max_entropy_bits": 3.584962500721156,
+    "n_bins_geq_5pct": 4,
+    "thresholds": {
+      "pass_strong_nats": 1.74,
+      "pass_weak_nats": 1.5,
+      "n_bins_5pct": 8
+    },
+    "pass_strong": false,
+    "pass_weak": false,
+    "pass_bins": false
+  },
+  "rule_magnitude": {
+    "bias_added_norm_mean": 1041.8878784179688,
+    "localizer_norm_mean": 6.67809255917867,
+    "ratio": 156.01578881769095,
+    "threshold_gate": 0.05,
+    "threshold_target": 1.7,
+    "pass_gate": true,
+    "pass_target": true,
+    "per_class": {
+      "0": {
+        "expected_trailer": 0,
+        "n_trials": 12,
+        "bias_added_norm_mean": 1048.0511474609375,
+        "bias_added_norm_std": 0.0001220703125,
+        "localizer_norm": 6.698728561401367,
+        "ratio": 156.4552344305663
+      },
+      "1": {
+        "expected_trailer": 1,
+        "n_trials": 12,
+        "bias_added_norm_mean": 1043.4151611328125,
+        "bias_added_norm_std": 0.0001220703125,
+        "localizer_norm": 6.664409160614014,
+        "ratio": 156.56529123378775
+      },
+      "2": {
+        "expected_trailer": 2,
+        "n_trials": 12,
+        "bias_added_norm_mean": 1043.3233642578125,
+        "bias_added_norm_std": 0.0001220703125,
+        "localizer_norm": 6.671656131744385,
+        "ratio": 156.38146565939192
+      },
+      "3": {
+        "expected_trailer": 3,
+        "n_trials": 12,
+        "bias_added_norm_mean": 1028.734375,
+        "bias_added_norm_std": 0.0,
+        "localizer_norm": 6.669224262237549,
+        "ratio": 154.25097950667828
+      },
+      "4": {
+        "expected_trailer": 4,
+        "n_trials": 12,
+        "bias_added_norm_mean": 1035.6954345703125,
+        "bias_added_norm_std": 0.0,
+        "localizer_norm": 6.685026168823242,
+        "ratio": 154.92765599038333
+      },
+      "5": {
+        "expected_trailer": 5,
+        "n_trials": 12,
+        "bias_added_norm_mean": 1052.1077880859375,
+        "bias_added_norm_std": 0.0001220703125,
+        "localizer_norm": 6.679511070251465,
+        "ratio": 157.51269471976053
+      }
+    }
+  },
+  "readout_alignment": {
+    "per_class_cos_same": [
+      -0.024484712376015228,
+      -0.047246996686861525,
+      0.011683655848456823,
+      0.03767559557531945,
+      -0.02808552355007999,
+      -0.037466688912131355
+    ],
+    "per_class_cos_other_mean": [
+      -0.04341900820092068,
+      0.0038260311380806087,
+      -0.0016169717535788018,
+      0.01687346051187236,
+      0.0066476771857138075,
+      0.013212046104229672
+    ],
+    "mean_cos_same": -0.014654111683551971,
+    "mean_cos_other": -0.0007461275024338391,
+    "control_mean_cos_b_gen_same": 0.013095924467340384,
+    "threshold": 0.3,
+    "pass": false
+  },
+  "thresholds": {
+    "coverage_pass_strong_nats": 1.74,
+    "coverage_pass_weak_nats": 1.5,
+    "coverage_n_bins_5pct": 8,
+    "rule_magnitude_gate": 0.05,
+    "rule_magnitude_target": 1.7,
+    "readout_cos": 0.3
+  }
+}

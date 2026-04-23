@@ -1,0 +1,34 @@
+{
+  "version": "level_8_prediction_head_v2",
+  "seed": 42,
+  "trajectory_seed": 1,
+  "world_rng_seed": 9001,
+  "n_steps": 200,
+  "n_paired": 199,
+  "n_l4_e": 128,
+  "shape_ok": true,
+  "stats": {
+    "head_mse": 0.0031889527132617254,
+    "copy_last_mse": 3.882892379756993e-05,
+    "uniform_mean_mse": 0.0003219612999703559,
+    "random_mse": 0.0006449619997958906,
+    "head_vs_copy_ratio": 82.12827967849324,
+    "head_vs_random_ratio": 4.944404033525889,
+    "x_hat_norm_mean": 0.022537249094782958,
+    "x_actual_norm_mean": 0.6558931935101986,
+    "norm_ratio": 0.03436115714841996,
+    "ablate_h_dx": 0.02621891528064015,
+    "ablate_c_dx": 0.001374447077861727,
+    "ablate_apical_dx": 0.9605918729997692,
+    "x_full_norm": 0.021649587899446487
+  },
+  "pass_fails": [
+    "head_mse 3.189e-03\u22650.8\u00b7random 5.160e-04",
+    "head_mse 3.189e-03>1.5\u00b7copy_last 5.824e-05",
+    "norm_ratio 0.034\u2209[0.5,2.0]"
+  ],
+  "nb_fails": [],
+  "verdict": "neutral_baseline",
+  "issue_if_fail": "none (structural capability intact; quantitative gates fail at init by T29 design \u2014 re-check post-Phase-2)",
+  "followup_note": "After Phase-2 trains the prediction head, re-run this probe and require verdict=pass."
+}

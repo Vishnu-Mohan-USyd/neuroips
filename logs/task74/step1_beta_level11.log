@@ -1,0 +1,6 @@
+step1_beta_level11: g0=0.30 delta_r=-0.08680 Δr_sign=correct matches_toy=T asym_sign=correct verdict=pass
+  mean_r_matched=0.43622 mean_r_mismatched=0.52302
+  pref_exp=1.0437 pref_unexp=1.7264 nonpref_exp=0.0120 nonpref_unexp=0.0089
+  installed_W_q_gain[0:2].mean=0.9426 n_suppressed_cue0=47 n_suppressed_cue1=51
+  toy_reference_delta_g0p3=-0.08680
+  JSON: logs/task74/step1_beta_level11.json

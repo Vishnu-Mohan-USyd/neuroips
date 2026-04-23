@@ -56,11 +56,13 @@ def test_context_memory_affects_l23(cfg, net):
 
 
 def test_zeroing_readout_silences_context(cfg, net):
-    """With W_mh_gen = 0 (and W_mh_task = 0 by init), m_t has no effect on r_l23."""
+    """With W_mh_gen = 0 (and W_mh_task_{exc,inh} = 0 by init), m_t has no effect on r_l23."""
     a = cfg.arch
     with torch.no_grad():
         net.context_memory.W_mh_gen.zero_()
-        net.context_memory.W_mh_task.zero_()  # zero by construction; belt + braces
+        # zero by construction; belt + braces
+        net.context_memory.W_mh_task_exc.zero_()
+        net.context_memory.W_mh_task_inh.zero_()
 
     frames = torch.randn(1, 1, a.grid_h, a.grid_w) * 0.2
 

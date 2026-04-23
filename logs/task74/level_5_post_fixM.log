@@ -1,0 +1,2 @@
+level5_verdict=pass n_l23e_defined=1.000 fwhm_median=45.0° n_bins=12/12 rate_l23e=0.560 rate_som=0.727 som_snr_median=0.206 Δrate_vs_L4=-0.037 Δfwhm_vs_L4=0.00 issue_if_fail=none
+[wrote] logs/task74/level_5_post_fixM.json

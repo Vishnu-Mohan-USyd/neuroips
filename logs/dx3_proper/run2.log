@@ -1,0 +1,15 @@
+[Dx3-proper] Localizer computed; tuning shape (12, 256)
+{
+  "n_trials_logged": 80,
+  "cue_mapping": {
+    "0": 135.0,
+    "1": 45.0
+  },
+  "cos_delta_expected_loc_mean": 0.9323215899407498,
+  "cos_delta_expected_loc_std": 0.03339622734469702,
+  "cos_delta_orth_loc_mean": 0.9317532511844189,
+  "cos_delta_orth_loc_std": 0.03349143369506523,
+  "cos_delta_mean_loc_mean": 0.9318491404167304,
+  "cos_delta_mean_loc_std": 0.03348428108515715,
+  "final_W_mh_task_norm": 0.18906725943088531
+}

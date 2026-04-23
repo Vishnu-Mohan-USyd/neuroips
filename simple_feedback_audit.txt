@@ -1,0 +1,99 @@
+## Simple Feedback Mode: Population & Parameter Audit
+======================================================================
+
+Source: src/model/network.py lines 214-223 (simple_feedback branch)
+
+### Code path (simple_feedback=true, feedback_mode='emergent')
+
+```python
+# Lines 214-223 of network.py step():
+if self.cfg.feedback_mode == 'emergent' and self.cfg.simple_feedback:
+    scaled_fb = feedback_signal * self.feedback_scale      # feedback_signal from V2.head_feedback
+    center_exc = torch.relu(scaled_fb)                     # positive part → excitation
+    som_drive_fb = torch.relu(-scaled_fb)                  # negative part → SOM drive
+    r_som = self.som(som_drive_fb, state.r_som)            # SOM integrates
+    r_vip = torch.zeros_like(state.r_vip)                  # VIP hardcoded to zero
+    l4_to_l23 = r_l4                                       # pass-through
+    r_l23 = self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)
+    #                                      ^ no apical_gain kwarg
+```
+
+### Audit Results
+
+| # | Component | Active? | Evidence |
+|---|-----------|---------|----------|
+| 1 | **L4** | YES | `r_l4 = self.l4(stimulus, state.r_l4, state.adaptation)` — computed before the branch (line ~176). Passed to L2/3 as `l4_to_l23 = r_l4`. |
+| 2 | **PV** | YES | `r_pv = self.pv(r_l4, state.r_pv)` — computed before the branch (line ~178). Passed to L2/3 as `r_pv` argument. |
+| 3 | **L2/3** | YES | `self.l23(l4_to_l23, state.r_l23, center_exc, r_som, r_pv)` — receives L4 feedforward, recurrence, template_modulation=center_exc, SOM inhibition, PV inhibition. `apical_gain` NOT passed (defaults to None inside V1L23Ring.forward). |
+| 4 | **SOM** | YES | `self.som(som_drive_fb, state.r_som)` — receives `relu(-scaled_fb)` as drive. SOM integrates with tau_som. Active in the computation graph. |
+| 5 | **VIP** | DEAD | `r_vip = torch.zeros_like(state.r_vip)` — hardcoded to zero. VIPRing.forward() never called. VIP weights receive NO gradients. |
+| 6 | **Deep template** | COMPUTED BUT UNUSED | `deep_tmpl = self.deep_template(q_pred, pi_pred_eff)` — computed at line 211 BEFORE the branch. Stored in `new_state.deep_template`. But never used in the simple_feedback path — NOT passed to L2/3, NOT used for center_exc. Only enters the energy cost (via `outputs["deep_template"]` in losses.py line 383). |
+| 7 | **Apical gain** | DEAD | `apical_gain` kwarg NOT passed to `self.l23()`. Inside V1L23Ring.forward(), `apical_gain is None` → no multiplicative modulation. EmergentFeedbackOperator.forward() never called, so alpha_apical is NOT used for apical gain. |
+| 8 | **EmergentFeedbackOperator.forward()** | DEAD | Never called. The entire SOM/VIP/apical pathway through `self.feedback()` is bypassed. |
+| 9 | **V2 head_feedback** | YES | `feedback_signal = self.head_feedback(h_v2)` in v2_context.py line 106. This is the raw [B,N] signal that gets split into excitation/inhibition. Primary feedback pathway. |
+| 10 | **w_template_drive** | DEAD | Only used in the non-simple emergent branch (line 230: `center_exc = self.w_template_drive * deep_tmpl`). Never referenced in simple_feedback path. |
+| 11 | **w_vip_som** | DEAD | Only used in the non-simple emergent branch (line 229: `F.softplus(self.w_vip_som) * r_vip`). Never referenced in simple_feedback path. |
+
+### Additional observations
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **V2 GRU** | YES | `self.gru(v2_input, h_v2_prev)` — processes L4 + L2/3_prev + cue + task_state. Backbone for all V2 outputs. |
+| **V2 head_mu** | YES | `mu_pred = F.softmax(self.head_mu(h_v2), dim=-1)` → q_pred. Used for deep_template + loss functions (prior_kl_loss, sensory_readout_loss via q_pred). |
+| **V2 head_pi** | YES | `pi_pred = clamp(softplus(head_pi(h_v2)))`. Used for feedback_scale and deep_template. |
+| **V2 head_state (legacy)** | N/A | Only exists in 'fixed' mode, not created in 'emergent' mode. |
+| **feedback_scale** | YES | Multiplies feedback_signal (line 217: `scaled_fb = feedback_signal * self.feedback_scale`). Also multiplies pi_pred (line 208: `pi_pred_eff = pi_pred_raw * self.feedback_scale`). |
+| **EmergentFeedbackOperator alpha_inh** | DEAD | Only used inside self.feedback.forward() which is never called. |
+| **EmergentFeedbackOperator alpha_vip** | DEAD | Same — never called. |
+| **EmergentFeedbackOperator alpha_apical** | DEAD | Same — never called. (Also used by compute_simple_feedback() but that method is never called in the current code path either.) |
+| **EmergentFeedbackOperator som_baseline, som_tonic, vip_baseline** | DEAD | All only used inside self.feedback.forward(). |
+| **SOM ring** | YES (integration) | SOM receives `relu(-scaled_fb)` as drive. The SOM module itself (tau_som) is active. |
+| **L2/3 W_rec** | YES | Recurrent kernel is active (line 278 of populations.py). |
+| **L2/3 w_som, w_pv_l23** | YES | Both inhibitory gains are active in L2/3 drive computation. |
+
+### Summary: What's in the computation graph
+
+**ACTIVE (receives gradients):**
+- L4 ring (feedforward processing)
+- PV pool (divisive normalization)
+- L2/3 ring (W_rec, w_som, w_pv_l23 all active)
+- SOM ring (integrates negative part of V2 feedback)
+- V2 GRU + head_mu + head_pi + head_feedback
+- DeepTemplate (only through energy cost — weak gradient signal)
+- feedback_scale buffer (not a parameter, set externally during warmup)
+
+**DEAD (no gradients, wasted parameters):**
+- VIP ring — hardcoded to zero, never called
+- EmergentFeedbackOperator — entirely bypassed (all alpha_inh, alpha_vip, alpha_apical, som_baseline, som_tonic, vip_baseline)
+- w_template_drive — never used
+- w_vip_som — never used
+- Apical gain pathway — never used (apical_gain=None)
+
+**COMPUTED BUT WEAKLY CONNECTED:**
+- DeepTemplate — computed every step, stored in state, enters energy cost.
+  But NOT used for L2/3 modulation. Gradient flows only through
+  `outputs["deep_template"].abs().mean()` in energy_cost(). This is a weak
+  L1 signal that pushes deep_template toward zero.
+
+### Feedback signal flow (simple_feedback)
+
+```
+V2 GRU hidden state
+    │
+    ├──→ head_mu → softmax → q_pred ──→ deep_template (→ energy cost only)
+    │                              └──→ loss functions (prior_kl, sensory)
+    ├──→ head_pi → softplus → pi_pred → pi_pred_eff (→ deep_template only)
+    │
+    └──→ head_feedback → feedback_signal [B,N]
+              │
+              ├──× feedback_scale → scaled_fb
+              │
+              ├──→ relu(scaled_fb) → center_exc → L2/3 excitatory drive
+              │
+              └──→ relu(-scaled_fb) → som_drive → SOM ring → L2/3 inhibition
+```
+
+The feedback pathway is a single learned linear head (head_feedback: 16→36)
+that outputs a raw signal, split by sign into excitation (positive) and
+SOM inhibition (negative). This is much simpler than the full
+EmergentFeedbackOperator (3 circulant kernels + delta-SOM + tonic + VIP).

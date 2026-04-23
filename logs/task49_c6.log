@@ -1,0 +1,26 @@
+
+========================================================================
+=== C6 empirical: 100-step θ trajectory vs arithmetic prediction ===
+========================================================================
+
+Initial θ: L23E=0.000000e+00  HE=0.000000e+00
+
+Running 100 steps with lr_homeo=1e-5, all plasticity LRs = 0 (no plasticity),
+on blank frames (r_l23 and r_h stay near zero).
+
+  t=   0  θ_L23E=-5.0000e-06  θ_HE=-1.0000e-06  r_L23E=0.0000e+00  r_HE=0.0000e+00
+  t=   1  θ_L23E=-9.9684e-06  θ_HE=-2.0000e-06  r_L23E=3.1639e-03  r_HE=4.7684e-07
+  t=  10  θ_L23E=-5.4448e-05  θ_HE=-1.0804e-05  r_L23E=1.6477e-03  r_HE=3.0194e-03
+  t=  25  θ_L23E=-1.2861e-04  θ_HE=-2.5191e-05  r_L23E=1.6374e-02  r_HE=4.6199e-03
+  t=  50  θ_L23E=-2.1084e-04  θ_HE=-4.0268e-05  r_L23E=2.7769e-01  r_HE=1.2717e-01
+  t= 100  θ_L23E=+2.3886e+00  θ_HE=+1.0000e+01  r_L23E=2.5930e+08  r_HE=8.0251e+05
+
+Arithmetic predictions (if rates ≈ 0):
+  Δθ_L23E ≈ 100 × 1e-5 × (0 − 0.5) = -5.0e-4
+  Δθ_HE   ≈ 100 × 1e-5 × (0 − 0.1) = -1.0e-4
+
+Observed Δθ over 100 steps:
+  Δθ_L23E = +2.3886e+00
+  Δθ_HE   = +1.0000e+01
+
+  Relative error vs prediction: L23E 477812.54%  HE 10000100.00%

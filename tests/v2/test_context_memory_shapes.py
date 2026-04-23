@@ -10,7 +10,7 @@ from src.v2_model.context_memory import ContextMemory
 
 def _make_cm(**overrides) -> ContextMemory:
     kw = dict(
-        n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12,
+        n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12, n_out_som=9,
         tau_m_ms=500.0, dt_ms=5.0, seed=0,
     )
     kw.update(overrides)
@@ -24,9 +24,10 @@ def test_forward_output_shapes() -> None:
     h = torch.randn(B, 24)
     q = torch.randn(B, 6)
     lead = torch.randn(B, 7)
-    m_next, b = cm(m, h, q, lead)
+    m_next, b_exc, som_gain = cm(m, h, q, lead)
     assert m_next.shape == (B, 16)
-    assert b.shape == (B, 12)
+    assert b_exc.shape == (B, 12)
+    assert som_gain.shape == (B, 9)
 
 
 def test_forward_output_dtype_matches_input() -> None:
@@ -34,18 +35,20 @@ def test_forward_output_dtype_matches_input() -> None:
     B = 2
     m = torch.randn(B, 16, dtype=torch.float64)
     h = torch.randn(B, 24, dtype=torch.float64)
-    m_next, b = cm(m, h)
+    m_next, b_exc, som_gain = cm(m, h)
     assert m_next.dtype == torch.float64
-    assert b.dtype == torch.float64
+    assert b_exc.dtype == torch.float64
+    assert som_gain.dtype == torch.float64
 
 
 def test_single_batch_shape() -> None:
     cm = _make_cm()
     m = torch.randn(1, 16)
     h = torch.randn(1, 24)
-    m_next, b = cm(m, h)
+    m_next, b_exc, som_gain = cm(m, h)
     assert m_next.shape == (1, 16)
-    assert b.shape == (1, 12)
+    assert b_exc.shape == (1, 12)
+    assert som_gain.shape == (1, 9)
 
 
 def test_phase_api_default_phase2() -> None:
@@ -53,7 +56,7 @@ def test_phase_api_default_phase2() -> None:
     assert cm.phase == "phase2"
     assert set(cm.plastic_weight_names()) == {"W_hm_gen", "W_mm_gen", "W_mh_gen"}
     assert set(cm.frozen_weight_names()) == {
-        "W_qm_task", "W_lm_task", "W_mh_task"
+        "W_qm_task", "W_lm_task", "W_mh_task_exc", "W_mh_task_inh",
     }
 
 
@@ -61,10 +64,14 @@ def test_set_phase_switches_sets() -> None:
     cm = _make_cm()
     cm.set_phase("phase3_kok")
     assert cm.phase == "phase3_kok"
-    assert set(cm.plastic_weight_names()) == {"W_qm_task", "W_mh_task"}
+    assert set(cm.plastic_weight_names()) == {
+        "W_qm_task", "W_mh_task_exc", "W_mh_task_inh",
+    }
 
     cm.set_phase("phase3_richter")
-    assert set(cm.plastic_weight_names()) == {"W_lm_task", "W_mh_task"}
+    assert set(cm.plastic_weight_names()) == {
+        "W_lm_task", "W_mh_task_exc", "W_mh_task_inh",
+    }
 
     cm.set_phase("phase2")
     assert set(cm.plastic_weight_names()) == {"W_hm_gen", "W_mm_gen", "W_mh_gen"}

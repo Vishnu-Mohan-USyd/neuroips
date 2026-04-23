@@ -1,0 +1,6 @@
+step3_full_pipeline: final_mean_gain_pref=0.5513 final_mean_gain_nonpref=0.9409 delta_r_matched_vs_mismatched=-0.16414 delta_r_sign=correct magnitude=0.16414 asym_sign=correct verdict=pass
+  mean_r_matched=0.36192 mean_r_mismatched=0.52606
+  pref_exp=0.7337 pref_unexp=1.7182 nonpref_exp=0.0556 nonpref_unexp=0.0148
+  cue0: g_pref=0.5312 g_nonpref=0.9379 (n_pref=47)
+  cue1: g_pref=0.5715 g_nonpref=0.9439 (n_pref=51)
+  JSON: logs/task77/step3_beta_level11.json

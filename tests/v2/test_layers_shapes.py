@@ -129,9 +129,15 @@ def test_l23pv_plastic_weight_names() -> None:
 
 
 def test_l23som_plastic_weight_names() -> None:
-    assert set(_l23som().plastic_weight_names()) == {
-        "W_l23_som_raw", "W_fb_som_raw",
-    }
+    # Task #74 Fix D-simpler: L23SOM excitatory inputs (W_l23_som_raw,
+    # W_fb_som_raw) are frozen at init in all phases; no rule updates them.
+    pop = _l23som()
+    for phase in ("phase2", "phase3_kok", "phase3_richter"):
+        pop.set_phase(phase)
+        assert pop.plastic_weight_names() == [], (
+            f"L23SOM.plastic_weight_names() non-empty in phase={phase!r}: "
+            f"{pop.plastic_weight_names()}"
+        )
 
 
 def test_he_plastic_weight_names() -> None:

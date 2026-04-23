@@ -1,0 +1,2 @@
+level4_verdict=pass n_l23e_defined=1.000 fwhm_median=45.0° n_preferred_bins=12/12 rate_l23e_mean=0.597 rate_pv_mean=46.228 contrast_R2_median=1.000 gain_compression=2.37 issue_if_fail=none
+[wrote] logs/task74/level_4_post_fixL2.json

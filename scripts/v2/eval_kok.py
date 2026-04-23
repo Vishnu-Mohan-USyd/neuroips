@@ -66,11 +66,33 @@ def run_kok_probe_trial(
     *, cue_id: int, probe_orientation_deg: float,
     timing: KokTiming, noise_std: float,
     generator: torch.Generator,
+    gate_probe_cue: bool = False,
 ) -> Tensor:
     """Return the mean L2/3 rate vector during probe1 for one eval trial.
 
     Shape ``[n_l23_e]`` — used by every downstream metric
     (amp-per-cell-group, decoder, asymmetry).
+
+    Parameters
+    ----------
+    gate_probe_cue : bool
+        If False (default — Task #40 legacy / harness backward-compat),
+        ``q_t = q_cue`` is delivered only during the cue epoch and is
+        ``None`` elsewhere. The β mechanism at ``src/v2_model/layers.py``
+        gates ``W_q_gain`` on ``q_t is not None``, so with this default
+        the learned gain does NOT modulate the probe-epoch L4→L23E drive
+        that downstream metrics read out.
+
+        If True (Task #74 β-eval), ``q_t = q_cue`` is additionally
+        delivered during the probe1 epoch (when the probe stimulus is
+        on and ``r_l23`` is being recorded), matching the validated
+        Level-11 protocol in
+        ``scripts/v2/step1_beta_level11.py:_run_probe_trial_with_gate``.
+        Use this whenever the evaluated checkpoint was trained with
+        ``--enable-w-q-gain-rule``; otherwise the probe-epoch rate is
+        measured on an un-gated network and the β effect collapses.
+        The delay, blank2 and probe2 epochs still receive ``q_t=None``
+        (exactly as in step1), because the assay only reads probe1.
     """
     cfg = bundle.cfg
     device = cfg.device
@@ -94,7 +116,11 @@ def run_kok_probe_trial(
         elif t < delay_end:
             frame, q_t = blank, None
         elif t < probe1_end:
-            frame, q_t = probe, None
+            # β-eval: keep q_cue live during probe1 so ``W_q_gain`` can
+            # multiply the L4→L23E feed-forward drive while the rate is
+            # being recorded. Matches step1 protocol exactly.
+            frame = probe
+            q_t = q_cue if gate_probe_cue else None
         elif t < blank2_end:
             frame, q_t = blank, None
         else:
@@ -615,6 +641,7 @@ def evaluate_kok(
     timing: Optional[KokTiming] = None,
     n_cell_groups: int = 4,
     noise_std: float = 0.01,
+    probe_noise_std: Optional[float] = None,
     seed: int = 42,
     n_localizer_orients: int = 12,
     n_localizer_trials: int = 20,
@@ -623,16 +650,43 @@ def evaluate_kok(
     n_bootstrap: int = 1000,
     n_permutations: int = 1000,
     run_upgrades: bool = True,
+    fine_tolerance_deg: Optional[float] = None,
+    gate_probe_cue: bool = False,
 ) -> dict[str, Any]:
     """Run Kok expected/unexpected eval, return metrics dict for JSON dump.
 
     When ``run_upgrades`` is False the function runs only the Task #40
     assays (test-harness fast path). When True (default) it additionally
     runs the Task #72 localizer + fine-discrim + FWHM + bootstrap suite.
+
+    ``probe_noise_std`` controls the frame-level noise added to the
+    cue-probe trials (main assay + fine-discrim). When ``None`` it
+    falls back to ``noise_std`` — the legacy behaviour. Split from
+    ``noise_std`` (which continues to drive the localizer) so callers
+    can push the probes toward the noise floor while keeping the
+    localizer decoder well-trained.
+
+    ``fine_tolerance_deg`` (Task #74 Fix J eval-hardening) overrides the
+    tolerance used by the fine-discrim SVM when judging whether a
+    decoded orientation is "correct". When ``None`` (legacy), the
+    tolerance is ``180/n_localizer_orients/2 + 7.5`` (15° at 12 orients,
+    10° at 36), which at ±5° probes auto-passes every trial. Pass a
+    scalar (e.g. half the probe offset) to tighten the criterion so
+    the SVM accuracy is meaningful below ceiling.
+
+    ``gate_probe_cue`` (Task #74 β-eval) forwards to
+    :func:`run_kok_probe_trial`. Default False preserves Task #40 legacy
+    behaviour; set True when evaluating a checkpoint trained with
+    ``--enable-w-q-gain-rule`` so the learned gain modulates L4→L23E
+    during the probe measurement window. See the helper docstring for
+    the full rationale.
     """
     cfg = bundle.cfg
     timing = timing or KokTiming()
     cue_mapping = cue_mapping or cue_mapping_from_seed(seed)
+    eff_probe_noise = (
+        float(noise_std) if probe_noise_std is None else float(probe_noise_std)
+    )
 
     gen = torch.Generator(device=cfg.device); gen.manual_seed(int(seed))
 
@@ -652,8 +706,9 @@ def evaluate_kok(
                 r = run_kok_probe_trial(
                     bundle, cue_id=cue_id,
                     probe_orientation_deg=float(probe_deg),
-                    timing=timing, noise_std=float(noise_std),
+                    timing=timing, noise_std=eff_probe_noise,
                     generator=gen,
+                    gate_probe_cue=bool(gate_probe_cue),
                 )
                 trials_l23.append(r)
                 trials_orient.append(float(probe_deg))
@@ -759,8 +814,9 @@ def evaluate_kok(
                     r = run_kok_probe_trial(
                         bundle, cue_id=int(cue_id),
                         probe_orientation_deg=probe_deg,
-                        timing=timing, noise_std=float(noise_std),
+                        timing=timing, noise_std=eff_probe_noise,
                         generator=gen,
+                        gate_probe_cue=bool(gate_probe_cue),
                     )
                     fine_trials_list.append(
                         r.cpu().numpy().astype(np.float64)
@@ -775,9 +831,14 @@ def evaluate_kok(
     fine_offset = np.asarray(fine_offset_list, dtype=np.float64)
 
     if loc_svm_available:
+        eff_fine_tol = (
+            float(fine_tolerance_deg)
+            if fine_tolerance_deg is not None
+            else float(180.0 / n_localizer_orients / 2.0 + 7.5)
+        )
         fine_result = _score_fine_discrim(
             loc_clf, fine_trials, fine_true, fine_expected,
-            tolerance_deg=float(180.0 / n_localizer_orients / 2.0 + 7.5),
+            tolerance_deg=eff_fine_tol,
         )
     else:
         fine_result = {"error": "sklearn not available"}
@@ -889,6 +950,23 @@ def _cli() -> argparse.ArgumentParser:
         "--fine-offsets-deg", type=float, nargs="+",
         default=[-10.0, 10.0],
     )
+    p.add_argument(
+        "--fine-offset-deg", type=float, default=None,
+        help=(
+            "Scalar magnitude: if provided, overrides --fine-offsets-deg "
+            "with (-val, +val). Convenience for symmetric offsets "
+            "(e.g. --fine-offset-deg 5 → fine_offsets_deg=(-5, 5))."
+        ),
+    )
+    p.add_argument(
+        "--probe-noise-std", type=float, default=None,
+        help=(
+            "Frame-level noise on cue-probe trials (main assay + "
+            "fine-discrim). Defaults to --noise-std. Split so the "
+            "localizer decoder can stay at low noise while probes are "
+            "pushed into the noise floor (sensitivity mode)."
+        ),
+    )
     p.add_argument("--n-fine-trials-per-condition", type=int, default=60)
     p.add_argument("--n-bootstrap", type=int, default=1000)
     p.add_argument("--n-permutations", type=int, default=1000)
@@ -896,8 +974,89 @@ def _cli() -> argparse.ArgumentParser:
         "--skip-upgrades", action="store_true",
         help="run Task #40 assays only (fast path for harness tests)",
     )
+    p.add_argument(
+        "--probe-cue-gate", action="store_true",
+        help=(
+            "Task #74 β-eval: deliver q_t=q_cue during the probe1 epoch "
+            "(in addition to the cue epoch) so the learned W_q_gain "
+            "multiplies L4→L23E while r_l23 is being recorded. Matches "
+            "step1_beta_level11._run_probe_trial_with_gate exactly. "
+            "Required for any checkpoint trained with "
+            "--enable-w-q-gain-rule; without it the β mechanism is "
+            "silently bypassed during eval. OFF by default to preserve "
+            "Task #40 harness behaviour."
+        ),
+    )
     p.add_argument("--output", type=Path, default=None)
     return p
+
+
+def _install_learned_w_q_gain(
+    bundle: "CheckpointBundle", ckpt_path: Path, *, device: str = "cpu",
+    verbose: bool = True,
+) -> bool:
+    """Install a β-trained ``W_q_gain`` onto ``bundle.net.l23_e`` in place.
+
+    ``W_q_gain`` is a non-persistent buffer on ``l23_e``, so the Phase-3 Kok
+    trainer writes it as a top-level key OUTSIDE ``state_dict`` (see
+    ``scripts/v2/train_phase3_kok_learning.py`` around the checkpoint save).
+    The generic :func:`_gates_common.load_checkpoint` only restores
+    ``state_dict``; without this helper the learned gain is silently replaced
+    by the default (all-1.0) init, and the β mechanism is effectively
+    disabled during evaluation.
+
+    Parameters
+    ----------
+    bundle : CheckpointBundle
+        Already loaded via :func:`_gates_common.load_checkpoint`.
+    ckpt_path : Path
+        Path to the same ``.pt`` file used to build ``bundle``. Re-opened
+        here so we can access the top-level ``W_q_gain`` key.
+    device : str
+        Device to ``torch.load`` onto. Must match how ``bundle`` was loaded.
+    verbose : bool
+        If True, prints a one-line confirmation with grand mean + row-0 /
+        row-1 means so the caller can see at a glance whether the learned
+        β gain is installed (saves a debugging round if the triad looks
+        wrong downstream).
+
+    Returns
+    -------
+    bool
+        True if a ``W_q_gain`` was installed (β-trained ckpt), False if the
+        checkpoint has no such key (pre-β ckpt; backward-compatible path).
+
+    Raises
+    ------
+    ValueError
+        If ``W_q_gain`` shape does not match ``bundle.net.l23_e.W_q_gain``.
+    """
+    raw_ckpt = torch.load(
+        ckpt_path, map_location=device, weights_only=False,
+    )
+    if "W_q_gain" not in raw_ckpt:
+        return False
+    W_q_gain_learned = raw_ckpt["W_q_gain"].to(
+        dtype=bundle.net.l23_e.W_q_gain.dtype,
+        device=bundle.net.l23_e.W_q_gain.device,
+    )
+    if W_q_gain_learned.shape != bundle.net.l23_e.W_q_gain.shape:
+        raise ValueError(
+            f"W_q_gain shape mismatch: "
+            f"ckpt={tuple(W_q_gain_learned.shape)} vs "
+            f"net={tuple(bundle.net.l23_e.W_q_gain.shape)}"
+        )
+    with torch.no_grad():
+        bundle.net.l23_e.W_q_gain.data.copy_(W_q_gain_learned)
+    if verbose:
+        row0 = float(bundle.net.l23_e.W_q_gain[0].mean().item())
+        row1 = float(bundle.net.l23_e.W_q_gain[1].mean().item())
+        grand = float(bundle.net.l23_e.W_q_gain.mean().item())
+        print(
+            f"[eval_kok] installed learned W_q_gain from ckpt: "
+            f"grand_mean={grand:.4f} row0_mean={row0:.4f} row1_mean={row1:.4f}"
+        )
+    return True
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -906,25 +1065,75 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.checkpoint, seed=int(args.seed), device=args.device,
     )
     bundle.net.set_phase("phase3_kok")
+    _install_learned_w_q_gain(bundle, args.checkpoint, device=args.device)
     cue_mapping = None
     if "cue_mapping" in bundle.meta:
         cue_mapping = {
             int(k): float(v) for k, v in bundle.meta["cue_mapping"].items()
         }
-    results = evaluate_kok(
-        bundle, n_trials_per_condition=int(args.n_trials_per_condition),
-        cue_mapping=cue_mapping,
-        n_cell_groups=int(args.n_cell_groups),
-        noise_std=float(args.noise_std),
-        seed=int(args.seed),
-        n_localizer_orients=int(args.n_localizer_orients),
-        n_localizer_trials=int(args.n_localizer_trials),
-        fine_offsets_deg=tuple(float(x) for x in args.fine_offsets_deg),
-        n_fine_trials_per_condition=int(args.n_fine_trials_per_condition),
-        n_bootstrap=int(args.n_bootstrap),
-        n_permutations=int(args.n_permutations),
-        run_upgrades=not args.skip_upgrades,
+    if args.fine_offset_deg is not None:
+        offsets = (-float(args.fine_offset_deg), float(args.fine_offset_deg))
+    else:
+        offsets = tuple(float(x) for x in args.fine_offsets_deg)
+    probe_noise = (
+        None if args.probe_noise_std is None else float(args.probe_noise_std)
     )
+    # Task #74 Fix J eval-hardening: when --fine-offset-deg is set, tighten the
+    # fine-discrim tolerance to half the offset magnitude so the SVM accuracy
+    # is meaningful (the default 15° tolerance auto-passes ±5° probes).
+    fine_tol_override = (
+        float(args.fine_offset_deg) / 2.0
+        if args.fine_offset_deg is not None
+        else None
+    )
+
+    def _run(n_loc: int) -> dict[str, Any]:
+        return evaluate_kok(
+            bundle, n_trials_per_condition=int(args.n_trials_per_condition),
+            cue_mapping=cue_mapping,
+            n_cell_groups=int(args.n_cell_groups),
+            noise_std=float(args.noise_std),
+            probe_noise_std=probe_noise,
+            seed=int(args.seed),
+            n_localizer_orients=int(n_loc),
+            n_localizer_trials=int(args.n_localizer_trials),
+            fine_offsets_deg=offsets,
+            n_fine_trials_per_condition=int(args.n_fine_trials_per_condition),
+            n_bootstrap=int(args.n_bootstrap),
+            n_permutations=int(args.n_permutations),
+            run_upgrades=not args.skip_upgrades,
+            fine_tolerance_deg=fine_tol_override,
+            gate_probe_cue=bool(args.probe_cue_gate),
+        )
+
+    n_loc_used = int(args.n_localizer_orients)
+    results = _run(n_loc_used)
+
+    # Auto-expand: if too few units pref either anchor at the current grid
+    # resolution, rerun with 36 orients (finer grid → tighter anchor tolerance
+    # → more pref units per anchor). Only applies when --fine-offset-deg is
+    # set (i.e. caller is running the hardened smoke/eval). Max one retry.
+    if args.fine_offset_deg is not None and n_loc_used < 36:
+        pref_block = results.get("pref_nonpref_localizer", {})
+        n_pref_lo = int(pref_block.get("n_units_pref_lo", 0))
+        n_pref_hi = int(pref_block.get("n_units_pref_hi", 0))
+        if min(n_pref_lo, n_pref_hi) < 5:
+            print(
+                f"[eval_kok] auto-expand: n_units_pref_lo={n_pref_lo} "
+                f"n_units_pref_hi={n_pref_hi} (min < 5) at "
+                f"n_localizer_orients={n_loc_used}; rerunning with 36."
+            )
+            n_loc_used = 36
+            results = _run(n_loc_used)
+
+    results["_cli"] = {
+        "n_localizer_orients_used": int(n_loc_used),
+        "fine_tolerance_deg_used": (
+            float(fine_tol_override) if fine_tol_override is not None
+            else float(180.0 / n_loc_used / 2.0 + 7.5)
+        ),
+        "probe_cue_gate": bool(args.probe_cue_gate),
+    }
     out_path = args.output or (args.checkpoint.parent / "eval_kok.json")
     out_path.write_text(json.dumps(results, indent=2))
     return 0

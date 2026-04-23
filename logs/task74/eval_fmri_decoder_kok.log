@@ -1,0 +1,16 @@
+[eval_kok] installed learned W_q_gain from ckpt: grand_mean=0.9829 row0_mean=0.5906 row1_mean=0.5891
+[fmri_decoder_kok] cue_mapping={0: 135.0, 1: 45.0}
+[fmri_decoder_kok] cue_mode=none: collecting 2 orient × 400 trials (noise_std=0.5, contrast∈[0.1,0.3], 50+5 steps)...
+[fmri_decoder_kok] cue_mode=none: X(800, 256) y(800,) → 5-fold CV (voxel-pooled).
+[fmri_decoder_kok] cue_mode=expected: collecting 2 orient × 400 trials (noise_std=0.5, contrast∈[0.1,0.3], 50+5 steps)...
+[fmri_decoder_kok] cue_mode=expected: X(800, 256) y(800,) → 5-fold CV (voxel-pooled).
+[fmri_decoder_kok] cue_mode=unexpected: collecting 2 orient × 400 trials (noise_std=0.5, contrast∈[0.1,0.3], 50+5 steps)...
+[fmri_decoder_kok] cue_mode=unexpected: X(800, 256) y(800,) → 5-fold CV (voxel-pooled).
+fmri_decoder Δdecode on β-trained Kok ckpt (noise=0.5, readout=5, 45°/135° binary)
+cue_mode        acc_mean   acc_std   n_trials
+none            0.9163     0.0166    800
+expected        1.0000     0.0000    800
+unexpected      1.0000     0.0000    800
+Δdecode_exp_vs_unexp = +0.0000 ci=[+0.0000,+0.0000] p=1.0000
+verdict: null  (eps=0.02)
+[fmri_decoder_kok] wrote logs/task74/eval_fmri_decoder_kok.json

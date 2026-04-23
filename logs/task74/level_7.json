@@ -1,0 +1,28 @@
+{
+  "version": "level_7_context_memory_v1",
+  "seed": 42,
+  "n_trials_per_cue": 30,
+  "n_cue_steps": 40,
+  "n_delay_steps": 110,
+  "n_m": 48,
+  "n_cue": 48,
+  "stats": {
+    "decode_cue_acc": 1.0,
+    "train_acc": 1.0,
+    "chance_ref": 0.5,
+    "m_norm_mean": 0.797809644750717,
+    "m_norm_std": 0.13381739951387786,
+    "m_norm_min": 0.6639922452368392,
+    "m_norm_max": 0.9316270442645949,
+    "cos_m_cueA_cueB": 0.3201744826936844,
+    "W_qm_task_norm": 14.010130882263184,
+    "W_lm_task_norm": 16.622766494750977,
+    "W_mh_gen_norm": 10.935917854309082,
+    "W_mh_task_exc_norm": 0.0,
+    "W_mh_task_inh_norm": 0.0,
+    "W_hm_gen_norm": 5.429497241973877,
+    "W_mm_gen_norm": 4.902572154998779
+  },
+  "verdict": "pass",
+  "issue_if_fail": "none"
+}

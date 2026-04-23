@@ -1,0 +1,89 @@
+2026-04-07 21:40:32,140 [INFO] Mechanism: center_surround
+2026-04-07 21:40:32,140 [INFO] Feedback mode: emergent
+2026-04-07 21:40:32,140 [INFO] Device: cuda
+2026-04-07 21:40:32,140 [INFO] Seed: 42
+2026-04-07 21:40:32,143 [INFO] Network parameters: 5079
+2026-04-07 21:40:32,143 [INFO] Delta-SOM mode enabled
+2026-04-07 21:40:32,144 [INFO] ============================================================
+2026-04-07 21:40:32,144 [INFO] STAGE 1: Sensory Scaffold
+2026-04-07 21:40:32,144 [INFO] ============================================================
+2026-04-07 21:40:42,653 [INFO] Stage 1 step 200/2000: loss=3.5931, acc=0.000, l23_mean=0.0002
+2026-04-07 21:40:51,841 [INFO] Stage 1 step 400/2000: loss=3.4825, acc=0.344, l23_mean=0.0039
+2026-04-07 21:41:01,886 [INFO] Stage 1 step 600/2000: loss=2.9912, acc=0.656, l23_mean=0.0125
+2026-04-07 21:41:11,140 [INFO] Stage 1 step 800/2000: loss=2.7626, acc=0.688, l23_mean=0.0153
+2026-04-07 21:41:20,294 [INFO] Stage 1 step 1000/2000: loss=2.2880, acc=0.875, l23_mean=0.0233
+2026-04-07 21:41:30,236 [INFO] Stage 1 step 1200/2000: loss=2.1436, acc=0.688, l23_mean=0.0254
+2026-04-07 21:41:42,236 [INFO] Stage 1 step 1400/2000: loss=2.0157, acc=0.844, l23_mean=0.0270
+2026-04-07 21:41:56,067 [INFO] Stage 1 step 1600/2000: loss=1.9961, acc=0.750, l23_mean=0.0273
+2026-04-07 21:42:10,607 [INFO] Stage 1 step 1800/2000: loss=1.9399, acc=0.781, l23_mean=0.0274
+2026-04-07 21:42:24,479 [INFO] Stage 1 step 2000/2000: loss=1.7440, acc=0.781, l23_mean=0.0323
+2026-04-07 21:42:24,509 [INFO] Gating 1 - Decoder accuracy: 1.000 (need >= 0.90)
+2026-04-07 21:42:24,531 [INFO] Gating 2 - Unimodal units: 36/36
+2026-04-07 21:42:24,566 [INFO] Gating 3 - Unique preferred orientations: 36/36
+2026-04-07 21:42:24,595 [INFO] Gating 4 - FWHM in range: 36/36
+2026-04-07 21:42:24,595 [INFO] Gating 5 - Mean L2/3 rate: 0.0397
+2026-04-07 21:42:24,680 [INFO] Gating 6 - FWHM high=25.0, low=25.0
+2026-04-07 21:42:24,716 [INFO] Transferred trained decoder from Stage 1 to shared loss_fn
+2026-04-07 21:42:24,716 [INFO] Stage 1 complete: loss=1.7440, acc=0.867
+2026-04-07 21:42:24,716 [INFO] Gating checks: {'decoder_accuracy_90': True, 'unimodal_tuning': True, 'orientation_tiling': True, 'fwhm_range': True, 'mean_activity': True, 'contrast_invariant_width': True}
+2026-04-07 21:42:24,726 [INFO] Stage 1 checkpoint saved to results/batch1/random_s42/center_surround_seed42/stage1_checkpoint.pt
+2026-04-07 21:42:24,727 [INFO] ============================================================
+2026-04-07 21:42:24,727 [INFO] STAGE 2: V2 + Feedback
+2026-04-07 21:42:24,727 [INFO] ============================================================
+2026-04-07 21:42:24,728 [INFO] V2 frozen (oracle/freeze mode): V2 parameters excluded from training
+2026-04-07 21:42:24,729 [INFO] Froze orientation decoder for mechanistic analysis
+2026-04-07 21:42:25,230 [INFO] Baselines (emergent): prior_kl uninformative=~3.6 (uniform prior), sensory uniform=0.028 (1/36)
+2026-04-07 21:43:46,455 [INFO] Stage 2 step 100/5000: loss=4.3751, sens=2.2873, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2855, homeo=0.0002, s_acc=0.377, p_acc=0.030, ang_err=47.3, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:45:01,798 [INFO] Stage 2 step 200/5000: loss=4.3451, sens=2.3447, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2840, homeo=0.0002, s_acc=0.389, p_acc=0.027, ang_err=44.7, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.099, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:46:39,126 [INFO] Stage 2 step 300/5000: loss=4.1722, sens=2.3175, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2842, homeo=0.0002, s_acc=0.420, p_acc=0.018, ang_err=47.2, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:48:15,187 [INFO] Stage 2 step 400/5000: loss=3.9594, sens=2.2997, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2839, homeo=0.0002, s_acc=0.386, p_acc=0.030, ang_err=42.7, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:49:58,187 [INFO] Stage 2 step 500/5000: loss=3.7464, sens=2.3111, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2824, homeo=0.0002, s_acc=0.377, p_acc=0.031, ang_err=44.6, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:51:38,632 [INFO] Stage 2 step 600/5000: loss=3.5246, sens=2.3156, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2855, homeo=0.0002, s_acc=0.407, p_acc=0.023, ang_err=43.4, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:53:19,247 [INFO] Stage 2 step 700/5000: loss=3.3634, sens=2.3382, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2834, homeo=0.0002, s_acc=0.395, p_acc=0.035, ang_err=44.8, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:54:58,877 [INFO] Stage 2 step 800/5000: loss=3.1500, sens=2.2929, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2838, homeo=0.0002, s_acc=0.425, p_acc=0.027, ang_err=45.9, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:56:38,995 [INFO] Stage 2 step 900/5000: loss=2.9808, sens=2.2677, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2886, homeo=0.0001, s_acc=0.384, p_acc=0.026, ang_err=45.3, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:58:18,480 [INFO] Stage 2 step 1000/5000: loss=2.9281, sens=2.3061, prior_kl=0.0000, fb_sparse=0.2100, energy=0.2842, homeo=0.0002, s_acc=0.403, p_acc=0.030, ang_err=44.7, a_inh=0.070, a_vip=0.070, tonic=0.0486, grad_norm=0.100, pi_ceil=0.000, fb_scale=0.000
+2026-04-07 21:58:18,494 [INFO] Step 1000: unfreezing gain_rec_raw
+2026-04-07 21:59:59,358 [INFO] Stage 2 step 1100/5000: loss=2.8533, sens=2.3028, prior_kl=0.0000, fb_sparse=0.7792, energy=0.2906, homeo=0.0003, s_acc=0.409, p_acc=0.018, ang_err=44.5, a_inh=0.074, a_vip=0.281, tonic=0.0464, grad_norm=0.104, pi_ceil=0.000, fb_scale=0.099
+2026-04-07 22:01:39,785 [INFO] Stage 2 step 1200/5000: loss=2.7520, sens=2.2667, prior_kl=0.0000, fb_sparse=1.2631, energy=0.2997, homeo=0.0004, s_acc=0.422, p_acc=0.036, ang_err=43.7, a_inh=0.085, a_vip=0.456, tonic=0.0448, grad_norm=0.119, pi_ceil=0.000, fb_scale=0.199
+2026-04-07 22:03:20,439 [INFO] Stage 2 step 1300/5000: loss=2.7587, sens=2.3106, prior_kl=0.0000, fb_sparse=1.6691, energy=0.3065, homeo=0.0005, s_acc=0.415, p_acc=0.022, ang_err=45.2, a_inh=0.092, a_vip=0.605, tonic=0.0436, grad_norm=0.145, pi_ceil=0.000, fb_scale=0.299
+2026-04-07 22:05:00,861 [INFO] Stage 2 step 1400/5000: loss=2.6971, sens=2.2923, prior_kl=0.0000, fb_sparse=2.0205, energy=0.3147, homeo=0.0007, s_acc=0.401, p_acc=0.044, ang_err=46.3, a_inh=0.115, a_vip=0.735, tonic=0.0425, grad_norm=0.191, pi_ceil=0.000, fb_scale=0.399
+2026-04-07 22:06:41,785 [INFO] Stage 2 step 1500/5000: loss=2.8080, sens=2.4076, prior_kl=0.0000, fb_sparse=2.3366, energy=0.3181, homeo=0.0008, s_acc=0.438, p_acc=0.022, ang_err=47.7, a_inh=0.143, a_vip=0.852, tonic=0.0416, grad_norm=0.240, pi_ceil=0.000, fb_scale=0.499
+2026-04-07 22:08:21,331 [INFO] Stage 2 step 1600/5000: loss=2.7590, sens=2.3947, prior_kl=0.0000, fb_sparse=2.6268, energy=0.3296, homeo=0.0009, s_acc=0.454, p_acc=0.035, ang_err=43.4, a_inh=0.172, a_vip=0.960, tonic=0.0408, grad_norm=0.292, pi_ceil=0.000, fb_scale=0.599
+2026-04-07 22:10:01,458 [INFO] Stage 2 step 1700/5000: loss=2.7143, sens=2.3831, prior_kl=0.0000, fb_sparse=2.8928, energy=0.3426, homeo=0.0009, s_acc=0.440, p_acc=0.025, ang_err=46.2, a_inh=0.202, a_vip=1.059, tonic=0.0400, grad_norm=0.344, pi_ceil=0.000, fb_scale=0.699
+2026-04-07 22:11:41,724 [INFO] Stage 2 step 1800/5000: loss=2.7370, sens=2.4206, prior_kl=0.0000, fb_sparse=3.1436, energy=0.3507, homeo=0.0010, s_acc=0.461, p_acc=0.031, ang_err=44.6, a_inh=0.215, a_vip=1.151, tonic=0.0393, grad_norm=0.408, pi_ceil=0.000, fb_scale=0.799
+2026-04-07 22:13:22,177 [INFO] Stage 2 step 1900/5000: loss=2.7996, sens=2.4894, prior_kl=0.0000, fb_sparse=3.3729, energy=0.3577, homeo=0.0012, s_acc=0.457, p_acc=0.021, ang_err=46.5, a_inh=0.231, a_vip=1.236, tonic=0.0387, grad_norm=0.475, pi_ceil=0.000, fb_scale=0.899
+2026-04-07 22:15:02,849 [INFO] Stage 2 step 2000/5000: loss=2.7543, sens=2.4708, prior_kl=0.0000, fb_sparse=3.5843, energy=0.3732, homeo=0.0012, s_acc=0.460, p_acc=0.027, ang_err=44.3, a_inh=0.254, a_vip=1.314, tonic=0.0382, grad_norm=0.503, pi_ceil=0.000, fb_scale=0.999
+2026-04-07 22:16:43,063 [INFO] Stage 2 step 2100/5000: loss=2.6934, sens=2.4404, prior_kl=0.0000, fb_sparse=3.7705, energy=0.3774, homeo=0.0011, s_acc=0.468, p_acc=0.027, ang_err=46.2, a_inh=0.270, a_vip=1.382, tonic=0.0377, grad_norm=0.470, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:18:23,183 [INFO] Stage 2 step 2200/5000: loss=2.7168, sens=2.4734, prior_kl=0.0000, fb_sparse=3.9262, energy=0.3707, homeo=0.0012, s_acc=0.471, p_acc=0.035, ang_err=42.8, a_inh=0.292, a_vip=1.439, tonic=0.0373, grad_norm=0.479, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:20:03,009 [INFO] Stage 2 step 2300/5000: loss=2.6712, sens=2.4500, prior_kl=0.0000, fb_sparse=4.0624, energy=0.3721, homeo=0.0011, s_acc=0.459, p_acc=0.030, ang_err=44.0, a_inh=0.304, a_vip=1.489, tonic=0.0370, grad_norm=0.461, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:21:43,919 [INFO] Stage 2 step 2400/5000: loss=2.6606, sens=2.4526, prior_kl=0.0000, fb_sparse=4.1820, energy=0.3720, homeo=0.0011, s_acc=0.452, p_acc=0.036, ang_err=44.9, a_inh=0.315, a_vip=1.532, tonic=0.0367, grad_norm=0.444, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:23:25,141 [INFO] Stage 2 step 2500/5000: loss=2.6671, sens=2.4682, prior_kl=0.0000, fb_sparse=4.2877, energy=0.3673, homeo=0.0011, s_acc=0.439, p_acc=0.031, ang_err=44.3, a_inh=0.332, a_vip=1.570, tonic=0.0364, grad_norm=0.467, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:25:05,150 [INFO] Stage 2 step 2600/5000: loss=2.6831, sens=2.4915, prior_kl=0.0000, fb_sparse=4.3843, energy=0.3680, homeo=0.0011, s_acc=0.442, p_acc=0.020, ang_err=44.6, a_inh=0.343, a_vip=1.605, tonic=0.0362, grad_norm=0.434, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:26:45,079 [INFO] Stage 2 step 2700/5000: loss=2.6920, sens=2.5078, prior_kl=0.0000, fb_sparse=4.4709, energy=0.3672, homeo=0.0011, s_acc=0.439, p_acc=0.022, ang_err=45.8, a_inh=0.356, a_vip=1.637, tonic=0.0359, grad_norm=0.423, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:28:25,666 [INFO] Stage 2 step 2800/5000: loss=2.6202, sens=2.4522, prior_kl=0.0000, fb_sparse=4.5496, energy=0.3697, homeo=0.0011, s_acc=0.445, p_acc=0.026, ang_err=45.9, a_inh=0.367, a_vip=1.666, tonic=0.0358, grad_norm=0.412, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:30:05,841 [INFO] Stage 2 step 2900/5000: loss=2.5516, sens=2.3997, prior_kl=0.0000, fb_sparse=4.6218, energy=0.3725, homeo=0.0011, s_acc=0.452, p_acc=0.021, ang_err=46.7, a_inh=0.373, a_vip=1.692, tonic=0.0356, grad_norm=0.410, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:31:46,213 [INFO] Stage 2 step 3000/5000: loss=2.6288, sens=2.4724, prior_kl=0.0000, fb_sparse=4.6852, energy=0.3690, homeo=0.0011, s_acc=0.442, p_acc=0.023, ang_err=44.9, a_inh=0.385, a_vip=1.715, tonic=0.0354, grad_norm=0.396, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:33:26,135 [INFO] Stage 2 step 3100/5000: loss=2.6255, sens=2.4750, prior_kl=0.0000, fb_sparse=4.7444, energy=0.3679, homeo=0.0011, s_acc=0.440, p_acc=0.036, ang_err=44.3, a_inh=0.389, a_vip=1.736, tonic=0.0353, grad_norm=0.399, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:35:05,884 [INFO] Stage 2 step 3200/5000: loss=2.5625, sens=2.4249, prior_kl=0.0000, fb_sparse=4.7970, energy=0.3703, homeo=0.0011, s_acc=0.465, p_acc=0.025, ang_err=46.3, a_inh=0.396, a_vip=1.755, tonic=0.0352, grad_norm=0.399, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:36:46,723 [INFO] Stage 2 step 3300/5000: loss=2.5585, sens=2.4248, prior_kl=0.0000, fb_sparse=4.8433, energy=0.3695, homeo=0.0011, s_acc=0.451, p_acc=0.020, ang_err=44.8, a_inh=0.404, a_vip=1.772, tonic=0.0350, grad_norm=0.399, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:38:26,979 [INFO] Stage 2 step 3400/5000: loss=2.5839, sens=2.4514, prior_kl=0.0000, fb_sparse=4.8845, energy=0.3689, homeo=0.0011, s_acc=0.442, p_acc=0.026, ang_err=44.7, a_inh=0.411, a_vip=1.787, tonic=0.0349, grad_norm=0.378, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:40:06,595 [INFO] Stage 2 step 3500/5000: loss=2.5833, sens=2.4540, prior_kl=0.0000, fb_sparse=4.9212, energy=0.3688, homeo=0.0011, s_acc=0.461, p_acc=0.022, ang_err=44.9, a_inh=0.417, a_vip=1.800, tonic=0.0349, grad_norm=0.388, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:41:46,358 [INFO] Stage 2 step 3600/5000: loss=2.5842, sens=2.4571, prior_kl=0.0000, fb_sparse=4.9530, energy=0.3680, homeo=0.0011, s_acc=0.440, p_acc=0.014, ang_err=45.1, a_inh=0.422, a_vip=1.812, tonic=0.0348, grad_norm=0.380, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:43:26,567 [INFO] Stage 2 step 3700/5000: loss=2.5171, sens=2.3994, prior_kl=0.0000, fb_sparse=4.9815, energy=0.3706, homeo=0.0010, s_acc=0.451, p_acc=0.027, ang_err=44.1, a_inh=0.426, a_vip=1.822, tonic=0.0347, grad_norm=0.388, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:45:06,909 [INFO] Stage 2 step 3800/5000: loss=2.5713, sens=2.4504, prior_kl=0.0000, fb_sparse=5.0052, energy=0.3691, homeo=0.0010, s_acc=0.434, p_acc=0.025, ang_err=45.1, a_inh=0.432, a_vip=1.831, tonic=0.0346, grad_norm=0.371, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:46:48,114 [INFO] Stage 2 step 3900/5000: loss=2.5479, sens=2.4305, prior_kl=0.0000, fb_sparse=5.0256, energy=0.3701, homeo=0.0010, s_acc=0.459, p_acc=0.027, ang_err=46.4, a_inh=0.436, a_vip=1.838, tonic=0.0346, grad_norm=0.371, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:48:28,599 [INFO] Stage 2 step 4000/5000: loss=2.5351, sens=2.4205, prior_kl=0.0000, fb_sparse=5.0430, energy=0.3686, homeo=0.0010, s_acc=0.474, p_acc=0.026, ang_err=44.1, a_inh=0.439, a_vip=1.845, tonic=0.0346, grad_norm=0.383, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:50:07,929 [INFO] Stage 2 step 4100/5000: loss=2.5339, sens=2.4205, prior_kl=0.0000, fb_sparse=5.0569, energy=0.3694, homeo=0.0010, s_acc=0.459, p_acc=0.021, ang_err=44.3, a_inh=0.442, a_vip=1.850, tonic=0.0345, grad_norm=0.375, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:51:47,955 [INFO] Stage 2 step 4200/5000: loss=2.5451, sens=2.4322, prior_kl=0.0000, fb_sparse=5.0683, energy=0.3694, homeo=0.0010, s_acc=0.434, p_acc=0.023, ang_err=44.4, a_inh=0.444, a_vip=1.854, tonic=0.0345, grad_norm=0.373, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:53:28,053 [INFO] Stage 2 step 4300/5000: loss=2.5208, sens=2.4111, prior_kl=0.0000, fb_sparse=5.0776, energy=0.3710, homeo=0.0010, s_acc=0.456, p_acc=0.029, ang_err=46.3, a_inh=0.445, a_vip=1.857, tonic=0.0345, grad_norm=0.368, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:55:07,872 [INFO] Stage 2 step 4400/5000: loss=2.5266, sens=2.4165, prior_kl=0.0000, fb_sparse=5.0844, energy=0.3703, homeo=0.0010, s_acc=0.447, p_acc=0.023, ang_err=45.9, a_inh=0.446, a_vip=1.860, tonic=0.0345, grad_norm=0.364, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:56:48,451 [INFO] Stage 2 step 4500/5000: loss=2.4822, sens=2.3775, prior_kl=0.0000, fb_sparse=5.0893, energy=0.3719, homeo=0.0010, s_acc=0.433, p_acc=0.025, ang_err=44.3, a_inh=0.447, a_vip=1.862, tonic=0.0344, grad_norm=0.372, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 22:58:28,923 [INFO] Stage 2 step 4600/5000: loss=2.5453, sens=2.4343, prior_kl=0.0000, fb_sparse=5.0926, energy=0.3694, homeo=0.0010, s_acc=0.465, p_acc=0.029, ang_err=43.7, a_inh=0.448, a_vip=1.863, tonic=0.0344, grad_norm=0.370, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 23:00:08,874 [INFO] Stage 2 step 4700/5000: loss=2.5357, sens=2.4262, prior_kl=0.0000, fb_sparse=5.0947, energy=0.3710, homeo=0.0010, s_acc=0.449, p_acc=0.020, ang_err=45.9, a_inh=0.448, a_vip=1.864, tonic=0.0344, grad_norm=0.355, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 23:01:49,457 [INFO] Stage 2 step 4800/5000: loss=2.5329, sens=2.4231, prior_kl=0.0000, fb_sparse=5.0958, energy=0.3697, homeo=0.0010, s_acc=0.438, p_acc=0.022, ang_err=44.4, a_inh=0.448, a_vip=1.864, tonic=0.0344, grad_norm=0.363, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 23:03:29,563 [INFO] Stage 2 step 4900/5000: loss=2.5185, sens=2.4106, prior_kl=0.0000, fb_sparse=5.0962, energy=0.3720, homeo=0.0010, s_acc=0.446, p_acc=0.026, ang_err=44.4, a_inh=0.448, a_vip=1.864, tonic=0.0344, grad_norm=0.352, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 23:05:08,996 [INFO] Stage 2 step 5000/5000: loss=2.5359, sens=2.4264, prior_kl=0.0000, fb_sparse=5.0962, energy=0.3700, homeo=0.0010, s_acc=0.449, p_acc=0.022, ang_err=45.4, a_inh=0.448, a_vip=1.864, tonic=0.0344, grad_norm=0.367, pi_ceil=0.000, fb_scale=1.000
+2026-04-07 23:05:09,012 [INFO] Stage 2 complete: loss=2.5359, s_acc=0.449, p_acc=0.022
+2026-04-07 23:05:09,033 [INFO] Saved to results/batch1/random_s42/center_surround_seed42/checkpoint.pt
+2026-04-07 23:05:09,033 [INFO] Training complete.

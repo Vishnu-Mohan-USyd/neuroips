@@ -1,0 +1,33 @@
+
+========================================================================
+=== C1 empirical: drive fixed, measure equilibrium rate ===
+========================================================================
+
+Prediction under layers.py form (rate_next = leak*state + phi):
+  equilibrium rate = phi(drive) / (1 - leak) = phi(drive) * τ/dt
+
+Prediction under standard Euler (lgn_l4 form):
+  equilibrium rate = phi(drive)
+
+Config: L23E τ=20ms, dt=5ms, leak=0.750, drive=0.5
+  phi(drive)           = 0.280930
+  predicted r_eq       = phi/(1-leak) = 1.123719
+  standard Euler r_eq  = phi          = 0.280930
+  τ/dt gain            = 4.000
+
+  Running: r_{t+1} = leak*r_t + phi(drive):
+   step           r
+      0    0.000000
+      1    0.280930
+     10    1.060439
+     50    1.123719
+    100    1.123719
+    200    1.123719
+    500    1.123719
+  final r = 1.123719
+  |observed - predicted| / predicted = 2.1217e-07  =>  CONFIRMED
+
+Same test for HE (τ=50, dt=5, leak=0.9):
+  predicted r_eq_HE = 2.809298
+  observed r_HE(1000) = 2.809296
+  relative error = 5.9407e-07

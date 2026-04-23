@@ -1,0 +1,66 @@
+{
+  "check": "check3_no_homeo_drift",
+  "starting_ckpt": "checkpoints/v2/phase2/phase2_task70_s42/phase2_s42/step_3000.pt",
+  "n_trials_learning": 100,
+  "entropy_no_homeo_drift": 1.6362043825675656,
+  "n_bins_no_homeo_drift": 5,
+  "coverage": {
+    "n_orientations": 12,
+    "n_units": 256,
+    "orientations_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "per_orientation_n_pref_units": [
+      20,
+      0,
+      54,
+      0,
+      56,
+      0,
+      7,
+      0,
+      57,
+      0,
+      62,
+      0
+    ],
+    "per_orientation_pct": [
+      7.8125,
+      0.0,
+      21.09375,
+      0.0,
+      21.875,
+      0.0,
+      2.734375,
+      0.0,
+      22.265625,
+      0.0,
+      24.21875,
+      0.0
+    ],
+    "entropy_nats": 1.6362043825675656,
+    "entropy_bits": 2.360543948611015,
+    "max_entropy_nats": 2.4849066497880004,
+    "max_entropy_bits": 3.584962500721156,
+    "n_bins_geq_5pct": 5,
+    "thresholds": {
+      "pass_strong_nats": 1.74,
+      "pass_weak_nats": 1.5,
+      "n_bins_5pct": 8
+    },
+    "pass_strong": false,
+    "pass_weak": true,
+    "pass_bins": false
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "orientations_deg": [
+    45.0,
+    135.0
+  ],
+  "n_orientations": 2,
+  "chance": 0.5,
+  "n_trials_per_orient": 200,
+  "n_trials_total": 400,
+  "n_voxels": 64,
+  "noise_std": 0.1,
+  "contrast_range": [
+    0.7,
+    1.0
+  ],
+  "n_warmup_steps": 50,
+  "n_readout_steps": 50,
+  "contrast_mean": 0.8502827286720276,
+  "svm_voxel_pooled": {
+    "acc_mean": 1.0,
+    "acc_std": 0.0,
+    "per_fold_acc": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "per_fold_C": [
+      0.01,
+      0.01,
+      0.01,
+      0.01,
+      0.01
+    ],
+    "n_samples": 400,
+    "n_features": 64,
+    "n_classes": 2
+  },
+  "svm_raw_l23": {
+    "acc_mean": 1.0,
+    "acc_std": 0.0,
+    "per_fold_acc": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "per_fold_C": [
+      0.01,
+      0.01,
+      0.01,
+      0.01,
+      0.01
+    ],
+    "n_samples": 400,
+    "n_features": 256,
+    "n_classes": 2
+  }
+}

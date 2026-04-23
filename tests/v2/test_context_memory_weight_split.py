@@ -1,11 +1,17 @@
 """Per-phase plastic/frozen weight specification (v4 plan §Architecture + D.2).
 
 Phase 2:          plastic = {W_hm_gen, W_mm_gen, W_mh_gen}
-                  frozen  = {W_qm_task, W_lm_task, W_mh_task}
-Phase 3 Kok:      plastic = {W_qm_task, W_mh_task}
+                  frozen  = {W_qm_task, W_lm_task,
+                             W_mh_task_exc, W_mh_task_inh}
+Phase 3 Kok:      plastic = {W_qm_task, W_mh_task_exc, W_mh_task_inh}
                   frozen  = {W_hm_gen, W_mm_gen, W_mh_gen, W_lm_task}
-Phase 3 Richter:  plastic = {W_lm_task, W_mh_task}
+Phase 3 Richter:  plastic = {W_lm_task, W_mh_task_exc, W_mh_task_inh}
                   frozen  = {W_hm_gen, W_mm_gen, W_mh_gen, W_qm_task}
+
+Task #74 Fix C-v2: the original ``W_mh_task`` was split into
+``W_mh_task_exc`` (→ additive L23 E apical, secondary) and
+``W_mh_task_inh`` (→ per-SOM-unit multiplicative gain on SOM→L23E
+synapses, main apical-gain route). Both are plastic in Phase-3.
 """
 
 from __future__ import annotations
@@ -17,13 +23,13 @@ from src.v2_model.context_memory import ContextMemory
 
 ALL_WEIGHTS = {
     "W_hm_gen", "W_mm_gen", "W_mh_gen",
-    "W_qm_task", "W_lm_task", "W_mh_task",
+    "W_qm_task", "W_lm_task", "W_mh_task_exc", "W_mh_task_inh",
 }
 
 
 def _make_cm() -> ContextMemory:
     return ContextMemory(
-        n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12,
+        n_m=16, n_h=24, n_cue=6, n_leader=7, n_out=12, n_out_som=9,
         tau_m_ms=500.0, dt_ms=5.0, seed=0,
     )
 
@@ -33,12 +39,12 @@ def _make_cm() -> ContextMemory:
     [
         ("phase2",
          {"W_hm_gen", "W_mm_gen", "W_mh_gen"},
-         {"W_qm_task", "W_lm_task", "W_mh_task"}),
+         {"W_qm_task", "W_lm_task", "W_mh_task_exc", "W_mh_task_inh"}),
         ("phase3_kok",
-         {"W_qm_task", "W_mh_task"},
+         {"W_qm_task", "W_mh_task_exc", "W_mh_task_inh"},
          {"W_hm_gen", "W_mm_gen", "W_mh_gen", "W_lm_task"}),
         ("phase3_richter",
-         {"W_lm_task", "W_mh_task"},
+         {"W_lm_task", "W_mh_task_exc", "W_mh_task_inh"},
          {"W_hm_gen", "W_mm_gen", "W_mh_gen", "W_qm_task"}),
     ],
 )
@@ -72,7 +78,7 @@ def test_plastic_and_frozen_cover_all_weights() -> None:
 
 
 def test_named_parameters_match_weight_names() -> None:
-    """All six weight names must correspond to `nn.Parameter` attributes."""
+    """All seven weight names must correspond to `nn.Parameter` attributes."""
     cm = _make_cm()
     param_names = {n for n, _ in cm.named_parameters()}
     assert ALL_WEIGHTS <= param_names, f"missing: {ALL_WEIGHTS - param_names}"

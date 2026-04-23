@@ -1,0 +1,13 @@
+[coverage] orient=0.0° done=1/12 trials=8/96 elapsed=0.09min
+[coverage] orient=15.0° done=2/12 trials=16/96 elapsed=0.17min
+[coverage] orient=30.0° done=3/12 trials=24/96 elapsed=0.26min
+[coverage] orient=45.0° done=4/12 trials=32/96 elapsed=0.35min
+[coverage] orient=60.0° done=5/12 trials=40/96 elapsed=0.43min
+[coverage] orient=75.0° done=6/12 trials=48/96 elapsed=0.51min
+[coverage] orient=90.0° done=7/12 trials=56/96 elapsed=0.60min
+[coverage] orient=105.0° done=8/12 trials=64/96 elapsed=0.68min
+[coverage] orient=120.0° done=9/12 trials=72/96 elapsed=0.77min
+[coverage] orient=135.0° done=10/12 trials=80/96 elapsed=0.86min
+[coverage] orient=150.0° done=11/12 trials=88/96 elapsed=0.94min
+[coverage] orient=165.0° done=12/12 trials=96/96 elapsed=1.03min
+coverage_entropy=1.368 n_bins_5pct=4/12 bias_norm=6.9405 loc_norm=5.212 ratio=1.3317 cos_bt_same=0.003 target_entropy>1.74 target_ratio>0.05 target_cos>0.30

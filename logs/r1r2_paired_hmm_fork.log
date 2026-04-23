@@ -1,0 +1,54 @@
+[setup] device=cpu
+[setup] config=config/sweep/sweep_rescue_1_2.yaml
+[setup] checkpoint=results/simple_dual/emergent_seed42/checkpoint.pt
+[setup] decoder_c=checkpoints/decoder_c.pt
+[setup] n_trials=1000  seed=42
+[cfg] n_orientations=36  period=180.0  steps_on=12  steps_isi=4  seq_length=25  cue_valid_fraction=0.75
+[setup] network loaded (oracle_mode=False, feedback_scale=1.000)
+[setup] Decoder C loaded (best_val_acc=0.8145)
+[hmm] generating 1000 trials × seq_length=25...
+[hmm] generated: orientations.shape=(1000, 25)  cues.shape=(1000, 25, 36)  task_states.shape=(1000, 25, 2)  is_ambiguous.sum()=7619
+
+=== Condition C1_focused_native (Focused + HMM cue) ===
+[C1_focused_native] forward ex...
+[C1_focused_native] forward unex...
+[C1_focused_native] forward omi...
+[C1_focused_native] pre-probe max|ex-unex|=0.00e+00  max|ex-omi|=0.00e+00  (should be ~0)
+
+[C1_focused_native] summary:
+  branch     decC_acc     decB_acc     peak      net    FWHM°
+      ex     0.6020± 0.0155  0.6040   0.5460  4.1885    29.60
+    unex     0.5310± 0.0158  0.5910   0.4770  4.8747    29.03
+     omi     0.1010± 0.0095  n/a   0.1728  2.1841    31.31
+[C1_focused_native] elapsed: 2.6s
+
+=== Condition C2_routine_native (Routine + HMM cue) ===
+[C2_routine_native] forward ex...
+[C2_routine_native] forward unex...
+[C2_routine_native] forward omi...
+[C2_routine_native] pre-probe max|ex-unex|=0.00e+00  max|ex-omi|=0.00e+00  (should be ~0)
+
+[C2_routine_native] summary:
+  branch     decC_acc     decB_acc     peak      net    FWHM°
+      ex     0.4700± 0.0158  0.4430   0.2652  1.9314    29.35
+    unex     0.4560± 0.0158  0.4700   0.2086  2.1269    27.51
+     omi     0.0870± 0.0089  n/a   0.0947  0.9302    30.20
+[C2_routine_native] elapsed: 2.3s
+
+=== Condition C3_focused_neutralcue (Focused + neutral) ===
+[C3_focused_neutralcue] forward ex...
+[C3_focused_neutralcue] forward unex...
+[C3_focused_neutralcue] forward omi...
+[C3_focused_neutralcue] pre-probe max|ex-unex|=0.00e+00  max|ex-omi|=0.00e+00  (should be ~0)
+
+[C3_focused_neutralcue] summary:
+  branch     decC_acc     decB_acc     peak      net    FWHM°
+      ex     0.5410± 0.0158  0.5440   0.5675  4.3418    29.10
+    unex     0.5060± 0.0158  0.5380   0.4590  4.8954    27.88
+     omi     0.1140± 0.0101  n/a   0.2088  2.4017    30.72
+[C3_focused_neutralcue] elapsed: 2.3s
+
+[total] elapsed: 7.1s
+
+[json] wrote results/r1r2_paired_hmm_fork.json
+[fig] wrote docs/figures/r1r2_paired_hmm_fork_headline.png

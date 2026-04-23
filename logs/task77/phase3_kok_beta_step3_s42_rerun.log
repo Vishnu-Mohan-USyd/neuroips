@@ -1,0 +1,13 @@
+[train] phase=learning trial=0/1000 elapsed=0.0min W_qm=14.0072 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=learning trial=100/1000 elapsed=1.0min W_qm=14.0091 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=learning trial=200/1000 elapsed=1.9min W_qm=14.0131 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=learning trial=300/1000 elapsed=2.9min W_qm=14.0188 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=learning trial=400/1000 elapsed=3.8min W_qm=14.0233 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=learning trial=499/1000 elapsed=4.8min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=scan trial=500/1000 elapsed=4.8min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=scan trial=600/1000 elapsed=5.7min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=scan trial=700/1000 elapsed=6.7min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=scan trial=800/1000 elapsed=7.6min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=scan trial=900/1000 elapsed=8.6min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+[train] phase=scan trial=999/1000 elapsed=9.5min W_qm=14.0317 W_mh_exc=0.0000 W_mh_inh=0.0000
+phase3_kok checkpoint written to checkpoints/v2/phase3_kok_beta_step3_s42/phase3_kok_s42.pt

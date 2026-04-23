@@ -1,0 +1,6 @@
+step2_toy_learning: final_mean_gain_pref=0.7838 final_mean_gain_nonpref=0.9672 target_pref=0.70 target_nonpref=1.00 matches_target=T iterations_to_converge=-1 rule=rule1
+  rule_formula: ΔW=-η·cue·r·sign(matched); clamp[gmin,gmax]
+  cue0: pref_gain=0.7741 nonpref_gain=0.9652 (n_pref=47)
+  cue1: pref_gain=0.7935 nonpref_gain=0.9692 (n_pref=51)
+  lr=0.001 homeostasis_gamma=0.003 gain_clamp=[0.1,1.0] n_trials=400 validity=0.75
+  JSON: logs/task74/step2_wqgain_rule1.json

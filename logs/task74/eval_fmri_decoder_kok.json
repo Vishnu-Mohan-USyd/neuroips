@@ -1,0 +1,121 @@
+{
+  "assay": "eval_fmri_decoder_kok",
+  "checkpoint": "checkpoints/v2/phase3_kok_beta_full_s42/phase3_kok_s42.pt",
+  "seed": 42,
+  "cue_mapping": {
+    "0": 135.0,
+    "1": 45.0
+  },
+  "n_voxels": 64,
+  "noise_std": 0.5,
+  "contrast_range": [
+    0.1,
+    0.3
+  ],
+  "n_warmup_steps": 50,
+  "n_readout_steps": 5,
+  "blocks": {
+    "none": {
+      "cue_mode": "none",
+      "orientations_deg": [
+        45.0,
+        135.0
+      ],
+      "n_trials_total": 800,
+      "svm_voxel_pooled": {
+        "acc_mean": 0.91625,
+        "acc_std": 0.01658312395177702,
+        "per_fold_acc": [
+          0.9375,
+          0.9125,
+          0.91875,
+          0.8875,
+          0.925
+        ],
+        "per_fold_C": [
+          1.0,
+          10.0,
+          10.0,
+          1.0,
+          10.0
+        ],
+        "n_samples": 800,
+        "n_features": 64,
+        "n_classes": 2
+      },
+      "contrast_mean": 0.20289087295532227
+    },
+    "expected": {
+      "cue_mode": "expected",
+      "orientations_deg": [
+        45.0,
+        135.0
+      ],
+      "n_trials_total": 800,
+      "svm_voxel_pooled": {
+        "acc_mean": 1.0,
+        "acc_std": 0.0,
+        "per_fold_acc": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "per_fold_C": [
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "n_samples": 800,
+        "n_features": 64,
+        "n_classes": 2
+      },
+      "contrast_mean": 0.19922909140586853
+    },
+    "unexpected": {
+      "cue_mode": "unexpected",
+      "orientations_deg": [
+        45.0,
+        135.0
+      ],
+      "n_trials_total": 800,
+      "svm_voxel_pooled": {
+        "acc_mean": 1.0,
+        "acc_std": 0.0,
+        "per_fold_acc": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "per_fold_C": [
+          0.01,
+          0.01,
+          0.01,
+          0.01,
+          0.01
+        ],
+        "n_samples": 800,
+        "n_features": 64,
+        "n_classes": 2
+      },
+      "contrast_mean": 0.2000962495803833
+    }
+  },
+  "delta_decode": {
+    "mean": 0.0,
+    "ci": [
+      0.0,
+      0.0
+    ],
+    "n_bootstrap": 1000,
+    "permutation_p_two_sided": 1.0,
+    "n_permutations": 1000,
+    "eps": 0.02
+  },
+  "verdict": "null"
+}

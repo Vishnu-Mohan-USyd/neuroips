@@ -1,0 +1,8 @@
+/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/eval_kok.py:424: RuntimeWarning: Mean of empty slice
+  pref_exp = float(np.nanmean([pref_exp_lo, pref_exp_hi]))
+/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/eval_kok.py:425: RuntimeWarning: Mean of empty slice
+  pref_unexp = float(np.nanmean([pref_unexp_lo, pref_unexp_hi]))
+/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/eval_kok.py:426: RuntimeWarning: Mean of empty slice
+  nonpref_exp = float(np.nanmean([nonpref_exp_lo, nonpref_exp_hi]))
+/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/scripts/v2/eval_kok.py:427: RuntimeWarning: Mean of empty slice
+  nonpref_unexp = float(np.nanmean([nonpref_unexp_lo, nonpref_unexp_hi]))

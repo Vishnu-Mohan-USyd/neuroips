@@ -25,14 +25,18 @@ def test_different_seed_different_weights() -> None:
 
 
 def test_bias_init_deterministic_across_seeds() -> None:
-    """``b_pred_raw`` is seed-independent (constant init at -10.0)."""
+    """``b_pred_raw`` is seed-independent (constant init at -8.0).
+
+    Task #74 Fix O (2026-04-22): init changed from -10.0 → -8.0 to match
+    the [-8, 8] raw clamp used by ``apply_plasticity_step``.
+    """
     h1 = PredictionHead(seed=0)
     h2 = PredictionHead(seed=999)
     torch.testing.assert_close(
         h1.b_pred_raw, h2.b_pred_raw, atol=0.0, rtol=0.0,
     )
     torch.testing.assert_close(
-        h1.b_pred_raw, torch.full_like(h1.b_pred_raw, -10.0),
+        h1.b_pred_raw, torch.full_like(h1.b_pred_raw, -8.0),
         atol=0.0, rtol=0.0,
     )
 

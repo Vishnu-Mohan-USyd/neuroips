@@ -1,0 +1,6 @@
+[diag] running center/full/surround probes on Fix-E network...
+  center_only   r_l23e_mean=2.732 r_l23e_center_unit=2.732 r_l23e_surround_unit=nan r_som_mean=6.265 r_pv_mean=219.072 r_h_mean=0.261
+  full_field    r_l23e_mean=3.502 r_l23e_center_unit=3.502 r_l23e_surround_unit=nan r_som_mean=8.475 r_pv_mean=281.096 r_h_mean=0.337
+  surround_only r_l23e_mean=3.484 r_l23e_center_unit=3.484 r_l23e_surround_unit=nan r_som_mean=8.427 r_pv_mean=279.682 r_h_mean=0.335
+[diag] verdict: r_som(full)/r_som(center)=1.35 r_som(surround)/r_som(center)=1.35 l23e(full)/l23e(center)=1.28 SI_pop=-0.282
+[diag] wrote logs/task74/phase_a_surround_diagnostic.json  wall=3.6s

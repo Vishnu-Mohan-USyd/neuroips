@@ -1,0 +1,28 @@
+SWEEP INFRASTRUCTURE COMPLETE — 18 configs ready, NOT launched
+======================================================================
+
+Branch: three-regimes (commit c6f8e4d)
+Remote: synced ✓ (18 configs + launcher verified on A6000)
+
+Files created:
+  scripts/generate_sweep_configs.py  — generates all 18 YAMLs from template
+  scripts/launch_sweep_groups.sh     — group-sequential, within-group parallel launcher
+  config/sweep/sweep_{a1..a6,b1..b5,c1..c2,d1..d3,e1..e2}.yaml
+  config/sweep/sweep_config_list.txt — for run_sweep_batch.sh
+
+Grid (18 runs):
+  Group A (6): Phase boundary — λ_sens ∈ {0.0, 0.1, 0.2, 0.3, 0.5, 0.7}, λ_energy=2.0
+  Group B (5): Energy interaction — λ_energy ∈ {0.5, 5.0} × λ_sens ∈ {0.0, 0.3, 1.0}
+  Group C (2): L2/3 weight — l23w=5.0, λ_sens ∈ {0.3, 1.0}
+  Group D (3): Mismatch — λ_mm ∈ {0.5, 1.0} × λ_sens ∈ {0.1, 0.3, 0.5}
+  Group E (2): Deconfound — l23w=3.0, λ_sens ∈ {0.0, 0.3}
+
+To launch (when authorized):
+  ssh vishnu@100.123.25.88 'cd ~/neuroips/freshstart && \
+    nohup ./scripts/launch_sweep_groups.sh 42 cuda > logs/sweep_master.log 2>&1 &'
+
+Note: GPU has 32GB/48GB used by another session's process (PID 22612).
+      ~16GB available — enough for sequential runs but parallel groups
+      may need the full GPU. May need to wait for that process to finish.
+
+AWAITING LEAD GO SIGNAL TO LAUNCH.

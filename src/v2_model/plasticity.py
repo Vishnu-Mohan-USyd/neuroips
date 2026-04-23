@@ -424,3 +424,69 @@ class ThreeFactorRule(nn.Module):
         dw = self.lr * hebb - self.weight_decay * shrink_target
         dw.clamp_(min=-0.01, max=0.01)
         return _apply_mask(dw, mask)
+
+    @torch.no_grad()
+    def delta_mh_inh(
+        self,
+        memory: Tensor,
+        som_modulator: Tensor,
+        weights: Tensor,
+        mask: Optional[Tensor] = None,
+        raw_prior: Optional[Tensor] = None,
+    ) -> Tensor:
+        """Three-factor update for W_mh^task_inh (memory → SOM gain, Fix C-v2).
+
+        Task #74 Fix C-v2: the task-specific readout was originally a
+        single excitatory-driven path (``W_mh_task @ m`` → L23E apical).
+        Empirical fault: direction metric cos(b_task, sensory_loc)=0.136
+        ≪ 0.30. The biologically grounded alternative is to route the
+        MAIN task bias through SOM, which provides apical gain control
+        of L23 E dendrites (Urbanczik & Senn 2014; Larkum 1999).
+
+        An earlier Fix-C variant added ``W_mh_task_inh @ m`` to the SOM
+        drive directly; this silenced L23E (r_l23 → 1e-20) because the
+        Phase-2 SOM baseline is already saturated. Fix C-v2 replaces that
+        additive route with *per-SOM-unit gain modulation* on the
+        SOM→L23E synapses:
+            som_gain = softplus(W_mh_task_inh · m + 0.5413).clamp(max=4.0)
+        which scales SOM→L23E efficacy multiplicatively (biologically:
+        cholinergic / noradrenergic modulation of GABAergic transmission,
+        Disney & Aoki 2008; Pfeffer 2013). The three-factor rule below is
+        UNCHANGED — only the application site of the resulting signal is
+        different. The modulator/memory correlation structure, learning
+        rate, weight decay, clamp, and mask semantics are preserved
+        verbatim.
+
+        Closed-form:
+            dw[j, i] = η · mean_b(som_modulator[b, j] · memory[b, i])
+                     − λ · (weights[j, i] − raw_prior[j, i])
+
+        with ``som_modulator[b, j] = r_som_expected_j − r_som_unexpected_j``
+        for unit ``j`` under the current batch's (cue × probe) condition.
+        Sign convention: positive modulator ⇒ SOM fires MORE for expected
+        ⇒ strengthen W to recapitulate expected-time inhibition via memory.
+
+        Args:
+            memory:        `[B, n_m]` presynaptic memory activity
+                           (eligibility ≡ pre-probe memory snapshot).
+            som_modulator: `[B, n_som]` post-synaptic signed modulator —
+                           contrast r_som_expected − r_som_unexpected
+                           matched to this trial's probe stimulus.
+            weights:       `[n_som, n_m]` current raw weights.
+            mask:          Optional `[n_som, n_m]` boolean mask.
+            raw_prior:     Optional `[n_som, n_m]` anchor for weight decay;
+                           see module docstring. `None` ⇒ decay toward 0.
+
+        Returns:
+            `[n_som, n_m]` ΔW tensor, already clamped to ±0.01 and masked.
+        """
+        _validate_pair_shapes(
+            memory, som_modulator, weights, pre_name="m", post_name="som",
+        )
+        hebb = _batch_outer_mean(som_modulator, memory)              # [n_som, n_m]
+        shrink_target = weights if raw_prior is None else (weights - raw_prior)
+        dw = self.lr * hebb - self.weight_decay * shrink_target
+        dw.clamp_(min=-0.01, max=0.01)
+        return _apply_mask(dw, mask)
+
+

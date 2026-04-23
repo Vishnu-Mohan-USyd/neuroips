@@ -1,0 +1,91 @@
+[setup] device=cuda
+[setup] config=config/sweep/sweep_rescue_1_2.yaml
+[setup] checkpoint=results/simple_dual/emergent_seed42/checkpoint.pt
+[setup] decoder_c=checkpoints/decoder_c.pt
+[setup] N values=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+[setup] n_trials/N=200
+[setup] seed_base=42
+[cfg] n_orientations=36  period=180.0  steps_on=12  steps_isi=4
+[setup] network loaded (oracle_mode=False, feedback_scale=1.000)
+[setup] Decoder C loaded (best_val_acc=0.8145)
+
+[run] N=4
+  ex   :  dec_acc=0.675±0.033   net_l23=5.007±0.042
+  unex :  dec_acc=0.595±0.035   net_l23=6.188±0.074
+  Δ(ex−unex):  dec_acc=+0.080   net_l23=-1.182
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=5
+  ex   :  dec_acc=0.695±0.033   net_l23=4.974±0.041
+  unex :  dec_acc=0.625±0.034   net_l23=6.162±0.076
+  Δ(ex−unex):  dec_acc=+0.070   net_l23=-1.187
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=6
+  ex   :  dec_acc=0.720±0.032   net_l23=4.949±0.040
+  unex :  dec_acc=0.565±0.035   net_l23=6.125±0.078
+  Δ(ex−unex):  dec_acc=+0.155   net_l23=-1.176
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=7
+  ex   :  dec_acc=0.685±0.033   net_l23=4.951±0.040
+  unex :  dec_acc=0.600±0.035   net_l23=6.091±0.079
+  Δ(ex−unex):  dec_acc=+0.085   net_l23=-1.140
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=8
+  ex   :  dec_acc=0.685±0.033   net_l23=4.971±0.041
+  unex :  dec_acc=0.635±0.034   net_l23=6.089±0.079
+  Δ(ex−unex):  dec_acc=+0.050   net_l23=-1.118
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=9
+  ex   :  dec_acc=0.705±0.032   net_l23=4.995±0.042
+  unex :  dec_acc=0.620±0.034   net_l23=6.105±0.078
+  Δ(ex−unex):  dec_acc=+0.085   net_l23=-1.111
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=10
+  ex   :  dec_acc=0.695±0.033   net_l23=5.020±0.043
+  unex :  dec_acc=0.605±0.035   net_l23=6.128±0.078
+  Δ(ex−unex):  dec_acc=+0.090   net_l23=-1.108
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=11
+  ex   :  dec_acc=0.730±0.031   net_l23=5.038±0.045
+  unex :  dec_acc=0.580±0.035   net_l23=6.147±0.079
+  Δ(ex−unex):  dec_acc=+0.150   net_l23=-1.109
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=12
+  ex   :  dec_acc=0.715±0.032   net_l23=5.034±0.045
+  unex :  dec_acc=0.520±0.035   net_l23=6.162±0.079
+  Δ(ex−unex):  dec_acc=+0.195   net_l23=-1.128
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=13
+  ex   :  dec_acc=0.735±0.031   net_l23=5.003±0.045
+  unex :  dec_acc=0.570±0.035   net_l23=6.158±0.078
+  Δ(ex−unex):  dec_acc=+0.165   net_l23=-1.156
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=14
+  ex   :  dec_acc=0.710±0.032   net_l23=4.966±0.043
+  unex :  dec_acc=0.510±0.035   net_l23=6.139±0.076
+  Δ(ex−unex):  dec_acc=+0.200   net_l23=-1.174
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[run] N=15
+  ex   :  dec_acc=0.730±0.031   net_l23=4.932±0.042
+  unex :  dec_acc=0.550±0.035   net_l23=6.118±0.076
+  Δ(ex−unex):  dec_acc=+0.180   net_l23=-1.185
+  pre-probe max|ex−unex|=0.00e+00  (smoke check)
+
+[overall] n_total=2400
+  ex   :  dec_acc=0.707±0.009   net_l23=4.987±0.012
+  unex :  dec_acc=0.581±0.010   net_l23=6.134±0.022
+  Δ(ex−unex):  dec_acc=+0.125   net_l23=-1.148
+  pre-probe max|ex−unex|=0.00e+00  (should be ~0 — context bit-identical until probe ON)
+
+[json] wrote results/eval_ex_vs_unex_decC.json
+[fig] wrote docs/figures/eval_ex_vs_unex_decC.png

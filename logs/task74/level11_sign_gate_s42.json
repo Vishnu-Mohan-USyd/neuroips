@@ -1,0 +1,30 @@
+{
+  "level": 11,
+  "ckpt": "checkpoints/v2/phase2/phase2_validated_substrate_s42/phase2_s42/step_3000.pt",
+  "seed": 42,
+  "n_trials_per_cell": 30,
+  "noise_std": 0.05,
+  "cue_mapping": {
+    "0": 135.0,
+    "1": 45.0
+  },
+  "task_weight_norms_before_zero": {
+    "W_qm_task": 14.010130882263184,
+    "W_mh_task_exc": 0.0,
+    "W_mh_task_inh": 0.0
+  },
+  "mean_r_matched": 0.5233146548271179,
+  "mean_r_mismatched": 0.5233147740364075,
+  "delta_r": -1.1920928955078125e-07,
+  "r_sign": "null",
+  "decode_matched": 1.0,
+  "decode_mismatched": 1.0,
+  "delta_decode": 0.0,
+  "decode_sign": "null",
+  "pref_expected": 1.7258782982826233,
+  "pref_unexpected": 1.7258482575416565,
+  "nonpref_expected": 0.011896025389432907,
+  "nonpref_unexpected": 0.012008407153189182,
+  "asym_sign": "inverse",
+  "verdict": "fail"
+}

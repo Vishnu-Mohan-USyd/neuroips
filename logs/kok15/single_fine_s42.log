@@ -1,0 +1,28 @@
+[Kok15_single_fine] anchor=15.0, offset=±10.0
+[Kok15_single_fine] SVM train_acc=0.750
+[Kok15_single_fine] n_units preferring 15.0°: 0
+{
+  "ckpt": "/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/checkpoints/v2/phase3_kok_task73_at15/phase3_kok_s42.pt",
+  "anchor_deg": 15.0,
+  "offset_deg": 10.0,
+  "n_fine_per_condition": 120,
+  "n_units_pref_anchor": 0,
+  "svm_train_acc": 0.75,
+  "svm_acc_expected": 1.0,
+  "svm_acc_unexpected": 1.0,
+  "delta_svm_acc": 0.0,
+  "delta_svm_acc_ci_lo": 0.0,
+  "delta_svm_acc_ci_hi": 0.0,
+  "p_svm_acc_two_sided": 1.0,
+  "fwhm_expected_deg": 46.86349826511135,
+  "fwhm_unexpected_deg": 46.857087999975285,
+  "delta_fwhm_deg": 0.00641026513606846,
+  "delta_fwhm_ci_lo": 0.0008687424852359627,
+  "delta_fwhm_ci_hi": 0.011897565615255698,
+  "p_fwhm_two_sided": 0.03196803196803197,
+  "amp_pref_expected": NaN,
+  "amp_pref_unexpected": NaN,
+  "delta_amp_pref": NaN,
+  "n_expected_trials": 240,
+  "n_unexpected_trials": 240
+}

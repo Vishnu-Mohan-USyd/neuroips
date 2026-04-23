@@ -1,0 +1,54 @@
+[eval_kok] installed learned W_q_gain from ckpt: grand_mean=0.9829 row0_mean=0.5906 row1_mean=0.5891
+[iso] cue_mapping={0: 135.0, 1: 45.0}
+[iso] collecting localizer (cue=none) 2 × 800 trials...
+[iso] collecting matched cued test 2 × 400 trials...
+[iso] collecting mismatched cued test 2 × 400 trials...
+[iso] computing Q1 (representation check)...
+[iso] fitting localizer decoder...
+
+voxel_representation_check (β-ckpt, n_voxels=64)
+baseline (q_t=None) per-voxel mean, averaged over voxels: ||Z_none.mean(trial)||₁ / n_voxels = 0.436562
+                                                          per-voxel std over trials, median = 0.024244
+
+cue effect sizes (per-voxel Δ in units of baseline σ_trial):
+  |mean(Z_matched)    - mean(Z_none)| / σ_trial, median across voxels = 4.7719
+  |mean(Z_mismatched) - mean(Z_none)| / σ_trial, median across voxels = 4.5101
+  |mean(Z_matched)    - mean(Z_mismatched)|  / σ_trial, median        = 0.2652
+
+fraction of voxels with |Δ| > 2σ_trial:
+  matched vs none:       45 / 64
+  mismatched vs none:    43 / 64
+  matched vs mismatched: 0 / 64
+
+RSA-style: correlation( Z_matched.mean(trial), Z_mismatched.mean(trial) ) across voxels = 0.9994
+          correlation( Z_matched.mean(trial), Z_none.mean(trial) )       across voxels = 0.0143
+          correlation( Z_mismatched.mean(trial), Z_none.mean(trial) )       across voxels = 0.0317
+
+VERDICT ON Q1: feedback_alive
+
+decoder_readout_check
+localizer_decoder_acc (5-fold CV on cue=none data) = 0.9213 ± 0.0165
+decoder_weight_l2_norm = 24.4546
+
+projections (trial-wise):
+  w · Z_none        : mean=-0.7645, std=1.6174, per-class means [45°=-2.0949, 135°=+0.5660]
+  w · Z_matched     : mean=+2.6620, std=21.7670, per-class means [45°=+24.4124, 135°=-19.0883]
+  w · Z_mismatched  : mean=+2.5565, std=22.6939, per-class means [45°=-20.1197, 135°=+25.2326]
+
+class-separation index = (mean_45 - mean_135) / pooled_std, on each condition:
+  none=-1.6452 matched=+1.9985 mismatched=-1.9984
+
+cosine( (mean(Z_matched)-mean(Z_none)),    w ) = +0.1094
+cosine( (mean(Z_mismatched)-mean(Z_none)), w ) = +0.1088
+rel ||Δmatched||/||w||=0.052397   rel ||Δmismatched||/||w||=0.051029
+
+VERDICT ON Q2: cue_shift_orthogonal_to_decoder
+
+Δdecode_block (frozen-localizer readout, β-ckpt)
+acc_matched    = 0.0000
+acc_mismatched = 1.0000
+Δ = acc_matched − acc_mismatched = -1.0000   ci=[-1.0000,-1.0000]   p=0.0010
+verdict: dampening  (eps=0.02)
+
+COMBINED: feedback_alive but Q2=cue_shift_orthogonal_to_decoder, |Δ|>eps — report raw numbers; the three blocks disagree.
+[iso] wrote logs/task74/eval_feedback_decoder_isolation.json

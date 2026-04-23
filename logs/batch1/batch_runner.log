@@ -1,0 +1,75 @@
+=== Batch 1: 12 runs (3 waves × 4 parallel on GPU) ===
+Start time: Tue Apr  7 18:02:37 AEST 2026
+
+=== Wave 1 (4 runs) — started Tue Apr  7 18:02:37 AEST 2026 ===
+  Starting: true_s42 (config=config/apical_template_true.yaml seed=42)
+  Starting: true_s123 (config=config/apical_template_true.yaml seed=123)
+  Starting: wrong_s42 (config=config/apical_template_wrong.yaml seed=42)
+  Starting: wrong_s123 (config=config/apical_template_wrong.yaml seed=123)
+Terminated
+Terminated
+Terminated
+Terminated
+=== Wave 1 complete — Tue Apr  7 18:02:47 AEST 2026 ===
+RAM after Wave 1:
+               total        used        free      shared  buff/cache   available
+Mem:           15869        3955        8786          83        3127       11588
+Swap:           4096         342        3753
+
+=== Wave 2 (4 runs) — started Tue Apr  7 18:02:47 AEST 2026 ===
+  Starting: true_s456 (config=config/apical_template_true.yaml seed=456)
+  Starting: wrong_s456 (config=config/apical_template_wrong.yaml seed=456)
+  Starting: random_s42 (config=config/apical_template_random.yaml seed=42)
+  Starting: random_s123 (config=config/apical_template_random.yaml seed=123)
+Terminated
+Terminated
+  Finished: wrong_s456 (exit=0)
+  Finished: true_s456 (exit=0)
+=== Wave 2 complete — Tue Apr  7 19:19:35 AEST 2026 ===
+RAM after Wave 2:
+               total        used        free      shared  buff/cache   available
+Mem:           15869        5518        7105         165        3244        9874
+Swap:           4096         344        3751
+
+=== Wave 3 (4 runs) — started Tue Apr  7 19:19:35 AEST 2026 ===
+  Starting: random_s456 (config=config/apical_template_random.yaml seed=456)
+  Starting: uniform_s42 (config=config/apical_template_uniform.yaml seed=42)
+  Starting: uniform_s123 (config=config/apical_template_uniform.yaml seed=123)
+  Starting: uniform_s456 (config=config/apical_template_uniform.yaml seed=456)
+Terminated
+Terminated
+========================================
+  Finished: Tue Apr  7 18:02:58 AEST 2026
+  Status: 0
+
+[3/12] apical_template_true_seed456
+  Config: config/apical_template_true.yaml
+  Seed: 456
+  Log: logs/batch1/apical_template_true_seed456.log
+  Started: Tue Apr  7 18:02:58 AEST 2026
+2026-04-07 18:02:59,719 [INFO] Mechanism: center_surround
+2026-04-07 18:02:59,720 [INFO] Feedback mode: emergent
+2026-04-07 18:02:59,720 [INFO] Device: cuda
+2026-04-07 18:02:59,720 [INFO] Seed: 456
+2026-04-07 18:02:59,725 [INFO] Network parameters: 5079
+2026-04-07 18:02:59,725 [INFO] Delta-SOM mode enabled
+2026-04-07 18:02:59,725 [INFO] ============================================================
+2026-04-07 18:02:59,725 [INFO] STAGE 1: Sensory Scaffold
+2026-04-07 18:02:59,725 [INFO] ============================================================
+  Finished: Tue Apr  7 18:03:07 AEST 2026
+  Status: 0
+
+[4/12] apical_template_wrong_seed42
+  Config: config/apical_template_wrong.yaml
+  Seed: 42
+  Log: logs/batch1/apical_template_wrong_seed42.log
+  Started: Tue Apr  7 18:03:07 AEST 2026
+2026-04-07 18:03:08,025 [INFO] Mechanism: center_surround
+2026-04-07 18:03:08,025 [INFO] Feedback mode: emergent
+2026-04-07 18:03:08,025 [INFO] Device: cuda
+2026-04-07 18:03:08,025 [INFO] Seed: 42
+2026-04-07 18:03:08,030 [INFO] Network parameters: 5079
+2026-04-07 18:03:08,030 [INFO] Delta-SOM mode enabled
+2026-04-07 18:03:08,030 [INFO] ============================================================
+2026-04-07 18:03:08,030 [INFO] STAGE 1: Sensory Scaffold
+2026-04-07 18:03:08,030 [INFO] ============================================================

@@ -1,0 +1,22 @@
+[setup] n_som=32 n_l23=256 n_h=64 target_rate_hz=1.0
+[setup] w_l23_som_eff: mean=8.0003e+00 max=8.0003e+00 rowsum_mean=2.0481e+03
+[setup] w_fb_som_eff:  mean=4.9285e+00 max=5.2497e+00 rowsum_mean=3.1543e+02
+
+[H1 fan-in] w_l23_som_rowsum_mean=2.0481e+03 w_fb_som_rowsum_mean=3.1543e+02
+[H1] drive_local_mean=4.4292e+02 drive_fb_mean=3.2476e+01 drive_total_mean=4.7540e+02
+[H1] r_l23_mean=2.1626e-01 r_h_mean=1.0295e-01 expected_total(design)=1.7387e+01 actual/design=27.342×
+
+[H2] theta_is_adaptive=False target_rate_hz(fixed)=1.0
+
+[H3] drive_total_mean=4.7540e+02 target=1.0 ratio_mean=475.40 ratio_max=6778.75
+
+[H4] divisive_stabilizer=missing
+
+r_som observed: mean=5.0571e+02 max=3.1756e+03
+r_l23 observed: mean=2.1626e-01 max=3.4067e+00
+r_h observed:   mean=1.0295e-01 max=6.3169e-01
+
+H1: h1_verdict=fail drive_som=4.7540e+02 w_l23_som_eff=2.0481e+03 w_fb_som_eff=3.1543e+02
+H2: h2_verdict=falsified theta_som_mean=1.0000e+00 (SOM has no adaptive theta; uses fixed target_rate_hz=1.0)
+H3: h3_verdict=fail drive_mean=4.7540e+02 theta_mean=1.0 ratio=475.40
+H4: h4_verdict=fail div_stabilizer=missing

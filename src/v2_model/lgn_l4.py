@@ -241,6 +241,36 @@ class LGNL4FrontEnd(nn.Module):
         )
 
     # ------------------------------------------------------------------
+    # L4 unit metadata (derivable from filter-bank layout; no RNG)
+    # ------------------------------------------------------------------
+    #
+    # L4 E unit linear index j ∈ [0, n_l4_e) decomposes as
+    #   retino_flat_j = j // n_ori      ∈ [0, retino_side²)
+    #   ori_bin_j     = j %  n_ori      ∈ [0, n_ori)
+    # with
+    #   retino_i_j    = retino_flat_j // retino_side
+    #   retino_j_j    = retino_flat_j %  retino_side
+    #   preferred_orient_deg_j = ori_bin_j × (180 / n_ori)
+    # These properties are used by Fix-K to build the orientation-biased
+    # feedforward mask on W_l4_l23 without a runtime probe.
+
+    @property
+    def pref_orient_deg_l4(self) -> Tensor:
+        """Per-L4-unit preferred orientation (deg, circular on 180°)."""
+        idx = torch.arange(self.n_l4_e, dtype=torch.float32)
+        bin_per_unit = idx % float(self.n_ori)
+        return bin_per_unit * (180.0 / float(self.n_ori))
+
+    @property
+    def retino_ij_l4(self) -> tuple[Tensor, Tensor]:
+        """Per-L4-unit (row, col) indices into the retinotopic grid."""
+        idx = torch.arange(self.n_l4_e, dtype=torch.long)
+        retino_flat = idx // int(self.n_ori)
+        retino_i = retino_flat // int(self.retino_side)
+        retino_j = retino_flat %  int(self.retino_side)
+        return retino_i, retino_j
+
+    # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 

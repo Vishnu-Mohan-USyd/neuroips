@@ -444,6 +444,8 @@ class L23E(ExcitatoryPopulation):
         seed: int = 0,
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float32,
+        w_l4_l23_init_mean: float = 1.5,
+        n_cue: int = 48,
     ) -> None:
         super().__init__(
             n_units=n_units, tau_ms=tau_ms, dt_ms=dt_ms,
@@ -455,10 +457,12 @@ class L23E(ExcitatoryPopulation):
         _validate_size("n_pv", n_pv)
         _validate_size("n_som", n_som)
         _validate_size("n_h_e", n_h_e)
+        _validate_size("n_cue", n_cue)
         self.n_l4_e = int(n_l4_e)
         self.n_pv = int(n_pv)
         self.n_som = int(n_som)
         self.n_h_e = int(n_h_e)
+        self.n_cue = int(n_cue)
 
         # Task #52 — re-calibrated init_means for plasticity=0/homeostasis=0
         # operating point at blank input. Targets (relaxed per Lead
@@ -482,14 +486,45 @@ class L23E(ExcitatoryPopulation):
         # Target 2 (grating orientation selectivity at init) is deferred
         # to Phase-2 predictive training — untrained near-uniform L4→L23
         # weights cannot produce selective responses.
+        # Task #74 Fix K (2026-04-22): W_l4_l23 is sparse orientation-biased
+        # at init (mask installed post-construction by V2Network). init_mean
+        # drops 4.0 → 1.5 so per-unit drive stays in biological range with
+        # ~15 connections per row: softplus(1.5)≈1.70; 15 × 1.70 × r_l4≈0.2
+        # ≈ 5 Hz, vs the unmasked 4.0×128 run which saturated at 30 Hz.
+        # Mask is installed via ``install_l4_l23_mask`` and defaults to an
+        # all-ones buffer so existing callers / tests get no behavioural
+        # change until they opt in.
         self.W_l4_l23_raw = self._make_raw(
-            (n_units, self.n_l4_e), init_mean=4.0, name="W_l4_l23_raw",
+            (n_units, self.n_l4_e),
+            init_mean=float(w_l4_l23_init_mean),
+            name="W_l4_l23_raw",
+        )
+        self.register_buffer(
+            "mask_l4_l23",
+            torch.ones((n_units, self.n_l4_e), dtype=self._dtype,
+                       device=self._device),
         )
         self.W_rec_raw = self._make_raw(
             (n_units, n_units), init_mean=-5.0, name="W_rec_raw",
         )
+        # Task #74 Fix L-2 (2026-04-22): W_pv_l23_raw init_mean -6.0 → -6.5.
+        # Fix L at -6.0 left L23E rate at 0.468 Hz — 0.032 Hz under the
+        # 0.5 Hz biological floor — because the L23E↔PV loop compensated:
+        # halving W_pv let L23E rise, which drove L23E→PV higher; PV climbed
+        # from 19 → 36 Hz, absorbing ~70% of the inhibition reduction
+        # (net PV→L23E inhibition 1.42 Hz vs pre-Fix-L 2.04 Hz). Loop-
+        # amplification insight: single-knob PV→L23E cuts are partially
+        # self-cancelling via the recurrent PV→L23→PV path. -6.5 drops the
+        # softplus ratio a further 0.60× (0.22× of original -5.0), predicted
+        # L23E 0.7–1.0 Hz, PV 20–28 Hz, FWHM ~50–55°, R²≈1, compression
+        # 1.8–2.2×. Original Fix L rationale (-5.0 → -6.0): feedforward L4
+        # drive ≈1.4 Hz was overwhelmed by 2.04 Hz of PV inhibition →
+        # L23E collapse at 0.26 Hz in pre-Fix-L Level 4; halving PV
+        # inhibition was meant to restore the biological band without
+        # losing the Naka-Rushton divisive-normalization signature
+        # (R²=1.0, gain-compression 2.26× in that run).
         self.W_pv_l23_raw = self._make_raw(
-            (n_units, self.n_pv), init_mean=-5.0, name="W_pv_l23_raw",
+            (n_units, self.n_pv), init_mean=-6.5, name="W_pv_l23_raw",
         )
         self.W_som_l23_raw = self._make_raw(
             (n_units, self.n_som), init_mean=-5.0, name="W_som_l23_raw",
@@ -528,6 +563,62 @@ class L23E(ExcitatoryPopulation):
             "W_som_l23_raw", "W_fb_apical_raw",
         )
 
+        # Task #74 β-mechanism (Step 1, 2026-04-23): per-cue multiplicative
+        # gain on the L4→L23E feedforward contribution. Shape ``[n_cue,
+        # n_units]``, values in R+ (commonly in [0, 1] for predictive
+        # suppression). When ``L23E.forward`` receives a non-None ``q_t``
+        # of shape ``[B, n_cue]``, the effective L4 feedforward drive is
+        # ``F.linear(l4, w_l4) * (q_t @ W_q_gain)``. At init the buffer
+        # is all ones, so for any one-hot ``q_t`` the gain equals 1 and
+        # forward is bit-exact to the pre-Fix path. Non-persistent buffer
+        # so legacy checkpoints load without schema errors; callers that
+        # want learned/hand-crafted gain install it explicitly via the
+        # public ``W_q_gain`` attribute after construction.
+        self.register_buffer(
+            "W_q_gain",
+            torch.ones(
+                (self.n_cue, self.n_units),
+                dtype=self._dtype, device=self._device,
+            ),
+            persistent=False,
+        )
+
+    def plastic_weight_names(self) -> list[str]:
+        """L23E extension: W_q_gain is plastic in phase3_kok.
+
+        Step 3 (2026-04-23): during the Kok learning sub-phase the driver
+        applies the three-factor rule
+        ``ΔW_q_gain[cue_id, :] = -η · cue_on · r_l23e · sign(matched)``
+        clamped to ``[gain_min, gain_max]``. W_q_gain is a non-Parameter
+        buffer, so the usual ``requires_grad`` gating does not apply;
+        this manifest entry signals to Validators that the training
+        loop may mutate the buffer under phase3_kok. Frozen everywhere
+        else (phase2 substrate, phase3_richter, null_control, scan).
+        """
+        base = super().plastic_weight_names()
+        if self._phase == "phase3_kok":
+            return list(base) + ["W_q_gain"]
+        return base
+
+    # ------------------------------------------------------------------
+    # Fix-K mask installer
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def install_l4_l23_mask(self, mask: Tensor) -> None:
+        """Replace ``mask_l4_l23`` with a caller-supplied binary mask.
+
+        Shape must match ``W_l4_l23_raw`` — [n_l23_e, n_l4_e]. Called once
+        by :class:`V2Network.__init__` after constructing both L23E and
+        LGN/L4; no RNG is consumed inside this layer.
+        """
+        if mask.shape != self.W_l4_l23_raw.shape:
+            raise ValueError(
+                f"install_l4_l23_mask: got {tuple(mask.shape)}, "
+                f"expected {tuple(self.W_l4_l23_raw.shape)}"
+            )
+        self.mask_l4_l23.copy_(mask.to(dtype=self._dtype, device=self._device))
+
     def forward(
         self,
         l4_input: Tensor,
@@ -537,8 +628,25 @@ class L23E(ExcitatoryPopulation):
         h_apical_input: Tensor,
         context_bias: Tensor,
         state: Tensor,
+        *,
+        som_gain: Optional[Tensor] = None,
+        q_t: Optional[Tensor] = None,
     ) -> tuple[Tensor, Tensor]:
-        """One Euler step of L2/3 E dynamics. Returns ``(rate, updated_state)``."""
+        """One Euler step of L2/3 E dynamics. Returns ``(rate, updated_state)``.
+
+        Task #74 Fix C-v2: ``som_gain`` is an optional per-SOM-unit
+        multiplicative scale on the SOM→L23E inhibitory efficacy
+        (shape ``[B, n_som]``, produced by ``ContextMemory``). When
+        provided, the SOM input is multiplied elementwise by
+        ``som_gain`` before the ``F.linear(…, w_som)`` projection, so
+        each SOM unit's outgoing inhibition onto every L23E postsynaptic
+        neuron is scaled by the same per-batch, per-SOM-unit factor.
+        The gain is bounded in (0, 4.0] by design (see
+        ``ContextMemory.forward``); at init it is identically 1.0, so
+        this kwarg is a no-op unless Phase-3 task plasticity has
+        populated ``W_mh_task_inh``. Keyword-only and optional so
+        existing callers (Phase-2 drivers, unit tests) are unaffected.
+        """
         B = state.shape[0]
         _validate_batch_shape(state, "state", self.n_units, B)
         _validate_batch_shape(l4_input, "l4_input", self.n_l4_e, B)
@@ -548,17 +656,34 @@ class L23E(ExcitatoryPopulation):
         _validate_batch_shape(pv_input, "pv_input", self.n_pv, B)
         _validate_batch_shape(h_apical_input, "h_apical_input", self.n_h_e, B)
         _validate_batch_shape(context_bias, "context_bias", self.n_units, B)
+        if som_gain is not None:
+            _validate_batch_shape(som_gain, "som_gain", self.n_som, B)
+        if q_t is not None:
+            _validate_batch_shape(q_t, "q_t", self.n_cue, B)
 
-        w_l4 = _excitatory_eff(self.W_l4_l23_raw)
+        # Fix K: feedforward mask applied multiplicatively on the softplus
+        # output. At Level-2-isolation test time this is the only thing that
+        # gives each L23E unit an orientation-biased row of L4 afferents.
+        w_l4 = _excitatory_eff(self.W_l4_l23_raw) * self.mask_l4_l23
         w_rec = _excitatory_eff(self.W_rec_raw, self.mask_rec)
         w_pv = _inhibitory_eff(self.W_pv_l23_raw)
         w_som = _inhibitory_eff(self.W_som_l23_raw)
         w_fb = _excitatory_eff(self.W_fb_apical_raw)
 
+        som_effective = som_input * som_gain if som_gain is not None else som_input
+
+        # Task #74 β-mechanism: per-cue multiplicative gain on the L4→L23E
+        # contribution. Only applied when q_t is supplied; at default init
+        # W_q_gain is all ones, so any one-hot q_t leaves ff_l4 unchanged.
+        ff_l4 = F.linear(l4_input, w_l4)
+        if q_t is not None:
+            cue_gain = q_t @ self.W_q_gain                # [B, n_units]
+            ff_l4 = ff_l4 * cue_gain
+
         drive = (
-            F.linear(l4_input, w_l4)
+            ff_l4
             + F.linear(l23_recurrent_input, w_rec)
-            + F.linear(som_input, w_som)
+            + F.linear(som_effective, w_som)
             + F.linear(pv_input, w_pv)
             + F.linear(h_apical_input, w_fb)
             + context_bias
@@ -659,21 +784,55 @@ class L23SOM(InhibitoryPopulation):
         # (r_l23 > 0.013) SOM responds. Loop gain stays bounded because
         # W_som_l23 in L23E is -5.0 (weak SOM→L23 feedback).
         # H→SOM feedback kept at -5.0 (weak; Phase-2 learns).
+        # Task #74 Fix M (2026-04-22): init_mean -4.5 → -4.2. Fix E's -4.5
+        # set W=softplus(-4.5)=0.0110, which — *after* Fix K brought L23E
+        # down from 1.66 Hz to 0.58 Hz — left SOM drive at 256·0.58·0.0110
+        # ≈ 1.64 Hz (raw); phi_in = drive − target_rate_hz(1.0) = 0.64 →
+        # rectified-softplus(0.64) = 0.37 Hz (Level-5 pre-Fix-M: observed
+        # 0.372 Hz, under the 0.5 Hz biological floor). Fix E was calibrated
+        # against the pre-Fix-K L23E substrate that no longer applies.
+        # -4.2 (softplus=0.0149, 1.35× higher) predicts SOM drive 2.20 Hz,
+        # phi_in 1.20, SOM rate 0.77 Hz — cleanly in band. SOM → L23E
+        # knock-on: n_som(32)·softplus(W_som_l23=-5.0)(0.0067)·0.77 = 0.17
+        # Hz extra inhibition; L23E drops ~0.03 Hz (0.58 → 0.55).
+        #
+        # Historical: Fix E (2026-04-21) moved -1.0 → -4.5 to escape r_som
+        # saturation at ~129 Hz. That remedy was still the right sign but
+        # overshot once Fix K shrank L23E drive. SOM selectivity remains
+        # low by design (all-to-all W_l23_som produces uniform tuning at
+        # init per G3 audit); Phase-2/3 plasticity is where orientation-
+        # tuned SOM is expected to emerge.
         self.W_l23_som_raw = self._make_raw(
-            (n_units, self.n_l23_e), init_mean=-1.0, name="W_l23_som_raw",
+            (n_units, self.n_l23_e), init_mean=-4.2, name="W_l23_som_raw",
         )
         self.W_fb_som_raw = self._make_raw(
             (n_units, self.n_h_e), init_mean=-5.0, name="W_fb_som_raw",
         )
-        self._plastic_names = ("W_l23_som_raw", "W_fb_som_raw")
+        # Task #74 Fix D-simpler: excitatory inputs onto L2/3 SOM are frozen
+        # at init in all phases. Earlier Fix D attempts (Vogels iSTDP +
+        # Turrigiano synaptic scaling on these raws) drove r_som to
+        # saturation — multiple rules fighting on one weight. Freezing
+        # eliminates the pathology; the Phase-3 experiment question doesn't
+        # require plasticity on these synapses.
+        self._plastic_names: tuple[str, ...] = ()
 
     def forward(
         self,
         l23e_input: Tensor,
         h_som_feedback_input: Tensor,
         state: Tensor,
+        *,
+        context_bias_som: Optional[Tensor] = None,
     ) -> tuple[Tensor, Tensor]:
-        """One Euler step of L2/3 SOM dynamics."""
+        """One Euler step of L2/3 SOM dynamics.
+
+        Task #74 Fix C: ``context_bias_som`` is an optional additive current
+        from the context-memory task-specific inhibitory readout
+        (``W_mh_task_inh @ m``) — the MAIN route of the Phase-3 task bias,
+        providing SOM-mediated apical gain control of L23 E dendrites
+        (Urbanczik & Senn 2014; Larkum 1999). Keyword-only and optional so
+        existing callers (Phase-2 drivers, layer unit tests) are unaffected.
+        """
         B = state.shape[0]
         _validate_batch_shape(state, "state", self.n_units, B)
         _validate_batch_shape(l23e_input, "l23e_input", self.n_l23_e, B)
@@ -685,6 +844,11 @@ class L23SOM(InhibitoryPopulation):
             F.linear(l23e_input, w_local)
             + F.linear(h_som_feedback_input, w_fb)
         )
+        if context_bias_som is not None:
+            _validate_batch_shape(
+                context_bias_som, "context_bias_som", self.n_units, B,
+            )
+            drive = drive + context_bias_som
         activated = self._phi(drive - self.target_rate_hz)
         rate_next = self._leak * state + (1.0 - self._leak) * activated
         return rate_next, rate_next
@@ -731,13 +895,21 @@ class HE(ExcitatoryPopulation):
         self.n_l23_e = int(n_l23_e)
         self.n_h_pv = int(n_h_pv)
 
-        # Task #52 — T29 calibration. L23→HE = -5.7 keeps HE rate below
-        # L23E at blank (Target 3): softplus(-5.7) ≈ 3.35e-3 × 256 × r_l23
-        # ≈ 0.86·r_l23 < 1·r_l23 drive into L23E itself. Self-rec = -5.0.
-        # HPV→HE = -5.0 weakens the HE↔HPV loop so HPV can fire strongly
-        # (W_pre_hpv = +3.0 in network.py) without driving ρ(J) past 1.0.
+        # Task #74 Fix N (2026-04-22): W_l23_h_raw init_mean -5.7 → -5.5.
+        # T29's -5.7 was calibrated against the pre-Fix-K L23E rate (~1.66
+        # Hz); post-Fix-K L23E settles at 0.56 Hz which left HE at 0.046 Hz
+        # (Level 6, 0.004 Hz under the 0.05 Hz biological floor). Closed-
+        # form at -5.7: drive_ff = 256·softplus(-5.7)(0.00335)·0.563 = 0.481;
+        # drive_inh = -8·softplus(-5.0)(0.00667)·7.305 = -0.392; drive_net =
+        # 0.089; rectified-softplus(0.089) = 0.0455 (matches observed 0.046).
+        # -5.5 (softplus 1.22×) predicts drive_ff 0.59, drive_net 0.20 →
+        # HE rate 0.10 Hz. T29's "HE < L23E at blank" constraint still holds
+        # (0.10 ≪ 0.56). Apical-feedback onto L23E rises 0.02 → 0.04 Hz —
+        # negligible, so L23E/SOM/PV balances from Fix K/L/M are preserved.
+        # Self-rec = -5.0; HPV→HE = -5.0 (weakens HE↔HPV loop so HPV can
+        # fire strongly without driving ρ(J) past 1.0).
         self.W_l23_h_raw = self._make_raw(
-            (n_units, self.n_l23_e), init_mean=-5.7, name="W_l23_h_raw",
+            (n_units, self.n_l23_e), init_mean=-5.5, name="W_l23_h_raw",
         )
         self.W_rec_raw = self._make_raw(
             (n_units, n_units), init_mean=-5.0, name="W_rec_raw",
@@ -885,6 +1057,7 @@ class FastInhibitoryPopulation(_BasePopulation):
         phi: Callable[[Tensor], Tensor] = rectified_softplus,
         init_scale: float = 0.1,
         w_pre_init_mean: float = 0.0,
+        freeze_W_pre: bool = False,
         seed: int = 0,
         device: torch.device | str | None = None,
         dtype: torch.dtype = torch.float32,
@@ -918,7 +1091,11 @@ class FastInhibitoryPopulation(_BasePopulation):
             init_mean=w_pre_init_mean,
             name="W_pre_raw",
         )
-        self._plastic_names = ("W_pre_raw",)
+        # Task #74 Fix Q — ``freeze_W_pre=True`` marks this weight non-plastic
+        # in every phase. Used for l23_pv where Vogels iSTDP on the E→I pre
+        # synapse inverted sign and drove L23E collapse; freezing at init
+        # matches the Fix D-simpler pattern used for L23SOM excitatory inputs.
+        self._plastic_names = () if freeze_W_pre else ("W_pre_raw",)
 
     def forward(
         self, pre_input: Tensor, state: Tensor

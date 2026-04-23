@@ -1,0 +1,32 @@
+CHECK 2a: normal localizer (baseline redo for parity)
+[coverage] orient=0.0° done=1/12 trials=8/96 elapsed=0.09min
+[coverage] orient=15.0° done=2/12 trials=16/96 elapsed=0.17min
+[coverage] orient=30.0° done=3/12 trials=24/96 elapsed=0.26min
+[coverage] orient=45.0° done=4/12 trials=32/96 elapsed=0.35min
+[coverage] orient=60.0° done=5/12 trials=40/96 elapsed=0.44min
+[coverage] orient=75.0° done=6/12 trials=48/96 elapsed=0.52min
+[coverage] orient=90.0° done=7/12 trials=56/96 elapsed=0.61min
+[coverage] orient=105.0° done=8/12 trials=64/96 elapsed=0.69min
+[coverage] orient=120.0° done=9/12 trials=72/96 elapsed=0.78min
+[coverage] orient=135.0° done=10/12 trials=80/96 elapsed=0.86min
+[coverage] orient=150.0° done=11/12 trials=88/96 elapsed=0.95min
+[coverage] orient=165.0° done=12/12 trials=96/96 elapsed=1.04min
+  entropy_a = 0.558 nats  n_bins_a = 2/12
+CHECK 2b: zero task state (W_mh_task=0, W_qm_task=0, W_lm_task=0)
+  after zero: |W_mh_task|max=0.000e+00 |W_qm_task|max=0.000e+00 |W_lm_task|max=0.000e+00
+[coverage] orient=0.0° done=1/12 trials=8/96 elapsed=0.08min
+[coverage] orient=15.0° done=2/12 trials=16/96 elapsed=0.16min
+[coverage] orient=30.0° done=3/12 trials=24/96 elapsed=0.23min
+[coverage] orient=45.0° done=4/12 trials=32/96 elapsed=0.31min
+[coverage] orient=60.0° done=5/12 trials=40/96 elapsed=0.39min
+[coverage] orient=75.0° done=6/12 trials=48/96 elapsed=0.47min
+[coverage] orient=90.0° done=7/12 trials=56/96 elapsed=0.54min
+[coverage] orient=105.0° done=8/12 trials=64/96 elapsed=0.62min
+[coverage] orient=120.0° done=9/12 trials=72/96 elapsed=0.70min
+[coverage] orient=135.0° done=10/12 trials=80/96 elapsed=0.77min
+[coverage] orient=150.0° done=11/12 trials=88/96 elapsed=0.85min
+[coverage] orient=165.0° done=12/12 trials=96/96 elapsed=0.92min
+  entropy_b = 0.693 nats  n_bins_b = 2/12
+
+=== SUMMARY ===
+entropy_a=0.558 entropy_b=0.693 n_bins_a=2 n_bins_b=2

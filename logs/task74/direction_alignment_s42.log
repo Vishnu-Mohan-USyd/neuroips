@@ -1,0 +1,20 @@
+[setup] cue_mapping={0: 135.0, 1: 45.0}
+[setup] W_mh_task_inh shape=(32, 48) min=0.2705 max=8.0000 mean=7.5615 pct_at_pos_clamp=89.6% pct_near_zero=2.1% pct_at_neg_clamp=0.0%
+
+[H1] cos(W·m_c, r_som_loc_c): c0=1.0000 c1=1.0000 mean=1.0000
+[H1] shuffle-control: mean=-0.0020 std=0.1864 gap=1.0020
+[H1] W sign entropy=-0.0000 (1.0=random) p_pos=1.000
+
+[H2] modulator_norm c0=3.7269 c1=3.3704 mean=3.5487
+[H2] modulator_max c0=0.6591 c1=0.5963
+
+[H3] som_n_bins_5pct=1 l23e_n_bins_5pct=4 cos_som_l23_histograms=0.6000
+[H3] som_hist=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+[H3] l23_hist=[0.0, 0.25, 0.0, 0.0, 0.0, 0.19140625, 0.0, 0.234375, 0.0, 0.0, 0.0, 0.32421875]
+
+[H4] r_som_baseline=532.7598 mod_abs=0.6277 snr=0.001178
+
+H1: h1_verdict=FALSIFIED w_sign_entropy=-0.000 cos_W_col_loc=1.0000 rand_shuffle_ctrl=-0.0020
+H2: h2_verdict=FALSIFIED mod_norm=3.5487 mod_max=0.6277 mod_sparsity=0.000
+H3: h3_verdict=FALSIFIED som_n_bins=1 l23e_n_bins=4 cos_som_l23_tuning=0.6000
+H4: h4_verdict=CONFIRMED r_som_baseline=532.7598 mod_abs=0.6277 snr=0.001178

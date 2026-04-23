@@ -117,10 +117,13 @@ class PredictionHead(nn.Module):
       * ``W_pred_C_raw``       [n_l4_e, n_c_bias]       — iff ``n_c_bias!=None``.
       * ``W_pred_apical_raw``  [n_l4_e, n_l23_apical]   — iff ``n_l23_apical!=None``.
       * ``b_pred_raw``         [n_l4_e]                — small non-negative
-                                                         bias (init so that
+                                                         bias (init at -8.0 so
                                                          ``softplus(b_pred_raw)
-                                                         ≈ 4.5e-5`` per unit —
-                                                         Task #52 calibration).
+                                                         ≈ 3.35e-4`` per unit;
+                                                         Task #52 calibration,
+                                                         Task #74 Fix O bump
+                                                         to match [-8, 8] raw
+                                                         clamp).
 
     Parameters
     ----------
@@ -200,33 +203,35 @@ class PredictionHead(nn.Module):
                 self.raw_init_means[name] = float(init_mean)
             return nn.Parameter(t, requires_grad=False)
 
-        # Task #52 — T29 calibration: all pred-head weights init at -10.0
-        # so that ``softplus(-10) ≈ 4.54e-5`` per unit keeps x̂ within one
-        # decade of the L4 blank rate (r_l4 ≈ 5e-5). With b_pred_raw=-10
-        # and W_pred_*=-10, the drive at blank is dominated by the bias:
-        # softplus(-10) + small contributions from h_rate / l23_apical →
-        # x̂ ≈ 5e-5 per unit, matching r_l4 (Target 6: |x̂|/|r_l4| ≈ 2).
-        # Phase-2 plasticity grows these upward as the prediction error
-        # signal becomes informative.
+        # Task #52 — T29 calibration: pred-head weights init at -8.0.
+        # Task #74 Fix O (2026-04-22): bumped from -10.0 to -8.0 to match
+        # the [-8, 8] raw clamp in ``apply_plasticity_step`` (Task #64).
+        # The previous -10 init was outside the clamp band and got snapped
+        # to -8 on the first plasticity step — a 7.4× softplus gain jump
+        # (softplus(-10)=4.54e-5 → softplus(-8)=3.35e-4) that propagated
+        # through the prediction pathway and destabilised L23E.
+        # At -8, drive per unit ≈ softplus(-8) × (1 + sum_k mean-inputs_k),
+        # still small enough to keep x̂ within a decade of r_l4 at blank,
+        # and now stable under the plasticity clamp contract.
         self.W_pred_H_raw = _make_raw(
-            (self.n_l4_e, self.n_h_e), init_mean=-10.0, name="W_pred_H_raw",
+            (self.n_l4_e, self.n_h_e), init_mean=-8.0, name="W_pred_H_raw",
         )
 
         b_init = torch.full(
-            (self.n_l4_e,), -10.0, device=self._device, dtype=self._dtype,
+            (self.n_l4_e,), -8.0, device=self._device, dtype=self._dtype,
         )
         self.b_pred_raw = nn.Parameter(b_init, requires_grad=False)
-        self.raw_init_means["b_pred_raw"] = -10.0
+        self.raw_init_means["b_pred_raw"] = -8.0
 
         if self.n_c_bias is not None:
             self.W_pred_C_raw = _make_raw(
                 (self.n_l4_e, self.n_c_bias),
-                init_mean=-10.0, name="W_pred_C_raw",
+                init_mean=-8.0, name="W_pred_C_raw",
             )
         if self.n_l23_apical is not None:
             self.W_pred_apical_raw = _make_raw(
                 (self.n_l4_e, self.n_l23_apical),
-                init_mean=-10.0, name="W_pred_apical_raw",
+                init_mean=-8.0, name="W_pred_apical_raw",
             )
 
         # Plastic-in-phase-2 manifest (stable iteration order: H, C, apical, b).

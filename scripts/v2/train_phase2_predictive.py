@@ -91,13 +91,30 @@ class PhaseFrozenError(RuntimeError):
 
 @dataclass
 class PlasticityRuleBank:
-    """Container for the three closed-form rules consumed by the driver.
+    """Container for the closed-form rules consumed by the driver.
 
     One instance per driver invocation. Learning rates come from
     ``cfg.plasticity``; the caller may override any LR via CLI.
+
+    Task #74 Fix H (2026-04-21) — Vogels targets are split by the E-pop
+    whose rate the rule is pushing toward ρ:
+
+    * ``vogels_l23``  (target = ``cfg.plasticity.vogels_target_l23e_hz``)
+      used for L23E-targeting inhibitory synapses — ``W_pv_l23_raw``,
+      ``W_som_l23_raw``. Pushes L23E toward ~3 Hz.
+    * ``vogels_h``    (target = ``cfg.plasticity.vogels_target_h_hz``)
+      used for HE-targeting inhibitory synapse — ``W_pv_h_raw``.
+      Pushes HE toward ~0.1 Hz (matches HE θ-homeostasis).
+    * ``vogels_ipop`` (target = ``cfg.plasticity.target_rate_hz``, = 1.0)
+      used for I-pop self-regulation — ``l23_pv.W_pre_raw`` and
+      ``h_pv.W_pre_raw``. Not tied to any E-pop target; retained at 1.0
+      for backwards compatibility with Task #52 tuning of PV/HPV
+      self-regulation.
     """
     urbanczik: UrbanczikSennRule
-    vogels: VogelsISTDPRule
+    vogels_l23: VogelsISTDPRule
+    vogels_h: VogelsISTDPRule
+    vogels_ipop: VogelsISTDPRule
     hebb: VogelsISTDPRule           # Vogels with target_rate=0 ≡ Hebbian
     energy: EnergyPenalty
 
@@ -115,7 +132,17 @@ class PlasticityRuleBank:
             urbanczik=UrbanczikSennRule(
                 lr=lr_urbanczik, weight_decay=weight_decay,
             ),
-            vogels=VogelsISTDPRule(
+            vogels_l23=VogelsISTDPRule(
+                lr=lr_vogels,
+                target_rate=cfg.plasticity.vogels_target_l23e_hz,
+                weight_decay=weight_decay,
+            ),
+            vogels_h=VogelsISTDPRule(
+                lr=lr_vogels,
+                target_rate=cfg.plasticity.vogels_target_h_hz,
+                weight_decay=weight_decay,
+            ),
+            vogels_ipop=VogelsISTDPRule(
                 lr=lr_vogels,
                 target_rate=cfg.plasticity.target_rate_hz,
                 weight_decay=weight_decay,
@@ -299,14 +326,33 @@ def _raw_prior(net: V2Network, module: str, weight: str, w: Tensor) -> Tensor:
 def _apply_update(
     net: V2Network, module: str, weight: str, dw: Tensor,
     energy: EnergyPenalty, pre: Tensor, mask: Optional[Tensor] = None,
+    *, rule_lr: Optional[float] = None,
 ) -> float:
     """Apply ``dw`` plus the energy-shrinkage term to ``module.weight``.
 
     Returns the absolute mean of the applied update (for logging).
+
+    Task #74 Fix O (2026-04-22): if ``rule_lr == 0.0``, this is a complete
+    no-op — no weight decay, no energy shrinkage, no clamp. This makes
+    per-rule ablation (set rule.lr=0) honest: zeroing a rule's LR must
+    leave its weights bit-identical to init. Previously, the clamp was
+    applied regardless of lr, which silently mutated any weight initialised
+    outside [-8, 8] on the first training step even under "lr=0" ablation.
+
+    Task #74 Fix P (2026-04-22): the L2 energy shrinkage is now anchored
+    at each weight's ``raw_init_means`` value (matches the weight-decay
+    anchor already used by the plasticity rules). Shrinking toward zero
+    pulled strongly-negative raw weights (e.g. ``W_pv_l23_raw`` init ≈
+    -6.5, pred-head weights -8, Dale inhibitory -5) *upward* in raw
+    magnitude under any plasticity-driving pre-activity, which *grew*
+    their softplus effective weight and destabilised E/I balance.
     """
     _assert_plastic(net, module, weight)
+    if rule_lr is not None and float(rule_lr) == 0.0:
+        return 0.0
     w = _get_weight(net, module, weight)
-    shrink = energy.current_weight_shrinkage(w, pre, mask=mask)
+    prior = _raw_prior(net, module, weight, w)
+    shrink = energy.current_weight_shrinkage(w, pre, mask=mask, raw_prior=prior)
     total = dw + shrink
     w.data.add_(total)
     w.data.clamp_(min=-8.0, max=8.0)
@@ -356,36 +402,43 @@ def apply_plasticity_step(
         )
         out[f"l23_e.{wname}"] = _apply_update(
             net, "l23_e", wname, dw, rules.energy, pre_tensor, mask=mask,
+            rule_lr=rules.urbanczik.lr,
         )
 
-    # ---- L2/3 inhibitory → E (Vogels iSTDP, target=ρ) --------------------
+    # ---- L2/3 inhibitory → E (Vogels iSTDP, target=vogels_target_l23e_hz)
     for wname, pre_tensor in (
         ("W_pv_l23_raw", state1.r_pv),
         ("W_som_l23_raw", state1.r_som),
     ):
         w = _get_weight(net, "l23_e", wname)
-        dw = rules.vogels.delta(
+        dw = rules.vogels_l23.delta(
             pre_activity=pre_tensor, post_activity=state2.r_l23, weights=w,
             raw_prior=_raw_prior(net, "l23_e", wname, w),
         )
         out[f"l23_e.{wname}"] = _apply_update(
             net, "l23_e", wname, dw, rules.energy, pre_tensor,
+            rule_lr=rules.vogels_l23.lr,
         )
 
-    # ---- E → L2/3 PV, L2/3 SOM (Vogels on the I-pop side, target=ρ) -----
-    for module, wname, pre_tensor, post_tensor in (
-        ("l23_pv", "W_pre_raw", state1.r_l23, state2.r_pv),
-        ("l23_som", "W_l23_som_raw", state1.r_l23, state2.r_som),
-        ("l23_som", "W_fb_som_raw", state1.r_h, state2.r_som),
-    ):
-        w = _get_weight(net, module, wname)
-        dw = rules.vogels.delta(
-            pre_activity=pre_tensor, post_activity=post_tensor, weights=w,
-            raw_prior=_raw_prior(net, module, wname, w),
-        )
-        out[f"{module}.{wname}"] = _apply_update(
-            net, module, wname, dw, rules.energy, pre_tensor,
-        )
+    # ---- E → L2/3 PV (frozen in Phase-2) ---------------------------------
+    # Task #74 Fix Q (2026-04-22): ``l23_pv.W_pre_raw`` is the L23E→L23PV
+    # excitatory synapse. The previous wiring applied ``rules.vogels_ipop``
+    # (Vogels iSTDP, target=1 Hz) here, but Vogels iSTDP is designed for
+    # I→E synapses: applied to an E→I synapse the homeostatic sign inverts
+    # and becomes anti-homeostatic, driving L23E to monotone collapse
+    # (Level 10, Task #74 Debugger). Cleanest intervention is to freeze
+    # this weight at init end-to-end in Phase-2 — matching the
+    # Fix D-simpler pattern used for L23SOM excitatory inputs below.
+    # Enforcement is two-sided: (i) ``FastInhibitoryPopulation`` is built
+    # with ``freeze_W_pre=True`` so ``plastic_weight_names()`` excludes
+    # ``W_pre_raw``; (ii) no ``_apply_update`` call touches it here.
+
+    # Task #74 Fix D-simpler: W_l23_som_raw and W_fb_som_raw are frozen
+    # at init in Phase-2 (no Vogels above, no Turrigiano scaling, no other
+    # rule). This replaces the earlier Fix D attempt at multi-rule
+    # regulation which drove r_som to saturation. Freeze is enforced by
+    # the Phase-2 plastic-weight manifest + never calling `_apply_update`
+    # on these weights here.
 
     # ---- H recurrent E-to-E and L2/3 → H (Hebbian, target=0) -------------
     for module, wname, pre_tensor, post_tensor, mask in (
@@ -403,20 +456,27 @@ def apply_plasticity_step(
         )
         out[f"{module}.{wname}"] = _apply_update(
             net, module, wname, dw, rules.energy, pre_tensor, mask=mask,
+            rule_lr=rules.hebb.lr,
         )
 
-    # ---- H inhibitory and H PV (Vogels, target=ρ) ------------------------
-    for module, wname, pre_tensor, post_tensor in (
-        ("h_e", "W_pv_h_raw", state1.h_pv, state2.r_h),
-        ("h_pv", "W_pre_raw", state1.r_h, state2.h_pv),
+    # ---- H inhibitory (Vogels on I→E; target = vogels_target_h_hz) -------
+    # Task #74 Fix Q' (2026-04-22): ``h_pv.W_pre_raw`` (HE→HPV, E→I
+    # excitatory) is frozen at init for the same reason as ``l23_pv.W_pre_raw``
+    # under Fix Q — Vogels iSTDP inverts sign on E→I via the ``-softplus``
+    # Dale wrapper and becomes anti-homeostatic. Enforcement: `h_pv` is built
+    # with ``freeze_W_pre=True`` so its manifest excludes ``W_pre_raw``; the
+    # per-weight update below does not list it.
+    for module, wname, pre_tensor, post_tensor, rule in (
+        ("h_e", "W_pv_h_raw", state1.h_pv, state2.r_h, rules.vogels_h),
     ):
         w = _get_weight(net, module, wname)
-        dw = rules.vogels.delta(
+        dw = rule.delta(
             pre_activity=pre_tensor, post_activity=post_tensor, weights=w,
             raw_prior=_raw_prior(net, module, wname, w),
         )
         out[f"{module}.{wname}"] = _apply_update(
             net, module, wname, dw, rules.energy, pre_tensor,
+            rule_lr=rule.lr,
         )
 
     # ---- Context memory generic weights (Hebbian, target=0) --------------
@@ -434,6 +494,7 @@ def apply_plasticity_step(
         )
         out[f"context_memory.{wname}"] = _apply_update(
             net, "context_memory", wname, dw, rules.energy, pre_tensor,
+            rule_lr=rules.hebb.lr,
         )
 
     # ---- Prediction head: Urbanczik–Senn with ε = r_l4_next − x̂_prev ----
@@ -452,27 +513,34 @@ def apply_plasticity_step(
         )
         out[f"prediction_head.{wname}"] = _apply_update(
             net, "prediction_head", wname, dw, rules.energy, pre_tensor,
+            rule_lr=rules.urbanczik.lr,
         )
 
     # ---- Prediction-head scalar bias b_pred_raw --------------------------
     # Closed-form update: db = lr · mean_b(ε) − wd · (b − b_prior). No "pre"
     # activity — bias has no pre-synaptic partner — so energy shrinkage is
     # omitted (its derivation requires pre-activity). Task #50: anchor decay
-    # at the init value (-5.0) so decay doesn't push softplus(b) *upward*.
+    # at the init value so decay doesn't push softplus(b) *upward*.
+    # Task #74 Fix O (2026-04-22): honour lr=0 as a complete no-op — no
+    # weight decay, no clamp. Mirrors the ``_apply_update`` contract so
+    # ablation (``rules.urbanczik.lr = 0``) leaves ``b_pred_raw`` at init.
     _assert_plastic(net, "prediction_head", "b_pred_raw")
     b = net.prediction_head.b_pred_raw
-    eps_pred = state2.r_l4 - x_hat_0                               # [B, n_l4]
-    b_prior = _raw_prior(net, "prediction_head", "b_pred_raw", b)
-    db = (
-        rules.urbanczik.lr * eps_pred.mean(dim=0)
-        - rules.urbanczik.weight_decay * (b.data - b_prior)
-    )
-    b.data.add_(db)
-    # Task #64: same raw clamp as _apply_update — covers this bias too,
-    # which bypasses the helper because it has no presynaptic partner
-    # (energy shrinkage is pre-activity-dependent and is therefore omitted).
-    b.data.clamp_(min=-8.0, max=8.0)
-    out["prediction_head.b_pred_raw"] = float(db.abs().mean().item())
+    if float(rules.urbanczik.lr) == 0.0:
+        out["prediction_head.b_pred_raw"] = 0.0
+    else:
+        eps_pred = state2.r_l4 - x_hat_0                           # [B, n_l4]
+        b_prior = _raw_prior(net, "prediction_head", "b_pred_raw", b)
+        db = (
+            rules.urbanczik.lr * eps_pred.mean(dim=0)
+            - rules.urbanczik.weight_decay * (b.data - b_prior)
+        )
+        b.data.add_(db)
+        # Task #64: same raw clamp as _apply_update — covers this bias too,
+        # which bypasses the helper because it has no presynaptic partner
+        # (energy shrinkage is pre-activity-dependent and is therefore omitted).
+        b.data.clamp_(min=-8.0, max=8.0)
+        out["prediction_head.b_pred_raw"] = float(db.abs().mean().item())
 
     # ---- Threshold homeostasis -------------------------------------------
     net.l23_e.homeostasis.update(state2.r_l23)
@@ -650,6 +718,11 @@ def run_phase2_training(
         metrics_fh = metrics_path.open("w")
 
     sha_at_start = net.frozen_sensory_core_sha()
+    # Task #74 Fix D-simpler: W_l23_som_raw and W_fb_som_raw are frozen at
+    # init in Phase-2 (no plasticity rule writes to them). Snapshot here so
+    # we can assert bit-exact equality at end-of-training.
+    w_l23_som_init = net.l23_som.W_l23_som_raw.detach().clone()
+    w_fb_som_init = net.l23_som.W_fb_som_raw.detach().clone()
     t_start = time.monotonic()
     history: list[TrainStepMetrics] = []
 
@@ -761,6 +834,17 @@ def run_phase2_training(
         raise RuntimeError(
             "frozen sensory core SHA changed during training — "
             "LGN/L4 was mutated (forbidden)"
+        )
+    # Task #74 Fix D-simpler: assert SOM excitatory inputs unchanged.
+    if not torch.equal(net.l23_som.W_l23_som_raw, w_l23_som_init):
+        raise RuntimeError(
+            "W_l23_som_raw changed during Phase-2 — must be frozen. "
+            f"max |Δ|={(net.l23_som.W_l23_som_raw - w_l23_som_init).abs().max().item():.3e}"
+        )
+    if not torch.equal(net.l23_som.W_fb_som_raw, w_fb_som_init):
+        raise RuntimeError(
+            "W_fb_som_raw changed during Phase-2 — must be frozen. "
+            f"max |Δ|={(net.l23_som.W_fb_som_raw - w_fb_som_init).abs().max().item():.3e}"
         )
     return history
 

@@ -1,0 +1,37 @@
+[sweep] === cell: noise=0.5 readout=5 ===
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=0.5, contrast∈[0.1,0.3], 50+5 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=0.7037, acc_std=0.0192, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=0.8056, acc_std=0.0091
+[sweep] === cell: noise=0.5 readout=10 ===
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=0.5, contrast∈[0.1,0.3], 50+10 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=0.7569, acc_std=0.0248, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=0.8513, acc_std=0.0166
+[sweep] === cell: noise=1.0 readout=5 ===
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=1.0, contrast∈[0.1,0.3], 50+5 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=0.2569, acc_std=0.0169, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=0.3063, acc_std=0.0198
+[sweep] === cell: noise=1.0 readout=10 ===
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=1.0, contrast∈[0.1,0.3], 50+10 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=0.2975, acc_std=0.0283, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=0.3688, acc_std=0.0322
+[sweep] === cell: noise=2.0 readout=5 ===
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=2.0, contrast∈[0.1,0.3], 50+5 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=0.1225, acc_std=0.0103, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=0.1431, acc_std=0.0067
+[sweep] === cell: noise=2.0 readout=10 ===
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=2.0, contrast∈[0.1,0.3], 50+10 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=0.1469, acc_std=0.0182, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=0.1650, acc_std=0.0211
+[sweep] done.

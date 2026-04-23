@@ -53,22 +53,32 @@ __all__ = [
 
 @contextlib.contextmanager
 def ablate_context_memory(bundle: CheckpointBundle) -> Iterator[None]:
-    """Temporarily zero ``W_mh_gen`` + ``W_mh_task`` on the context memory.
+    """Temporarily zero all readouts from ``m_t`` to L2/3.
 
-    Restores the originals on exit. This keeps memory integration (the
-    ``m_t`` recurrence) intact but silences the readout to L2/3 apical —
-    i.e. ``b_l23 ≡ 0`` for the duration of the context.
+    Task #74 Fix C-v2: the original single ``W_mh_task`` was split into
+    ``W_mh_task_exc`` (→ additive L23 E apical bias, scaled by
+    ``task_exc_gain``) and ``W_mh_task_inh`` (→ per-SOM-unit gain on
+    SOM→L23E synapses). This ablation zeros all three readouts
+    (``W_mh_gen``, ``W_mh_task_exc``, ``W_mh_task_inh``) so that
+    ``b_l23_exc`` ≡ 0 and ``som_gain`` ≡ softplus(0.5413) = 1.0 (no-op)
+    for the duration of the context; memory integration (``m_t``
+    recurrence) stays intact.
+
+    Restores the originals on exit.
     """
     cm = bundle.net.context_memory
     saved_gen = cm.W_mh_gen.data.detach().clone()
-    saved_task = cm.W_mh_task.data.detach().clone()
+    saved_task_exc = cm.W_mh_task_exc.data.detach().clone()
+    saved_task_inh = cm.W_mh_task_inh.data.detach().clone()
     try:
         cm.W_mh_gen.data.zero_()
-        cm.W_mh_task.data.zero_()
+        cm.W_mh_task_exc.data.zero_()
+        cm.W_mh_task_inh.data.zero_()
         yield
     finally:
         cm.W_mh_gen.data.copy_(saved_gen)
-        cm.W_mh_task.data.copy_(saved_task)
+        cm.W_mh_task_exc.data.copy_(saved_task_exc)
+        cm.W_mh_task_inh.data.copy_(saved_task_inh)
 
 
 # ---------------------------------------------------------------------------

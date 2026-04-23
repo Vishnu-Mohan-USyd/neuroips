@@ -1,0 +1,118 @@
+{
+  "task": "task74_diagnostics",
+  "version": 1,
+  "checkpoint": "checkpoints/v2/phase3_kok_task74D/phase3_kok_s42.pt",
+  "untrained_init": false,
+  "paradigm": "kok",
+  "phase": "phase3_kok",
+  "seed": 42,
+  "coverage": {
+    "n_orientations": 12,
+    "n_units": 256,
+    "orientations_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "per_orientation_n_pref_units": [
+      0,
+      64,
+      0,
+      0,
+      0,
+      49,
+      0,
+      60,
+      0,
+      0,
+      0,
+      83
+    ],
+    "per_orientation_pct": [
+      0.0,
+      25.0,
+      0.0,
+      0.0,
+      0.0,
+      19.140625,
+      0.0,
+      23.4375,
+      0.0,
+      0.0,
+      0.0,
+      32.421875
+    ],
+    "entropy_nats": 1.3682549596245492,
+    "entropy_bits": 1.973974644922066,
+    "max_entropy_nats": 2.4849066497880004,
+    "max_entropy_bits": 3.584962500721156,
+    "n_bins_geq_5pct": 4,
+    "thresholds": {
+      "pass_strong_nats": 1.74,
+      "pass_weak_nats": 1.5,
+      "n_bins_5pct": 8
+    },
+    "pass_strong": false,
+    "pass_weak": false,
+    "pass_bins": false
+  },
+  "rule_magnitude": {
+    "bias_added_norm_mean": 1037.2708129882812,
+    "localizer_norm_mean": 4.29137110710144,
+    "ratio": 241.7108162171164,
+    "threshold_gate": 0.05,
+    "threshold_target": 1.7,
+    "pass_gate": true,
+    "pass_target": true,
+    "per_class": {
+      "0": {
+        "expected_orient_deg": 45.0,
+        "n_trials": 50,
+        "bias_added_norm_mean": 1039.3985595703125,
+        "bias_added_norm_std": 0.0001220703125,
+        "localizer_norm": 4.293226718902588,
+        "ratio": 242.10194979774002
+      },
+      "1": {
+        "expected_orient_deg": 135.0,
+        "n_trials": 50,
+        "bias_added_norm_mean": 1035.14306640625,
+        "bias_added_norm_std": 0.0001220703125,
+        "localizer_norm": 4.289515495300293,
+        "ratio": 241.31934423366437
+      }
+    }
+  },
+  "readout_alignment": {
+    "per_class_cos_same": [
+      0.06207813416380647,
+      0.11250576328843752
+    ],
+    "per_class_cos_other_mean": [
+      0.03134264700603929,
+      0.05634103953566323
+    ],
+    "mean_cos_same": 0.08729194872612199,
+    "mean_cos_other": 0.04384184327085126,
+    "control_mean_cos_b_gen_same": -0.08738501427478507,
+    "threshold": 0.3,
+    "pass": false
+  },
+  "thresholds": {
+    "coverage_pass_strong_nats": 1.74,
+    "coverage_pass_weak_nats": 1.5,
+    "coverage_n_bins_5pct": 8,
+    "rule_magnitude_gate": 0.05,
+    "rule_magnitude_target": 1.7,
+    "readout_cos": 0.3
+  }
+}

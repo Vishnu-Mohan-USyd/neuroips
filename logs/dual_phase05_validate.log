@@ -1,0 +1,16 @@
+2026-04-10 18:16:21,284 [INFO] Loaded config from checkpoint: feedback_mode=emergent, oracle_pi(train)=3.0
+2026-04-10 18:16:21,457 [INFO] Loaded model from results/regression_post_cleanup/e1/emergent_seed42/checkpoint.pt
+Running M7 baseline  (task_state=(0,0))...
+  δ=10° delta_acc = +0.108750
+Running M7 focused   (task_state=(1,0))...
+  δ=10° delta_acc = +0.103750
+Running M7 routine   (task_state=(0,1))...
+  δ=10° delta_acc = +0.100625
+
+======================================================================
+m7_baseline δ=10°  : +0.108750  (legacy expected +0.103700, diff +0.005050) PASS
+m7_focused  δ=10°  : +0.103750  (vs baseline -0.005000) PASS
+m7_routine  δ=10°  : +0.100625  (vs baseline -0.008125) PASS
+======================================================================
+OVERALL: PASS
+Wrote results/dual_phase05/e1_extended.json

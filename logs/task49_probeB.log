@@ -1,0 +1,28 @@
+
+========================================================================
+=== Probe B: homeo only × 3 stim × 1000 steps ===
+========================================================================
+
+--- Probe B × blank ---
+     t        r_l4       r_l23   r_l23_max        r_pv         r_h     r_h_max       θ_l23  nan
+     0   1.706e-02   0.000e+00   0.000e+00   0.000e+00   0.000e+00   0.000e+00  -5.000e-06  False
+    10   3.411e-02   1.648e-03   1.750e-03   6.833e-03   3.019e-03   3.434e-03  -5.445e-05  False
+   100   3.412e-02   2.593e+08   5.270e+09   1.199e+11   8.025e+05   8.298e+05   2.389e+00  False
+   500   3.412e-02         nan         nan         nan         nan         nan         nan  True
+   999   3.412e-02         nan         nan         nan         nan         nan         nan  True
+
+--- Probe B × grating ---
+     t        r_l4       r_l23   r_l23_max        r_pv         r_h     r_h_max       θ_l23  nan
+     0   2.841e-02   0.000e+00   0.000e+00   0.000e+00   0.000e+00   0.000e+00  -5.000e-06  False
+    10   5.679e-02   2.749e-03   2.942e-03   5.238e-02   5.022e-03   5.712e-03  -5.408e-05  False
+   100   5.682e-02   1.310e+10   2.712e+11   5.409e+12   2.009e+07   2.081e+07   2.434e+00  False
+   500   5.682e-02         nan         nan         nan         nan         nan         nan  True
+   999   5.682e-02         nan         nan         nan         nan         nan         nan  True
+
+--- Probe B × procedural ---
+     t        r_l4       r_l23   r_l23_max        r_pv         r_h     r_h_max       θ_l23  nan
+     0   2.998e-02   0.000e+00   0.000e+00   0.000e+00   0.000e+00   0.000e+00  -5.000e-06  False
+    10   5.992e-02   2.900e-03   3.104e-03   6.284e-02   5.298e-03   6.027e-03  -5.403e-05  False
+   100   5.995e-02   3.754e+09   7.341e+10   1.700e+12   9.367e+06   9.880e+06   2.403e+00  False
+   500   5.995e-02         nan         nan         nan         nan         nan         nan  True
+   999   5.995e-02         nan         nan         nan         nan         nan         nan  True

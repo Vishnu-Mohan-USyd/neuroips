@@ -1,0 +1,3 @@
+[Kok-at-15] cue_mapping={0: 15.0, 1: 75.0}
+[Kok-at-15] checkpoint saved to /mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/checkpoints/v2/phase3_kok_task73_at15/phase3_kok_s42.pt
+{"ckpt": "/mnt/c/Users/User/codingproj/freshstart_backup_2026-04-18/checkpoints/v2/phase3_kok_task73_at15/phase3_kok_s42.pt", "cue_mapping": {"0": 15.0, "1": 75.0}, "n_trials_learning": 500, "n_trials_scan": 1000}

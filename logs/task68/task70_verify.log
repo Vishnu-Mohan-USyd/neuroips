@@ -1,0 +1,13 @@
+{
+  "n_trials": 300,
+  "label_balance_p1": 0.5166666666666667,
+  "cos_sim_cue0_cue1": 0.3190355696253665,
+  "c_expected_decode_acc": 1.0,
+  "c_expected_decode_std": 0.0,
+  "h_expected_decode_acc": 0.5266666666666666,
+  "b_l23_expected_decode_acc": 1.0,
+  "W_qm_task_norm": 14.03136157989502,
+  "W_mh_task_norm": 1.135428786277771,
+  "W_lm_task_norm": 16.622766494750977,
+  "cue_gain": 5.0
+}

@@ -1,0 +1,9 @@
+[fmri_decoder] coarse 8-way: collecting 8 orient × 200 trials (noise_std=0.1, contrast∈[0.7,1.0], 50+50 steps)...
+[fmri_decoder] coarse 8-way: collected X(1600, 256) y(1600,); running 5-fold CV (voxel-pooled + raw).
+[fmri_decoder] fine 2-way: collecting 2 orient × 200 trials (noise_std=0.1, contrast∈[0.7,1.0], 50+50 steps)...
+[fmri_decoder] fine 2-way: collected X(400, 256) y(400,); running 5-fold CV (voxel-pooled + raw).
+fmri_decoder (phase-2 substrate, no cue, no task weights)
+  coarse (8-way), chance=0.125: acc_mean=1.0000, acc_std=0.0000, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=1.0000, acc_std=0.0000
+  fine   (2-way 45/135), chance=0.500: acc_mean=1.0000, acc_std=0.0000, n_voxels=64
+    no-pooling (raw L2/3 E, 256-d): acc_mean=1.0000, acc_std=0.0000

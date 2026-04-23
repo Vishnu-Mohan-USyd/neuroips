@@ -1,0 +1,126 @@
+Loading checkpoint: results/simple_dual/emergent_seed42/checkpoint.pt
+W shape=(36, 36), b shape=(36,)
+W stats: min=-4.7839  max=+3.1633  mean=-2.3485  fro=115.9291
+
+=== Part 1: raw weights ===
+Diagonal weights: min=2.2804  max=3.1633  mean=2.8271  std=0.1851
+Rows whose argmax is at diagonal: 21/36  (58.3%)
+FWHM (ch): mean=4.69  median=4.67  min=4.42  max=4.98  NaN=0
+Mean weight at +90deg from diagonal: -3.2869  (min=-4.1055, max=-2.0107)
+Mean weight at -90deg from diagonal: -3.3476  (min=-4.1306, max=-2.0244)
+Bias b: min=-0.3383  max=0.6848  mean=-0.0404  std=0.2440
+Bias argmax = ch3  (+0.6848)
+Bias argmin = ch16  (-0.3383)
+Saved heatmap -> docs/figures/decA_weights_r1_2.png
+
+=== Part 2: single-bump amplitude sweep (mu=18, sigma=3) ===
+     A   argmax   top1_logit   top2_logit    margin
+  0.05       18       0.3176      -0.0547    0.3724
+  0.10       18       0.5366       0.1118    0.4248
+  0.20       18       0.9745       0.4450    0.5296
+  0.40       18       1.8504       1.1760    0.6744
+  0.60       18       2.7262       1.9120    0.8142
+  0.80       18       3.6021       2.6480    0.9541
+  1.00       18       4.4779       3.3839    1.0940
+  1.50       18       6.6676       5.2239    1.4437
+  2.00       18       8.8572       7.0638    1.7934
+Unique argmax across A: [18]
+
+=== Part 3: single-bump width sweep (mu=18, A=0.5) ===
+ sigma   argmax   top1_logit   top2_logit    margin
+   1.0       18       3.1419       2.8040    0.3379
+   2.0       18       4.0655       3.5248    0.5407
+   3.0       18       2.2883       1.5440    0.7443
+   5.0       18      -3.7886      -5.1239    1.3353
+   7.0       18      -9.9656     -10.0920    0.1265
+  10.0       21     -16.7378     -16.8160    0.0782
+Unique argmax across sigma: [18, 21]
+
+=== Part 4: compound-bump sweep (ch_P=18) ===
+
+  Delta = 9 ch  (45 deg) -> ch_P=18, ch_S=27
+      A_P    A_S   ratio   argmax   ==ch_P   ==ch_S       top1       top2    margin
+     0.50   0.00    0.00       18     True    False     2.2883     1.5440    0.7443
+     0.50   0.10    0.20       18     True    False     0.2764    -1.1855    1.4618
+     0.50   0.20    0.40       18     True    False    -1.7356    -3.8752    2.1396
+     0.50   0.30    0.60       18     True    False    -3.7475    -6.4209    2.6733
+     0.50   0.40    0.80       18     True    False    -5.7595    -6.9379    1.1785
+     0.50   0.50    1.00       27    False     True    -6.4151    -7.7714    1.3563
+  -> first ratio at which argmax leaves ch_P: 1.0
+
+  Delta = 18 ch  (90 deg) -> ch_P=18, ch_S=0
+      A_P    A_S   ratio   argmax   ==ch_P   ==ch_S       top1       top2    margin
+     0.50   0.00    0.00       18     True    False     2.2883     1.5440    0.7443
+     0.50   0.10    0.20       18     True    False     0.3162    -1.1966    1.5128
+     0.50   0.20    0.40       18     True    False    -1.6560    -3.9373    2.2813
+     0.50   0.30    0.60       18     True    False    -3.6281    -6.6779    3.0498
+     0.50   0.40    0.80       18     True    False    -5.6003    -6.2589    0.6586
+     0.50   0.50    1.00        0    False     True    -5.6517    -7.5724    1.9208
+  -> first ratio at which argmax leaves ch_P: 1.0
+
+  Delta = 27 ch  (135 deg) -> ch_P=18, ch_S=9
+      A_P    A_S   ratio   argmax   ==ch_P   ==ch_S       top1       top2    margin
+     0.50   0.00    0.00       18     True    False     2.2883     1.5440    0.7443
+     0.50   0.10    0.20       18     True    False     0.4431    -1.2250    1.6681
+     0.50   0.20    0.40       18     True    False    -1.4021    -3.9940    2.5919
+     0.50   0.30    0.60       18     True    False    -3.2473    -6.5907    3.3434
+     0.50   0.40    0.80       18     True    False    -5.0925    -6.1637    1.0712
+     0.50   0.50    1.00        9    False     True    -5.6140    -6.9377    1.3237
+  -> first ratio at which argmax leaves ch_P: 1.0
+Saved compound-sweep figure -> docs/figures/decA_compound_sweep_r1_2.png
+
+=== Part 5: Pass A / Pass B emulation ===
+  pass_A_synth:
+    argmax = ch18  (logit +3.0766)
+    top2   = ch17  (logit +2.2064)
+    top3   = ch19  (logit +2.0439)
+    margin top1-top2 = 0.8702
+    margin top2-top3 = 0.1624
+    full input  (3x12 rows):
+      +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000 +0.001 +0.003 +0.008 +0.019 +0.045
+      +0.092 +0.170 +0.280 +0.412 +0.545 +0.643 +0.680 +0.643 +0.545 +0.412 +0.280 +0.170
+      +0.092 +0.045 +0.019 +0.008 +0.003 +0.001 +0.000 +0.000 +0.000 +0.000 +0.000 +0.000
+    full logits (3x12 rows):
+      -12.008 -19.167 -18.776 -10.509 -18.014 -18.089 -10.440 -18.505 -18.377 -11.476 -17.486 -16.431
+      -9.841 -11.082 -7.393 -2.208 -0.269 +2.206 +3.077 +2.044 -0.314 -2.124 -6.607 -10.527
+      -9.603 -15.854 -17.767 -12.349 -18.447 -18.689 -12.510 -19.041 -19.217 -12.440 -19.617 -19.504
+  pass_B_synth:
+    argmax = ch18  (logit -1.9187)
+    top2   = ch17  (logit -4.1580)
+    top3   = ch19  (logit -4.3328)
+    margin top1-top2 = 2.2393
+    margin top2-top3 = 0.1748
+    full input  (3x12 rows):
+      +0.200 +0.189 +0.160 +0.121 +0.082 +0.050 +0.027 +0.014 +0.007 +0.007 +0.013 +0.029
+      +0.060 +0.110 +0.181 +0.267 +0.352 +0.416 +0.440 +0.416 +0.352 +0.267 +0.181 +0.110
+      +0.060 +0.029 +0.013 +0.007 +0.007 +0.014 +0.027 +0.050 +0.082 +0.121 +0.160 +0.189
+    full logits (3x12 rows):
+      -6.367 -11.145 -11.536 -7.000 -13.191 -14.702 -9.997 -16.907 -17.494 -11.484 -17.061 -16.360
+      -9.944 -12.658 -10.225 -5.156 -5.749 -4.158 -1.919 -4.333 -5.677 -4.991 -9.935 -12.505
+      -9.625 -15.974 -17.155 -11.550 -17.525 -17.212 -11.637 -15.899 -14.698 -8.974 -12.641 -11.638
+
+=== Part 6: noise floor (1000 random draws) ===
+argmax counts (per class):
+    123    1    0  207    1    0  112    0    0   82    0    0
+     66    4    3   35    0    1   48    0    0   61    0    1
+     75    1    1   76    1    0   38    1    0   62    0    0
+Counts: min=0  max=207  mean=27.78  std=46.49
+Mean top1 logit under noise: -1.0601  (std 1.2113)
+Chi^2 vs uniform = 2800.66  (df=35, ~p<0.05 if chi2>49.8; ~p<0.001 if chi2>66.6)
+
+=== Part 7: real-data cross-reference (clean-march, pi-Q75 + pred_err<=15) ===
+  npz keys: ['is_clean_march', 'is_amb', 'ctx_dir', 'target_true_ch', 'target_true_ori', 'pi_target', 'pred_err_A', 'unexp_ori', 'unexp_ch', 'r_probe_A', 'r_probe_B', 'r_probe_C', 'r_probe_B_fboff', 'dec_A', 'dec_B', 'dec_C', 'dec_B_fboff', 'r_pm2_A', 'r_pm1_A', 'q_pred_argmax_target_isi', 'meta_N', 'meta_step_deg', 'meta_center_idx', 'meta_period']
+  is_clean_march & ~is_amb -> n=535
+  pi-Q75 + pred_err<=15 -> n=40  (q75=0.4862)
+  pass_A: n=40
+    Decoder A acc  +-0=0.7000   +-1=1.0000   +-2=1.0000
+    argmax distance buckets: at_true=28  +-1=12  +-2=0  other=0
+    mean top1-top2 margin: correct=0.4186  wrong=0.1573
+    corr(margin, correct@0): +0.5703
+  pass_B: n=40
+    Decoder A acc  +-0=0.3000   +-1=1.0000   +-2=1.0000
+    argmax distance buckets: at_true=12  +-1=28  +-2=0  other=0
+    mean top1-top2 margin: correct=2.1065  wrong=1.4781
+    corr(margin, correct@0): +0.3889
+
+Wrote JSON -> results/decA_probe_r1_2.json

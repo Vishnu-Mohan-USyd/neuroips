@@ -1,0 +1,37 @@
+=== Rate statistics at the update point ===
+         state1.r_l4: shape=(4, 128) mean=0.0433  max=0.1770  pos_frac=1.000
+        state1.r_l23: shape=(4, 256) mean=1.4056  max=2.1026  pos_frac=1.000
+         state1.r_pv: shape=(4, 16) mean=157.3475  max=204.4793  pos_frac=1.000
+        state1.r_som: shape=(4, 32) mean=129.0015  max=147.9248  pos_frac=1.000
+          state1.r_h: shape=(4, 64) mean=0.2189  max=0.3073  pos_frac=1.000
+        state2.r_l23: shape=(4, 256) mean=1.0542  max=1.5770  pos_frac=1.000
+         state2.r_pv: shape=(4, 16) mean=128.1888  max=168.9818  pos_frac=1.000
+        state2.r_som: shape=(4, 32) mean=124.6247  max=148.0011  pos_frac=1.000
+          state2.r_h: shape=(4, 64) mean=0.1986  max=0.2766  pos_frac=1.000
+
+=== Vogels on W_pv_l23_raw ===
+  W shape: (256, 16)
+  W raw:  mean=-5.0008 max=5.3124 softplus=0.0067
+  target_rate_hz ρ = 1.0
+  lr = 0.0001   wd = 1e-05   beta_syn = 0.0001
+
+  hebb = (1/B) · post_dev.T @ pre:  shape=(256, 16) mean=1.5408e+01 max=4.8001e+01
+  lr · hebb:  mean=1.5408e-03 max=4.8001e-03
+
+  raw_prior mean = -5.0000
+  wd · (w - prior):  mean=8.0369e-07 max=3.9137e-06
+
+  pre² mean across batch, max=2.6177e+04 mean=2.5540e+04
+  -beta · pre² · w:  mean=1.2772e+01 max=1.3729e+01
+
+  dw (Vogels) = lr·hebb - wd·(w-prior):  mean=1.5409e-03 max=4.8001e-03
+
+  total = dw + shrink (what gets added to w):  mean=1.2774e+01 max=1.3731e+01
+
+  Dominant-term ranking (by mean|·|):
+        shrink  1.2772e+01
+       lr*hebb  1.5408e-03
+      wd*decay  8.0369e-07
+
+  wd*decay / lr*hebb  = 5.22e-04
+  shrink / lr*hebb    = 8.29e+03

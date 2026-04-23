@@ -1,0 +1,109 @@
+
+[running default_seg50_sc0p1]
+[step 250] state has NaN — halting
+  halted at step 250
+
+[running hard_reset_seg50_sc0]
+[step 113] state has NaN — halting
+  halted at step 113
+
+[running no_reset_seg50_sc1]
+[step 289] state has NaN — halting
+  halted at step 289
+
+[running short_seg10_sc0p1]
+[step 180] state has NaN — halting
+  halted at step 180
+
+[running pre_task56_seg1_sc0]
+  halted at step 299
+
+
+============================================================================
+=== HARVEST RESULTS (for team-lead key=value report) ===
+============================================================================
+
+--- default_seg50_sc0p1 ---
+halted_step= 250
+pre_traces_nkeys_t0= 0.000000e+00
+pre_traces_nkeys_t100= 0.000000e+00
+pre_traces_nkeys_t200= 0.000000e+00
+post_traces_nkeys_t0= 0.000000e+00
+post_traces_nkeys_t100= 0.000000e+00
+post_traces_nkeys_t200= 0.000000e+00
+regime_post_norm_t0= 1.000000e+00
+regime_post_norm_t100= 1.000000e+00
+regime_post_norm_t200= 1.000000e+00
+W_pv_l23_delta_t0= 1.277352e+01
+W_pv_l23_delta_t100= 1.504514e-04
+W_pv_l23_delta_t200= 7.292532e+03
+max_delta_t200= 7.292532e+03
+first_explosive_step= 156
+
+--- hard_reset_seg50_sc0 ---
+halted_step= 113
+pre_traces_nkeys_t0= 0.000000e+00
+pre_traces_nkeys_t100= 0.000000e+00
+pre_traces_nkeys_t200= 0.000000e+00
+post_traces_nkeys_t0= 0.000000e+00
+post_traces_nkeys_t100= 0.000000e+00
+post_traces_nkeys_t200= 0.000000e+00
+regime_post_norm_t0= 1.000000e+00
+regime_post_norm_t100= 1.000000e+00
+regime_post_norm_t200= 1.000000e+00
+W_pv_l23_delta_t0= 1.277352e+01
+W_pv_l23_delta_t100= 2.816027e-01
+W_pv_l23_delta_t200= nan
+max_delta_t200= 5.134717e-05
+first_explosive_step= 68
+
+--- no_reset_seg50_sc1 ---
+halted_step= 289
+pre_traces_nkeys_t0= 0.000000e+00
+pre_traces_nkeys_t100= 0.000000e+00
+pre_traces_nkeys_t200= 0.000000e+00
+post_traces_nkeys_t0= 0.000000e+00
+post_traces_nkeys_t100= 0.000000e+00
+post_traces_nkeys_t200= 0.000000e+00
+regime_post_norm_t0= 1.000000e+00
+regime_post_norm_t100= 1.000000e+00
+regime_post_norm_t200= 1.000000e+00
+W_pv_l23_delta_t0= 1.277352e+01
+W_pv_l23_delta_t100= 1.415142e-04
+W_pv_l23_delta_t200= 1.174049e+00
+max_delta_t200= 1.174049e+00
+first_explosive_step= 219
+
+--- short_seg10_sc0p1 ---
+halted_step= 180
+pre_traces_nkeys_t0= 0.000000e+00
+pre_traces_nkeys_t100= 0.000000e+00
+pre_traces_nkeys_t200= 0.000000e+00
+post_traces_nkeys_t0= 0.000000e+00
+post_traces_nkeys_t100= 0.000000e+00
+post_traces_nkeys_t200= 0.000000e+00
+regime_post_norm_t0= 1.000000e+00
+regime_post_norm_t100= 1.000000e+00
+regime_post_norm_t200= 1.000000e+00
+W_pv_l23_delta_t0= 1.277352e+01
+W_pv_l23_delta_t100= 5.293442e+04
+W_pv_l23_delta_t200= nan
+max_delta_t200= 2.535102e-06
+first_explosive_step= 85
+
+--- pre_task56_seg1_sc0 ---
+halted_step= 299
+pre_traces_nkeys_t0= 0.000000e+00
+pre_traces_nkeys_t100= 0.000000e+00
+pre_traces_nkeys_t200= 0.000000e+00
+post_traces_nkeys_t0= 0.000000e+00
+post_traces_nkeys_t100= 0.000000e+00
+post_traces_nkeys_t200= 0.000000e+00
+regime_post_norm_t0= 1.000000e+00
+regime_post_norm_t100= 1.000000e+00
+regime_post_norm_t200= 1.000000e+00
+W_pv_l23_delta_t0= 1.277352e+01
+W_pv_l23_delta_t100= 1.276007e-04
+W_pv_l23_delta_t200= 1.274731e-04
+max_delta_t200= 1.274731e-04
+first_explosive_step= -1

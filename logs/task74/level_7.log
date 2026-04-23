@@ -1,0 +1,2 @@
+level7_verdict=pass decode_cue_acc=1.000 chance_ref=0.5 m_norm=0.798 cos_m_cueA_cueB=0.320 W_qm_task_norm=14.010 W_mh_gen_norm=10.936 issue_if_fail=none
+[wrote] logs/task74/level_7.json

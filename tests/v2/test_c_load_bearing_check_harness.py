@@ -3,8 +3,8 @@
 Exercises :func:`ablate_context_memory`, :func:`measure_prediction_mse`,
 and :func:`run_gate_7_c_load_bearing` on an untrained network. Verifies:
 
-* The ablation context manager zeros ``W_mh_gen`` / ``W_mh_task`` inside
-  the ``with`` block and restores them on exit.
+* The ablation context manager zeros ``W_mh_gen`` / ``W_mh_task_exc`` /
+  ``W_mh_task_inh`` inside the ``with`` block and restores them on exit.
 * The MSE measurement produces a finite non-negative float.
 * Aggregate gate returns a dict with the expected keys.
 """
@@ -45,13 +45,16 @@ def untrained_bundle(cfg, tmp_path):
 def test_ablation_zeros_inside_and_restores_on_exit(untrained_bundle):
     cm = untrained_bundle.net.context_memory
     orig_gen = cm.W_mh_gen.data.detach().clone()
-    orig_task = cm.W_mh_task.data.detach().clone()
+    orig_task_exc = cm.W_mh_task_exc.data.detach().clone()
+    orig_task_inh = cm.W_mh_task_inh.data.detach().clone()
     assert torch.any(orig_gen != 0.0), "W_mh_gen is zero at init (precondition broken)"
     with ablate_context_memory(untrained_bundle):
         assert torch.all(cm.W_mh_gen.data == 0.0)
-        assert torch.all(cm.W_mh_task.data == 0.0)
+        assert torch.all(cm.W_mh_task_exc.data == 0.0)
+        assert torch.all(cm.W_mh_task_inh.data == 0.0)
     assert torch.equal(cm.W_mh_gen.data, orig_gen)
-    assert torch.equal(cm.W_mh_task.data, orig_task)
+    assert torch.equal(cm.W_mh_task_exc.data, orig_task_exc)
+    assert torch.equal(cm.W_mh_task_inh.data, orig_task_inh)
 
 
 def test_measure_prediction_mse_is_finite_nonneg(untrained_bundle):

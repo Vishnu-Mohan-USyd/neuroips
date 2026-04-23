@@ -1,0 +1,116 @@
+{
+  "task": "task74_diagnostics",
+  "version": 1,
+  "checkpoint": "checkpoints/v2/phase3_kok_task70/phase3_kok_s42.pt",
+  "phase": "phase3_kok",
+  "seed": 42,
+  "coverage": {
+    "n_orientations": 12,
+    "n_units": 256,
+    "orientations_deg": [
+      0.0,
+      15.0,
+      30.0,
+      45.0,
+      60.0,
+      75.0,
+      90.0,
+      105.0,
+      120.0,
+      135.0,
+      150.0,
+      165.0
+    ],
+    "per_orientation_n_pref_units": [
+      193,
+      0,
+      0,
+      0,
+      0,
+      0,
+      63,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "per_orientation_pct": [
+      75.390625,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      24.609375,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "entropy_nats": 0.5580028576775724,
+    "entropy_bits": 0.8050279555733038,
+    "max_entropy_nats": 2.4849066497880004,
+    "max_entropy_bits": 3.584962500721156,
+    "n_bins_geq_5pct": 2,
+    "thresholds": {
+      "pass_strong_nats": 1.74,
+      "pass_weak_nats": 1.5,
+      "n_bins_5pct": 8
+    },
+    "pass_strong": false,
+    "pass_weak": false,
+    "pass_bins": false
+  },
+  "rule_magnitude": {
+    "bias_added_norm_mean": 0.9071164131164551,
+    "localizer_norm_mean": 2.4430463314056396,
+    "ratio": 0.37130544822461964,
+    "threshold_gate": 0.05,
+    "threshold_target": 1.7,
+    "pass_gate": true,
+    "pass_target": false,
+    "per_class": {
+      "0": {
+        "expected_orient_deg": 45.0,
+        "n_trials": 50,
+        "bias_added_norm_mean": 1.1441922187805176,
+        "bias_added_norm_std": 0.0,
+        "localizer_norm": 2.4462127685546875,
+        "ratio": 0.46774026915740474
+      },
+      "1": {
+        "expected_orient_deg": 135.0,
+        "n_trials": 50,
+        "bias_added_norm_mean": 0.6700406074523926,
+        "bias_added_norm_std": 0.0,
+        "localizer_norm": 2.439879894256592,
+        "ratio": 0.2746203241517644
+      }
+    }
+  },
+  "readout_alignment": {
+    "per_class_cos_same": [
+      0.09987874589334786,
+      0.1324271703407871
+    ],
+    "per_class_cos_other_mean": [
+      0.04144928190472163,
+      0.080833794347521
+    ],
+    "mean_cos_same": 0.11615295811706748,
+    "mean_cos_other": 0.06114153812612132,
+    "control_mean_cos_b_gen_same": -0.08531162490447311,
+    "threshold": 0.3,
+    "pass": false
+  },
+  "thresholds": {
+    "coverage_pass_strong_nats": 1.74,
+    "coverage_pass_weak_nats": 1.5,
+    "coverage_n_bins_5pct": 8,
+    "rule_magnitude_gate": 0.05,
+    "rule_magnitude_target": 1.7,
+    "readout_cos": 0.3
+  }
+}

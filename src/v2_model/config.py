@@ -68,6 +68,20 @@ class ConnectivityConfig:
     sigma_r_px: float = 4.0
     sigma_theta_deg: float = 25.0
 
+    # Task #74 Fix K — feedforward L4→L23E orientation-like-to-like mask.
+    # Sparse (top-k per row) orientation-biased retinotopic mask is applied
+    # multiplicatively to ``W_l4_l23_eff`` so L23E inherits L4's orientation
+    # tuning at init. Without this, dense uniform W_l4_l23 saturates every
+    # L23E unit at ~30 Hz and eliminates orientation selectivity in the
+    # Level-2 isolation probe (coder2 #74, 2026-04-22).
+    l4_l23_mask_sparsity: float = 0.12            # top-k = round(0.12·n_l4_e)
+    l4_l23_sigma_theta_deg: float = 30.0           # orient-bias Gaussian σ
+    l4_l23_retino_radius_cells: int = 1            # Chebyshev in pool cells
+    # Drop from +4.0 (dense uniform) to +1.5 so per-unit drive stays in
+    # biological range once sparsified: softplus(1.5)≈1.70; 15 selected
+    # L4 units × 1.70 × mean-matched-r_l4≈0.2 ≈ 5 Hz.
+    w_l4_l23_init_mean: float = 1.5
+
 
 @dataclass
 class EnergyConfig:
@@ -93,8 +107,29 @@ class PlasticityConfig:
 
     weight_decay: float = 1e-5
 
-    # Vogels iSTDP target rate (log-normal target)
+    # Vogels iSTDP / FastInhibitoryPopulation threshold (log-normal target).
+    # Reverted to 1.0 after Fix-H-global (Task #74, 2026-04-21) failed: a
+    # single scalar was overloaded for (a) Vogels target on L23 I→E, (b)
+    # Vogels target on H I→E, and (c) FastInhibitoryPopulation ReLU
+    # threshold for L23PV/L23SOM/HPV. Raising to 3.0 broke (b) by driving
+    # a Vogels vs. homeostasis conflict on HE (homeostasis target=0.1 per
+    # Debugger #37). Surgical fix: this field now governs only the I-pop
+    # ReLU threshold and PV-self-regulation Vogels target; L23E- and HE-
+    # targeting Vogels targets live in their own fields below.
     target_rate_hz: float = 1.0
+
+    # Vogels iSTDP targets for synapses that push *E-population* rates —
+    # separated from the I-pop ReLU threshold above so the two can be
+    # tuned independently. Fix H (Task #74, 2026-04-21): L23E target
+    # raised to 3.0 Hz to match the init equilibrium r_l23 ≈ 3.5 Hz; at
+    # the legacy 1.0 Hz Vogels was driving L23E down to ~0.8 Hz through
+    # Phase-2, starving Hebbian rules on tiny pre·post products and
+    # collapsing orientation-preference bins 10/12 → 1/12. HE target
+    # stays at 0.1 Hz to match the HE homeostasis target (network.py
+    # L23E constructor, Debugger #37: "target 1.0 is unreachable and
+    # drives θ downward without bound").
+    vogels_target_l23e_hz: float = 3.0
+    vogels_target_h_hz: float = 0.1
 
 
 @dataclass

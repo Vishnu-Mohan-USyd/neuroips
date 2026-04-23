@@ -1,0 +1,81 @@
+[setup] device=cuda
+[setup] config=config/sweep/sweep_rescue_1_2.yaml
+[setup] checkpoint=results/simple_dual/emergent_seed42/checkpoint.pt
+[setup] decoder_c=checkpoints/decoder_c.pt
+[setup] n_trials=1000  seed=42  n_boot=1000
+[setup] new_assay_json=results/eval_ex_vs_unex_decC_adjacent.json
+[new-assay] loaded NEW assay (n_total_per_branch=2400)
+[cfg] n_orientations=36  period=180.0  steps_on=12  steps_isi=4  seq_length=25  cue_valid_fraction=0.75
+[setup] network loaded (oracle_mode=False, feedback_scale=1.000)
+[setup] Decoder C loaded (best_val_acc=0.8145)
+[hmm] generating 1000 trials × seq_length=25...
+[hmm] generated: orientations.shape=(1000, 25)  cues.shape=(1000, 25, 36)  task_states.shape=(1000, 25, 2)  is_ambiguous.sum()=7619
+
+=== Condition C1_focused_native (Focused + HMM cue) ===
+[C1_focused_native] forward ex...
+[C1_focused_native] forward unex...
+[C1_focused_native] pre-probe max|ex-unex|=0.00e+00  (should be ~0)
+
+[C1_focused_native] summary (Δ = ex − unex; bootstrap 95% CI):
+  Δ Dec C:   0.0880 [0.0510, 0.1200]
+  Δ Dec B:   0.0180 [-0.0160, 0.0480]
+  Δ peak:    0.0696 [0.0583, 0.0814]
+  Δ net:     -0.6828 [-0.7495, -0.6079]
+  Δ FWHM°:   0.900 [0.369, 1.418]
+  S(0)  = -0.0696  [-0.0814, -0.0583]
+  S(+3) = -0.0192  [-0.0267, -0.0111]
+  S(−3) = -0.0259  [-0.0343, -0.0180]
+[C1_focused_native] elapsed: 4.9s
+
+=== Condition C2_routine_native (Routine + HMM cue) ===
+[C2_routine_native] forward ex...
+[C2_routine_native] forward unex...
+[C2_routine_native] pre-probe max|ex-unex|=0.00e+00  (should be ~0)
+
+[C2_routine_native] summary (Δ = ex − unex; bootstrap 95% CI):
+  Δ Dec C:   0.0130 [-0.0240, 0.0540]
+  Δ Dec B:   -0.0280 [-0.0630, 0.0070]
+  Δ peak:    0.0574 [0.0498, 0.0651]
+  Δ net:     -0.1889 [-0.2296, -0.1462]
+  Δ FWHM°:   2.000 [1.548, 2.451]
+  S(0)  = -0.0574  [-0.0651, -0.0498]
+  S(+3) = -0.0285  [-0.0337, -0.0229]
+  S(−3) = -0.0333  [-0.0385, -0.0278]
+[C2_routine_native] elapsed: 0.9s
+
+=== Condition C3_focused_neutralcue (Focused + neutral) ===
+[C3_focused_neutralcue] forward ex...
+[C3_focused_neutralcue] forward unex...
+[C3_focused_neutralcue] pre-probe max|ex-unex|=0.00e+00  (should be ~0)
+
+[C3_focused_neutralcue] summary (Δ = ex − unex; bootstrap 95% CI):
+  Δ Dec C:   0.0450 [0.0080, 0.0800]
+  Δ Dec B:   0.0040 [-0.0320, 0.0380]
+  Δ peak:    0.1079 [0.0958, 0.1198]
+  Δ net:     -0.5789 [-0.6464, -0.5096]
+  Δ FWHM°:   1.175 [0.585, 1.753]
+  S(0)  = -0.1079  [-0.1198, -0.0958]
+  S(+3) = -0.0600  [-0.0685, -0.0497]
+  S(−3) = -0.0283  [-0.0375, -0.0201]
+[C3_focused_neutralcue] elapsed: 1.1s
+
+=== Condition C4_routine_neutralcue (Routine + neutral) ===
+[C4_routine_neutralcue] forward ex...
+[C4_routine_neutralcue] forward unex...
+[C4_routine_neutralcue] pre-probe max|ex-unex|=0.00e+00  (should be ~0)
+
+[C4_routine_neutralcue] summary (Δ = ex − unex; bootstrap 95% CI):
+  Δ Dec C:   0.0410 [0.0030, 0.0820]
+  Δ Dec B:   -0.0360 [-0.0700, -0.0010]
+  Δ peak:    0.0655 [0.0572, 0.0736]
+  Δ net:     -0.1986 [-0.2405, -0.1552]
+  Δ FWHM°:   1.358 [0.946, 1.743]
+  S(0)  = -0.0655  [-0.0736, -0.0572]
+  S(+3) = -0.0286  [-0.0342, -0.0228]
+  S(−3) = -0.0403  [-0.0462, -0.0346]
+[C4_routine_neutralcue] elapsed: 0.9s
+
+[total] HMM elapsed: 7.7s
+
+[json] wrote results/r1r2_paradigm_readout.json
+[fig] wrote docs/figures/r1r2_paradigm_readout.png

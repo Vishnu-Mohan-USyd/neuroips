@@ -1,0 +1,16 @@
+=== Run A: offset=5 noise=0.10 → logs/task74/sweep_A_o5_n0.10.json ===
+    exit=0 elapsed=520s
+    SUMMARY A offset=5 noise=0.10: svm_all=1.000 svm_exp=1.000 svm_unexp=1.000 Δsvm=+0.000 p=1.000 mean_r_exp=0.670 mean_r_unexp=0.619
+=== Run B: offset=5 noise=0.20 → logs/task74/sweep_B_o5_n0.20.json ===
+    exit=0 elapsed=530s
+    SUMMARY B offset=5 noise=0.20: svm_all=1.000 svm_exp=1.000 svm_unexp=1.000 Δsvm=+0.000 p=1.000 mean_r_exp=0.633 mean_r_unexp=0.602
+=== Run C: offset=3 noise=0.10 → logs/task74/sweep_C_o3_n0.10.json ===
+    exit=0 elapsed=533s
+    SUMMARY C offset=3 noise=0.10: svm_all=1.000 svm_exp=1.000 svm_unexp=1.000 Δsvm=+0.000 p=1.000 mean_r_exp=0.670 mean_r_unexp=0.619
+=== Run D: offset=3 noise=0.20 → logs/task74/sweep_D_o3_n0.20.json ===
+    exit=0 elapsed=529s
+    SUMMARY D offset=3 noise=0.20: svm_all=1.000 svm_exp=1.000 svm_unexp=1.000 Δsvm=+0.000 p=1.000 mean_r_exp=0.633 mean_r_unexp=0.602
+=== Run E: offset=2 noise=0.30 → logs/task74/sweep_E_o2_n0.30.json ===
+    exit=0 elapsed=532s
+    SUMMARY E offset=2 noise=0.30: svm_all=1.000 svm_exp=1.000 svm_unexp=1.000 Δsvm=+0.000 p=1.000 mean_r_exp=0.614 mean_r_unexp=0.594
+SWEEP_COMPLETE_NO_BREAK

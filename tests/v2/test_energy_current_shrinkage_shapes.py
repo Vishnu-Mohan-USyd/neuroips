@@ -166,3 +166,94 @@ def test_rejects_1d_pre_activity() -> None:
     energy = EnergyPenalty(alpha=0.0, beta=1e-3)
     with pytest.raises(ValueError, match="pre_activity"):
         energy.current_weight_shrinkage(torch.rand(5, 3), torch.rand(3))
+
+
+# ---------------------------------------------------------------------------
+# Task #74 Fix P — raw_prior kwarg (2026-04-22)
+# ---------------------------------------------------------------------------
+
+def test_raw_prior_none_matches_legacy_shrink_to_zero() -> None:
+    """Passing ``raw_prior=None`` (default) must yield exactly the
+    pre-Fix-P behaviour: Δw = -w · s / (1 + s)."""
+    energy = EnergyPenalty(alpha=0.0, beta=1e-2)
+    torch.manual_seed(0)
+    weights = torch.randn(6, 4)
+    pre = torch.randn(8, 4)
+    dw_default = energy.current_weight_shrinkage(weights, pre)
+    dw_explicit_none = energy.current_weight_shrinkage(
+        weights, pre, raw_prior=None,
+    )
+    torch.testing.assert_close(dw_default, dw_explicit_none, atol=0.0, rtol=0.0)
+
+    # Closed-form: for raw_prior=None, Δw = -w · s / (1 + s).
+    s = energy.beta * (pre * pre).mean(dim=0)
+    expected = -weights * (s / (1.0 + s)).view(1, -1)
+    torch.testing.assert_close(dw_default, expected)
+
+
+def test_raw_prior_at_init_is_inert() -> None:
+    """Shrinkage with raw_prior equal to the weight value itself must be
+    exactly zero — the weight sits at its shrinkage target."""
+    energy = EnergyPenalty(alpha=0.0, beta=5e-2)
+    torch.manual_seed(1)
+    init_value = torch.full((5, 3), -6.5)                      # Fix-L2 style
+    pre = torch.randn(10, 3).abs()                             # non-zero pre
+    dw = energy.current_weight_shrinkage(
+        init_value, pre, raw_prior=init_value.clone(),
+    )
+    torch.testing.assert_close(dw, torch.zeros_like(dw), atol=0.0, rtol=0.0)
+
+
+def test_raw_prior_pulls_toward_prior_not_zero() -> None:
+    """With raw_prior = -8, a weight at -8 is inert; perturb it and Fix P
+    should pull it back toward -8 (not toward 0)."""
+    energy = EnergyPenalty(alpha=0.0, beta=1e-1)
+    prior = torch.full((4, 2), -8.0)
+    perturbed = prior + 0.5                                    # weights at -7.5
+    pre = torch.ones(3, 2)                                     # s = β · 1 = 0.1
+    dw = energy.current_weight_shrinkage(
+        perturbed, pre, raw_prior=prior,
+    )
+    # Expected: Δw = -(w - prior) · s / (1 + s) = -0.5 · 0.1 / 1.1
+    expected = torch.full((4, 2), -0.5 * 0.1 / 1.1)
+    torch.testing.assert_close(dw, expected)
+    # Post-update weight moves toward prior (−8), not toward 0.
+    w_new = perturbed + dw
+    assert (w_new < perturbed).all()
+    assert (w_new > prior).all()
+
+
+def test_raw_prior_shape_mismatch_raises() -> None:
+    energy = EnergyPenalty(alpha=0.0, beta=1e-3)
+    weights = torch.randn(4, 3)
+    pre = torch.randn(2, 3)
+    bad_prior = torch.randn(4, 5)
+    with pytest.raises(ValueError, match="raw_prior"):
+        energy.current_weight_shrinkage(weights, pre, raw_prior=bad_prior)
+
+
+def test_raw_prior_non_tensor_raises() -> None:
+    energy = EnergyPenalty(alpha=0.0, beta=1e-3)
+    weights = torch.randn(4, 3)
+    pre = torch.randn(2, 3)
+    with pytest.raises(ValueError, match="raw_prior"):
+        # Mypy-wise this is deliberately wrong; runtime check catches it.
+        energy.current_weight_shrinkage(weights, pre, raw_prior=-6.5)  # type: ignore[arg-type]
+
+
+def test_raw_prior_mask_still_zeros_masked_entries() -> None:
+    energy = EnergyPenalty(alpha=0.0, beta=1e-2)
+    weights = torch.randn(4, 3)
+    pre = torch.randn(2, 3)
+    prior = torch.zeros_like(weights)
+    mask = torch.tensor([
+        [True,  False, True],
+        [False, True,  False],
+        [True,  True,  False],
+        [False, False, True],
+    ])
+    dw = energy.current_weight_shrinkage(
+        weights, pre, mask=mask, raw_prior=prior,
+    )
+    masked_off = ~mask
+    assert torch.all(dw[masked_off] == 0.0)

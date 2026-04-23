@@ -1,0 +1,14 @@
+
+[H1-refined] W pct at +clamp=89.6% pct near 0=2.1% pct at -clamp=0.0%
+[H1-refined] cos(W·m_demeaned, r_som_loc_demeaned): c0=0.6726 c1=0.9525 mean=0.8125
+[H1-refined] cos(som_gain_eff_demeaned, r_som_loc_demeaned): c0=0.0000 c1=0.0000 mean=0.0000
+[H1-refined] som_gain_eff: mean c0=4.000 c1=4.000 std c0=0.0000 c1=0.0000 pct_at_clamp c0=100.0% c1=100.0%
+[H1-refined] shuffle-ctrl (demeaned eff): mean=0.0011 std=0.1742 gap=-0.0011 verdict=CONFIRMED
+
+--- summary numbers for DM ---
+H1 raw demeaned cos: c0=0.6726 c1=0.9525 mean=0.8125
+H1 eff demeaned cos: c0=0.0000 c1=0.0000 mean=0.0000
+H1 som_gain_eff std: c0=0.0000 c1=0.0000
+H1 som_gain_eff pct_at_clamp: c0=1.000 c1=1.000
+H1 shuffle: mean=0.0011 std=0.1742
+H1 verdict=CONFIRMED

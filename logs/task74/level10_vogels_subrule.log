@@ -1,0 +1,38 @@
+[all_on] wall=3.7s
+[no_vogels_l23] wall=3.0s
+[no_vogels_h] wall=3.1s
+[no_vogels_ipop] wall=3.1s
+[freeze_W_pv_l23] wall=3.1s
+[freeze_W_som_l23] wall=3.2s
+[freeze_both_l23inh] wall=3.2s
+
+=== INIT STATE (post-warmup) ===
+  r_l23_mean=0.32162
+  r_pv_mean=23.85401
+  r_som_mean=0.12082
+  W_pv_l23_raw_mean=-6.50081
+  W_pv_l23_eff_mean=0.00151
+  W_som_l23_raw_mean=-5.00257
+  W_som_l23_eff_mean=0.00673
+
+=== STEP-1 VOGELS dw (for vogels_l23 weights) ===
+  W_pv_l23_raw: dw_mean=-0.006415 dw_abs_mean=0.006415 frac_pos=0.000 w_raw_mean=-6.5008 w_eff_mean=0.00151
+  W_som_l23_raw: dw_mean=-0.000033 dw_abs_mean=0.000033 frac_pos=0.000 w_raw_mean=-5.0026 w_eff_mean=0.00673
+
+=== SUB-RULE ABLATION + WEIGHT-FREEZE RESULTS ===
+ablation=all_on               l23e_s500=0.022 som_s500=0.000 pv_s500=1.474 he_s500=0.011 hpv_s500=1.082 prevented=F
+ablation=no_vogels_l23        l23e_s500=0.271 som_s500=0.025 pv_s500=29.295 he_s500=0.015 hpv_s500=1.452 prevented=T
+ablation=no_vogels_h          l23e_s500=0.035 som_s500=0.000 pv_s500=2.958 he_s500=0.015 hpv_s500=1.630 prevented=F
+ablation=no_vogels_ipop       l23e_s500=0.024 som_s500=0.000 pv_s500=1.642 he_s500=0.011 hpv_s500=1.008 prevented=F
+ablation=freeze_W_pv_l23      l23e_s500=0.271 som_s500=0.025 pv_s500=29.296 he_s500=0.015 hpv_s500=1.452 prevented=T
+ablation=freeze_W_som_l23     l23e_s500=0.026 som_s500=0.000 pv_s500=1.919 he_s500=0.011 hpv_s500=1.065 prevented=F
+ablation=freeze_both_l23inh   l23e_s500=0.271 som_s500=0.025 pv_s500=29.295 he_s500=0.015 hpv_s500=1.452 prevented=T
+
+=== WEIGHT TRAJECTORY (all_on condition) ===
+  step=1    W_pv_l23_raw=-6.1496 W_pv_l23_eff=0.00214   W_som_l23_raw=-5.0026 W_som_l23_eff=0.00673
+  step=100  W_pv_l23_raw=-3.8072 W_pv_l23_eff=0.02201   W_som_l23_raw=-5.0027 W_som_l23_eff=0.00673
+  step=300  W_pv_l23_raw=-2.8565 W_pv_l23_eff=0.05595   W_som_l23_raw=-5.0027 W_som_l23_eff=0.00673
+  step=500  W_pv_l23_raw=-2.2956 W_pv_l23_eff=0.09603   W_som_l23_raw=-5.0027 W_som_l23_eff=0.00673
+
+[total wall=22.4s]
+[wrote] logs/task74/level10_vogels_subrule.json
