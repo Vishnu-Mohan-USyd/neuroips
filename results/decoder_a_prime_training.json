@@ -1,0 +1,100 @@
+{
+  "label": "Task #1 \u2014 Dec A' training on frozen R1+R2 L2/3",
+  "description": "Fresh Linear(36,36) trained on r_l23 from frozen R1+R2 emergent_seed42 network. Natural HMM stream, 50/50 task state, 20k grad steps Adam lr=1e-3, val every 500 steps on fixed seed=1234 pool (~8k readouts).",
+  "history": {
+    "step": [
+      0,
+      500,
+      1000,
+      1500,
+      2000,
+      2500,
+      3000,
+      3500,
+      4000,
+      4500,
+      5000
+    ],
+    "train_loss": [
+      NaN,
+      2.922912041187286,
+      2.2334776883125307,
+      1.9263047518730163,
+      1.7442274341583253,
+      1.617067296743393,
+      1.5203079092502594,
+      1.4428990395069123,
+      1.3803271543979645,
+      1.326274034500122,
+      1.2846685330867766
+    ],
+    "train_acc": [
+      NaN,
+      0.2744375,
+      0.361135,
+      0.4041825,
+      0.459065,
+      0.4991625,
+      0.5223475,
+      0.536305,
+      0.54655,
+      0.55306,
+      0.55753
+    ],
+    "val_loss": [
+      3.58632755279541,
+      2.4676830768585205,
+      2.048818349838257,
+      1.8223271369934082,
+      1.6723867654800415,
+      1.5620678663253784,
+      1.4760361909866333,
+      1.4066499471664429,
+      1.3492807149887085,
+      1.301259160041809,
+      1.2609061002731323
+    ],
+    "val_acc": [
+      0.03162500262260437,
+      0.35212501883506775,
+      0.37825003266334534,
+      0.43912503123283386,
+      0.48112502694129944,
+      0.5132500529289246,
+      0.5295000076293945,
+      0.5406250357627869,
+      0.5490000247955322,
+      0.5506250262260437,
+      0.5560000538825989
+    ]
+  },
+  "config": {
+    "n_steps": 5000,
+    "lr": 0.001,
+    "batch_size": 32,
+    "seq_length": 25,
+    "readout_window": [
+      9,
+      11
+    ],
+    "seed": 42,
+    "val_seed": 1234,
+    "n_val_batches": 10,
+    "n_val_readouts": 8000,
+    "steps_on": 12,
+    "steps_isi": 4,
+    "ambiguous_fraction": 0.3,
+    "task_state_mode": "50/50 focused/routine per batch"
+  },
+  "net_ckpt": "/mnt/c/Users/User/codingproj/freshstart/results/simple_dual/emergent_seed42/checkpoint.pt",
+  "net_config": "/mnt/c/Users/User/codingproj/freshstart/config/sweep/sweep_rescue_1_2.yaml",
+  "final": {
+    "val_loss": 1.2609061002731323,
+    "val_acc": 0.5560000538825989
+  },
+  "compare_decA_orig_on_val_pool": {
+    "val_loss": 1.2082438468933105,
+    "val_acc": 0.5472500324249268
+  },
+  "wall_clock_seconds": 2213.5609970092773
+}
