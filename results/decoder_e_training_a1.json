@@ -1,0 +1,98 @@
+{
+  "label": "Task #5 \u2014 Dec E training (a1) \u2014 RECOVERED FROM STEP4000",
+  "note": "Training completed through step 5000 but post-training Dec A comparison crashed due to legacy ckpt lacking 'loss_heads'. State_dict recovered from crash-safety snapshot at step 4000. Val_acc at step 4000 is within ~0.02 of the step-5000 projection from the visible curve; final 1000 steps not applied.",
+  "history": {
+    "step": [
+      0,
+      500,
+      1000,
+      1500,
+      2000,
+      2500,
+      3000,
+      3500,
+      4000
+    ],
+    "train_loss": [
+      NaN,
+      3.452369662761688,
+      3.233836015224457,
+      3.043391905784607,
+      2.876802854537964,
+      2.7313791155815124,
+      2.604327253341675,
+      2.4919667773246763,
+      2.3949461874961853
+    ],
+    "train_acc": [
+      NaN,
+      0.20696,
+      0.3499175,
+      0.3606375,
+      0.360365,
+      0.3596825,
+      0.36098,
+      0.360195,
+      0.3622425
+    ],
+    "val_loss": [
+      3.5806944370269775,
+      3.335242748260498,
+      3.133969306945801,
+      2.955920696258545,
+      2.8000824451446533,
+      2.6643271446228027,
+      2.5452027320861816,
+      2.4404642581939697,
+      2.3479843139648438
+    ],
+    "val_acc": [
+      0.03450000286102295,
+      0.33375000953674316,
+      0.3620000183582306,
+      0.3603750169277191,
+      0.35887500643730164,
+      0.36125001311302185,
+      0.3615000247955322,
+      0.3615000247955322,
+      0.3642500042915344
+    ],
+    "train_focused_frac_running": [
+      0.49475,
+      0.4984375,
+      0.5020625,
+      0.4988125,
+      0.501875,
+      0.50775,
+      0.5025625,
+      0.4946875
+    ]
+  },
+  "final": {
+    "val_loss": 2.3479843139648438,
+    "val_acc": 0.3642500042915344
+  },
+  "compare_decA_orig_on_val_pool": {
+    "val_loss": 2.7755556106567383,
+    "val_acc": 0.5956250429153442
+  },
+  "early_terminated_at_step_4000_due_to_crash": true,
+  "config": {
+    "n_steps": 4000,
+    "n_steps_target": 5000,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "batch_size": 32,
+    "seq_length": 25,
+    "readout_window": [
+      9,
+      11
+    ],
+    "seed": 42,
+    "val_seed": 1234,
+    "n_val_batches": 10,
+    "task_state_mode": "HMM-own stochastic (Markov task_p_switch=0.0)"
+  },
+  "net_ckpt": "/tmp/remote_ckpts/a1/checkpoint.pt",
+  "net_config": "/mnt/c/Users/User/codingproj/freshstart/config/sweep/sweep_a1.yaml"
+}

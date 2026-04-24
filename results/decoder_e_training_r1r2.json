@@ -1,0 +1,115 @@
+{
+  "label": "Task #5 \u2014 Dec E training on frozen R1+R2 L2/3 with HMM stochastic task_state",
+  "description": "Fresh Linear(36,36)+bias trained on r_l23 from frozen R1+R2 emergent_seed42 network. Natural HMM stream with the HMM's OWN task_state (Markov p_switch=0.2 per sweep_rescue_1_2.yaml) \u2014 NOT pinned focused, NOT 50/50. Adam lr=1e-3 no weight decay; 5000 grad steps. Val pool seed=1234.",
+  "history": {
+    "step": [
+      0,
+      500,
+      1000,
+      1500,
+      2000,
+      2500,
+      3000,
+      3500,
+      4000,
+      4500,
+      5000
+    ],
+    "train_loss": [
+      NaN,
+      2.918247512817383,
+      2.224478371620178,
+      1.9182821514606476,
+      1.7392449853420258,
+      1.618286066532135,
+      1.5235450706481934,
+      1.4513538043498992,
+      1.3894243142604827,
+      1.3406949460506439,
+      1.299069920539856
+    ],
+    "train_acc": [
+      NaN,
+      0.27148,
+      0.3558275,
+      0.400275,
+      0.45317,
+      0.49047,
+      0.51002,
+      0.5208425,
+      0.5280325,
+      0.5330325,
+      0.53765
+    ],
+    "val_loss": [
+      3.5850930213928223,
+      2.443150043487549,
+      2.0243585109710693,
+      1.8022087812423706,
+      1.656963586807251,
+      1.5508242845535278,
+      1.468193531036377,
+      1.40193772315979,
+      1.3475903272628784,
+      1.3023566007614136,
+      1.2645472288131714
+    ],
+    "val_acc": [
+      0.035875000059604645,
+      0.34825000166893005,
+      0.37662503123283386,
+      0.4285000264644623,
+      0.48625001311302185,
+      0.5138750076293945,
+      0.5283750295639038,
+      0.5403750538825989,
+      0.546625018119812,
+      0.5502500534057617,
+      0.5546250343322754
+    ],
+    "train_focused_frac_running": [
+      0.49891248762607576,
+      0.49775498819351194,
+      0.5010149884223938,
+      0.503147488117218,
+      0.49960998874902723,
+      0.49865498787164686,
+      0.4985624884963036,
+      0.4990049882531166,
+      0.5011274873018264,
+      0.5011824873089791
+    ]
+  },
+  "config": {
+    "n_steps": 5000,
+    "lr": 0.001,
+    "weight_decay": 0.0,
+    "batch_size": 32,
+    "seq_length": 25,
+    "readout_window": [
+      9,
+      11
+    ],
+    "seed": 42,
+    "val_seed": 1234,
+    "n_val_batches": 10,
+    "n_val_readouts": 8000,
+    "steps_on": 12,
+    "steps_isi": 4,
+    "ambiguous_fraction": 0.3,
+    "task_state_mode": "HMM-own stochastic (Markov task_p_switch=0.2)",
+    "cue_valid_fraction": 0.75
+  },
+  "net_ckpt": "/mnt/c/Users/User/codingproj/freshstart/results/simple_dual/emergent_seed42/checkpoint.pt",
+  "net_config": "/mnt/c/Users/User/codingproj/freshstart/config/sweep/sweep_rescue_1_2.yaml",
+  "final": {
+    "val_loss": 1.2645472288131714,
+    "val_acc": 0.5546250343322754
+  },
+  "val_focused_frac_mean": 0.5148749887943268,
+  "compare_decA_orig_on_val_pool": {
+    "val_loss": 1.2182002067565918,
+    "val_acc": 0.5353749990463257
+  },
+  "wall_clock_seconds": 2075.543543100357
+}
