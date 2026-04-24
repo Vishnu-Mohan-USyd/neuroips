@@ -174,6 +174,56 @@ def load_decoder_c(path: str, N: int, device: torch.device) -> nn.Linear:
     return dec
 
 
+def load_decoder_d(path: str, N: int, device: torch.device) -> nn.Linear:
+    """Task #4 — Load Decoder D-raw or D-shape (Linear(N, N)+bias)."""
+    dd = torch.load(path, map_location=device, weights_only=False)
+    sd = dd['state_dict'] if isinstance(dd, dict) and 'state_dict' in dd else dd
+    dec = nn.Linear(N, N, bias=True).to(device)
+    dec.load_state_dict(sd)
+    dec.eval()
+    return dec
+
+
+# Task #4 module-level Decoder D slots. Populated from argparse in main().
+# Set to None → D accs are not computed (backwards-compatible no-op).
+DEC_D_RAW: nn.Linear | None = None
+DEC_D_SHAPE: nn.Linear | None = None
+
+
+def _decD_accs(r: np.ndarray, true_ch: np.ndarray
+               ) -> tuple[float | None, float | None, int]:
+    """Compute Dec D-raw and Dec D-shape top-1 accs on r vs true_ch.
+
+    Returns (d_raw_acc, d_shape_acc, n). Returns (None, None, 0) if DEC_D_*
+    globals are not set or n == 0.
+    """
+    n = int(r.shape[0])
+    if n == 0 or DEC_D_RAW is None or DEC_D_SHAPE is None:
+        return None, None, n
+    r_t = torch.from_numpy(np.ascontiguousarray(r)).float()
+    with torch.no_grad():
+        pred_raw = DEC_D_RAW(r_t).argmax(dim=-1).numpy()
+        r_sum = r_t.sum(dim=1, keepdim=True) + 1e-8
+        r_shape = r_t / r_sum
+        pred_shape = DEC_D_SHAPE(r_shape).argmax(dim=-1).numpy()
+    return (float((pred_raw == true_ch).mean()),
+            float((pred_shape == true_ch).mean()), n)
+
+
+def _add_decD_delta(out: dict, prefix_ex: str = 'expected', prefix_unex: str = 'unexpected') -> None:
+    """Populate decD_raw_acc_ex/unex/delta + decD_shape_acc_ex/unex/delta from
+    the per-bucket keys ``{prefix_ex}_decD_{raw,shape}_acc`` and
+    ``{prefix_unex}_decD_{raw,shape}_acc``. No-op if keys missing."""
+    for v in ['raw', 'shape']:
+        ex = out.get(f'{prefix_ex}_decD_{v}_acc')
+        un = out.get(f'{prefix_unex}_decD_{v}_acc')
+        if ex is None or un is None:
+            continue
+        out[f'decD_{v}_acc_ex'] = ex
+        out[f'decD_{v}_acc_unex'] = un
+        out[f'decD_{v}_delta'] = ex - un
+
+
 def acc_one(decoder: nn.Linear, r: np.ndarray, true_ch: np.ndarray
             ) -> tuple[float | None, int]:
     """Top-1 accuracy of `decoder` on r vs true_ch. r: [n, N]."""
@@ -307,6 +357,9 @@ def eval_NEW(checkpoint: str, config: str, decoder_c_path: str,
             cor_unex_A.append(cu_A); cor_unex_C.append(cu_C)
             cor_ex_R.append(r_probe_ex);  cor_ex_Y.append(ex_ch)
             cor_unex_R.append(r_probe_unex); cor_unex_Y.append(unex_ch)
+            # Task #4 Dec D per-N (same r_probe as decA/decC)
+            dR_ex, dS_ex, _ = _decD_accs(r_probe_ex, ex_ch)
+            dR_un, dS_un, _ = _decD_accs(r_probe_unex, unex_ch)
             per_N.append({
                 'N': int(N), 'n': int(ex_ch.size),
                 'decA_acc_ex': float(ce_A.mean()),
@@ -315,6 +368,10 @@ def eval_NEW(checkpoint: str, config: str, decoder_c_path: str,
                 'decC_acc_unex': float(cu_C.mean()),
                 'decA_delta': float(ce_A.mean() - cu_A.mean()),
                 'decC_delta': float(ce_C.mean() - cu_C.mean()),
+                'decD_raw_acc_ex': dR_ex, 'decD_raw_acc_unex': dR_un,
+                'decD_raw_delta': (dR_ex - dR_un) if (dR_ex is not None and dR_un is not None) else None,
+                'decD_shape_acc_ex': dS_ex, 'decD_shape_acc_unex': dS_un,
+                'decD_shape_delta': (dS_ex - dS_un) if (dS_ex is not None and dS_un is not None) else None,
             })
             print(f"[NEW] N={N:>2}  decA Δ={ce_A.mean()-cu_A.mean():+.4f}  "
                   f"decC Δ={ce_C.mean()-cu_C.mean():+.4f}  n={ex_ch.size}",
@@ -328,6 +385,9 @@ def eval_NEW(checkpoint: str, config: str, decoder_c_path: str,
     decB_unex_acc, decB_unex_n, decB_unex_folds = decB_acc_5fold(R_unex, Y_unex, seed=seed_base)
     decB_delta = (None if decB_ex_acc is None or decB_unex_acc is None
                   else decB_ex_acc - decB_unex_acc)
+    # Task #4 Dec D on pooled ex/unex R arrays
+    dR_exP, dS_exP, _ = _decD_accs(R_ex, Y_ex)
+    dR_unP, dS_unP, _ = _decD_accs(R_unex, Y_unex)
     return {
         'strategy': 'NEW (eval_ex_vs_unex_decC)',
         'native_decoder': 'C',
@@ -340,6 +400,10 @@ def eval_NEW(checkpoint: str, config: str, decoder_c_path: str,
         'decB_delta': decB_delta,
         'decB_n_used_ex': decB_ex_n, 'decB_n_used_unex': decB_unex_n,
         'decB_per_fold_ex': decB_ex_folds, 'decB_per_fold_unex': decB_unex_folds,
+        'decD_raw_acc_ex': dR_exP, 'decD_raw_acc_unex': dR_unP,
+        'decD_raw_delta': (dR_exP - dR_unP) if (dR_exP is not None and dR_unP is not None) else None,
+        'decD_shape_acc_ex': dS_exP, 'decD_shape_acc_unex': dS_unP,
+        'decD_shape_delta': (dS_exP - dS_unP) if (dS_exP is not None and dS_unP is not None) else None,
         'per_N': per_N,
     }
 
@@ -389,13 +453,17 @@ def eval_M3R(checkpoint: str, config: str, decoder_c_path: str,
         a_acc, n = acc_one(decA, b['r_win'], b['true_ch'])
         c_acc, _ = acc_one(decC, b['r_win'], b['true_ch'])
         b_acc, b_n, b_folds = decB_acc_5fold(b['r_win'], b['true_ch'], seed=seed)
+        d_r, d_s, _ = _decD_accs(b['r_win'], b['true_ch'])
         out[f'{name}_n'] = n
         out[f'{name}_decA_acc'] = a_acc
         out[f'{name}_decC_acc'] = c_acc
         out[f'{name}_decB_acc'] = b_acc
         out[f'{name}_decB_n_used'] = b_n
         out[f'{name}_decB_per_fold'] = b_folds
-        print(f"[M3R] {name:<11s} n={n}  decA={a_acc}  decB={b_acc}  decC={c_acc}",
+        out[f'{name}_decD_raw_acc'] = d_r
+        out[f'{name}_decD_shape_acc'] = d_s
+        print(f"[M3R] {name:<11s} n={n}  decA={a_acc}  decB={b_acc}  decC={c_acc}"
+              + (f"  dD_raw={d_r}  dD_shape={d_s}" if d_r is not None else ""),
               flush=True)
     out['n_ex'] = out['expected_n']
     out['n_unex'] = out['unexpected_n']
@@ -409,6 +477,7 @@ def eval_M3R(checkpoint: str, config: str, decoder_c_path: str,
     out['decC_delta'] = out['decC_acc_ex'] - out['decC_acc_unex']
     out['decB_delta'] = (None if out['decB_acc_ex'] is None or out['decB_acc_unex'] is None
                          else out['decB_acc_ex'] - out['decB_acc_unex'])
+    _add_decD_delta(out)
     return out
 
 
@@ -454,13 +523,17 @@ def _eval_HMS_inner(args, device, tight_expected: bool, decoder_c_path: str,
         a_acc, n = acc_one(decA, r, true_ch)
         c_acc, _ = acc_one(decC, r, true_ch)
         b_acc, b_n, b_folds = decB_acc_5fold(r, true_ch, seed=getattr(args, 'rng_seed', 42))
+        d_r, d_s, _ = _decD_accs(r, true_ch)
         out[f'{name}_n'] = n
         out[f'{name}_decA_acc'] = a_acc
         out[f'{name}_decC_acc'] = c_acc
         out[f'{name}_decB_acc'] = b_acc
         out[f'{name}_decB_n_used'] = b_n
         out[f'{name}_decB_per_fold'] = b_folds
-        print(f"[{label}] {name:<11s} n={n}  decA={a_acc}  decB={b_acc}  decC={c_acc}",
+        out[f'{name}_decD_raw_acc'] = d_r
+        out[f'{name}_decD_shape_acc'] = d_s
+        print(f"[{label}] {name:<11s} n={n}  decA={a_acc}  decB={b_acc}  decC={c_acc}"
+              + (f"  dD_raw={d_r}  dD_shape={d_s}" if d_r is not None else ""),
               flush=True)
     out['n_ex'] = out['expected_n']
     out['n_unex'] = out['unexpected_n']
@@ -474,6 +547,7 @@ def _eval_HMS_inner(args, device, tight_expected: bool, decoder_c_path: str,
     out['decC_delta'] = out['decC_acc_ex'] - out['decC_acc_unex']
     out['decB_delta'] = (None if out['decB_acc_ex'] is None or out['decB_acc_unex'] is None
                          else out['decB_acc_ex'] - out['decB_acc_unex'])
+    _add_decD_delta(out)
     return out
 
 
@@ -560,13 +634,17 @@ def eval_P3P(checkpoint: str, config: str, decoder_c_path: str,
         a_acc, n = acc_one(decA, r, true_ch)
         c_acc, _ = acc_one(decC, r, true_ch)
         b_acc, b_n, b_folds = decB_acc_5fold(r, true_ch, seed=seed)
+        d_r, d_s, _ = _decD_accs(r, true_ch)
         out[f'{name}_n'] = n
         out[f'{name}_decA_acc'] = a_acc
         out[f'{name}_decC_acc'] = c_acc
         out[f'{name}_decB_acc'] = b_acc
         out[f'{name}_decB_n_used'] = b_n
         out[f'{name}_decB_per_fold'] = b_folds
-        print(f"[P3P] {name:<11s} n={n}  decA={a_acc}  decB={b_acc}  decC={c_acc}",
+        out[f'{name}_decD_raw_acc'] = d_r
+        out[f'{name}_decD_shape_acc'] = d_s
+        print(f"[P3P] {name:<11s} n={n}  decA={a_acc}  decB={b_acc}  decC={c_acc}"
+              + (f"  dD_raw={d_r}  dD_shape={d_s}" if d_r is not None else ""),
               flush=True)
     out['n_ex'] = out['expected_n']
     out['n_unex'] = out['unexpected_n']
@@ -580,6 +658,7 @@ def eval_P3P(checkpoint: str, config: str, decoder_c_path: str,
     out['decC_delta'] = out['decC_acc_ex'] - out['decC_acc_unex']
     out['decB_delta'] = (None if out['decB_acc_ex'] is None or out['decB_acc_unex'] is None
                          else out['decB_acc_ex'] - out['decB_acc_unex'])
+    _add_decD_delta(out)
     return out
 
 
@@ -668,9 +747,16 @@ def eval_VCD(checkpoint: str, config: str, decoder_c_path: str,
     b_u, b_u_n, b_u_folds = decB_acc_5fold(r_u, t_u, seed=seed)
     decB_delta = (None if b_e is None or b_u is None else b_e - b_u)
 
+    dR_e, dS_e, _ = _decD_accs(r_e, t_e)
+    dR_u, dS_u, _ = _decD_accs(r_u, t_u)
+
     print(f"[VCD] n_pairs={n_pairs}  decA Δ={a_e - a_u:+.4f}  "
           f"decB Δ={(b_e - b_u) if (b_e is not None and b_u is not None) else float('nan'):+.4f}  "
-          f"decC Δ={c_e - c_u:+.4f}", flush=True)
+          f"decC Δ={c_e - c_u:+.4f}"
+          + (f"  dD_raw Δ={dR_e - dR_u:+.4f}  dD_shape Δ={dS_e - dS_u:+.4f}"
+             if (dR_e is not None and dR_u is not None and dS_e is not None and dS_u is not None)
+             else ""),
+          flush=True)
 
     return {
         'strategy': 'VCD-test3 (v2_confidence_dissection)',
@@ -686,6 +772,10 @@ def eval_VCD(checkpoint: str, config: str, decoder_c_path: str,
         'decA_delta': a_e - a_u,
         'decC_delta': c_e - c_u,
         'decB_delta': decB_delta,
+        'decD_raw_acc_ex': dR_e, 'decD_raw_acc_unex': dR_u,
+        'decD_raw_delta': (dR_e - dR_u) if (dR_e is not None and dR_u is not None) else None,
+        'decD_shape_acc_ex': dS_e, 'decD_shape_acc_unex': dS_u,
+        'decD_shape_delta': (dS_e - dS_u) if (dS_e is not None and dS_u is not None) else None,
     }
 
 
@@ -713,6 +803,13 @@ def parse_args() -> argparse.Namespace:
                         'bumps for all HMM-driven strategies. Applied via '
                         'HMMSequenceGenerator.generate monkey-patch — affects '
                         'every strategy except NEW (which uses build_trial_batch).')
+    p.add_argument('--decoder-d-raw-path', default=None,
+                   help='Task #4: path to Dec D-raw ckpt (Linear(N, N)+bias). '
+                        'If set, Δ_D-raw is computed per assay alongside A/B/C.')
+    p.add_argument('--decoder-d-shape-path', default=None,
+                   help='Task #4: path to Dec D-shape ckpt (Linear(N, N)+bias). '
+                        'Operates on shape-normalised r_l23. If set, Δ_D-shape '
+                        'is computed per assay alongside A/B/C.')
     return p.parse_args()
 
 
@@ -729,6 +826,21 @@ def main() -> None:
           flush=True)
     print(f"[setup] strategies={args.strategies}", flush=True)
     print(f"[setup] override_task_cue={args.override_task_cue}", flush=True)
+
+    # Task #4 — load Dec D-raw / D-shape if paths provided; cache in module globals.
+    global DEC_D_RAW, DEC_D_SHAPE
+    if args.decoder_d_raw_path and args.decoder_d_shape_path:
+        mc_tmp, _, _ = load_config(args.config)
+        N_tmp = int(mc_tmp.n_orientations)
+        DEC_D_RAW = load_decoder_d(args.decoder_d_raw_path, N_tmp, torch.device('cpu'))
+        DEC_D_SHAPE = load_decoder_d(args.decoder_d_shape_path, N_tmp, torch.device('cpu'))
+        print(f"[setup] Dec D-raw   loaded from {args.decoder_d_raw_path}", flush=True)
+        print(f"[setup] Dec D-shape loaded from {args.decoder_d_shape_path}", flush=True)
+    elif args.decoder_d_raw_path or args.decoder_d_shape_path:
+        raise ValueError("--decoder-d-raw-path and --decoder-d-shape-path must be set together")
+    else:
+        print(f"[setup] Dec D disabled (no --decoder-d-raw-path / --decoder-d-shape-path)",
+              flush=True)
 
     if args.override_task_cue:
         model_cfg, _, _ = load_config(args.config)

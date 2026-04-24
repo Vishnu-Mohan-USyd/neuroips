@@ -246,6 +246,8 @@ def run_condition(cond_id: str, cond_label: str, ts_value: list[float], zero_cue
                   device: torch.device, n_trials: int, seed: int, n_boot: int,
                   decoder_a: nn.Linear | None = None,
                   pertrial_dump_dir: str | None = None,
+                  decoder_d_raw: nn.Linear | None = None,
+                  decoder_d_shape: nn.Linear | None = None,
                   ) -> dict[str, Any]:
     """One condition: build temporal seqs + run 3 probe-branch forwards. Returns
     summary dict with per-trial arrays preserved for bootstrap + S(d) profile."""
@@ -318,6 +320,26 @@ def run_condition(cond_id: str, cond_label: str, ts_value: list[float], zero_cue
     else:
         decA_correct_ex = None
         decA_correct_unex = None
+
+    # ---------- Decoder D-raw and D-shape (Task #4 — neutral FB-off linear) ----------
+    # D-raw: direct on r_l23. D-shape: r_l23 normalised by row sum.
+    if decoder_d_raw is not None and decoder_d_shape is not None:
+        with torch.no_grad():
+            pred_draw_ex = decoder_d_raw(r_probe_ex).argmax(dim=-1)
+            pred_draw_unex = decoder_d_raw(r_probe_unex).argmax(dim=-1)
+            r_shape_ex = r_probe_ex / (r_probe_ex.sum(dim=1, keepdim=True) + 1e-8)
+            r_shape_unex = r_probe_unex / (r_probe_unex.sum(dim=1, keepdim=True) + 1e-8)
+            pred_dshape_ex = decoder_d_shape(r_shape_ex).argmax(dim=-1)
+            pred_dshape_unex = decoder_d_shape(r_shape_unex).argmax(dim=-1)
+        decD_raw_correct_ex = (pred_draw_ex == true_ch_ex).cpu().numpy().astype(np.float64)
+        decD_raw_correct_unex = (pred_draw_unex == true_ch_unex).cpu().numpy().astype(np.float64)
+        decD_shape_correct_ex = (pred_dshape_ex == true_ch_ex).cpu().numpy().astype(np.float64)
+        decD_shape_correct_unex = (pred_dshape_unex == true_ch_unex).cpu().numpy().astype(np.float64)
+    else:
+        decD_raw_correct_ex = None
+        decD_raw_correct_unex = None
+        decD_shape_correct_ex = None
+        decD_shape_correct_unex = None
 
     # ---------- Decoder B (5-fold CV, per-trial correctness) ----------
     rB_ex = r_probe_ex.detach().cpu()
@@ -417,7 +439,7 @@ def run_condition(cond_id: str, cond_label: str, ts_value: list[float], zero_cue
 
     # ---------- Pack ----------
     def _branch_summary(decC_corr, decB_folds, decB_pertrial, decA_corr, peak, netv, fwhm,
-                        tc_m, tc_s):
+                        tc_m, tc_s, decD_raw_corr=None, decD_shape_corr=None):
         m_decC, s_decC, _ = mean_sem(decC_corr)
         decB_arr = np.array(decB_folds, dtype=np.float64)
         m_decB = float(decB_arr.mean())
@@ -431,6 +453,14 @@ def run_condition(cond_id: str, cond_label: str, ts_value: list[float], zero_cue
             m_decA, s_decA, _ = mean_sem(decA_corr)
         else:
             m_decA, s_decA = None, None
+        if decD_raw_corr is not None:
+            m_decDraw, s_decDraw, _ = mean_sem(decD_raw_corr)
+        else:
+            m_decDraw, s_decDraw = None, None
+        if decD_shape_corr is not None:
+            m_decDshape, s_decDshape, _ = mean_sem(decD_shape_corr)
+        else:
+            m_decDshape, s_decDshape = None, None
         return {
             "n_trials": int(n),
             "decC_acc_mean": m_decC,
@@ -443,6 +473,10 @@ def run_condition(cond_id: str, cond_label: str, ts_value: list[float], zero_cue
             "decB_pertrial_n_used": n_decB_pt,
             "decA_acc_mean": m_decA,
             "decA_acc_sem": s_decA,
+            "decD_raw_acc_mean": m_decDraw,
+            "decD_raw_acc_sem": s_decDraw,
+            "decD_shape_acc_mean": m_decDshape,
+            "decD_shape_acc_sem": s_decDshape,
             "peak_mean": m_peak,
             "peak_sem": s_peak,
             "net_mean": m_net,
@@ -463,10 +497,14 @@ def run_condition(cond_id: str, cond_label: str, ts_value: list[float], zero_cue
         "branches": {
             "ex":   _branch_summary(decC_correct_ex, decB_folds_ex, decB_pertrial_ex,
                                     decA_correct_ex,
-                                    peak_ex, net_ex_v, fwhm_ex, tc_mean_ex, tc_sem_ex),
+                                    peak_ex, net_ex_v, fwhm_ex, tc_mean_ex, tc_sem_ex,
+                                    decD_raw_corr=decD_raw_correct_ex,
+                                    decD_shape_corr=decD_shape_correct_ex),
             "unex": _branch_summary(decC_correct_unex, decB_folds_unex, decB_pertrial_unex,
                                     decA_correct_unex,
-                                    peak_unex, net_unex_v, fwhm_unex, tc_mean_unex, tc_sem_unex),
+                                    peak_unex, net_unex_v, fwhm_unex, tc_mean_unex, tc_sem_unex,
+                                    decD_raw_corr=decD_raw_correct_unex,
+                                    decD_shape_corr=decD_shape_correct_unex),
         },
         "deltas_ex_minus_unex_bootstrap": {
             "decC_acc": boot_decC,
@@ -685,6 +723,13 @@ def main():
                    help="If set, dumps per-condition r_probe + decoder correctness arrays as NPZs.")
     p.add_argument("--conditions", default=None,
                    help="Comma-separated list of condition IDs to run (default=all).")
+    p.add_argument("--decoder-d-raw-path", default=None,
+                   help="Task #4: Dec D-raw ckpt path (Linear(N, N)+bias). If set "
+                        "together with --decoder-d-shape-path, Δ_D columns are "
+                        "computed per branch.")
+    p.add_argument("--decoder-d-shape-path", default=None,
+                   help="Task #4: Dec D-shape ckpt path (Linear(N, N)+bias). "
+                        "Applied to r_l23 / (r_l23.sum + 1e-8).")
     args = p.parse_args()
 
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -749,6 +794,23 @@ def main():
     else:
         print(f"[setup] WARN: Decoder A not found in ckpt; will skip Dec A", flush=True)
 
+    # Task #4 — load Dec D-raw / D-shape if both paths provided
+    decoder_d_raw = None
+    decoder_d_shape = None
+    if args.decoder_d_raw_path and args.decoder_d_shape_path:
+        dR_ckpt = torch.load(args.decoder_d_raw_path, map_location=device, weights_only=False)
+        dS_ckpt = torch.load(args.decoder_d_shape_path, map_location=device, weights_only=False)
+        decoder_d_raw = nn.Linear(n_ori, n_ori, bias=True).to(device)
+        decoder_d_raw.load_state_dict(dR_ckpt['state_dict'] if isinstance(dR_ckpt, dict) and 'state_dict' in dR_ckpt else dR_ckpt)
+        decoder_d_raw.eval()
+        decoder_d_shape = nn.Linear(n_ori, n_ori, bias=True).to(device)
+        decoder_d_shape.load_state_dict(dS_ckpt['state_dict'] if isinstance(dS_ckpt, dict) and 'state_dict' in dS_ckpt else dS_ckpt)
+        decoder_d_shape.eval()
+        print(f"[setup] Decoder D-raw   loaded from {args.decoder_d_raw_path}", flush=True)
+        print(f"[setup] Decoder D-shape loaded from {args.decoder_d_shape_path}", flush=True)
+    elif args.decoder_d_raw_path or args.decoder_d_shape_path:
+        raise ValueError("--decoder-d-raw-path and --decoder-d-shape-path must be set together")
+
     # Build ONE HMM batch with sweep_rescue_1_2 params
     gen = HMMSequenceGenerator(
         n_orientations=n_ori,
@@ -793,7 +855,9 @@ def main():
                             net, decoder_c, device, args.n_trials, args.seed,
                             args.n_boot,
                             decoder_a=decoder_a,
-                            pertrial_dump_dir=getattr(args, 'pertrial_dump_dir', None))
+                            pertrial_dump_dir=getattr(args, 'pertrial_dump_dir', None),
+                            decoder_d_raw=decoder_d_raw,
+                            decoder_d_shape=decoder_d_shape)
         cond_results.append(res)
 
         # Per-condition headline summary

@@ -69,7 +69,9 @@ def _row_sign_agreement(row: dict) -> dict:
 
 def _row(assay: str, network: str, source: str,
          decA_ex, decA_unex, decB_ex, decB_unex, decC_ex, decC_unex,
-         n_ex=None, n_unex=None, notes: str | None = None) -> dict:
+         n_ex=None, n_unex=None, notes: str | None = None,
+         decD_raw_ex=None, decD_raw_unex=None,
+         decD_shape_ex=None, decD_shape_unex=None) -> dict:
     def _delta(e, u):
         if e is None or u is None:
             return None
@@ -86,6 +88,10 @@ def _row(assay: str, network: str, source: str,
         'decB_delta': _delta(decB_ex, decB_unex),
         'decC_acc_ex': decC_ex, 'decC_acc_unex': decC_unex,
         'decC_delta': _delta(decC_ex, decC_unex),
+        'decD_raw_acc_ex': decD_raw_ex, 'decD_raw_acc_unex': decD_raw_unex,
+        'decD_raw_delta': _delta(decD_raw_ex, decD_raw_unex),
+        'decD_shape_acc_ex': decD_shape_ex, 'decD_shape_acc_unex': decD_shape_unex,
+        'decD_shape_delta': _delta(decD_shape_ex, decD_shape_unex),
         'notes': notes,
     }
     row['sign_agreement'] = _row_sign_agreement(row)
@@ -116,6 +122,8 @@ def _load_paradigm_R1R2(path: str) -> list[dict]:
             decB_ex=ex.get('decB_acc_mean'), decB_unex=ux.get('decB_acc_mean'),
             decC_ex=ex.get('decC_acc_mean'), decC_unex=ux.get('decC_acc_mean'),
             n_ex=ex.get('n_trials'), n_unex=ux.get('n_trials'),
+            decD_raw_ex=ex.get('decD_raw_acc_mean'), decD_raw_unex=ux.get('decD_raw_acc_mean'),
+            decD_shape_ex=ex.get('decD_shape_acc_mean'), decD_shape_unex=ux.get('decD_shape_acc_mean'),
         ))
     return rows
 
@@ -135,6 +143,8 @@ def _load_legacy_C1(path: str, network_label: str) -> dict:
         decB_ex=ex.get('decB_acc_mean'), decB_unex=ux.get('decB_acc_mean'),
         decC_ex=ex.get('decC_acc_mean'), decC_unex=ux.get('decC_acc_mean'),
         n_ex=ex.get('n_trials'), n_unex=ux.get('n_trials'),
+        decD_raw_ex=ex.get('decD_raw_acc_mean'), decD_raw_unex=ux.get('decD_raw_acc_mean'),
+        decD_shape_ex=ex.get('decD_shape_acc_mean'), decD_shape_unex=ux.get('decD_shape_acc_mean'),
     )
 
 
@@ -162,12 +172,20 @@ def _load_xdec_obs(path: str, modified: bool) -> list[dict]:
             decC_ex=r.get('decC_acc_ex'), decC_unex=r.get('decC_acc_unex'),
             n_ex=r.get('n_ex'), n_unex=r.get('n_unex'),
             notes=f"native={r.get('native_decoder')}",
+            decD_raw_ex=r.get('decD_raw_acc_ex'), decD_raw_unex=r.get('decD_raw_acc_unex'),
+            decD_shape_ex=r.get('decD_shape_acc_ex'), decD_shape_unex=r.get('decD_shape_acc_unex'),
         ))
     return rows
 
 
 def _per_decoder_profile(rows: list[dict]) -> dict:
-    """Per-decoder profile: agreement count, |Δ| magnitude, outlier rows."""
+    """Per-decoder profile: agreement count, |Δ| magnitude, outlier rows.
+
+    Sign-agreement is defined over the A/B/C triple (so A/B/C get full
+    majority/outlier stats). Dec D_raw and Dec D_shape are reported as
+    magnitude summaries alongside A/B/C, with per-row sign-flip vs C and vs
+    A-C-majority recorded for later analysis.
+    """
     out = {}
     for dec in ['A', 'B', 'C']:
         deltas = [r.get(f'dec{dec}_delta') for r in rows
@@ -201,15 +219,46 @@ def _per_decoder_profile(rows: list[dict]) -> dict:
             'n_rows_disagreeing_with_majority': majority_disagree,
             'outlier_in_rows': outlier_rows,
         }
+    # Dec D_raw / D_shape: magnitude summary + agreement with C sign per row
+    for dec_name, field in [('D_raw', 'decD_raw_delta'),
+                            ('D_shape', 'decD_shape_delta')]:
+        deltas = [r.get(field) for r in rows if r.get(field) is not None]
+        valid = [v for v in deltas if not (isinstance(v, float) and math.isnan(v))]
+        # Agreement with A-B-C majority sign where both defined
+        agree_with_majority = []
+        disagree_with_majority = []
+        for r in rows:
+            d = r.get(field)
+            if d is None or (isinstance(d, float) and math.isnan(d)):
+                continue
+            maj = r['sign_agreement'].get('majority')
+            if maj is None:
+                continue
+            s = _sign(d)
+            if s is None:
+                continue
+            key = r['assay'] + ' / ' + r['network']
+            if s == maj:
+                agree_with_majority.append(key)
+            else:
+                disagree_with_majority.append(key)
+        out[dec_name] = {
+            'n_rows_with_delta': len(valid),
+            'mean_abs_delta': float(sum(abs(v) for v in valid) / len(valid)) if valid else None,
+            'max_abs_delta': float(max(abs(v) for v in valid)) if valid else None,
+            'n_rows_agreeing_with_ABC_majority': len(agree_with_majority),
+            'n_rows_disagreeing_with_ABC_majority': len(disagree_with_majority),
+            'rows_disagreeing_with_ABC_majority': disagree_with_majority,
+        }
     return out
 
 
 def _format_md(rows: list[dict], profile: dict) -> str:
     """Markdown deliverable."""
-    out = ['# Cross-decoder comprehensive matrix\n',
+    out = ['# Cross-decoder comprehensive matrix (with Dec D)\n',
            '## Long-form per-row table (raw ex/unex/Δ for each decoder)\n',
-           '| # | Assay | Network | n_ex | n_unex | ex_A | unex_A | Δ_A | ex_B | unex_B | Δ_B | ex_C | unex_C | Δ_C | sign-agree |',
-           '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
+           '| # | Assay | Network | n_ex | n_unex | ex_A | unex_A | Δ_A | ex_B | unex_B | Δ_B | ex_C | unex_C | Δ_C | ex_Dr | unex_Dr | Δ_Dr | ex_Ds | unex_Ds | Δ_Ds | sign-agree (ABC) |',
+           '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|']
     def fmt(x, decimals=4):
         if x is None:
             return ' — '
@@ -235,11 +284,13 @@ def _format_md(rows: list[dict], profile: dict) -> str:
             f"{fmt(r['decA_acc_ex'])} | {fmt(r['decA_acc_unex'])} | {fmtsign(r['decA_delta'])} | "
             f"{fmt(r['decB_acc_ex'])} | {fmt(r['decB_acc_unex'])} | {fmtsign(r['decB_delta'])} | "
             f"{fmt(r['decC_acc_ex'])} | {fmt(r['decC_acc_unex'])} | {fmtsign(r['decC_delta'])} | "
+            f"{fmt(r.get('decD_raw_acc_ex'))} | {fmt(r.get('decD_raw_acc_unex'))} | {fmtsign(r.get('decD_raw_delta'))} | "
+            f"{fmt(r.get('decD_shape_acc_ex'))} | {fmt(r.get('decD_shape_acc_unex'))} | {fmtsign(r.get('decD_shape_delta'))} | "
             f"{sg} |"
         )
-    out += ['\n## Compact Δ side-by-side (sign-agreement)\n',
-            '| # | Assay | Network | Δ_A | Δ_B | Δ_C | majority sign | outlier |',
-            '|---|---|---|---|---|---|---|---|']
+    out += ['\n## Compact Δ side-by-side (5-decoder; sign-agreement is over A/B/C)\n',
+            '| # | Assay | Network | Δ_A | Δ_B | Δ_C | Δ_D-raw | Δ_D-shape | majority sign (ABC) | outlier (ABC) |',
+            '|---|---|---|---|---|---|---|---|---|---|']
     for i, r in enumerate(rows, 1):
         sa = r['sign_agreement']
         msign = sa.get('majority')
@@ -254,10 +305,11 @@ def _format_md(rows: list[dict], profile: dict) -> str:
         out.append(
             f"| {i} | {r['assay']} | {r['network']} | "
             f"{fmtsign(r['decA_delta'])} | {fmtsign(r['decB_delta'])} | {fmtsign(r['decC_delta'])} | "
+            f"{fmtsign(r.get('decD_raw_delta'))} | {fmtsign(r.get('decD_shape_delta'))} | "
             f"{ms} | {sa.get('outlier') or '—'} |"
         )
-    out += ['\n## Per-decoder profile\n',
-            '| Decoder | n rows | mean |Δ| | max |Δ| | rows ALL agree | rows agreeing w/ majority | rows disagreeing w/ majority | rows where this is outlier |',
+    out += ['\n## Per-decoder profile (A/B/C: ABC-sign-agreement stats; D_raw/D_shape: agreement with A/B/C majority)\n',
+            '| Decoder | n rows | mean |Δ| | max |Δ| | rows ALL agree (ABC) | rows agreeing w/ majority | rows disagreeing w/ majority | outlier / disagree rows |',
             '|---|---|---|---|---|---|---|---|']
     for dec in ['A', 'B', 'C']:
         p = profile[dec]
@@ -268,6 +320,18 @@ def _format_md(rows: list[dict], profile: dict) -> str:
             f"| {dec} | {p['n_rows_with_delta']} | {ma} | {mx} | "
             f"{p['n_rows_all_agree']} | {p['n_rows_with_majority_agreeing']} | "
             f"{p['n_rows_disagreeing_with_majority']} | {ml} |"
+        )
+    for dec in ['D_raw', 'D_shape']:
+        if dec not in profile:
+            continue
+        p = profile[dec]
+        ma = fmt(p['mean_abs_delta'], 4) if p['mean_abs_delta'] is not None else '—'
+        mx = fmt(p['max_abs_delta'], 4) if p['max_abs_delta'] is not None else '—'
+        ml = ', '.join(p['rows_disagreeing_with_ABC_majority']) if p['rows_disagreeing_with_ABC_majority'] else '—'
+        out.append(
+            f"| {dec} | {p['n_rows_with_delta']} | {ma} | {mx} | "
+            f"— | {p['n_rows_agreeing_with_ABC_majority']} | "
+            f"{p['n_rows_disagreeing_with_ABC_majority']} | {ml} |"
         )
     return '\n'.join(out) + '\n'
 

@@ -1,0 +1,640 @@
+{
+  "task": "#26 cross-decoder comprehensive matrix",
+  "rows": [
+    {
+      "assay": "HMM C1 (focused + HMM cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_paradigm_R1R2.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.656,
+      "decA_acc_unex": 0.341,
+      "decA_delta": 0.315,
+      "decB_acc_ex": 0.603,
+      "decB_acc_unex": 0.583,
+      "decB_delta": 0.020000000000000018,
+      "decC_acc_ex": 0.61,
+      "decC_acc_unex": 0.544,
+      "decC_delta": 0.06599999999999995,
+      "decD_raw_acc_ex": 0.369,
+      "decD_raw_acc_unex": 0.36,
+      "decD_raw_delta": 0.009000000000000008,
+      "decD_shape_acc_ex": 0.368,
+      "decD_shape_acc_unex": 0.335,
+      "decD_shape_delta": 0.032999999999999974,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": 1,
+          "C": 1
+        },
+        "all_agree": true,
+        "majority": 1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "HMM C2 (routine + HMM cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_paradigm_R1R2.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.449,
+      "decA_acc_unex": 0.287,
+      "decA_delta": 0.16200000000000003,
+      "decB_acc_ex": 0.44000000000000006,
+      "decB_acc_unex": 0.47400000000000003,
+      "decB_delta": -0.033999999999999975,
+      "decC_acc_ex": 0.478,
+      "decC_acc_unex": 0.449,
+      "decC_delta": 0.02899999999999997,
+      "decD_raw_acc_ex": 0.351,
+      "decD_raw_acc_unex": 0.299,
+      "decD_raw_delta": 0.05199999999999999,
+      "decD_shape_acc_ex": 0.36,
+      "decD_shape_acc_unex": 0.293,
+      "decD_shape_delta": 0.067,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": -1,
+          "C": 1
+        },
+        "all_agree": false,
+        "majority": 1,
+        "outlier": "B"
+      }
+    },
+    {
+      "assay": "HMM C3 (focused + zero cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_paradigm_R1R2.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.608,
+      "decA_acc_unex": 0.296,
+      "decA_delta": 0.312,
+      "decB_acc_ex": 0.545,
+      "decB_acc_unex": 0.531,
+      "decB_delta": 0.014000000000000012,
+      "decC_acc_ex": 0.54,
+      "decC_acc_unex": 0.499,
+      "decC_delta": 0.041000000000000036,
+      "decD_raw_acc_ex": 0.36,
+      "decD_raw_acc_unex": 0.336,
+      "decD_raw_delta": 0.023999999999999966,
+      "decD_shape_acc_ex": 0.354,
+      "decD_shape_acc_unex": 0.298,
+      "decD_shape_delta": 0.055999999999999994,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": 1,
+          "C": 1
+        },
+        "all_agree": true,
+        "majority": 1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "HMM C4 (routine + zero cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_paradigm_R1R2.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.447,
+      "decA_acc_unex": 0.277,
+      "decA_delta": 0.16999999999999998,
+      "decB_acc_ex": 0.437,
+      "decB_acc_unex": 0.45999999999999996,
+      "decB_delta": -0.022999999999999965,
+      "decC_acc_ex": 0.456,
+      "decC_acc_unex": 0.42,
+      "decC_delta": 0.03600000000000003,
+      "decD_raw_acc_ex": 0.334,
+      "decD_raw_acc_unex": 0.291,
+      "decD_raw_delta": 0.04300000000000004,
+      "decD_shape_acc_ex": 0.326,
+      "decD_shape_acc_unex": 0.278,
+      "decD_shape_delta": 0.04799999999999999,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": -1,
+          "C": 1
+        },
+        "all_agree": false,
+        "majority": 1,
+        "outlier": "B"
+      }
+    },
+    {
+      "assay": "HMM C1 (focused + HMM cue)",
+      "network": "a1 (legacy three-regimes)",
+      "source_json": "a1_C1.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.574,
+      "decA_acc_unex": 0.605,
+      "decA_delta": -0.031000000000000028,
+      "decB_acc_ex": 0.51,
+      "decB_acc_unex": 0.5160000000000001,
+      "decB_delta": -0.006000000000000116,
+      "decC_acc_ex": 0.49,
+      "decC_acc_unex": 0.5,
+      "decC_delta": -0.010000000000000009,
+      "decD_raw_acc_ex": 0.411,
+      "decD_raw_acc_unex": 0.462,
+      "decD_raw_delta": -0.051000000000000045,
+      "decD_shape_acc_ex": 0.545,
+      "decD_shape_acc_unex": 0.578,
+      "decD_shape_delta": -0.03299999999999992,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "HMM C1 (focused + HMM cue)",
+      "network": "b1 (legacy three-regimes)",
+      "source_json": "b1_C1.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.578,
+      "decA_acc_unex": 0.611,
+      "decA_delta": -0.03300000000000003,
+      "decB_acc_ex": 0.49899999999999994,
+      "decB_acc_unex": 0.522,
+      "decB_delta": -0.023000000000000076,
+      "decC_acc_ex": 0.485,
+      "decC_acc_unex": 0.513,
+      "decC_delta": -0.028000000000000025,
+      "decD_raw_acc_ex": 0.404,
+      "decD_raw_acc_unex": 0.455,
+      "decD_raw_delta": -0.05099999999999999,
+      "decD_shape_acc_ex": 0.568,
+      "decD_shape_acc_unex": 0.589,
+      "decD_shape_delta": -0.02100000000000002,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "HMM C1 (focused + HMM cue)",
+      "network": "c1 (legacy three-regimes)",
+      "source_json": "c1_C1.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.437,
+      "decA_acc_unex": 0.26,
+      "decA_delta": 0.177,
+      "decB_acc_ex": 0.4699999999999999,
+      "decB_acc_unex": 0.45,
+      "decB_delta": 0.019999999999999907,
+      "decC_acc_ex": 0.435,
+      "decC_acc_unex": 0.444,
+      "decC_delta": -0.009000000000000008,
+      "decD_raw_acc_ex": 0.389,
+      "decD_raw_acc_unex": 0.32,
+      "decD_raw_delta": 0.069,
+      "decD_shape_acc_ex": 0.385,
+      "decD_shape_acc_unex": 0.322,
+      "decD_shape_delta": 0.063,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": 1,
+          "C": -1
+        },
+        "all_agree": false,
+        "majority": 1,
+        "outlier": "C"
+      }
+    },
+    {
+      "assay": "HMM C1 (focused + HMM cue)",
+      "network": "e1 (legacy three-regimes)",
+      "source_json": "e1_C1.json",
+      "n_ex": 1000,
+      "n_unex": 1000,
+      "decA_acc_ex": 0.477,
+      "decA_acc_unex": 0.278,
+      "decA_delta": 0.19899999999999995,
+      "decB_acc_ex": 0.495,
+      "decB_acc_unex": 0.454,
+      "decB_delta": 0.04099999999999998,
+      "decC_acc_ex": 0.458,
+      "decC_acc_unex": 0.46,
+      "decC_delta": -0.0020000000000000018,
+      "decD_raw_acc_ex": 0.379,
+      "decD_raw_acc_unex": 0.384,
+      "decD_raw_delta": -0.0050000000000000044,
+      "decD_shape_acc_ex": 0.371,
+      "decD_shape_acc_unex": 0.363,
+      "decD_shape_delta": 0.008000000000000007,
+      "notes": null,
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": 1,
+          "C": -1
+        },
+        "all_agree": false,
+        "majority": 1,
+        "outlier": "C"
+      }
+    },
+    {
+      "assay": "NEW (paired march, eval_ex_vs_unex_decC)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_native.json",
+      "n_ex": 2400,
+      "n_unex": 2400,
+      "decA_acc_ex": 0.7125,
+      "decA_acc_unex": 0.3254166666666667,
+      "decA_delta": 0.38708333333333333,
+      "decB_acc_ex": 0.7345833301544189,
+      "decB_acc_unex": 0.6491666555404663,
+      "decB_delta": 0.08541667461395264,
+      "decC_acc_ex": 0.7070833333333333,
+      "decC_acc_unex": 0.5816666666666667,
+      "decC_delta": 0.12541666666666662,
+      "decD_raw_acc_ex": 0.4529166666666667,
+      "decD_raw_acc_unex": 0.38625,
+      "decD_raw_delta": 0.06666666666666671,
+      "decD_shape_acc_ex": 0.43583333333333335,
+      "decD_shape_acc_unex": 0.37083333333333335,
+      "decD_shape_delta": 0.065,
+      "notes": "native=C",
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": 1,
+          "C": 1
+        },
+        "all_agree": true,
+        "majority": 1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "M3R (matched_3row_ring)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_native.json",
+      "n_ex": 1084,
+      "n_unex": 3295,
+      "decA_acc_ex": 0.6964944649446494,
+      "decA_acc_unex": 0.8512898330804249,
+      "decA_delta": -0.15479536813577555,
+      "decB_acc_ex": 0.8407407402992249,
+      "decB_acc_unex": 0.8512898325920105,
+      "decB_delta": -0.010549092292785667,
+      "decC_acc_ex": 0.7398523985239852,
+      "decC_acc_unex": 0.7672230652503793,
+      "decC_delta": -0.0273706667263941,
+      "decD_raw_acc_ex": 0.4123616236162362,
+      "decD_raw_acc_unex": 0.4039453717754173,
+      "decD_raw_delta": 0.0084162518408189,
+      "decD_shape_acc_ex": 0.47232472324723246,
+      "decD_shape_acc_unex": 0.4267071320182094,
+      "decD_shape_delta": 0.045617591229023036,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "HMS (matched_hmm_ring_sequence)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_native.json",
+      "n_ex": 3078,
+      "n_unex": 149,
+      "decA_acc_ex": 0.7933723196881092,
+      "decA_acc_unex": 0.9798657718120806,
+      "decA_delta": -0.1864934521239714,
+      "decB_acc_ex": 0.8679674863815308,
+      "decB_acc_unex": 0.9793103456497192,
+      "decB_delta": -0.11134285926818843,
+      "decC_acc_ex": 0.7907732293697206,
+      "decC_acc_unex": 0.738255033557047,
+      "decC_delta": 0.052518195812673585,
+      "decD_raw_acc_ex": 0.44639376218323584,
+      "decD_raw_acc_unex": 0.4429530201342282,
+      "decD_raw_delta": 0.003440742049007628,
+      "decD_shape_acc_ex": 0.45743989603638724,
+      "decD_shape_acc_unex": 0.48322147651006714,
+      "decD_shape_delta": -0.0257815804736799,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": 1
+        },
+        "all_agree": false,
+        "majority": -1,
+        "outlier": "C"
+      }
+    },
+    {
+      "assay": "HMS-T (matched_hmm_ring_sequence --tight-expected)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_native.json",
+      "n_ex": 791,
+      "n_unex": 105,
+      "decA_acc_ex": 0.6776232616940582,
+      "decA_acc_unex": 0.9809523809523809,
+      "decA_delta": -0.30332911925832273,
+      "decB_acc_ex": 0.7708860754966735,
+      "decB_acc_unex": 0.9142857193946838,
+      "decB_delta": -0.1433996438980103,
+      "decC_acc_ex": 0.6649810366624526,
+      "decC_acc_unex": 0.7428571428571429,
+      "decC_delta": -0.07787610619469032,
+      "decD_raw_acc_ex": 0.3944374209860936,
+      "decD_raw_acc_unex": 0.44761904761904764,
+      "decD_raw_delta": -0.05318162663295406,
+      "decD_shape_acc_ex": 0.45132743362831856,
+      "decD_shape_acc_unex": 0.2857142857142857,
+      "decD_shape_delta": 0.16561314791403287,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "P3P (matched_probe_3pass)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_native.json",
+      "n_ex": 39,
+      "n_unex": 39,
+      "decA_acc_ex": 0.6923076923076923,
+      "decA_acc_unex": 0.3076923076923077,
+      "decA_delta": 0.3846153846153846,
+      "decB_acc_ex": 0.6857142984867096,
+      "decB_acc_unex": 0.6571428716182709,
+      "decB_delta": 0.02857142686843872,
+      "decC_acc_ex": 0.8205128205128205,
+      "decC_acc_unex": 0.7692307692307693,
+      "decC_delta": 0.05128205128205121,
+      "decD_raw_acc_ex": 0.5128205128205128,
+      "decD_raw_acc_unex": 0.28205128205128205,
+      "decD_raw_delta": 0.23076923076923073,
+      "decD_shape_acc_ex": 0.5128205128205128,
+      "decD_shape_acc_unex": 0.38461538461538464,
+      "decD_shape_delta": 0.12820512820512814,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": 1,
+          "B": 1,
+          "C": 1
+        },
+        "all_agree": true,
+        "majority": 1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "VCD-test3 (v2_confidence_dissection)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_native.json",
+      "n_ex": 7981,
+      "n_unex": 7981,
+      "decA_acc_ex": 0.600300714196216,
+      "decA_acc_unex": 0.76694649793259,
+      "decA_delta": -0.16664578373637395,
+      "decB_acc_ex": 0.5586466193199158,
+      "decB_acc_unex": 0.6398496031761169,
+      "decB_delta": -0.08120298385620117,
+      "decC_acc_ex": 0.6336298709434908,
+      "decC_acc_unex": 0.7044230046360105,
+      "decC_delta": -0.07079313369251972,
+      "decD_raw_acc_ex": 0.46761057511590026,
+      "decD_raw_acc_unex": 0.4106001754166145,
+      "decD_raw_delta": 0.057010399699285785,
+      "decD_shape_acc_ex": 0.4697406340057637,
+      "decD_shape_acc_unex": 0.41511088835985466,
+      "decD_shape_delta": 0.054629745645909056,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "M3R (matched_3row_ring) (modified: focused+march cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_modified.json",
+      "n_ex": 3272,
+      "n_unex": 6484,
+      "decA_acc_ex": 0.7166870415647921,
+      "decA_acc_unex": 0.8528685996298581,
+      "decA_delta": -0.13618155806506593,
+      "decB_acc_ex": 0.8217125415802002,
+      "decB_acc_unex": 0.8589506268501281,
+      "decB_delta": -0.03723808526992789,
+      "decC_acc_ex": 0.7405256723716381,
+      "decC_acc_unex": 0.7601789019123998,
+      "decC_delta": -0.019653229540761652,
+      "decD_raw_acc_ex": 0.42817848410757947,
+      "decD_raw_acc_unex": 0.4136335595311536,
+      "decD_raw_delta": 0.014544924576425866,
+      "decD_shape_acc_ex": 0.5143643031784841,
+      "decD_shape_acc_unex": 0.43460826650215917,
+      "decD_shape_delta": 0.07975603667632497,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    },
+    {
+      "assay": "HMS-T (matched_hmm_ring_sequence --tight-expected) (modified: focused+march cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_modified.json",
+      "n_ex": 1143,
+      "n_unex": 111,
+      "decA_acc_ex": 0.6972878390201225,
+      "decA_acc_unex": 0.990990990990991,
+      "decA_delta": -0.2937031519708685,
+      "decB_acc_ex": 0.8649122595787049,
+      "decB_acc_unex": 0.9818181753158569,
+      "decB_delta": -0.11690591573715203,
+      "decC_acc_ex": 0.7086614173228346,
+      "decC_acc_unex": 0.6576576576576577,
+      "decC_delta": 0.051003759665176895,
+      "decD_raw_acc_ex": 0.47244094488188976,
+      "decD_raw_acc_unex": 0.36036036036036034,
+      "decD_raw_delta": 0.11208058452152941,
+      "decD_shape_acc_ex": 0.4881889763779528,
+      "decD_shape_acc_unex": 0.5135135135135135,
+      "decD_shape_delta": -0.02532453713556071,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": 1
+        },
+        "all_agree": false,
+        "majority": -1,
+        "outlier": "C"
+      }
+    },
+    {
+      "assay": "VCD-test3 (v2_confidence_dissection) (modified: focused+march cue)",
+      "network": "R1+R2 (emergent_seed42)",
+      "source_json": "task4_fbON_xdec_modified.json",
+      "n_ex": 6985,
+      "n_unex": 6985,
+      "decA_acc_ex": 0.7813886900501074,
+      "decA_acc_unex": 0.8649964209019327,
+      "decA_delta": -0.08360773085182538,
+      "decB_acc_ex": 0.8367931246757507,
+      "decB_acc_unex": 0.8652827501296997,
+      "decB_delta": -0.028489625453948952,
+      "decC_acc_ex": 0.7766642806012884,
+      "decC_acc_unex": 0.7869720830350752,
+      "decC_delta": -0.010307802433786706,
+      "decD_raw_acc_ex": 0.47730851825340015,
+      "decD_raw_acc_unex": 0.44380816034359344,
+      "decD_raw_delta": 0.03350035790980671,
+      "decD_shape_acc_ex": 0.5088045812455261,
+      "decD_shape_acc_unex": 0.4329277022190408,
+      "decD_shape_delta": 0.07587687902648527,
+      "notes": "native=A",
+      "sign_agreement": {
+        "signs": {
+          "A": -1,
+          "B": -1,
+          "C": -1
+        },
+        "all_agree": true,
+        "majority": -1,
+        "outlier": null
+      }
+    }
+  ],
+  "per_decoder_profile": {
+    "A": {
+      "n_rows_with_delta": 17,
+      "mean_abs_delta": 0.20561499306417189,
+      "max_abs_delta": 0.38708333333333333,
+      "n_rows_all_agree": 11,
+      "n_rows_with_majority_agreeing": 17,
+      "n_rows_disagreeing_with_majority": 0,
+      "outlier_in_rows": []
+    },
+    "B": {
+      "n_rows_with_delta": 17,
+      "mean_abs_delta": 0.04847742983874152,
+      "max_abs_delta": 0.1433996438980103,
+      "n_rows_all_agree": 11,
+      "n_rows_with_majority_agreeing": 15,
+      "n_rows_disagreeing_with_majority": 2,
+      "outlier_in_rows": [
+        "HMM C2 (routine + HMM cue) / R1+R2 (emergent_seed42)",
+        "HMM C4 (routine + zero cue) / R1+R2 (emergent_seed42)"
+      ]
+    },
+    "C": {
+      "n_rows_with_delta": 17,
+      "mean_abs_delta": 0.04160127129498358,
+      "max_abs_delta": 0.12541666666666662,
+      "n_rows_all_agree": 11,
+      "n_rows_with_majority_agreeing": 13,
+      "n_rows_disagreeing_with_majority": 4,
+      "outlier_in_rows": [
+        "HMM C1 (focused + HMM cue) / c1 (legacy three-regimes)",
+        "HMM C1 (focused + HMM cue) / e1 (legacy three-regimes)",
+        "HMS (matched_hmm_ring_sequence) / R1+R2 (emergent_seed42)",
+        "HMS-T (matched_hmm_ring_sequence --tight-expected) (modified: focused+march cue) / R1+R2 (emergent_seed42)"
+      ]
+    },
+    "D_raw": {
+      "n_rows_with_delta": 17,
+      "mean_abs_delta": 0.05197710498033682,
+      "max_abs_delta": 0.23076923076923073,
+      "n_rows_agreeing_with_ABC_majority": 10,
+      "n_rows_disagreeing_with_ABC_majority": 7,
+      "rows_disagreeing_with_ABC_majority": [
+        "HMM C1 (focused + HMM cue) / e1 (legacy three-regimes)",
+        "M3R (matched_3row_ring) / R1+R2 (emergent_seed42)",
+        "HMS (matched_hmm_ring_sequence) / R1+R2 (emergent_seed42)",
+        "VCD-test3 (v2_confidence_dissection) / R1+R2 (emergent_seed42)",
+        "M3R (matched_3row_ring) (modified: focused+march cue) / R1+R2 (emergent_seed42)",
+        "HMS-T (matched_hmm_ring_sequence --tight-expected) (modified: focused+march cue) / R1+R2 (emergent_seed42)",
+        "VCD-test3 (v2_confidence_dissection) (modified: focused+march cue) / R1+R2 (emergent_seed42)"
+      ]
+    },
+    "D_shape": {
+      "n_rows_with_delta": 17,
+      "mean_abs_delta": 0.05851792037094965,
+      "max_abs_delta": 0.16561314791403287,
+      "n_rows_agreeing_with_ABC_majority": 12,
+      "n_rows_disagreeing_with_ABC_majority": 5,
+      "rows_disagreeing_with_ABC_majority": [
+        "M3R (matched_3row_ring) / R1+R2 (emergent_seed42)",
+        "HMS-T (matched_hmm_ring_sequence --tight-expected) / R1+R2 (emergent_seed42)",
+        "VCD-test3 (v2_confidence_dissection) / R1+R2 (emergent_seed42)",
+        "M3R (matched_3row_ring) (modified: focused+march cue) / R1+R2 (emergent_seed42)",
+        "VCD-test3 (v2_confidence_dissection) (modified: focused+march cue) / R1+R2 (emergent_seed42)"
+      ]
+    }
+  },
+  "sources": {
+    "paradigm_r1r2": "/tmp/task4_fbON_paradigm_R1R2.json",
+    "legacy_dir": "/tmp/task4_fbON_legacy",
+    "xdec_native": "/tmp/task4_fbON_xdec_native.json",
+    "xdec_modified": "/tmp/task4_fbON_xdec_modified.json"
+  },
+  "n_rows": 17
+}
