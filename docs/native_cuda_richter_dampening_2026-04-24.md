@@ -378,7 +378,7 @@ Traceability branch and commit:
 
 ```text
 branch: cuda-richter-dampening-20260424
-commit: filled by git after commit
+commit: 86d185bcd8d312a129680a8bd7db113e356304fd
 ```
 
 The production validation command pattern was:
