@@ -481,12 +481,259 @@ struct FrozenRichterSeededSourceResult {
     std::map<std::string, std::vector<std::int32_t>> cuda_raw_counts;
     std::map<std::string, std::vector<std::int32_t>> cpu_source_counts;
     std::map<std::string, std::vector<std::int32_t>> cuda_source_counts;
+    std::vector<std::int32_t> cpu_v1_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cpu_v1_som_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cuda_v1_som_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cpu_hpred_preprobe_channel_counts;
+    std::vector<std::int32_t> cpu_hpred_trailer_bin_total_counts;
+    std::vector<std::int32_t> cpu_hpred_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cuda_hpred_preprobe_channel_counts;
+    std::vector<std::int32_t> cpu_hpred_feedback_held_trailer_bin_total_counts;
+    std::vector<std::int32_t> cpu_hpred_feedback_held_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cuda_hpred_feedback_held_trailer_bin_total_counts;
+    std::vector<std::int32_t> cuda_hpred_feedback_held_trailer_bin_channel_counts;
+    std::vector<double> cpu_hpred_feedback_normalized_trailer_bin_total_weights;
+    std::vector<double> cpu_hpred_feedback_normalized_trailer_bin_channel_weights;
+    std::vector<double> cuda_hpred_feedback_normalized_trailer_bin_total_weights;
+    std::vector<double> cuda_hpred_feedback_normalized_trailer_bin_channel_weights;
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_preprobe_zero;
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_fallback_used;
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_fallback_zero_template;
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_leader_template_total_counts;
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_leader_template_channel_counts;
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_preprobe_zero;
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_fallback_used;
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_fallback_zero_template;
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_leader_template_total_counts;
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_leader_template_channel_counts;
+    std::vector<double> cpu_v1_predicted_suppression_trailer_channel_signal_sum;
+    std::vector<double> cpu_v1_predicted_suppression_trailer_channel_gain_sum;
+    std::vector<double> cpu_v1_predicted_suppression_trailer_raw_ie_before_sum;
+    std::vector<double> cpu_v1_predicted_suppression_trailer_raw_ie_after_sum;
+    std::vector<double> cpu_v1_predicted_suppression_trailer_raw_ie_delta_sum;
+    std::vector<double> cuda_v1_predicted_suppression_trailer_channel_signal_sum;
+    std::vector<double> cuda_v1_predicted_suppression_trailer_channel_gain_sum;
+    std::vector<double> cuda_v1_predicted_suppression_trailer_raw_ie_before_sum;
+    std::vector<double> cuda_v1_predicted_suppression_trailer_raw_ie_after_sum;
+    std::vector<double> cuda_v1_predicted_suppression_trailer_raw_ie_delta_sum;
     std::map<std::string, std::vector<double>> cpu_diagnostic_rates_hz;
     std::map<std::string, std::vector<double>> cuda_diagnostic_rates_hz;
+    std::map<std::string, double> cpu_q_active_fC;
+    std::map<std::string, double> cuda_q_active_fC;
     std::map<std::string, std::vector<double>> cpu_final_state;
     std::map<std::string, std::vector<double>> cuda_final_state;
     std::map<std::string, double> max_abs_error;
 };
+
+struct FrozenRichterSeededSourceBatchResult {
+    std::int32_t n_conditions;
+    std::vector<std::int32_t> v1_leader_total_counts;
+    std::vector<std::int32_t> v1_preprobe_total_counts;
+    std::vector<std::int32_t> v1_trailer_total_counts;
+    std::vector<std::int32_t> v1_trailer_channel_counts;
+    std::vector<std::int32_t> v1_trailer_bin_channel_counts;
+    std::vector<std::int32_t> v1_som_trailer_total_counts;
+    std::vector<std::int32_t> v1_som_trailer_channel_counts;
+    std::vector<std::int32_t> v1_som_trailer_bin_channel_counts;
+    std::vector<double> v1e_q_active_fC_by_phase;
+    std::vector<double> v1som_q_active_fC_by_phase;
+    std::vector<std::int32_t> hctx_preprobe_total_counts;
+    std::vector<std::int32_t> hctx_trailer_total_counts;
+    std::vector<std::int32_t> hpred_preprobe_total_counts;
+    std::vector<std::int32_t> hpred_preprobe_channel_counts;
+    std::vector<std::int32_t> hpred_trailer_total_counts;
+    std::vector<std::int32_t> hpred_trailer_bin_total_counts;
+    std::vector<std::int32_t> hpred_trailer_bin_channel_counts;
+    std::vector<std::int32_t> hpred_feedback_held_trailer_bin_total_counts;
+    std::vector<std::int32_t> hpred_feedback_held_trailer_bin_channel_counts;
+    std::vector<double> hpred_feedback_normalized_trailer_bin_total_weights;
+    std::vector<double> hpred_feedback_normalized_trailer_bin_channel_weights;
+    std::vector<std::int32_t> hpred_feedback_normalized_preprobe_zero;
+    std::vector<std::int32_t> hpred_feedback_normalized_fallback_used;
+    std::vector<std::int32_t> hpred_feedback_normalized_fallback_zero_template;
+    std::vector<std::int32_t> hpred_feedback_normalized_leader_template_total_counts;
+    std::vector<std::int32_t> hpred_feedback_normalized_leader_template_channel_counts;
+    std::vector<double> v1_predicted_suppression_trailer_channel_signal_sum;
+    std::vector<double> v1_predicted_suppression_trailer_channel_gain_sum;
+    std::vector<double> v1_predicted_suppression_trailer_raw_ie_before_sum;
+    std::vector<double> v1_predicted_suppression_trailer_raw_ie_after_sum;
+    std::vector<double> v1_predicted_suppression_trailer_raw_ie_delta_sum;
+    std::vector<std::int32_t> source_total_counts;
+};
+
+FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cuda(
+    const std::string& stim_bank_name,
+    const std::vector<std::int32_t>& stim_pre,
+    const std::vector<std::int32_t>& stim_post,
+    const std::vector<double>& stim_weight,
+    double stim_drive_amp,
+    const std::vector<std::int32_t>& stim_channel,
+    const std::string& v1_to_h_bank_name,
+    const std::vector<std::int32_t>& v1_to_h_pre,
+    const std::vector<std::int32_t>& v1_to_h_post,
+    const std::vector<double>& v1_to_h_weight,
+    double v1_to_h_drive_amp,
+    const std::string& ctx_to_pred_bank_name,
+    const std::vector<std::int32_t>& ctx_to_pred_pre,
+    const std::vector<std::int32_t>& ctx_to_pred_post,
+    const std::vector<double>& ctx_to_pred_weight,
+    double ctx_to_pred_drive_amp,
+    const std::string& feedback_direct_bank_name,
+    const std::vector<std::int32_t>& feedback_direct_pre,
+    const std::vector<std::int32_t>& feedback_direct_post,
+    const std::vector<double>& feedback_direct_weight,
+    double feedback_direct_drive_amp,
+    const std::string& feedback_som_bank_name,
+    const std::vector<std::int32_t>& feedback_som_pre,
+    const std::vector<std::int32_t>& feedback_som_post,
+    const std::vector<double>& feedback_som_weight,
+    double feedback_som_drive_amp,
+    std::int64_t seed,
+    std::int32_t expected_channel,
+    std::int32_t unexpected_channel,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    std::int32_t n_steps,
+    std::int32_t leader_start_step,
+    std::int32_t leader_end_step,
+    std::int32_t preprobe_start_step,
+    std::int32_t preprobe_end_step,
+    std::int32_t trailer_start_step,
+    std::int32_t trailer_end_step,
+    std::int32_t iti_start_step,
+    std::int32_t iti_end_step,
+    const std::string& feedback_replay_mode = "raw",
+    double feedback_replay_target_per_bin = 314.1666666666667,
+    const std::string& feedback_replay_fallback_mode = "none",
+    const std::vector<std::int32_t>& feedback_replay_leader_templates =
+        std::vector<std::int32_t>(),
+    double v1_som_to_e_scale = 1.0,
+    double v1_som_divisive_scale = 0.0,
+    double v1_direct_divisive_scale = 0.0,
+    double v1_feedforward_divisive_scale = 0.0,
+    std::int32_t v1_feedforward_divisive_gate_source_id = 0,
+    std::int32_t v1_direct_divisive_gate_source_id = 0,
+    double v1_predicted_suppression_scale = 0.0,
+    double v1_predicted_suppression_neighbor_weight = 0.0,
+    std::int32_t v1_predicted_suppression_locus_id = 0,
+    double v1_stim_sigma_deg = 22.0
+);
+
+FrozenRichterSeededSourceBatchResult run_frozen_richter_seeded_source_cuda_batched(
+    const std::string& stim_bank_name,
+    const std::vector<std::int32_t>& stim_pre,
+    const std::vector<std::int32_t>& stim_post,
+    const std::vector<double>& stim_weight,
+    double stim_drive_amp,
+    const std::vector<std::int32_t>& stim_channel,
+    const std::string& v1_to_h_bank_name,
+    const std::vector<std::int32_t>& v1_to_h_pre,
+    const std::vector<std::int32_t>& v1_to_h_post,
+    const std::vector<double>& v1_to_h_weight,
+    double v1_to_h_drive_amp,
+    const std::string& ctx_to_pred_bank_name,
+    const std::vector<std::int32_t>& ctx_to_pred_pre,
+    const std::vector<std::int32_t>& ctx_to_pred_post,
+    const std::vector<double>& ctx_to_pred_weight,
+    double ctx_to_pred_drive_amp,
+    const std::string& feedback_direct_bank_name,
+    const std::vector<std::int32_t>& feedback_direct_pre,
+    const std::vector<std::int32_t>& feedback_direct_post,
+    const std::vector<double>& feedback_direct_weight,
+    double feedback_direct_drive_amp,
+    const std::string& feedback_som_bank_name,
+    const std::vector<std::int32_t>& feedback_som_pre,
+    const std::vector<std::int32_t>& feedback_som_post,
+    const std::vector<double>& feedback_som_weight,
+    double feedback_som_drive_amp,
+    const std::vector<std::int64_t>& seeds,
+    const std::vector<std::int32_t>& expected_channels,
+    const std::vector<std::int32_t>& unexpected_channels,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    std::int32_t n_steps,
+    std::int32_t leader_start_step,
+    std::int32_t leader_end_step,
+    std::int32_t preprobe_start_step,
+    std::int32_t preprobe_end_step,
+    std::int32_t trailer_start_step,
+    std::int32_t trailer_end_step,
+    std::int32_t iti_start_step,
+    std::int32_t iti_end_step,
+    const std::string& feedback_replay_mode = "raw",
+    double feedback_replay_target_per_bin = 314.1666666666667,
+    const std::string& feedback_replay_fallback_mode = "none",
+    const std::vector<std::int32_t>& feedback_replay_leader_templates =
+        std::vector<std::int32_t>(),
+    double v1_som_to_e_scale = 1.0,
+    double v1_som_divisive_scale = 0.0,
+    double v1_direct_divisive_scale = 0.0,
+    double v1_feedforward_divisive_scale = 0.0,
+    std::int32_t v1_feedforward_divisive_gate_source_id = 0,
+    std::int32_t v1_direct_divisive_gate_source_id = 0,
+    double v1_predicted_suppression_scale = 0.0,
+    double v1_predicted_suppression_neighbor_weight = 0.0,
+    std::int32_t v1_predicted_suppression_locus_id = 0,
+    double v1_stim_sigma_deg = 22.0
+);
+
+FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cpu(
+    const std::string& stim_bank_name,
+    const std::vector<std::int32_t>& stim_pre,
+    const std::vector<std::int32_t>& stim_post,
+    const std::vector<double>& stim_weight,
+    double stim_drive_amp,
+    const std::vector<std::int32_t>& stim_channel,
+    const std::string& v1_to_h_bank_name,
+    const std::vector<std::int32_t>& v1_to_h_pre,
+    const std::vector<std::int32_t>& v1_to_h_post,
+    const std::vector<double>& v1_to_h_weight,
+    double v1_to_h_drive_amp,
+    const std::string& ctx_to_pred_bank_name,
+    const std::vector<std::int32_t>& ctx_to_pred_pre,
+    const std::vector<std::int32_t>& ctx_to_pred_post,
+    const std::vector<double>& ctx_to_pred_weight,
+    double ctx_to_pred_drive_amp,
+    const std::string& feedback_direct_bank_name,
+    const std::vector<std::int32_t>& feedback_direct_pre,
+    const std::vector<std::int32_t>& feedback_direct_post,
+    const std::vector<double>& feedback_direct_weight,
+    double feedback_direct_drive_amp,
+    const std::string& feedback_som_bank_name,
+    const std::vector<std::int32_t>& feedback_som_pre,
+    const std::vector<std::int32_t>& feedback_som_post,
+    const std::vector<double>& feedback_som_weight,
+    double feedback_som_drive_amp,
+    std::int64_t seed,
+    std::int32_t expected_channel,
+    std::int32_t unexpected_channel,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    std::int32_t n_steps,
+    std::int32_t leader_start_step,
+    std::int32_t leader_end_step,
+    std::int32_t preprobe_start_step,
+    std::int32_t preprobe_end_step,
+    std::int32_t trailer_start_step,
+    std::int32_t trailer_end_step,
+    std::int32_t iti_start_step,
+    std::int32_t iti_end_step,
+    const std::string& feedback_replay_mode = "raw",
+    double feedback_replay_target_per_bin = 314.1666666666667,
+    const std::string& feedback_replay_fallback_mode = "none",
+    const std::vector<std::int32_t>& feedback_replay_leader_templates =
+        std::vector<std::int32_t>(),
+    double v1_som_to_e_scale = 1.0,
+    double v1_som_divisive_scale = 0.0,
+    double v1_direct_divisive_scale = 0.0,
+    double v1_feedforward_divisive_scale = 0.0,
+    std::int32_t v1_feedforward_divisive_gate_source_id = 0,
+    std::int32_t v1_direct_divisive_gate_source_id = 0,
+    double v1_predicted_suppression_scale = 0.0,
+    double v1_predicted_suppression_neighbor_weight = 0.0,
+    std::int32_t v1_predicted_suppression_locus_id = 0,
+    double v1_stim_sigma_deg = 22.0
+);
 
 FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_test(
     const std::string& stim_bank_name,
@@ -744,6 +991,10 @@ struct Stage1HGateDynamicsResult {
     std::vector<double> cuda_ctx_persistence_ms_by_trial;
     std::vector<std::int32_t> cpu_pred_pretrailer_target_counts;
     std::vector<std::int32_t> cuda_pred_pretrailer_target_counts;
+    std::vector<std::int32_t> cpu_pred_pretrailer_channel_counts;
+    std::vector<std::int32_t> cuda_pred_pretrailer_channel_counts;
+    std::vector<std::int32_t> cpu_pred_pretrailer_channel_counts_by_bin;
+    std::vector<std::int32_t> cuda_pred_pretrailer_channel_counts_by_bin;
     std::vector<std::int32_t> cpu_ctx_total_counts;
     std::vector<std::int32_t> cuda_ctx_total_counts;
     std::vector<std::int32_t> cpu_pred_total_counts;
@@ -759,6 +1010,34 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     const std::vector<std::int32_t>& leader_cells,
     const std::vector<std::int32_t>& trailer_cells,
     const std::vector<double>& w_ctx_pred
+);
+
+struct NativeStage1TrainResult {
+    std::int64_t seed;
+    std::int32_t n_trials;
+    std::int32_t n_pre;
+    std::int32_t n_post;
+    std::int32_t n_syn;
+    std::int32_t n_steps;
+    std::int32_t trial_steps;
+    double dt_ms;
+    std::map<std::string, std::int32_t> phase_steps;
+    std::map<std::string, std::int32_t> event_counts;
+    std::vector<double> w_ctx_pred_final;
+    std::vector<double> row_sums;
+    std::vector<double> gate_w_before;
+    std::vector<double> gate_w_after;
+    std::vector<double> gate_dw_sum;
+    std::vector<double> gate_elig_mean;
+    std::vector<double> gate_elig_max;
+    std::vector<double> gate_row_sum_max;
+    std::vector<std::int32_t> gate_n_capped;
+};
+
+NativeStage1TrainResult run_native_stage1_generated_train(
+    std::int64_t seed,
+    const std::vector<std::int32_t>& leader_cells,
+    const std::vector<std::int32_t>& expected_trailer_cells
 );
 
 }  // namespace expectation_snn_cuda

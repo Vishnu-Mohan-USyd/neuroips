@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <map>
@@ -19,12 +20,29 @@ namespace {
 
 constexpr int V1_E_N = 192;
 constexpr int V1_SOM_N = 48;
+constexpr int V1_N_CHANNELS = 12;
+constexpr int V1_E_PER_CHANNEL = 16;
+constexpr int V1_SOM_PER_CHANNEL = 4;
+constexpr int V1_TRAILER_BIN_COUNT = 5;
 constexpr int H_E_N = 192;
 constexpr int H_N_CHANNELS = 12;
 constexpr int H_E_PER_CHANNEL = 16;
+constexpr int V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM = 0;
+constexpr int V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK = 1;
+constexpr int V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM = 0;
+constexpr int V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK = 1;
+constexpr int V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE = 0;
+constexpr int V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE = 1;
 constexpr int H_INH_N = 16;
 constexpr int H_BROAD_INH_START = 12;
 constexpr double DT_MS = 0.1;
+constexpr double PI_RAD = 3.14159265358979323846;
+constexpr double V1_CHANNEL_SPACING_RAD = PI_RAD / static_cast<double>(V1_N_CHANNELS);
+constexpr double DEFAULT_FEEDBACK_REPLAY_TARGET_PER_BIN = 314.1666666666667;
+
+__host__ __device__ inline int wrap_ring_channel(int channel, int n_channels) {
+    return (channel % n_channels + n_channels) % n_channels;
+}
 
 constexpr double TAU_E_MS = 5.0;
 constexpr double TAU_I_MS = 10.0;
@@ -53,6 +71,8 @@ constexpr double V1SOM_EL_MV = -65.0;
 constexpr double V1SOM_VT_MV = -50.0;
 constexpr double V1SOM_VR_MV = -65.0;
 constexpr double V1SOM_REFACTORY_MS = 2.0;
+constexpr double V1_SOM_TO_E_WEIGHT = 0.5;
+constexpr double V1_SOM_TO_E_DRIVE_AMP_PA = 20.0;
 
 constexpr double HE_C_NF = 0.2;
 constexpr double HE_GL_NS = 10.0;
@@ -127,6 +147,22 @@ void device_free(T* dev) {
     }
 }
 
+template <typename T>
+std::vector<T> repeat_vector(const std::vector<T>& values, int repeats) {
+    if (repeats <= 0 || values.empty()) {
+        return {};
+    }
+    std::vector<T> out(static_cast<std::size_t>(repeats) * values.size());
+    for (int i = 0; i < repeats; ++i) {
+        std::copy(
+            values.begin(),
+            values.end(),
+            out.begin() + static_cast<std::size_t>(i) * values.size()
+        );
+    }
+    return out;
+}
+
 __device__ __host__ inline double sigmoid(double x) {
     return 1.0 / (1.0 + exp(-x));
 }
@@ -192,20 +228,21 @@ __device__ __host__ inline double grating_rate_for_step_channel(
     int preprobe_start_step,
     int preprobe_end_step,
     int trailer_start_step,
-    int trailer_end_step
+    int trailer_end_step,
+    double v1_stim_sigma_deg
 ) {
     const int phase = richter_phase_index(
         step, leader_start_step, leader_end_step, preprobe_start_step,
         preprobe_end_step, trailer_start_step, trailer_end_step
     );
-    if ((phase == 0 || phase == 1) && channel == expected_channel) {
-        return grating_rate_hz;
-    }
-    if (phase == 2 && channel == unexpected_channel) {
-        return grating_rate_hz;
-    }
     if (phase >= 0) {
-        return baseline_rate_hz;
+        const int active_channel = (phase == 2) ? unexpected_channel : expected_channel;
+        const int raw_delta = std::abs(channel - active_channel);
+        const int wrapped_delta = std::min(raw_delta, V1_N_CHANNELS - raw_delta);
+        const double d_rad = static_cast<double>(wrapped_delta) * V1_CHANNEL_SPACING_RAD;
+        const double sigma_rad = v1_stim_sigma_deg * PI_RAD / 180.0;
+        (void)baseline_rate_hz;
+        return grating_rate_hz * std::exp(-0.5 * (d_rad / sigma_rad) * (d_rad / sigma_rad));
     }
     return 0.0;
 }
@@ -224,12 +261,14 @@ __device__ __host__ inline bool seeded_source_event(
     int preprobe_start_step,
     int preprobe_end_step,
     int trailer_start_step,
-    int trailer_end_step
+    int trailer_end_step,
+    double v1_stim_sigma_deg
 ) {
     const double rate_hz = grating_rate_for_step_channel(
         step, channel, expected_channel, unexpected_channel, grating_rate_hz,
         baseline_rate_hz, leader_start_step, leader_end_step, preprobe_start_step,
-        preprobe_end_step, trailer_start_step, trailer_end_step
+        preprobe_end_step, trailer_start_step, trailer_end_step,
+        v1_stim_sigma_deg
     );
     const double p = fmin(fmax(rate_hz * DT_MS / 1000.0, 0.0), 1.0);
     return counter_uniform01(seed, step, source) < p;
@@ -550,7 +589,8 @@ void cpu_v1e_count_step(
 
 void cpu_v1som_step(
     std::map<std::string, std::vector<double>>& s,
-    int step
+    int step,
+    std::vector<std::int32_t>* step_spikes = nullptr
 ) {
     auto& v = s["V_mV"];
     auto& ie = s["I_e_pA"];
@@ -559,6 +599,9 @@ void cpu_v1som_step(
     auto& refrac = s["refrac_until_ms"];
     const double t_ms = step * DT_MS;
     for (int i = 0; i < V1_SOM_N; ++i) {
+        if (step_spikes != nullptr) {
+            (*step_spikes)[static_cast<std::size_t>(i)] = 0;
+        }
         const bool in_refrac = t_ms < refrac[i];
         const double old_v = v[i];
         const double old_ie = ie[i];
@@ -574,7 +617,143 @@ void cpu_v1som_step(
         if (!in_refrac && v[i] > V1SOM_VT_MV) {
             v[i] = V1SOM_VR_MV;
             refrac[i] = refractory_until_ms(step, V1SOM_REFACTORY_MS);
+            if (step_spikes != nullptr) {
+                (*step_spikes)[static_cast<std::size_t>(i)] = 1;
+            }
         }
+    }
+}
+
+void accumulate_cpu_v1e_q_active_phase(
+    const std::map<std::string, std::vector<double>>& s,
+    std::array<double, 3>& q_active_fC_by_phase,
+    int step,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step
+) {
+    const int phase = richter_phase_index(
+        step, leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step
+    );
+    if (phase < 0) {
+        return;
+    }
+    const auto& ie = s.at("I_e_pA");
+    const auto& ii = s.at("I_i_pA");
+    const auto& iape = s.at("I_ap_e_pA");
+    double q_fC = 0.0;
+    for (int i = 0; i < V1_E_N; ++i) {
+        q_fC += (std::abs(ie[static_cast<std::size_t>(i)])
+            + std::abs(ii[static_cast<std::size_t>(i)])
+            + std::abs(iape[static_cast<std::size_t>(i)])) * DT_MS;
+    }
+    q_active_fC_by_phase[static_cast<std::size_t>(phase)] += q_fC;
+}
+
+void accumulate_cpu_v1som_q_active_phase(
+    const std::map<std::string, std::vector<double>>& s,
+    std::array<double, 3>& q_active_fC_by_phase,
+    int step,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step
+) {
+    const int phase = richter_phase_index(
+        step, leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step
+    );
+    if (phase < 0) {
+        return;
+    }
+    const auto& ie = s.at("I_e_pA");
+    const auto& ii = s.at("I_i_pA");
+    double q_fC = 0.0;
+    for (int i = 0; i < V1_SOM_N; ++i) {
+        q_fC += (std::abs(ie[static_cast<std::size_t>(i)])
+            + std::abs(ii[static_cast<std::size_t>(i)])) * DT_MS;
+    }
+    q_active_fC_by_phase[static_cast<std::size_t>(phase)] += q_fC;
+}
+
+std::map<std::string, double> make_v1_q_active_map(
+    const std::array<double, 3>& v1e_q_active_fC_by_phase,
+    const std::array<double, 3>& v1som_q_active_fC_by_phase
+) {
+    return {
+        {"v1e.leader", v1e_q_active_fC_by_phase[0]},
+        {"v1e.preprobe", v1e_q_active_fC_by_phase[1]},
+        {"v1e.trailer", v1e_q_active_fC_by_phase[2]},
+        {"v1som.leader", v1som_q_active_fC_by_phase[0]},
+        {"v1som.preprobe", v1som_q_active_fC_by_phase[1]},
+        {"v1som.trailer", v1som_q_active_fC_by_phase[2]},
+        {"v1.leader", v1e_q_active_fC_by_phase[0] + v1som_q_active_fC_by_phase[0]},
+        {"v1.preprobe", v1e_q_active_fC_by_phase[1] + v1som_q_active_fC_by_phase[1]},
+        {"v1.trailer", v1e_q_active_fC_by_phase[2] + v1som_q_active_fC_by_phase[2]},
+    };
+}
+
+double hpred_prediction_neighborhood_signal(
+    const std::vector<std::int32_t>& hpred_step_spikes,
+    int channel,
+    double neighbor_weight
+) {
+    auto hpred_channel_count = [&](int ch) {
+        const int wrapped = wrap_ring_channel(ch, H_N_CHANNELS);
+        const int h_base = wrapped * H_E_PER_CHANNEL;
+        int count = 0;
+        for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+            count += hpred_step_spikes[static_cast<std::size_t>(h_base + h)];
+        }
+        return count;
+    };
+    const int same_count = hpred_channel_count(channel);
+    const int neighbor_count =
+        hpred_channel_count(channel - 1) + hpred_channel_count(channel + 1);
+    return static_cast<double>(same_count)
+        + neighbor_weight * static_cast<double>(neighbor_count);
+}
+
+void cpu_apply_v1_predicted_raw_ie_suppression(
+    std::map<std::string, std::vector<double>>& s,
+    const std::vector<std::int32_t>& hpred_feedback_step_spikes,
+    double scale,
+    double neighbor_weight,
+    std::vector<double>& signal_sum,
+    std::vector<double>& gain_sum,
+    std::vector<double>& raw_ie_before_sum,
+    std::vector<double>& raw_ie_after_sum,
+    std::vector<double>& raw_ie_delta_sum
+) {
+    auto& ie = s["I_e_pA"];
+    for (int channel = 0; channel < V1_N_CHANNELS; ++channel) {
+        const double signal = hpred_prediction_neighborhood_signal(
+            hpred_feedback_step_spikes, channel, neighbor_weight
+        );
+        const double gain = 1.0 / (1.0 + scale * signal);
+        double before_sum = 0.0;
+        double after_sum = 0.0;
+        const int base = channel * V1_E_PER_CHANNEL;
+        for (int cell = 0; cell < V1_E_PER_CHANNEL; ++cell) {
+            const std::size_t idx = static_cast<std::size_t>(base + cell);
+            const double before = ie[idx];
+            const double after = before * gain;
+            ie[idx] = after;
+            before_sum += before;
+            after_sum += after;
+        }
+        const std::size_t out_idx = static_cast<std::size_t>(channel);
+        signal_sum[out_idx] += signal;
+        gain_sum[out_idx] += gain;
+        raw_ie_before_sum[out_idx] += before_sum;
+        raw_ie_after_sum[out_idx] += after_sum;
+        raw_ie_delta_sum[out_idx] += before_sum - after_sum;
     }
 }
 
@@ -784,7 +963,24 @@ void cpu_v1e_richter_count_step_flags(
     int preprobe_start_step,
     int preprobe_end_step,
     int trailer_start_step,
-    int trailer_end_step
+    int trailer_end_step,
+    const std::vector<std::int32_t>* v1_som_step_spikes = nullptr,
+    double v1_som_divisive_scale = 0.0,
+    double v1_direct_divisive_scale = 0.0,
+    double v1_feedforward_divisive_scale = 0.0,
+    const std::vector<std::int32_t>* v1_feedforward_gate_step_spikes = nullptr,
+    int v1_feedforward_divisive_gate_source_id =
+        V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM,
+    const std::vector<std::int32_t>* v1_direct_gate_step_spikes = nullptr,
+    int v1_direct_divisive_gate_source_id =
+        V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM,
+    double v1_predicted_suppression_scale = 0.0,
+    double v1_predicted_suppression_neighbor_weight = 0.0,
+    int v1_predicted_suppression_locus_id =
+        V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE,
+    const std::vector<std::int32_t>* v1_predicted_suppression_step_spikes = nullptr,
+    std::vector<double>* v1_predicted_suppression_signal_sum = nullptr,
+    std::vector<double>* v1_predicted_suppression_gain_sum = nullptr
 ) {
     std::fill(step_spikes.begin(), step_spikes.end(), 0);
     auto& v = s["V_soma_mV"];
@@ -811,9 +1007,114 @@ void cpu_v1e_richter_count_step_flags(
         const double i_ap = V1E_G_AP_SOMA_NS
             * sigmoid((old_vap - V1E_V_AP_TH_MV) / V1E_V_AP_SLOPE_MV)
             * (old_v - V1E_EL_MV);
+        double effective_ie = old_ie;
+        double effective_i_ap = i_ap;
+        const int channel = i / V1_E_PER_CHANNEL;
+        int same_channel_som_spikes = 0;
+        if ((v1_som_divisive_scale > 0.0
+                || (v1_direct_divisive_scale > 0.0
+                    && v1_direct_divisive_gate_source_id
+                        == V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM)
+                || (v1_feedforward_divisive_scale > 0.0
+                    && v1_feedforward_divisive_gate_source_id
+                        == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM))
+            && v1_som_step_spikes != nullptr) {
+            const int som_base = channel * V1_SOM_PER_CHANNEL;
+            for (int som = 0; som < V1_SOM_PER_CHANNEL; ++som) {
+                same_channel_som_spikes +=
+                    (*v1_som_step_spikes)[static_cast<std::size_t>(som_base + som)];
+            }
+        }
+        if (v1_som_divisive_scale > 0.0) {
+            const double gain =
+                1.0 / (1.0 + v1_som_divisive_scale
+                    * static_cast<double>(same_channel_som_spikes));
+            effective_ie *= gain;
+            effective_i_ap *= gain;
+        }
+        if (v1_direct_divisive_scale > 0.0) {
+            int direct_gate_count = same_channel_som_spikes;
+            if (v1_direct_divisive_gate_source_id
+                == V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+                direct_gate_count = 0;
+                if (phase == 2 && v1_direct_gate_step_spikes != nullptr) {
+                    const int channel = i / V1_E_PER_CHANNEL;
+                    const int h_base = channel * H_E_PER_CHANNEL;
+                    for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                        direct_gate_count +=
+                            (*v1_direct_gate_step_spikes)[
+                                static_cast<std::size_t>(h_base + h)
+                            ];
+                    }
+                }
+            }
+            const double direct_gain =
+                1.0 / (1.0 + v1_direct_divisive_scale
+                    * static_cast<double>(direct_gate_count));
+            effective_i_ap *= direct_gain;
+        }
+        if (v1_feedforward_divisive_scale > 0.0) {
+            int feedforward_gate_count = same_channel_som_spikes;
+            if (v1_feedforward_divisive_gate_source_id
+                == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+                feedforward_gate_count = 0;
+                if (phase == 2 && v1_feedforward_gate_step_spikes != nullptr) {
+                    const int channel = i / V1_E_PER_CHANNEL;
+                    const int h_base = channel * H_E_PER_CHANNEL;
+                    for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                        feedforward_gate_count +=
+                            (*v1_feedforward_gate_step_spikes)[
+                                static_cast<std::size_t>(h_base + h)
+                            ];
+                    }
+                }
+            }
+            const double feedforward_gain =
+                1.0 / (1.0 + v1_feedforward_divisive_scale
+                    * static_cast<double>(feedforward_gate_count));
+            effective_ie *= feedforward_gain;
+        }
+        if (v1_predicted_suppression_scale > 0.0
+            && v1_predicted_suppression_locus_id
+                == V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE
+            && phase == 2
+            && v1_predicted_suppression_step_spikes != nullptr) {
+            auto hpred_channel_count = [&](int ch) {
+                const int wrapped = wrap_ring_channel(ch, H_N_CHANNELS);
+                const int h_base = wrapped * H_E_PER_CHANNEL;
+                int count = 0;
+                for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                    count += (*v1_predicted_suppression_step_spikes)[
+                        static_cast<std::size_t>(h_base + h)
+                    ];
+                }
+                return count;
+            };
+            const int same_count = hpred_channel_count(channel);
+            const int neighbor_count =
+                hpred_channel_count(channel - 1) + hpred_channel_count(channel + 1);
+            const double suppression_signal =
+                static_cast<double>(same_count)
+                + v1_predicted_suppression_neighbor_weight
+                    * static_cast<double>(neighbor_count);
+            const double predicted_gain =
+                1.0 / (1.0 + v1_predicted_suppression_scale
+                    * suppression_signal);
+            effective_ie *= predicted_gain;
+            if ((i % V1_E_PER_CHANNEL) == 0
+                && v1_predicted_suppression_signal_sum != nullptr
+                && v1_predicted_suppression_gain_sum != nullptr) {
+                (*v1_predicted_suppression_signal_sum)[
+                    static_cast<std::size_t>(channel)
+                ] += suppression_signal;
+                (*v1_predicted_suppression_gain_sum)[
+                    static_cast<std::size_t>(channel)
+                ] += predicted_gain;
+            }
+        }
         if (!in_refrac) {
             const double current = V1E_GL_SOMA_NS * (V1E_EL_MV - old_v)
-                + ibias[i] + old_ie + i_ap - old_ii - old_w;
+                + ibias[i] + effective_ie + effective_i_ap - old_ii - old_w;
             v[i] = old_v + DT_MS * current / V1E_C_SOMA_NF
                 * PA_PER_NF_TO_MV_PER_MS;
         }
@@ -1254,7 +1555,21 @@ __global__ void v1e_richter_count_step_flags_kernel(
     std::int32_t* leader_counts,
     std::int32_t* preprobe_counts,
     std::int32_t* trailer_counts,
-    std::int32_t* step_spikes
+    std::int32_t* step_spikes,
+    const std::int32_t* v1_som_step_spikes,
+    double v1_som_divisive_scale,
+    double v1_direct_divisive_scale,
+    double v1_feedforward_divisive_scale,
+    const std::int32_t* v1_feedforward_gate_step_spikes,
+    int v1_feedforward_divisive_gate_source_id,
+    const std::int32_t* v1_direct_gate_step_spikes,
+    int v1_direct_divisive_gate_source_id,
+    double v1_predicted_suppression_scale,
+    double v1_predicted_suppression_neighbor_weight,
+    int v1_predicted_suppression_locus_id,
+    const std::int32_t* v1_predicted_suppression_step_spikes,
+    double* v1_predicted_suppression_signal_sum,
+    double* v1_predicted_suppression_gain_sum
 ) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= V1_E_N) return;
@@ -1274,9 +1589,103 @@ __global__ void v1e_richter_count_step_flags_kernel(
     const double i_ap = V1E_G_AP_SOMA_NS
         * sigmoid((old_vap - V1E_V_AP_TH_MV) / V1E_V_AP_SLOPE_MV)
         * (old_v - V1E_EL_MV);
+    double effective_ie = old_ie;
+    double effective_i_ap = i_ap;
+    const int channel = i / V1_E_PER_CHANNEL;
+    int same_channel_som_spikes = 0;
+    if ((v1_som_divisive_scale > 0.0
+            || (v1_direct_divisive_scale > 0.0
+                && v1_direct_divisive_gate_source_id
+                    == V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM)
+            || (v1_feedforward_divisive_scale > 0.0
+                && v1_feedforward_divisive_gate_source_id
+                    == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM))
+        && v1_som_step_spikes != nullptr) {
+        const int som_base = channel * V1_SOM_PER_CHANNEL;
+        for (int som = 0; som < V1_SOM_PER_CHANNEL; ++som) {
+            same_channel_som_spikes += v1_som_step_spikes[som_base + som];
+        }
+    }
+    if (v1_som_divisive_scale > 0.0) {
+        const double gain =
+            1.0 / (1.0 + v1_som_divisive_scale
+                * static_cast<double>(same_channel_som_spikes));
+        effective_ie *= gain;
+        effective_i_ap *= gain;
+    }
+    if (v1_direct_divisive_scale > 0.0) {
+        int direct_gate_count = same_channel_som_spikes;
+        if (v1_direct_divisive_gate_source_id
+            == V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+            direct_gate_count = 0;
+            if (phase == 2 && v1_direct_gate_step_spikes != nullptr) {
+                const int channel = i / V1_E_PER_CHANNEL;
+                const int h_base = channel * H_E_PER_CHANNEL;
+                for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                    direct_gate_count +=
+                        v1_direct_gate_step_spikes[h_base + h];
+                }
+            }
+        }
+        const double direct_gain =
+            1.0 / (1.0 + v1_direct_divisive_scale
+                * static_cast<double>(direct_gate_count));
+        effective_i_ap *= direct_gain;
+    }
+    if (v1_feedforward_divisive_scale > 0.0) {
+        int feedforward_gate_count = same_channel_som_spikes;
+        if (v1_feedforward_divisive_gate_source_id
+            == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+            feedforward_gate_count = 0;
+            if (phase == 2 && v1_feedforward_gate_step_spikes != nullptr) {
+                const int channel = i / V1_E_PER_CHANNEL;
+                const int h_base = channel * H_E_PER_CHANNEL;
+                for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                    feedforward_gate_count +=
+                        v1_feedforward_gate_step_spikes[h_base + h];
+                }
+            }
+        }
+        const double feedforward_gain =
+            1.0 / (1.0 + v1_feedforward_divisive_scale
+                * static_cast<double>(feedforward_gate_count));
+        effective_ie *= feedforward_gain;
+    }
+    if (v1_predicted_suppression_scale > 0.0
+        && v1_predicted_suppression_locus_id
+            == V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE
+        && phase == 2
+        && v1_predicted_suppression_step_spikes != nullptr) {
+        auto hpred_channel_count = [&](int ch) {
+            const int wrapped = wrap_ring_channel(ch, H_N_CHANNELS);
+            const int h_base = wrapped * H_E_PER_CHANNEL;
+            int count = 0;
+            for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                count += v1_predicted_suppression_step_spikes[h_base + h];
+            }
+            return count;
+        };
+        const int same_count = hpred_channel_count(channel);
+        const int neighbor_count =
+            hpred_channel_count(channel - 1) + hpred_channel_count(channel + 1);
+        const double suppression_signal =
+            static_cast<double>(same_count)
+            + v1_predicted_suppression_neighbor_weight
+                * static_cast<double>(neighbor_count);
+        const double predicted_gain =
+            1.0 / (1.0 + v1_predicted_suppression_scale
+                * suppression_signal);
+        effective_ie *= predicted_gain;
+        if ((i % V1_E_PER_CHANNEL) == 0
+            && v1_predicted_suppression_signal_sum != nullptr
+            && v1_predicted_suppression_gain_sum != nullptr) {
+            v1_predicted_suppression_signal_sum[channel] += suppression_signal;
+            v1_predicted_suppression_gain_sum[channel] += predicted_gain;
+        }
+    }
     if (!in_refrac) {
         const double current = V1E_GL_SOMA_NS * (V1E_EL_MV - old_v)
-            + ibias[i] + old_ie + i_ap - old_ii - old_w;
+            + ibias[i] + effective_ie + effective_i_ap - old_ii - old_w;
         v[i] = old_v + DT_MS * current / V1E_C_SOMA_NF
             * PA_PER_NF_TO_MV_PER_MS;
     }
@@ -1320,6 +1729,7 @@ __global__ void he_richter_count_step_flags_kernel(
     double* refrac,
     std::int32_t* leader_counts,
     std::int32_t* preprobe_counts,
+    std::int32_t* preprobe_channel_counts,
     std::int32_t* trailer_counts,
     std::int32_t* step_spikes
 ) {
@@ -1355,6 +1765,12 @@ __global__ void he_richter_count_step_flags_kernel(
             leader_counts[i] += 1;
         } else if (phase == 1) {
             preprobe_counts[i] += 1;
+            if (preprobe_channel_counts != nullptr) {
+                atomicAdd(
+                    &preprobe_channel_counts[i / H_E_PER_CHANNEL],
+                    1
+                );
+            }
         } else if (phase == 2) {
             trailer_counts[i] += 1;
         }
@@ -1573,6 +1989,29 @@ __global__ void h_ring_e_step_batch_kernel(
     }
 }
 
+__global__ void h_pretrailer_channel_bin_counts_kernel(
+    int n_trials,
+    int step,
+    int pretrailer_start,
+    int pretrailer_end,
+    int n_bins,
+    const std::int32_t* e_spikes,
+    std::int32_t* channel_counts_by_bin
+) {
+    if (step < pretrailer_start || step >= pretrailer_end) return;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_trials * H_E_N;
+    if (idx >= n || e_spikes[idx] == 0) return;
+    const int bin_width = (pretrailer_end - pretrailer_start) / n_bins;
+    const int bin = (step - pretrailer_start) / bin_width;
+    const int trial = idx / H_E_N;
+    const int cell = idx % H_E_N;
+    const int channel = cell / H_E_PER_CHANNEL;
+    const int offset =
+        (trial * n_bins + bin) * H_BROAD_INH_START + channel;
+    atomicAdd(&channel_counts_by_bin[offset], 1);
+}
+
 __global__ void h_ring_inh_step_batch_kernel(
     int n_trials,
     int step,
@@ -1686,6 +2125,7 @@ __global__ void seeded_stim_source_scatter_kernel(
     int unexpected_channel,
     double grating_rate_hz,
     double baseline_rate_hz,
+    double v1_stim_sigma_deg,
     int leader_start_step,
     int leader_end_step,
     int preprobe_start_step,
@@ -1711,7 +2151,7 @@ __global__ void seeded_stim_source_scatter_kernel(
             seed, step, src, channel, expected_channel, unexpected_channel,
             grating_rate_hz, baseline_rate_hz, leader_start_step, leader_end_step,
             preprobe_start_step, preprobe_end_step, trailer_start_step,
-            trailer_end_step
+            trailer_end_step, v1_stim_sigma_deg
         )) {
         return;
     }
@@ -1797,16 +2237,38 @@ __global__ void csr_scatter_spike_flags_kernel(
     }
 }
 
+__global__ void csr_scatter_pre_weights_kernel(
+    int n_pre,
+    const double* pre_weights,
+    const std::int32_t* row_ptr,
+    const std::int32_t* post,
+    const double* weight,
+    double drive_amp,
+    double* target
+) {
+    const int src = blockIdx.x * blockDim.x + threadIdx.x;
+    if (src >= n_pre) return;
+    const double pre_weight = pre_weights[src];
+    if (pre_weight == 0.0) return;
+    for (int edge = row_ptr[src]; edge < row_ptr[src + 1]; ++edge) {
+        atomicAdd(&target[post[edge]], weight[edge] * drive_amp * pre_weight);
+    }
+}
+
 __global__ void v1som_step_kernel(
     int step,
     double* v,
     double* ie,
     double* ii,
     double* ibias,
-    double* refrac
+    double* refrac,
+    std::int32_t* step_spikes
 ) {
     const int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= V1_SOM_N) return;
+    if (step_spikes != nullptr) {
+        step_spikes[i] = 0;
+    }
     const double t_ms = step * DT_MS;
     const bool in_refrac = t_ms < refrac[i];
     const double old_v = v[i];
@@ -1823,6 +2285,769 @@ __global__ void v1som_step_kernel(
     if (!in_refrac && v[i] > V1SOM_VT_MV) {
         v[i] = V1SOM_VR_MV;
         refrac[i] = refractory_until_ms(step, V1SOM_REFACTORY_MS);
+        if (step_spikes != nullptr) {
+            step_spikes[i] = 1;
+        }
+    }
+}
+
+__global__ void count_v1som_trailer_flags_kernel(
+    int step,
+    int trailer_start_step,
+    int trailer_end_step,
+    int trailer_bin_steps,
+    const std::int32_t* step_spikes,
+    std::int32_t* trailer_counts,
+    std::int32_t* trailer_bin_channel_counts
+) {
+    if (step < trailer_start_step || step >= trailer_end_step) return;
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= V1_SOM_N) return;
+    if (step_spikes[i] == 0) return;
+    const int trailer_bin = (step - trailer_start_step) / trailer_bin_steps;
+    const int channel = i / V1_SOM_PER_CHANNEL;
+    atomicAdd(&trailer_counts[i], 1);
+    atomicAdd(
+        &trailer_bin_channel_counts[trailer_bin * V1_N_CHANNELS + channel],
+        1
+    );
+}
+
+__global__ void v1som_q_active_phase_batch_kernel(
+    int n_conditions,
+    int step,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step,
+    const double* ie,
+    const double* ii,
+    double* q_active_fC_by_phase
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * V1_SOM_N;
+    if (idx >= n) return;
+    const int phase = richter_phase_index(
+        step, leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step
+    );
+    if (phase < 0) return;
+    const int condition = idx / V1_SOM_N;
+    const double q_fC = (fabs(ie[idx]) + fabs(ii[idx])) * DT_MS;
+    atomicAdd(&q_active_fC_by_phase[condition * 3 + phase], q_fC);
+}
+
+__global__ void v1e_q_active_phase_batch_kernel(
+    int n_conditions,
+    int step,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step,
+    const double* ie,
+    const double* ii,
+    const double* iape,
+    double* q_active_fC_by_phase
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * V1_E_N;
+    if (idx >= n) return;
+    const int phase = richter_phase_index(
+        step, leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step
+    );
+    if (phase < 0) return;
+    const int condition = idx / V1_E_N;
+    const double q_fC =
+        (fabs(ie[idx]) + fabs(ii[idx]) + fabs(iape[idx])) * DT_MS;
+    atomicAdd(&q_active_fC_by_phase[condition * 3 + phase], q_fC);
+}
+
+__global__ void v1e_predicted_raw_ie_suppression_kernel(
+    int n_conditions,
+    double* ie,
+    const std::int32_t* hpred_feedback_step_spikes,
+    double scale,
+    double neighbor_weight,
+    double* signal_sum,
+    double* gain_sum,
+    double* raw_ie_before_sum,
+    double* raw_ie_after_sum,
+    double* raw_ie_delta_sum
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * V1_N_CHANNELS;
+    if (idx >= n) return;
+    const int condition = idx / V1_N_CHANNELS;
+    const int channel = idx % V1_N_CHANNELS;
+    auto hpred_channel_count = [&](int ch) {
+        const int wrapped = wrap_ring_channel(ch, H_N_CHANNELS);
+        const int h_base =
+            condition * H_E_N + wrapped * H_E_PER_CHANNEL;
+        int count = 0;
+        for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+            count += hpred_feedback_step_spikes[h_base + h];
+        }
+        return count;
+    };
+    const int same_count = hpred_channel_count(channel);
+    const int neighbor_count =
+        hpred_channel_count(channel - 1) + hpred_channel_count(channel + 1);
+    const double signal = static_cast<double>(same_count)
+        + neighbor_weight * static_cast<double>(neighbor_count);
+    const double gain = 1.0 / (1.0 + scale * signal);
+    double before_sum = 0.0;
+    double after_sum = 0.0;
+    const int v1_base = condition * V1_E_N + channel * V1_E_PER_CHANNEL;
+    for (int cell = 0; cell < V1_E_PER_CHANNEL; ++cell) {
+        const int cell_idx = v1_base + cell;
+        const double before = ie[cell_idx];
+        const double after = before * gain;
+        ie[cell_idx] = after;
+        before_sum += before;
+        after_sum += after;
+    }
+    signal_sum[idx] += signal;
+    gain_sum[idx] += gain;
+    raw_ie_before_sum[idx] += before_sum;
+    raw_ie_after_sum[idx] += after_sum;
+    raw_ie_delta_sum[idx] += before_sum - after_sum;
+}
+
+__global__ void v1e_richter_count_total_batch_kernel(
+    int n_conditions,
+    int step,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step,
+    double* v,
+    double* vap,
+    double* ie,
+    double* ii,
+    double* iape,
+    double* wadapt,
+    double* ibias,
+    double* refrac,
+    std::int32_t* leader_total_counts,
+    std::int32_t* preprobe_total_counts,
+    std::int32_t* trailer_total_counts,
+    std::int32_t* trailer_channel_counts,
+    std::int32_t trailer_bin_steps,
+    std::int32_t* trailer_bin_channel_counts,
+    std::int32_t* step_spikes,
+    const std::int32_t* v1_som_step_spikes,
+    double v1_som_divisive_scale,
+    double v1_direct_divisive_scale,
+    double v1_feedforward_divisive_scale,
+    const std::int32_t* v1_feedforward_gate_step_spikes,
+    int v1_feedforward_divisive_gate_source_id,
+    const std::int32_t* v1_direct_gate_step_spikes,
+    int v1_direct_divisive_gate_source_id,
+    double v1_predicted_suppression_scale,
+    double v1_predicted_suppression_neighbor_weight,
+    int v1_predicted_suppression_locus_id,
+    const std::int32_t* v1_predicted_suppression_step_spikes,
+    double* v1_predicted_suppression_signal_sum,
+    double* v1_predicted_suppression_gain_sum
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * V1_E_N;
+    if (idx >= n) return;
+    const int condition = idx / V1_E_N;
+    step_spikes[idx] = 0;
+    const double t_ms = step * DT_MS;
+    const bool in_refrac = t_ms < refrac[idx];
+    const int phase = richter_phase_index(
+        step, leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step
+    );
+    const double old_v = v[idx];
+    const double old_vap = vap[idx];
+    const double old_ie = ie[idx];
+    const double old_ii = ii[idx];
+    const double old_iape = iape[idx];
+    const double old_w = wadapt[idx];
+    const double i_ap = V1E_G_AP_SOMA_NS
+        * sigmoid((old_vap - V1E_V_AP_TH_MV) / V1E_V_AP_SLOPE_MV)
+        * (old_v - V1E_EL_MV);
+    double effective_ie = old_ie;
+    double effective_i_ap = i_ap;
+    const int cell_index = idx % V1_E_N;
+    const int channel = cell_index / V1_E_PER_CHANNEL;
+    int same_channel_som_spikes = 0;
+    if ((v1_som_divisive_scale > 0.0
+            || (v1_direct_divisive_scale > 0.0
+                && v1_direct_divisive_gate_source_id
+                    == V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM)
+            || (v1_feedforward_divisive_scale > 0.0
+                && v1_feedforward_divisive_gate_source_id
+                    == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM))
+        && v1_som_step_spikes != nullptr) {
+        const int som_base = condition * V1_SOM_N + channel * V1_SOM_PER_CHANNEL;
+        for (int som = 0; som < V1_SOM_PER_CHANNEL; ++som) {
+            same_channel_som_spikes += v1_som_step_spikes[som_base + som];
+        }
+    }
+    if (v1_som_divisive_scale > 0.0) {
+        const double gain =
+            1.0 / (1.0 + v1_som_divisive_scale
+                * static_cast<double>(same_channel_som_spikes));
+        effective_ie *= gain;
+        effective_i_ap *= gain;
+    }
+    if (v1_direct_divisive_scale > 0.0) {
+        int direct_gate_count = same_channel_som_spikes;
+        if (v1_direct_divisive_gate_source_id
+            == V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+            direct_gate_count = 0;
+            if (phase == 2 && v1_direct_gate_step_spikes != nullptr) {
+                const int cell_index = idx % V1_E_N;
+                const int channel = cell_index / V1_E_PER_CHANNEL;
+                const int h_base =
+                    condition * H_E_N + channel * H_E_PER_CHANNEL;
+                for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                    direct_gate_count +=
+                        v1_direct_gate_step_spikes[h_base + h];
+                }
+            }
+        }
+        const double direct_gain =
+            1.0 / (1.0 + v1_direct_divisive_scale
+                * static_cast<double>(direct_gate_count));
+        effective_i_ap *= direct_gain;
+    }
+    if (v1_feedforward_divisive_scale > 0.0) {
+        int feedforward_gate_count = same_channel_som_spikes;
+        if (v1_feedforward_divisive_gate_source_id
+            == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+            feedforward_gate_count = 0;
+            if (phase == 2 && v1_feedforward_gate_step_spikes != nullptr) {
+                const int cell_index = idx % V1_E_N;
+                const int channel = cell_index / V1_E_PER_CHANNEL;
+                const int h_base =
+                    condition * H_E_N + channel * H_E_PER_CHANNEL;
+                for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                    feedforward_gate_count +=
+                        v1_feedforward_gate_step_spikes[h_base + h];
+                }
+            }
+        }
+        const double feedforward_gain =
+            1.0 / (1.0 + v1_feedforward_divisive_scale
+                * static_cast<double>(feedforward_gate_count));
+        effective_ie *= feedforward_gain;
+    }
+    if (v1_predicted_suppression_scale > 0.0
+        && v1_predicted_suppression_locus_id
+            == V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE
+        && phase == 2
+        && v1_predicted_suppression_step_spikes != nullptr) {
+        auto hpred_channel_count = [&](int ch) {
+            const int wrapped = wrap_ring_channel(ch, H_N_CHANNELS);
+            const int h_base =
+                condition * H_E_N + wrapped * H_E_PER_CHANNEL;
+            int count = 0;
+            for (int h = 0; h < H_E_PER_CHANNEL; ++h) {
+                count += v1_predicted_suppression_step_spikes[h_base + h];
+            }
+            return count;
+        };
+        const int same_count = hpred_channel_count(channel);
+        const int neighbor_count =
+            hpred_channel_count(channel - 1) + hpred_channel_count(channel + 1);
+        const double suppression_signal =
+            static_cast<double>(same_count)
+            + v1_predicted_suppression_neighbor_weight
+                * static_cast<double>(neighbor_count);
+        const double predicted_gain =
+            1.0 / (1.0 + v1_predicted_suppression_scale
+                * suppression_signal);
+        effective_ie *= predicted_gain;
+        if ((cell_index % V1_E_PER_CHANNEL) == 0
+            && v1_predicted_suppression_signal_sum != nullptr
+            && v1_predicted_suppression_gain_sum != nullptr) {
+            const int out_idx = condition * V1_N_CHANNELS + channel;
+            v1_predicted_suppression_signal_sum[out_idx] += suppression_signal;
+            v1_predicted_suppression_gain_sum[out_idx] += predicted_gain;
+        }
+    }
+    if (!in_refrac) {
+        const double current = V1E_GL_SOMA_NS * (V1E_EL_MV - old_v)
+            + ibias[idx] + effective_ie + effective_i_ap - old_ii - old_w;
+        v[idx] = old_v + DT_MS * current / V1E_C_SOMA_NF
+            * PA_PER_NF_TO_MV_PER_MS;
+    }
+    vap[idx] = old_vap + DT_MS
+        * (V1E_GL_AP_NS * (V1E_EL_AP_MV - old_vap) + old_iape)
+        / V1E_C_AP_NF * PA_PER_NF_TO_MV_PER_MS;
+    ie[idx] = old_ie + DT_MS * (-old_ie / TAU_E_MS);
+    ii[idx] = old_ii + DT_MS * (-old_ii / TAU_I_MS);
+    iape[idx] = old_iape + DT_MS * (-old_iape / TAU_E_MS);
+    wadapt[idx] = old_w + DT_MS
+        * ((V1E_A_ADAPT_NS * (old_v - V1E_EL_MV) - old_w)
+           / V1E_TAU_ADAPT_MS);
+    if (!in_refrac && v[idx] > V1E_VT_MV) {
+        v[idx] = V1E_VR_MV;
+        wadapt[idx] += V1E_B_ADAPT_PA;
+        refrac[idx] = refractory_until_ms(step, V1E_REFACTORY_MS);
+        step_spikes[idx] = 1;
+        if (phase == 0) {
+            atomicAdd(&leader_total_counts[condition], 1);
+        } else if (phase == 1) {
+            atomicAdd(&preprobe_total_counts[condition], 1);
+        } else if (phase == 2) {
+            atomicAdd(&trailer_total_counts[condition], 1);
+            const int cell_index = idx % V1_E_N;
+            const int channel = cell_index / V1_E_PER_CHANNEL;
+            atomicAdd(
+                &trailer_channel_counts[condition * V1_N_CHANNELS + channel],
+                1
+            );
+            const int trailer_rel_step = step - trailer_start_step;
+            const int trailer_bin = trailer_rel_step / trailer_bin_steps;
+            if (trailer_bin >= 0 && trailer_bin < V1_TRAILER_BIN_COUNT) {
+                atomicAdd(
+                    &trailer_bin_channel_counts[
+                        (condition * V1_TRAILER_BIN_COUNT + trailer_bin)
+                        * V1_N_CHANNELS + channel
+                    ],
+                    1
+                );
+            }
+        }
+    }
+}
+
+__global__ void he_richter_count_total_batch_kernel(
+    int n_conditions,
+    int step,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step,
+    double* v,
+    double* ie,
+    double* ii,
+    double* gnmda,
+    double* ibias,
+    double* refrac,
+    std::int32_t* leader_total_counts,
+    std::int32_t* preprobe_total_counts,
+    std::int32_t* preprobe_channel_counts,
+    std::int32_t* trailer_total_counts,
+    std::int32_t trailer_bin_steps,
+    std::int32_t* trailer_bin_total_counts,
+    std::int32_t* trailer_bin_channel_counts,
+    std::int32_t* step_spikes
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * H_E_N;
+    if (idx >= n) return;
+    const int condition = idx / H_E_N;
+    step_spikes[idx] = 0;
+    const double t_ms = step * DT_MS;
+    const bool in_refrac = t_ms < refrac[idx];
+    const int phase = richter_phase_index(
+        step, leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step
+    );
+    const double old_v = v[idx];
+    const double old_ie = ie[idx];
+    const double old_ii = ii[idx];
+    const double old_g = gnmda[idx];
+    if (!in_refrac) {
+        const double s_nmda = 1.0 / (1.0 + exp(-0.062 * old_v) / 3.57);
+        const double i_nmda = old_g * s_nmda * (V_NMDA_REV_MV - old_v);
+        const double current = HE_GL_NS * (HE_EL_MV - old_v)
+            + ibias[idx] + old_ie + i_nmda - old_ii;
+        v[idx] = old_v + DT_MS * current / HE_C_NF
+            * PA_PER_NF_TO_MV_PER_MS;
+    }
+    ie[idx] = old_ie + DT_MS * (-old_ie / TAU_E_MS);
+    ii[idx] = old_ii + DT_MS * (-old_ii / TAU_I_MS);
+    gnmda[idx] = old_g + DT_MS * (-old_g / TAU_NMDA_H_MS);
+    if (!in_refrac && v[idx] > HE_VT_MV) {
+        v[idx] = HE_VR_MV;
+        refrac[idx] = refractory_until_ms(step, HE_REFACTORY_MS);
+        step_spikes[idx] = 1;
+        if (phase == 0) {
+            atomicAdd(&leader_total_counts[condition], 1);
+        } else if (phase == 1) {
+            atomicAdd(&preprobe_total_counts[condition], 1);
+            if (preprobe_channel_counts != nullptr) {
+                const int cell_index = idx % H_E_N;
+                const int channel = cell_index / H_E_PER_CHANNEL;
+                atomicAdd(
+                    &preprobe_channel_counts[
+                        condition * H_N_CHANNELS + channel
+                    ],
+                    1
+                );
+            }
+        } else if (phase == 2) {
+            atomicAdd(&trailer_total_counts[condition], 1);
+            if (trailer_bin_total_counts != nullptr) {
+                const int trailer_rel_step = step - trailer_start_step;
+                const int trailer_bin = trailer_rel_step / trailer_bin_steps;
+                if (trailer_bin >= 0 && trailer_bin < V1_TRAILER_BIN_COUNT) {
+                    atomicAdd(
+                        &trailer_bin_total_counts[
+                            condition * V1_TRAILER_BIN_COUNT + trailer_bin
+                        ],
+                        1
+                    );
+                }
+            }
+            if (trailer_bin_channel_counts != nullptr) {
+                const int trailer_rel_step = step - trailer_start_step;
+                const int trailer_bin = trailer_rel_step / trailer_bin_steps;
+                if (trailer_bin >= 0 && trailer_bin < V1_TRAILER_BIN_COUNT) {
+                    const int cell_index = idx % H_E_N;
+                    const int channel = cell_index / H_E_PER_CHANNEL;
+                    atomicAdd(
+                        &trailer_bin_channel_counts[
+                            (condition * V1_TRAILER_BIN_COUNT + trailer_bin)
+                            * H_N_CHANNELS + channel
+                        ],
+                        1
+                    );
+                }
+            }
+        }
+    }
+}
+
+__global__ void v1som_step_batch_kernel(
+    int n_conditions,
+    int step,
+    int trailer_start_step,
+    int trailer_end_step,
+    double* v,
+    double* ie,
+    double* ii,
+    double* ibias,
+    double* refrac,
+    std::int32_t* trailer_total_counts,
+    std::int32_t* trailer_channel_counts,
+    std::int32_t trailer_bin_steps,
+    std::int32_t* trailer_bin_channel_counts,
+    std::int32_t* step_spikes
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * V1_SOM_N;
+    if (idx >= n) return;
+    if (step_spikes != nullptr) {
+        step_spikes[idx] = 0;
+    }
+    const double t_ms = step * DT_MS;
+    const bool in_refrac = t_ms < refrac[idx];
+    const double old_v = v[idx];
+    const double old_ie = ie[idx];
+    const double old_ii = ii[idx];
+    if (!in_refrac) {
+        const double current = V1SOM_GL_NS * (V1SOM_EL_MV - old_v)
+            + ibias[idx] + old_ie - old_ii;
+        v[idx] = old_v + DT_MS * current / V1SOM_C_NF
+            * PA_PER_NF_TO_MV_PER_MS;
+    }
+    ie[idx] = old_ie + DT_MS * (-old_ie / TAU_E_MS);
+    ii[idx] = old_ii + DT_MS * (-old_ii / TAU_I_MS);
+    if (!in_refrac && v[idx] > V1SOM_VT_MV) {
+        v[idx] = V1SOM_VR_MV;
+        refrac[idx] = refractory_until_ms(step, V1SOM_REFACTORY_MS);
+        if (step_spikes != nullptr) {
+            step_spikes[idx] = 1;
+        }
+        if (trailer_total_counts != nullptr
+            && trailer_channel_counts != nullptr
+            && step >= trailer_start_step
+            && step < trailer_end_step) {
+            const int condition = idx / V1_SOM_N;
+            const int cell_index = idx % V1_SOM_N;
+            const int channel = cell_index / V1_SOM_PER_CHANNEL;
+            atomicAdd(&trailer_total_counts[condition], 1);
+            atomicAdd(
+                &trailer_channel_counts[condition * V1_N_CHANNELS + channel],
+                1
+            );
+            if (trailer_bin_channel_counts != nullptr) {
+                const int trailer_bin =
+                    (step - trailer_start_step) / trailer_bin_steps;
+                atomicAdd(
+                    &trailer_bin_channel_counts[
+                        (condition * V1_TRAILER_BIN_COUNT + trailer_bin)
+                            * V1_N_CHANNELS
+                        + channel
+                    ],
+                    1
+                );
+            }
+        }
+    }
+}
+
+__global__ void seeded_stim_source_scatter_batch_kernel(
+    int n_conditions,
+    const std::int64_t* seeds,
+    int step,
+    int n_sources,
+    const std::int32_t* source_channel,
+    const std::int32_t* expected_channels,
+    const std::int32_t* unexpected_channels,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    double v1_stim_sigma_deg,
+    int leader_start_step,
+    int leader_end_step,
+    int preprobe_start_step,
+    int preprobe_end_step,
+    int trailer_start_step,
+    int trailer_end_step,
+    const std::int32_t* row_ptr,
+    const std::int32_t* post,
+    const double* weight,
+    double drive_amp,
+    double* target,
+    std::int32_t* source_total_counts
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * n_sources;
+    if (idx >= n) return;
+    const int condition = idx / n_sources;
+    const int src = idx % n_sources;
+    const int channel = source_channel[src];
+    if (!seeded_source_event(
+            seeds[condition], step, src, channel,
+            expected_channels[condition], unexpected_channels[condition],
+            grating_rate_hz, baseline_rate_hz, leader_start_step,
+            leader_end_step, preprobe_start_step, preprobe_end_step,
+            trailer_start_step, trailer_end_step, v1_stim_sigma_deg
+        )) {
+        return;
+    }
+    atomicAdd(&source_total_counts[condition], 1);
+    const int target_base = condition * V1_E_N;
+    for (int edge = row_ptr[src]; edge < row_ptr[src + 1]; ++edge) {
+        atomicAdd(&target[target_base + post[edge]], weight[edge] * drive_amp);
+    }
+}
+
+__global__ void csr_scatter_spike_flags_batch_kernel(
+    int n_conditions,
+    int n_pre,
+    const std::int32_t* spike_flags,
+    const std::int32_t* row_ptr,
+    const std::int32_t* post,
+    const double* weight,
+    double drive_amp,
+    int target_stride,
+    double* target
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * n_pre;
+    if (idx >= n || spike_flags[idx] == 0) return;
+    const int condition = idx / n_pre;
+    const int src = idx % n_pre;
+    const int target_base = condition * target_stride;
+    for (int edge = row_ptr[src]; edge < row_ptr[src + 1]; ++edge) {
+        atomicAdd(&target[target_base + post[edge]], weight[edge] * drive_amp);
+    }
+}
+
+__global__ void csr_scatter_pre_weights_batch_kernel(
+    int n_conditions,
+    int n_pre,
+    const double* pre_weights,
+    const std::int32_t* row_ptr,
+    const std::int32_t* post,
+    const double* weight,
+    double drive_amp,
+    int target_stride,
+    double* target
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * n_pre;
+    if (idx >= n) return;
+    const int condition = idx / n_pre;
+    const int src = idx % n_pre;
+    const double pre_weight = pre_weights[idx];
+    if (pre_weight == 0.0) return;
+    const int target_base = condition * target_stride;
+    for (int edge = row_ptr[src]; edge < row_ptr[src + 1]; ++edge) {
+        atomicAdd(
+            &target[target_base + post[edge]],
+            weight[edge] * drive_amp * pre_weight
+        );
+    }
+}
+
+__global__ void store_hpred_feedback_replay_flags_kernel(
+    int n_conditions,
+    int replay_step,
+    const std::int32_t* spike_flags,
+    std::int32_t* replay_flags
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * H_E_N;
+    if (idx >= n) return;
+    const int condition = idx / H_E_N;
+    const int cell = idx % H_E_N;
+    replay_flags[
+        (replay_step * n_conditions + condition) * H_E_N + cell
+    ] = spike_flags[idx];
+}
+
+__global__ void count_hpred_feedback_replay_flags_kernel(
+    int n_conditions,
+    int trailer_bin,
+    const std::int32_t* replay_flags,
+    std::int32_t* trailer_bin_total_counts,
+    std::int32_t* trailer_bin_channel_counts
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * H_E_N;
+    if (idx >= n || replay_flags[idx] == 0) return;
+    const int condition = idx / H_E_N;
+    const int cell = idx % H_E_N;
+    const int channel = cell / H_E_PER_CHANNEL;
+    atomicAdd(
+        &trailer_bin_total_counts[
+            condition * V1_TRAILER_BIN_COUNT + trailer_bin
+        ],
+        1
+    );
+    atomicAdd(
+        &trailer_bin_channel_counts[
+            (condition * V1_TRAILER_BIN_COUNT + trailer_bin)
+            * H_N_CHANNELS + channel
+        ],
+        1
+    );
+}
+
+__global__ void build_hpred_normalized_feedback_weights_kernel(
+    int n_conditions,
+    int preprobe_steps,
+    double target_per_bin,
+    const std::int32_t* preprobe_channel_counts,
+    const std::int32_t* leader_channels,
+    const std::int32_t* leader_template_channel_counts,
+    int fallback_mode_id,
+    std::int32_t* preprobe_zero,
+    std::int32_t* fallback_used,
+    std::int32_t* fallback_zero_template,
+    double* feedback_weights,
+    double* trailer_bin_total_weights,
+    double* trailer_bin_channel_weights
+) {
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n = n_conditions * H_E_N;
+    if (idx >= n) return;
+    const int condition = idx / H_E_N;
+    const int cell = idx % H_E_N;
+    const int channel = cell / H_E_PER_CHANNEL;
+    std::int32_t total = 0;
+    for (int ch = 0; ch < H_N_CHANNELS; ++ch) {
+        total += preprobe_channel_counts[condition * H_N_CHANNELS + ch];
+    }
+    const bool current_preprobe_zero = total == 0;
+    int source_mode = 0;
+    int leader = 0;
+    std::int32_t template_total = 0;
+    if (current_preprobe_zero) {
+        if (fallback_mode_id == 1 && leader_channels != nullptr
+            && leader_template_channel_counts != nullptr) {
+            leader = leader_channels[condition];
+            if (leader >= 0 && leader < H_N_CHANNELS) {
+                for (int ch = 0; ch < H_N_CHANNELS; ++ch) {
+                    template_total +=
+                        leader_template_channel_counts[leader * H_N_CHANNELS + ch];
+                }
+                if (template_total > 0) {
+                    source_mode = 1;
+                    total = template_total;
+                }
+            }
+        } else if (fallback_mode_id == 2) {
+            source_mode = 2;
+            total = H_N_CHANNELS;
+        }
+    }
+    if (cell == 0) {
+        if (preprobe_zero != nullptr) {
+            preprobe_zero[condition] = current_preprobe_zero ? 1 : 0;
+        }
+        if (fallback_used != nullptr) {
+            fallback_used[condition] = (current_preprobe_zero && total > 0) ? 1 : 0;
+        }
+        if (fallback_zero_template != nullptr) {
+            fallback_zero_template[condition] =
+                (current_preprobe_zero && total == 0) ? 1 : 0;
+        }
+    }
+    std::int32_t channel_count = 0;
+    if (source_mode == 1) {
+        channel_count =
+            leader_template_channel_counts[leader * H_N_CHANNELS + channel];
+    } else if (source_mode == 2) {
+        channel_count = 1;
+    } else {
+        channel_count =
+            preprobe_channel_counts[condition * H_N_CHANNELS + channel];
+    }
+    double channel_weight = 0.0;
+    if (total > 0 && target_per_bin > 0.0) {
+        channel_weight =
+            target_per_bin
+            * static_cast<double>(channel_count)
+            / static_cast<double>(total);
+    }
+    feedback_weights[idx] =
+        channel_weight
+        / (static_cast<double>(preprobe_steps) * H_E_PER_CHANNEL);
+    if (cell < H_N_CHANNELS) {
+        const int telemetry_channel = cell;
+        std::int32_t telemetry_channel_count = 0;
+        if (source_mode == 1) {
+            telemetry_channel_count =
+                leader_template_channel_counts[
+                    leader * H_N_CHANNELS + telemetry_channel
+                ];
+        } else if (source_mode == 2) {
+            telemetry_channel_count = 1;
+        } else {
+            telemetry_channel_count =
+                preprobe_channel_counts[
+                    condition * H_N_CHANNELS + telemetry_channel
+                ];
+        }
+        double telemetry_channel_weight = 0.0;
+        if (total > 0 && target_per_bin > 0.0) {
+            telemetry_channel_weight =
+                target_per_bin
+                * static_cast<double>(telemetry_channel_count)
+                / static_cast<double>(total);
+        }
+        for (int bin = 0; bin < V1_TRAILER_BIN_COUNT; ++bin) {
+            trailer_bin_channel_weights[
+                (condition * V1_TRAILER_BIN_COUNT + bin) * H_N_CHANNELS
+                + telemetry_channel
+            ] = telemetry_channel_weight;
+            if (telemetry_channel == 0) {
+                trailer_bin_total_weights[
+                    condition * V1_TRAILER_BIN_COUNT + bin
+                ] = (total > 0 ? target_per_bin : 0.0);
+            }
+        }
     }
 }
 
@@ -2097,6 +3322,26 @@ CsrBank build_csr_bank(
     return bank;
 }
 
+CsrBank build_fixed_v1_som_to_e_bank() {
+    std::vector<std::int32_t> pre;
+    std::vector<std::int32_t> post;
+    std::vector<double> weight;
+    pre.reserve(static_cast<std::size_t>(V1_SOM_N) * V1_E_PER_CHANNEL);
+    post.reserve(static_cast<std::size_t>(V1_SOM_N) * V1_E_PER_CHANNEL);
+    weight.reserve(static_cast<std::size_t>(V1_SOM_N) * V1_E_PER_CHANNEL);
+    for (int channel = 0; channel < V1_N_CHANNELS; ++channel) {
+        for (int som_cell = 0; som_cell < 4; ++som_cell) {
+            const int som_index = channel * 4 + som_cell;
+            for (int e_cell = 0; e_cell < V1_E_PER_CHANNEL; ++e_cell) {
+                pre.push_back(som_index);
+                post.push_back(channel * V1_E_PER_CHANNEL + e_cell);
+                weight.push_back(V1_SOM_TO_E_WEIGHT);
+            }
+        }
+    }
+    return build_csr_bank("v1_som_to_e", pre, post, weight);
+}
+
 std::int32_t csr_fanout(const CsrBank& bank, std::int32_t pre_index) {
     if (pre_index < 0 || pre_index >= bank.n_pre) {
         throw std::runtime_error("CSR pre index out of range: " + bank.name);
@@ -2146,6 +3391,186 @@ void cpu_scatter_spike_flags(
             cpu_scatter_one_source(bank, src, drive_amp, target);
         }
     }
+}
+
+void cpu_scatter_pre_weights(
+    const CsrBank& bank,
+    const std::vector<double>& pre_weights,
+    double drive_amp,
+    std::vector<double>& target
+) {
+    const int n_pre = std::min<int>(
+        bank.n_pre, static_cast<int>(pre_weights.size())
+    );
+    for (int src = 0; src < n_pre; ++src) {
+        const double pre_weight = pre_weights[static_cast<std::size_t>(src)];
+        if (pre_weight == 0.0) {
+            continue;
+        }
+        for (int edge = bank.row_ptr[src]; edge < bank.row_ptr[src + 1]; ++edge) {
+            target[static_cast<std::size_t>(bank.post[static_cast<std::size_t>(edge)])] +=
+                bank.weight[static_cast<std::size_t>(edge)] * drive_amp * pre_weight;
+        }
+    }
+}
+
+void build_normalized_hpred_feedback_weights(
+    const std::vector<std::int32_t>& hpred_preprobe_channel_counts,
+    int preprobe_steps,
+    double target_per_bin,
+    std::vector<double>& feedback_weights,
+    std::vector<double>& trailer_bin_total_weights,
+    std::vector<double>& trailer_bin_channel_weights
+) {
+    if (preprobe_steps <= 0) {
+        throw std::runtime_error("normalized H_pred feedback requires positive preprobe_steps");
+    }
+    if (target_per_bin < 0.0) {
+        throw std::runtime_error("normalized H_pred feedback target must be nonnegative");
+    }
+    const double total = static_cast<double>(std::accumulate(
+        hpred_preprobe_channel_counts.begin(),
+        hpred_preprobe_channel_counts.end(),
+        0LL
+    ));
+    std::fill(feedback_weights.begin(), feedback_weights.end(), 0.0);
+    std::fill(trailer_bin_total_weights.begin(), trailer_bin_total_weights.end(), 0.0);
+    std::fill(trailer_bin_channel_weights.begin(), trailer_bin_channel_weights.end(), 0.0);
+    if (total <= 0.0 || target_per_bin == 0.0) {
+        return;
+    }
+    for (int channel = 0; channel < H_N_CHANNELS; ++channel) {
+        const double channel_weight =
+            target_per_bin
+            * static_cast<double>(
+                hpred_preprobe_channel_counts[static_cast<std::size_t>(channel)]
+            )
+            / total;
+        for (int bin = 0; bin < V1_TRAILER_BIN_COUNT; ++bin) {
+            trailer_bin_channel_weights[
+                static_cast<std::size_t>(bin) * H_N_CHANNELS
+                + static_cast<std::size_t>(channel)
+            ] = channel_weight;
+        }
+        const double cell_step_weight =
+            channel_weight
+            / (static_cast<double>(preprobe_steps) * H_E_PER_CHANNEL);
+        for (int cell = 0; cell < H_E_PER_CHANNEL; ++cell) {
+            feedback_weights[
+                static_cast<std::size_t>(channel) * H_E_PER_CHANNEL
+                + static_cast<std::size_t>(cell)
+            ] = cell_step_weight;
+        }
+    }
+    for (int bin = 0; bin < V1_TRAILER_BIN_COUNT; ++bin) {
+        trailer_bin_total_weights[static_cast<std::size_t>(bin)] =
+            target_per_bin;
+    }
+}
+
+int feedback_replay_fallback_mode_id(const std::string& mode) {
+    if (mode == "none") {
+        return 0;
+    }
+    if (mode == "leader") {
+        return 1;
+    }
+    if (mode == "flat") {
+        return 2;
+    }
+    throw std::runtime_error(
+        "feedback replay fallback mode must be none, leader, or flat"
+    );
+}
+
+void validate_feedback_replay_leader_templates(
+    const std::vector<std::int32_t>& templates
+) {
+    if (templates.empty()) {
+        return;
+    }
+    if (templates.size() != static_cast<std::size_t>(H_N_CHANNELS * H_N_CHANNELS)) {
+        throw std::runtime_error(
+            "feedback replay leader templates must have shape [12,12]"
+        );
+    }
+}
+
+std::vector<std::int32_t> feedback_replay_leader_template_totals(
+    const std::vector<std::int32_t>& templates
+) {
+    std::vector<std::int32_t> totals(H_N_CHANNELS, 0);
+    if (templates.empty()) {
+        return totals;
+    }
+    validate_feedback_replay_leader_templates(templates);
+    for (int leader = 0; leader < H_N_CHANNELS; ++leader) {
+        for (int channel = 0; channel < H_N_CHANNELS; ++channel) {
+            totals[static_cast<std::size_t>(leader)] +=
+                templates[
+                    static_cast<std::size_t>(leader) * H_N_CHANNELS
+                    + static_cast<std::size_t>(channel)
+                ];
+        }
+    }
+    return totals;
+}
+
+std::vector<std::int32_t> select_normalized_feedback_source_counts(
+    const std::vector<std::int32_t>& preprobe_channel_counts,
+    std::int32_t leader_channel,
+    int fallback_mode_id,
+    const std::vector<std::int32_t>& leader_templates,
+    std::vector<std::int32_t>& preprobe_zero,
+    std::vector<std::int32_t>& fallback_used,
+    std::vector<std::int32_t>& fallback_zero_template
+) {
+    if (preprobe_channel_counts.size() != static_cast<std::size_t>(H_N_CHANNELS)) {
+        throw std::runtime_error(
+            "normalized feedback source requires 12 preprobe channel counts"
+        );
+    }
+    const auto total = std::accumulate(
+        preprobe_channel_counts.begin(),
+        preprobe_channel_counts.end(),
+        0LL
+    );
+    preprobe_zero.assign(1, total == 0 ? 1 : 0);
+    fallback_used.assign(1, 0);
+    fallback_zero_template.assign(1, 0);
+    if (total > 0 || fallback_mode_id == 0) {
+        return preprobe_channel_counts;
+    }
+    if (fallback_mode_id == 1) {
+        validate_feedback_replay_leader_templates(leader_templates);
+        if (leader_channel < 0 || leader_channel >= H_N_CHANNELS
+            || leader_templates.empty()) {
+            fallback_zero_template[0] = 1;
+            return std::vector<std::int32_t>(H_N_CHANNELS, 0);
+        }
+        std::vector<std::int32_t> selected(H_N_CHANNELS, 0);
+        for (int channel = 0; channel < H_N_CHANNELS; ++channel) {
+            selected[static_cast<std::size_t>(channel)] =
+                leader_templates[
+                    static_cast<std::size_t>(leader_channel) * H_N_CHANNELS
+                    + static_cast<std::size_t>(channel)
+                ];
+        }
+        const auto template_total = std::accumulate(
+            selected.begin(), selected.end(), 0LL
+        );
+        if (template_total > 0) {
+            fallback_used[0] = 1;
+        } else {
+            fallback_zero_template[0] = 1;
+        }
+        return selected;
+    }
+    if (fallback_mode_id == 2) {
+        fallback_used[0] = 1;
+        return std::vector<std::int32_t>(H_N_CHANNELS, 1);
+    }
+    throw std::runtime_error("unhandled feedback replay fallback mode");
 }
 
 std::int32_t sum_counts(const std::vector<std::int32_t>& counts) {
@@ -2286,7 +3711,7 @@ constexpr double CTX_PRED_GAMMA = 1e-4;
 constexpr double CTX_PRED_W_TARGET = 0.0075;
 constexpr double CTX_PRED_W_MAX = 1.0;
 constexpr double CTX_PRED_W_ROW_MAX = 3.0;
-constexpr double CTX_PRED_W_INIT_FRAC = 0.015;
+constexpr double CTX_PRED_W_INIT_FRAC = 0.0;
 constexpr double CTX_PRED_M_INTEGRAL = 0.150;
 constexpr double CTX_PRED_DT_TRIAL_S = 2.5;
 constexpr int CTX_PRED_PAIRED_PRE = 3;
@@ -2316,6 +3741,36 @@ std::vector<double> init_ctx_pred_test_weights(std::int64_t seed) {
         w[ctx_pred_edge_index(CTX_PRED_CAPPED_PRE, post)] = 0.05;
     }
     return w;
+}
+
+std::vector<double> init_ctx_pred_production_weights() {
+    return std::vector<double>(static_cast<std::size_t>(CTX_PRED_N_SYN), 0.0);
+}
+
+constexpr int CTX_PRED_GENERATED_WINDOW_PERIOD_STEPS = 20;
+
+void append_ctx_pred_channel_window_events(
+    std::vector<std::int32_t>& event_steps,
+    std::vector<std::int32_t>& event_cells,
+    int trial_offset,
+    int start_rel,
+    int end_rel,
+    int channel,
+    int period_steps
+) {
+    if (channel < 0 || channel >= H_N_CHANNELS) {
+        throw std::runtime_error("generated Stage1 channel out of range");
+    }
+    if (period_steps <= 0) {
+        throw std::runtime_error("generated Stage1 event period must be positive");
+    }
+    const int cell_start = channel * H_E_PER_CHANNEL;
+    for (int rel_step = start_rel; rel_step < end_rel; rel_step += period_steps) {
+        for (int offset = 0; offset < H_E_PER_CHANNEL; ++offset) {
+            event_steps.push_back(trial_offset + rel_step);
+            event_cells.push_back(cell_start + offset);
+        }
+    }
 }
 
 void cpu_ctx_pred_decay_step(
@@ -2545,6 +4000,45 @@ __global__ void ctx_pred_post_event_kernel(
     if (pre >= n_pre) {
         return;
     }
+    const int idx = pre * n_post + post;
+    xpost[idx] += 1.0;
+    elig[idx] += xpre[idx];
+}
+
+__global__ void ctx_pred_pre_channel_event_kernel(
+    double* xpre,
+    double* xpost,
+    double* elig,
+    int pre_start,
+    int n_post
+) {
+    const int local = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n_edges = H_E_PER_CHANNEL * n_post;
+    if (local >= n_edges) {
+        return;
+    }
+    const int pre = pre_start + local / n_post;
+    const int post = local % n_post;
+    const int idx = pre * n_post + post;
+    xpre[idx] += 1.0;
+    elig[idx] += xpost[idx];
+}
+
+__global__ void ctx_pred_post_channel_event_kernel(
+    double* xpre,
+    double* xpost,
+    double* elig,
+    int post_start,
+    int n_pre,
+    int n_post
+) {
+    const int local = blockIdx.x * blockDim.x + threadIdx.x;
+    const int n_edges = n_pre * H_E_PER_CHANNEL;
+    if (local >= n_edges) {
+        return;
+    }
+    const int pre = local / H_E_PER_CHANNEL;
+    const int post = post_start + local % H_E_PER_CHANNEL;
     const int idx = pre * n_post + post;
     xpost[idx] += 1.0;
     elig[idx] += xpre[idx];
@@ -2977,6 +4471,12 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     const int late_end = 5600;
     const int n_steps = 6000;
     const int pulse_period_steps = 20;
+    const int pretrailer_bin_count = 5;
+    const int pretrailer_bin_steps =
+        (pretrailer_end - pretrailer_start) / pretrailer_bin_count;
+    if ((pretrailer_end - pretrailer_start) % pretrailer_bin_count != 0) {
+        throw std::runtime_error("pretrailer window must divide evenly into bins");
+    }
 
     Stage1HGateDynamicsResult result;
     result.seed = seed;
@@ -2992,6 +4492,8 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
         {"persistence_end_step", persistence_end},
         {"pretrailer_start_step", pretrailer_start},
         {"pretrailer_end_step", pretrailer_end},
+        {"pretrailer_bin_count", pretrailer_bin_count},
+        {"pretrailer_bin_width_step", pretrailer_bin_steps},
         {"trailer_start_step", trailer_start},
         {"trailer_end_step", trailer_end},
         {"late_start_step", late_start},
@@ -3027,6 +4529,15 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     );
     result.cpu_pred_pretrailer_target_counts.assign(
         static_cast<std::size_t>(n_trials), 0
+    );
+    result.cpu_pred_pretrailer_channel_counts.assign(
+        static_cast<std::size_t>(n_trials * H_BROAD_INH_START), 0
+    );
+    result.cpu_pred_pretrailer_channel_counts_by_bin.assign(
+        static_cast<std::size_t>(
+            n_trials * pretrailer_bin_count * H_BROAD_INH_START
+        ),
+        0
     );
 
     for (int trial = 0; trial < n_trials; ++trial) {
@@ -3075,6 +4586,22 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
                 pretrailer_end, trailer_start, trailer_end, pred_leader,
                 pred_pre, pred_trailer, pred_total, &pred_last_pretrailer_step
             );
+            if (step >= pretrailer_start && step < pretrailer_end) {
+                const int bin = (step - pretrailer_start) / pretrailer_bin_steps;
+                const std::size_t bin_base =
+                    (
+                        static_cast<std::size_t>(trial * pretrailer_bin_count + bin)
+                    ) * static_cast<std::size_t>(H_BROAD_INH_START);
+                for (int i = 0; i < H_E_N; ++i) {
+                    if (pred.e_spikes[static_cast<std::size_t>(i)] == 0) {
+                        continue;
+                    }
+                    const int channel = i / H_E_PER_CHANNEL;
+                    result.cpu_pred_pretrailer_channel_counts_by_bin[
+                        bin_base + static_cast<std::size_t>(channel)
+                    ] += 1;
+                }
+            }
             cpu_h_ring_inh_step(pred, step, pred_inh_total);
             cpu_h_ring_scatter_spikes(ctx);
             cpu_h_ctx_pred_dense_scatter(ctx, w_ctx_pred, pred);
@@ -3109,6 +4636,18 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
             result.trailer_channels[static_cast<std::size_t>(trial)];
         const int target_start = target_channel * H_E_PER_CHANNEL;
         int target_pre_count = 0;
+        const std::size_t channel_base =
+            static_cast<std::size_t>(trial) * static_cast<std::size_t>(H_BROAD_INH_START);
+        for (int channel = 0; channel < H_BROAD_INH_START; ++channel) {
+            int channel_total = 0;
+            const int start = channel * H_E_PER_CHANNEL;
+            for (int k = 0; k < H_E_PER_CHANNEL; ++k) {
+                channel_total += pred_pre[static_cast<std::size_t>(start + k)];
+            }
+            result.cpu_pred_pretrailer_channel_counts[
+                channel_base + static_cast<std::size_t>(channel)
+            ] = channel_total;
+        }
         for (int k = 0; k < H_E_PER_CHANNEL; ++k) {
             target_pre_count += pred_pre[static_cast<std::size_t>(target_start + k)];
         }
@@ -3125,6 +4664,15 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     );
     result.cuda_pred_pretrailer_target_counts.assign(
         static_cast<std::size_t>(n_trials), 0
+    );
+    result.cuda_pred_pretrailer_channel_counts.assign(
+        static_cast<std::size_t>(n_trials * H_BROAD_INH_START), 0
+    );
+    result.cuda_pred_pretrailer_channel_counts_by_bin.assign(
+        static_cast<std::size_t>(
+            n_trials * pretrailer_bin_count * H_BROAD_INH_START
+        ),
+        0
     );
     std::vector<std::int32_t> cuda_ctx_leader(e_total, 0);
     std::vector<std::int32_t> cuda_ctx_persist(e_total, 0);
@@ -3193,6 +4741,8 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     auto* d_pred_pre = device_alloc_copy(cuda_pred_pre);
     auto* d_pred_trailer = device_alloc_copy(cuda_pred_trailer);
     auto* d_pred_total = device_alloc_copy(result.cuda_pred_total_counts);
+    auto* d_pred_pre_bins =
+        device_alloc_copy(result.cuda_pred_pretrailer_channel_counts_by_bin);
     auto* d_pred_i_total = device_alloc_copy(result.cuda_pred_inh_total_counts);
     auto* d_pred_last = device_alloc_copy(cuda_pred_last);
 
@@ -3234,6 +4784,21 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
             d_pred_trailer, d_pred_total, d_pred_es, d_pred_last
         );
         check_cuda(cudaGetLastError(), "stage1 h pred e batch launch");
+        if (step >= pretrailer_start && step < pretrailer_end) {
+            h_pretrailer_channel_bin_counts_kernel<<<e_grid, block>>>(
+                n_trials,
+                step,
+                pretrailer_start,
+                pretrailer_end,
+                pretrailer_bin_count,
+                d_pred_es,
+                d_pred_pre_bins
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "stage1 h pred pretrailer bin count launch"
+            );
+        }
         h_ring_inh_step_batch_kernel<<<inh_grid, block>>>(
             n_trials, step, d_pred_iv, d_pred_iie, d_pred_iii, d_pred_ir,
             d_pred_i_total, d_pred_is
@@ -3267,6 +4832,10 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     copy_device_to_host(d_ctx_i_total, result.cuda_ctx_inh_total_counts);
     copy_device_to_host(d_ctx_last, cuda_ctx_last);
     copy_device_to_host(d_pred_pre, cuda_pred_pre);
+    copy_device_to_host(
+        d_pred_pre_bins,
+        result.cuda_pred_pretrailer_channel_counts_by_bin
+    );
     copy_device_to_host(d_pred_total, result.cuda_pred_total_counts);
     copy_device_to_host(d_pred_i_total, result.cuda_pred_inh_total_counts);
 
@@ -3282,6 +4851,7 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     device_free(d_pred_iie); device_free(d_pred_iii); device_free(d_pred_ir);
     device_free(d_pred_es); device_free(d_pred_is); device_free(d_pred_leader);
     device_free(d_pred_pre); device_free(d_pred_trailer); device_free(d_pred_total);
+    device_free(d_pred_pre_bins);
     device_free(d_pred_i_total); device_free(d_pred_last);
 
     for (int trial = 0; trial < n_trials; ++trial) {
@@ -3295,6 +4865,19 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
             result.trailer_channels[static_cast<std::size_t>(trial)];
         const int target_start = target_channel * H_E_PER_CHANNEL;
         const std::size_t e_base = static_cast<std::size_t>(trial) * H_E_N;
+        const std::size_t channel_base =
+            static_cast<std::size_t>(trial) * static_cast<std::size_t>(H_BROAD_INH_START);
+        for (int channel = 0; channel < H_BROAD_INH_START; ++channel) {
+            int channel_total = 0;
+            const int start = channel * H_E_PER_CHANNEL;
+            for (int k = 0; k < H_E_PER_CHANNEL; ++k) {
+                channel_total +=
+                    cuda_pred_pre[e_base + static_cast<std::size_t>(start + k)];
+            }
+            result.cuda_pred_pretrailer_channel_counts[
+                channel_base + static_cast<std::size_t>(channel)
+            ] = channel_total;
+        }
         int target_pre_count = 0;
         for (int k = 0; k < H_E_PER_CHANNEL; ++k) {
             target_pre_count +=
@@ -3302,6 +4885,40 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
         }
         result.cuda_pred_pretrailer_target_counts[static_cast<std::size_t>(trial)] =
             target_pre_count;
+    }
+
+    for (int trial = 0; trial < n_trials; ++trial) {
+        const std::size_t channel_base =
+            static_cast<std::size_t>(trial) * static_cast<std::size_t>(H_BROAD_INH_START);
+        for (int channel = 0; channel < H_BROAD_INH_START; ++channel) {
+            int cpu_bin_total = 0;
+            int cuda_bin_total = 0;
+            for (int bin = 0; bin < pretrailer_bin_count; ++bin) {
+                const std::size_t bin_offset =
+                    (
+                        static_cast<std::size_t>(trial * pretrailer_bin_count + bin)
+                    ) * static_cast<std::size_t>(H_BROAD_INH_START)
+                    + static_cast<std::size_t>(channel);
+                cpu_bin_total +=
+                    result.cpu_pred_pretrailer_channel_counts_by_bin[bin_offset];
+                cuda_bin_total +=
+                    result.cuda_pred_pretrailer_channel_counts_by_bin[bin_offset];
+            }
+            if (cpu_bin_total != result.cpu_pred_pretrailer_channel_counts[
+                    channel_base + static_cast<std::size_t>(channel)
+                ]) {
+                throw std::runtime_error(
+                    "CPU pretrailer bin counts do not sum to channel counts"
+                );
+            }
+            if (cuda_bin_total != result.cuda_pred_pretrailer_channel_counts[
+                    channel_base + static_cast<std::size_t>(channel)
+                ]) {
+                throw std::runtime_error(
+                    "CUDA pretrailer bin counts do not sum to channel counts"
+                );
+            }
+        }
     }
 
     auto max_flat_rate_hz = [&](const std::vector<std::int32_t>& counts) {
@@ -3342,6 +4959,18 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
     );
     const double forecast_probability =
         static_cast<double>(forecast_trials) / static_cast<double>(n_trials);
+    auto population_rate_hz = [&](
+        const std::vector<std::int32_t>& counts,
+        int n_cells
+    ) {
+        const double duration_s = static_cast<double>(n_steps) * DT_MS / 1000.0;
+        const double total_duration_s = duration_s * static_cast<double>(n_trials);
+        if (n_cells <= 0 || total_duration_s <= 0.0) {
+            return 0.0;
+        }
+        return static_cast<double>(sum_counts(counts))
+            / (static_cast<double>(n_cells) * total_duration_s);
+    };
     const double ctx_max_cell_rate = max_flat_rate_hz(result.cpu_ctx_total_counts);
     const double pred_max_cell_rate = max_flat_rate_hz(result.cpu_pred_total_counts);
     const double max_cell_rate = std::max(ctx_max_cell_rate, pred_max_cell_rate);
@@ -3353,6 +4982,20 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
         std::max(ctx_max_channel_rate, pred_max_channel_rate);
     const int ctx_total_spikes = sum_counts(result.cpu_ctx_total_counts);
     const int pred_total_spikes = sum_counts(result.cpu_pred_total_counts);
+    const int ctx_inh_total_spikes = sum_counts(result.cpu_ctx_inh_total_counts);
+    const int pred_inh_total_spikes = sum_counts(result.cpu_pred_inh_total_counts);
+    const double ctx_population_rate =
+        population_rate_hz(result.cpu_ctx_total_counts, H_E_N);
+    const double pred_population_rate =
+        population_rate_hz(result.cpu_pred_total_counts, H_E_N);
+    const double ctx_inh_population_rate =
+        population_rate_hz(result.cpu_ctx_inh_total_counts, H_INH_N);
+    const double pred_inh_population_rate =
+        population_rate_hz(result.cpu_pred_inh_total_counts, H_INH_N);
+    const double max_population_rate = std::max(
+        std::max(ctx_population_rate, pred_population_rate),
+        std::max(ctx_inh_population_rate, pred_inh_population_rate)
+    );
     const int pred_pre_target_spikes =
         sum_counts(result.cpu_pred_pretrailer_target_counts);
     result.metrics = {
@@ -3366,20 +5009,31 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
         {"h_prediction_pretrailer_forecast_threshold", 0.25},
         {"h_prediction_pretrailer_forecast_pass",
          forecast_probability >= 0.25 ? 1.0 : 0.0},
-        {"no_runaway_max_rate_hz", max_cell_rate},
+        {"no_runaway_max_rate_hz", max_population_rate},
+        {"no_runaway_population_max_rate_hz", max_population_rate},
+        {"no_runaway_max_cell_rate_hz", max_cell_rate},
         {"no_runaway_max_channel_rate_hz", max_channel_rate},
         {"no_runaway_threshold_hz", 80.0},
-        {"no_runaway_pass", max_cell_rate <= 80.0 ? 1.0 : 0.0},
+        {"no_runaway_pass", max_population_rate <= 80.0 ? 1.0 : 0.0},
+        {"ctx_population_rate_hz", ctx_population_rate},
+        {"pred_population_rate_hz", pred_population_rate},
+        {"ctx_inh_population_rate_hz", ctx_inh_population_rate},
+        {"pred_inh_population_rate_hz", pred_inh_population_rate},
         {"ctx_max_cell_rate_hz", ctx_max_cell_rate},
         {"pred_max_cell_rate_hz", pred_max_cell_rate},
         {"ctx_max_channel_rate_hz", ctx_max_channel_rate},
         {"pred_max_channel_rate_hz", pred_max_channel_rate},
         {"ctx_total_spikes", static_cast<double>(ctx_total_spikes)},
         {"pred_total_spikes", static_cast<double>(pred_total_spikes)},
+        {"ctx_inh_total_spikes", static_cast<double>(ctx_inh_total_spikes)},
+        {"pred_inh_total_spikes", static_cast<double>(pred_inh_total_spikes)},
         {"pred_pretrailer_target_spikes", static_cast<double>(pred_pre_target_spikes)},
         {"forecast_trial_count", static_cast<double>(forecast_trials)},
         {"h_prediction_pretrailer_start_step", static_cast<double>(pretrailer_start)},
         {"h_prediction_pretrailer_end_step", static_cast<double>(pretrailer_end)},
+        {"h_prediction_pretrailer_bin_count", static_cast<double>(pretrailer_bin_count)},
+        {"h_prediction_pretrailer_bin_width_ms",
+         static_cast<double>(pretrailer_bin_steps) * DT_MS},
         {"n_trials", static_cast<double>(n_trials)},
         {"gate_metric_source_native_h_dynamics", 1.0},
         {"ctx_pred_gate_drive_amp_pA", CTX_PRED_GATE_DRIVE_PA},
@@ -3398,6 +5052,20 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
             max_count_abs_diff(
                 result.cpu_pred_pretrailer_target_counts,
                 result.cuda_pred_pretrailer_target_counts
+            ),
+        },
+        {
+            "pred_pretrailer_channel_counts",
+            max_count_abs_diff(
+                result.cpu_pred_pretrailer_channel_counts,
+                result.cuda_pred_pretrailer_channel_counts
+            ),
+        },
+        {
+            "pred_pretrailer_channel_counts_by_bin",
+            max_count_abs_diff(
+                result.cpu_pred_pretrailer_channel_counts_by_bin,
+                result.cuda_pred_pretrailer_channel_counts_by_bin
             ),
         },
         {
@@ -4179,7 +5847,8 @@ FeedbackV1CountTestResult run_feedback_v1_count_test(
         );
         check_cuda(cudaGetLastError(), "feedback V1 E count step launch");
         v1som_step_kernel<<<1, 64>>>(
-            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac
+            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac,
+            nullptr
         );
         check_cuda(cudaGetLastError(), "feedback V1 SOM step launch");
         check_cuda(cudaDeviceSynchronize(), "feedback V1 step sync");
@@ -5173,7 +6842,8 @@ ClosedLoopDeterministicCountTestResult run_closed_loop_deterministic_count_test(
         );
         check_cuda(cudaGetLastError(), "closed loop V1 step launch");
         v1som_step_kernel<<<1, 64>>>(
-            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac
+            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac,
+            nullptr
         );
         check_cuda(cudaGetLastError(), "closed loop SOM step launch");
         he_count_step_kernel<<<1, 256>>>(
@@ -6076,7 +7746,8 @@ FrozenRichterDeterministicTrialResult run_frozen_richter_deterministic_trial_tes
         );
         check_cuda(cudaGetLastError(), "frozen Richter V1 step launch");
         v1som_step_kernel<<<1, 64>>>(
-            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac
+            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac,
+            nullptr
         );
         check_cuda(cudaGetLastError(), "frozen Richter SOM step launch");
         he_richter_count_step_kernel<<<1, 256>>>(
@@ -6387,6 +8058,2430 @@ FrozenRichterDeterministicTrialResult run_frozen_richter_deterministic_trial_tes
     return result;
 }
 
+FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cpu(
+    const std::string& stim_bank_name,
+    const std::vector<std::int32_t>& stim_pre,
+    const std::vector<std::int32_t>& stim_post,
+    const std::vector<double>& stim_weight,
+    double stim_drive_amp,
+    const std::vector<std::int32_t>& stim_channel,
+    const std::string& v1_to_h_bank_name,
+    const std::vector<std::int32_t>& v1_to_h_pre,
+    const std::vector<std::int32_t>& v1_to_h_post,
+    const std::vector<double>& v1_to_h_weight,
+    double v1_to_h_drive_amp,
+    const std::string& ctx_to_pred_bank_name,
+    const std::vector<std::int32_t>& ctx_to_pred_pre,
+    const std::vector<std::int32_t>& ctx_to_pred_post,
+    const std::vector<double>& ctx_to_pred_weight,
+    double ctx_to_pred_drive_amp,
+    const std::string& feedback_direct_bank_name,
+    const std::vector<std::int32_t>& feedback_direct_pre,
+    const std::vector<std::int32_t>& feedback_direct_post,
+    const std::vector<double>& feedback_direct_weight,
+    double feedback_direct_drive_amp,
+    const std::string& feedback_som_bank_name,
+    const std::vector<std::int32_t>& feedback_som_pre,
+    const std::vector<std::int32_t>& feedback_som_post,
+    const std::vector<double>& feedback_som_weight,
+    double feedback_som_drive_amp,
+    std::int64_t seed,
+    std::int32_t expected_channel,
+    std::int32_t unexpected_channel,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    std::int32_t n_steps,
+    std::int32_t leader_start_step,
+    std::int32_t leader_end_step,
+    std::int32_t preprobe_start_step,
+    std::int32_t preprobe_end_step,
+    std::int32_t trailer_start_step,
+    std::int32_t trailer_end_step,
+    std::int32_t iti_start_step,
+    std::int32_t iti_end_step,
+    const std::string& feedback_replay_mode,
+    double feedback_replay_target_per_bin,
+    const std::string& feedback_replay_fallback_mode,
+    const std::vector<std::int32_t>& feedback_replay_leader_templates,
+    double v1_som_to_e_scale,
+    double v1_som_divisive_scale,
+    double v1_direct_divisive_scale,
+    double v1_feedforward_divisive_scale,
+    std::int32_t v1_feedforward_divisive_gate_source_id,
+    std::int32_t v1_direct_divisive_gate_source_id,
+    double v1_predicted_suppression_scale,
+    double v1_predicted_suppression_neighbor_weight,
+    std::int32_t v1_predicted_suppression_locus_id,
+    double v1_stim_sigma_deg
+) {
+    if (n_steps <= 0 || iti_end_step != n_steps
+        || leader_start_step < 0
+        || leader_start_step >= leader_end_step
+        || leader_end_step > preprobe_start_step
+        || preprobe_start_step >= preprobe_end_step
+        || preprobe_end_step > trailer_start_step
+        || trailer_start_step >= trailer_end_step
+        || trailer_end_step > iti_start_step
+        || iti_start_step >= iti_end_step) {
+        throw std::runtime_error(
+            "seeded source test requires ordered [start,end) Richter phases"
+        );
+    }
+    if (grating_rate_hz < 0.0 || baseline_rate_hz < 0.0) {
+        throw std::runtime_error("seeded source rates must be nonnegative");
+    }
+    if (v1_stim_sigma_deg <= 0.0) {
+        throw std::runtime_error("V1 stimulus sigma must be positive");
+    }
+    if (v1_som_to_e_scale < 0.0) {
+        throw std::runtime_error("V1 SOM->E scale must be nonnegative");
+    }
+    if (v1_som_divisive_scale < 0.0) {
+        throw std::runtime_error("V1 SOM divisive scale must be nonnegative");
+    }
+    if (v1_direct_divisive_scale < 0.0) {
+        throw std::runtime_error("V1 direct divisive scale must be nonnegative");
+    }
+    if (v1_feedforward_divisive_scale < 0.0) {
+        throw std::runtime_error(
+            "V1 feedforward divisive scale must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_scale < 0.0) {
+        throw std::runtime_error(
+            "V1 predicted suppression scale must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_neighbor_weight < 0.0) {
+        throw std::runtime_error(
+            "V1 predicted suppression neighbor weight must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_locus_id
+            != V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE
+        && v1_predicted_suppression_locus_id
+            != V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE) {
+        throw std::runtime_error("V1 predicted suppression locus is invalid");
+    }
+    if (v1_feedforward_divisive_gate_source_id
+            != V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM
+        && v1_feedforward_divisive_gate_source_id
+            != V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+        throw std::runtime_error("V1 feedforward divisive gate source is invalid");
+    }
+    if (v1_direct_divisive_gate_source_id
+            != V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM
+        && v1_direct_divisive_gate_source_id
+            != V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+        throw std::runtime_error("V1 direct divisive gate source is invalid");
+    }
+    const double v1_som_to_e_drive_amp =
+        V1_SOM_TO_E_DRIVE_AMP_PA * v1_som_to_e_scale;
+    const bool normalized_feedback_replay =
+        feedback_replay_mode == "normalized";
+    if (!normalized_feedback_replay && feedback_replay_mode != "raw") {
+        throw std::runtime_error(
+            "feedback replay mode must be raw or normalized"
+        );
+    }
+    if (feedback_replay_target_per_bin < 0.0) {
+        throw std::runtime_error(
+            "feedback replay target per bin must be nonnegative"
+        );
+    }
+    const int feedback_replay_fallback_id =
+        feedback_replay_fallback_mode_id(feedback_replay_fallback_mode);
+    if (!normalized_feedback_replay && feedback_replay_fallback_id != 0) {
+        throw std::runtime_error(
+            "feedback replay fallback requires normalized replay mode"
+        );
+    }
+    validate_feedback_replay_leader_templates(
+        feedback_replay_leader_templates
+    );
+
+    const CsrBank stim_bank = build_csr_bank(
+        stim_bank_name, stim_pre, stim_post, stim_weight
+    );
+    const CsrBank v1_to_h_bank = build_csr_bank(
+        v1_to_h_bank_name, v1_to_h_pre, v1_to_h_post, v1_to_h_weight
+    );
+    const CsrBank ctx_to_pred_bank = build_csr_bank(
+        ctx_to_pred_bank_name, ctx_to_pred_pre, ctx_to_pred_post,
+        ctx_to_pred_weight
+    );
+    const CsrBank fb_direct_bank = build_csr_bank(
+        feedback_direct_bank_name, feedback_direct_pre, feedback_direct_post,
+        feedback_direct_weight
+    );
+    const CsrBank fb_som_bank = build_csr_bank(
+        feedback_som_bank_name, feedback_som_pre, feedback_som_post,
+        feedback_som_weight
+    );
+    const CsrBank v1_som_to_e_bank = build_fixed_v1_som_to_e_bank();
+    if (stim_bank.n_target != V1_E_N
+        || v1_to_h_bank.n_target != H_E_N
+        || ctx_to_pred_bank.n_target != H_E_N
+        || fb_direct_bank.n_target != V1_E_N
+        || fb_som_bank.n_target != V1_SOM_N
+        || v1_som_to_e_bank.n_target != V1_E_N) {
+        throw std::runtime_error("seeded source test target size mismatch");
+    }
+    if (static_cast<int>(stim_channel.size()) != stim_bank.n_pre) {
+        throw std::runtime_error("seeded source test stim_channel size mismatch");
+    }
+    const int n_channels =
+        static_cast<int>(*std::max_element(stim_channel.begin(), stim_channel.end())) + 1;
+    if (expected_channel < 0 || expected_channel >= n_channels
+        || unexpected_channel < 0 || unexpected_channel >= n_channels) {
+        throw std::runtime_error("seeded source test channel index out of range");
+    }
+
+    FrozenRichterSeededSourceResult result;
+    result.seed = seed;
+    result.n_steps = n_steps;
+    result.dt_ms = DT_MS;
+    result.expected_channel = expected_channel;
+    result.unexpected_channel = unexpected_channel;
+    result.phase_steps = {
+        {"leader_start_step", leader_start_step},
+        {"leader_end_step", leader_end_step},
+        {"preprobe_start_step", preprobe_start_step},
+        {"preprobe_end_step", preprobe_end_step},
+        {"trailer_start_step", trailer_start_step},
+        {"trailer_end_step", trailer_end_step},
+        {"iti_start_step", iti_start_step},
+        {"iti_end_step", iti_end_step},
+    };
+    result.edge_counts = {
+        {"v1_stim_to_e", static_cast<std::int32_t>(stim_pre.size())},
+        {"v1_to_h_ctx", static_cast<std::int32_t>(v1_to_h_pre.size())},
+        {"ctx_to_pred", static_cast<std::int32_t>(ctx_to_pred_pre.size())},
+        {"fb_pred_to_v1e_apical", static_cast<std::int32_t>(feedback_direct_pre.size())},
+        {"fb_pred_to_v1som", static_cast<std::int32_t>(feedback_som_pre.size())},
+    };
+    result.rates_hz = {
+        {"grating", grating_rate_hz},
+        {"baseline", baseline_rate_hz},
+        {"v1_stim_sigma_deg", v1_stim_sigma_deg},
+    };
+    const int trailer_steps = trailer_end_step - trailer_start_step;
+    if (trailer_steps <= 0 || (trailer_steps % V1_TRAILER_BIN_COUNT) != 0) {
+        throw std::runtime_error("seeded source trailer window must split into 100 ms bins");
+    }
+    const int trailer_bin_steps = trailer_steps / V1_TRAILER_BIN_COUNT;
+    const int preprobe_steps = preprobe_end_step - preprobe_start_step;
+    if (preprobe_steps != trailer_bin_steps) {
+        throw std::runtime_error(
+            "seeded source H_pred feedback replay requires preprobe window to match trailer bin"
+        );
+    }
+
+    std::map<std::string, std::vector<double>> cpu_v1;
+    std::map<std::string, std::vector<double>> cpu_som;
+    std::map<std::string, std::vector<double>> cpu_hctx;
+    std::map<std::string, std::vector<double>> cpu_hpred;
+    std::vector<std::int32_t> dummy_spikes;
+    init_v1e_feedback_state(cpu_v1, dummy_spikes);
+    init_v1som_feedback_state(cpu_som);
+    init_he_quiet_state(cpu_hctx, dummy_spikes);
+    init_he_quiet_state(cpu_hpred, dummy_spikes);
+    std::vector<std::int32_t> cpu_v1_leader(V1_E_N, 0);
+    std::vector<std::int32_t> cpu_v1_preprobe(V1_E_N, 0);
+    std::vector<std::int32_t> cpu_v1_trailer(V1_E_N, 0);
+    std::vector<std::int32_t> cpu_hctx_leader(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hctx_preprobe(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hctx_trailer(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hpred_leader(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hpred_preprobe(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hpred_trailer(H_E_N, 0);
+    std::vector<std::int32_t> cpu_v1_flags(V1_E_N, 0);
+    std::vector<std::int32_t> cpu_som_flags(V1_SOM_N, 0);
+    std::vector<std::int32_t> cpu_hctx_flags(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hpred_flags(H_E_N, 0);
+    std::vector<std::int32_t> cpu_source_by_step(n_steps, 0);
+    std::vector<std::int32_t> cpu_source_by_afferent(stim_bank.n_pre, 0);
+    std::vector<std::int32_t> cpu_source_by_channel(n_channels, 0);
+    std::vector<std::int32_t> cpu_source_by_phase(5, 0);
+    std::vector<std::int32_t> cpu_v1_trailer_bin_channel_counts(
+        V1_TRAILER_BIN_COUNT * V1_N_CHANNELS, 0
+    );
+    std::vector<std::int32_t> cpu_v1_som_trailer(
+        V1_SOM_N, 0
+    );
+    std::vector<std::int32_t> cpu_v1_som_trailer_bin_channel_counts(
+        V1_TRAILER_BIN_COUNT * V1_N_CHANNELS, 0
+    );
+    std::vector<std::int32_t> cpu_hpred_trailer_bin_total_counts(
+        V1_TRAILER_BIN_COUNT, 0
+    );
+    std::vector<std::int32_t> cpu_hpred_trailer_bin_channel_counts(
+        V1_TRAILER_BIN_COUNT * H_N_CHANNELS, 0
+    );
+    std::vector<std::int32_t> cpu_hpred_preprobe_channel_counts(
+        H_N_CHANNELS, 0
+    );
+    std::vector<std::int32_t> cpu_hpred_feedback_replay_flags(
+        static_cast<std::size_t>(preprobe_steps) * H_E_N, 0
+    );
+    std::vector<std::int32_t> cpu_hpred_feedback_flags(H_E_N, 0);
+    std::vector<std::int32_t> cpu_hpred_feedback_held_trailer_bin_total_counts(
+        V1_TRAILER_BIN_COUNT, 0
+    );
+    std::vector<std::int32_t>
+        cpu_hpred_feedback_held_trailer_bin_channel_counts(
+            V1_TRAILER_BIN_COUNT * H_N_CHANNELS, 0
+        );
+    std::vector<double> cpu_hpred_feedback_normalized_weights(H_E_N, 0.0);
+    std::vector<double>
+        cpu_hpred_feedback_normalized_trailer_bin_total_weights(
+            V1_TRAILER_BIN_COUNT, 0.0
+        );
+    std::vector<double>
+        cpu_hpred_feedback_normalized_trailer_bin_channel_weights(
+            V1_TRAILER_BIN_COUNT * H_N_CHANNELS, 0.0
+        );
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_preprobe_zero(1, 0);
+    std::vector<std::int32_t> cpu_hpred_feedback_normalized_fallback_used(1, 0);
+    std::vector<std::int32_t>
+        cpu_hpred_feedback_normalized_fallback_zero_template(1, 0);
+    std::vector<double> cpu_v1_predicted_suppression_signal_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cpu_v1_predicted_suppression_gain_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cpu_v1_predicted_suppression_raw_ie_before_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cpu_v1_predicted_suppression_raw_ie_after_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cpu_v1_predicted_suppression_raw_ie_delta_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    const std::vector<std::int32_t>
+        cpu_hpred_feedback_normalized_leader_template_total_counts =
+            feedback_replay_leader_template_totals(
+                feedback_replay_leader_templates
+            );
+    bool cpu_hpred_preprobe_channel_counts_ready = false;
+    bool cpu_hpred_feedback_normalized_ready = false;
+    auto ensure_cpu_hpred_preprobe_channel_counts = [&]() {
+        if (cpu_hpred_preprobe_channel_counts_ready) {
+            return;
+        }
+        std::fill(
+            cpu_hpred_preprobe_channel_counts.begin(),
+            cpu_hpred_preprobe_channel_counts.end(),
+            0
+        );
+        for (int i = 0; i < H_E_N; ++i) {
+            cpu_hpred_preprobe_channel_counts[
+                static_cast<std::size_t>(i / H_E_PER_CHANNEL)
+            ] += cpu_hpred_preprobe[static_cast<std::size_t>(i)];
+        }
+        cpu_hpred_preprobe_channel_counts_ready = true;
+    };
+    std::array<double, 3> cpu_v1e_q_active_fC_by_phase{};
+    std::array<double, 3> cpu_v1som_q_active_fC_by_phase{};
+    for (int step = 0; step < n_steps; ++step) {
+        const bool in_trailer_phase =
+            step >= trailer_start_step && step < trailer_end_step;
+        const int trailer_bin = in_trailer_phase
+            ? (step - trailer_start_step) / trailer_bin_steps
+            : -1;
+        accumulate_cpu_v1som_q_active_phase(
+            cpu_som, cpu_v1som_q_active_fC_by_phase, step,
+            leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step
+        );
+        cpu_v1som_step(cpu_som, step, &cpu_som_flags);
+        cpu_scatter_spike_flags(
+            v1_som_to_e_bank, cpu_som_flags, v1_som_to_e_drive_amp,
+            cpu_v1["I_i_pA"]
+        );
+        if (in_trailer_phase) {
+            const int replay_step =
+                (step - trailer_start_step) % preprobe_steps;
+            std::copy(
+                cpu_hpred_feedback_replay_flags.begin()
+                    + replay_step * H_E_N,
+                cpu_hpred_feedback_replay_flags.begin()
+                    + (replay_step + 1) * H_E_N,
+                cpu_hpred_feedback_flags.begin()
+            );
+        }
+        const std::vector<std::int32_t>* cpu_feedforward_gate_flags =
+            (v1_feedforward_divisive_gate_source_id
+                    == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK
+                && in_trailer_phase)
+            ? &cpu_hpred_feedback_flags
+            : nullptr;
+        const std::vector<std::int32_t>* cpu_direct_gate_flags =
+            (v1_direct_divisive_gate_source_id
+                    == V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK
+                && in_trailer_phase)
+            ? &cpu_hpred_feedback_flags
+            : nullptr;
+        const std::vector<std::int32_t>* cpu_predicted_suppression_flags =
+            (v1_predicted_suppression_scale > 0.0 && in_trailer_phase)
+            ? &cpu_hpred_feedback_flags
+            : nullptr;
+        if (cpu_predicted_suppression_flags != nullptr
+            && v1_predicted_suppression_locus_id
+                == V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE) {
+            cpu_apply_v1_predicted_raw_ie_suppression(
+                cpu_v1,
+                *cpu_predicted_suppression_flags,
+                v1_predicted_suppression_scale,
+                v1_predicted_suppression_neighbor_weight,
+                cpu_v1_predicted_suppression_signal_sum,
+                cpu_v1_predicted_suppression_gain_sum,
+                cpu_v1_predicted_suppression_raw_ie_before_sum,
+                cpu_v1_predicted_suppression_raw_ie_after_sum,
+                cpu_v1_predicted_suppression_raw_ie_delta_sum
+            );
+        }
+        accumulate_cpu_v1e_q_active_phase(
+            cpu_v1, cpu_v1e_q_active_fC_by_phase, step,
+            leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step
+        );
+        cpu_v1e_richter_count_step_flags(
+            cpu_v1, cpu_v1_leader, cpu_v1_preprobe, cpu_v1_trailer,
+            cpu_v1_flags, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, &cpu_som_flags, v1_som_divisive_scale,
+            v1_direct_divisive_scale, v1_feedforward_divisive_scale,
+            cpu_feedforward_gate_flags, v1_feedforward_divisive_gate_source_id,
+            cpu_direct_gate_flags, v1_direct_divisive_gate_source_id,
+            v1_predicted_suppression_scale,
+            v1_predicted_suppression_neighbor_weight,
+            v1_predicted_suppression_locus_id,
+            cpu_predicted_suppression_flags,
+            &cpu_v1_predicted_suppression_signal_sum,
+            &cpu_v1_predicted_suppression_gain_sum
+        );
+        cpu_he_richter_count_step_flags(
+            cpu_hctx, cpu_hctx_leader, cpu_hctx_preprobe, cpu_hctx_trailer,
+            cpu_hctx_flags, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step
+        );
+        cpu_he_richter_count_step_flags(
+            cpu_hpred, cpu_hpred_leader, cpu_hpred_preprobe, cpu_hpred_trailer,
+            cpu_hpred_flags, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step
+        );
+        const bool in_preprobe_phase =
+            step >= preprobe_start_step && step < preprobe_end_step;
+        if (in_preprobe_phase) {
+            const int replay_step = step - preprobe_start_step;
+            std::copy(
+                cpu_hpred_flags.begin(),
+                cpu_hpred_flags.end(),
+                cpu_hpred_feedback_replay_flags.begin()
+                    + replay_step * H_E_N
+            );
+        }
+        if (in_trailer_phase) {
+            for (int i = 0; i < V1_SOM_N; ++i) {
+                if (cpu_som_flags[static_cast<std::size_t>(i)] == 0) {
+                    continue;
+                }
+                const int channel = i / V1_SOM_PER_CHANNEL;
+                cpu_v1_som_trailer[static_cast<std::size_t>(i)] += 1;
+                cpu_v1_som_trailer_bin_channel_counts[
+                    trailer_bin * V1_N_CHANNELS + channel
+                ] += 1;
+            }
+            for (int i = 0; i < V1_E_N; ++i) {
+                if (cpu_v1_flags[static_cast<std::size_t>(i)] == 0) {
+                    continue;
+                }
+                const int channel = i / V1_E_PER_CHANNEL;
+                cpu_v1_trailer_bin_channel_counts[
+                    trailer_bin * V1_N_CHANNELS + channel
+                ] += 1;
+            }
+            for (int i = 0; i < H_E_N; ++i) {
+                if (cpu_hpred_flags[static_cast<std::size_t>(i)] == 0) {
+                    continue;
+                }
+                const int channel = i / H_E_PER_CHANNEL;
+                cpu_hpred_trailer_bin_total_counts[trailer_bin] += 1;
+                cpu_hpred_trailer_bin_channel_counts[
+                    trailer_bin * H_N_CHANNELS + channel
+                ] += 1;
+            }
+            for (int i = 0; i < H_E_N; ++i) {
+                if (cpu_hpred_feedback_flags[static_cast<std::size_t>(i)] == 0) {
+                    continue;
+                }
+                const int channel = i / H_E_PER_CHANNEL;
+                cpu_hpred_feedback_held_trailer_bin_total_counts[trailer_bin] += 1;
+                cpu_hpred_feedback_held_trailer_bin_channel_counts[
+                    trailer_bin * H_N_CHANNELS + channel
+                ] += 1;
+            }
+            if (normalized_feedback_replay && !cpu_hpred_feedback_normalized_ready) {
+                ensure_cpu_hpred_preprobe_channel_counts();
+                const std::vector<std::int32_t> feedback_source_counts =
+                    select_normalized_feedback_source_counts(
+                        cpu_hpred_preprobe_channel_counts,
+                        expected_channel,
+                        feedback_replay_fallback_id,
+                        feedback_replay_leader_templates,
+                        cpu_hpred_feedback_normalized_preprobe_zero,
+                        cpu_hpred_feedback_normalized_fallback_used,
+                        cpu_hpred_feedback_normalized_fallback_zero_template
+                    );
+                build_normalized_hpred_feedback_weights(
+                    feedback_source_counts,
+                    preprobe_steps,
+                    feedback_replay_target_per_bin,
+                    cpu_hpred_feedback_normalized_weights,
+                    cpu_hpred_feedback_normalized_trailer_bin_total_weights,
+                    cpu_hpred_feedback_normalized_trailer_bin_channel_weights
+                );
+                cpu_hpred_feedback_normalized_ready = true;
+            }
+        }
+        for (int src = 0; src < stim_bank.n_pre; ++src) {
+            const int channel = stim_channel[static_cast<std::size_t>(src)];
+            if (!seeded_source_event(
+                    seed, step, src, channel, expected_channel, unexpected_channel,
+                    grating_rate_hz, baseline_rate_hz, leader_start_step,
+                    leader_end_step, preprobe_start_step, preprobe_end_step,
+                    trailer_start_step, trailer_end_step, v1_stim_sigma_deg
+                )) {
+                continue;
+            }
+            const int phase = richter_phase_index(
+                step, leader_start_step, leader_end_step, preprobe_start_step,
+                preprobe_end_step, trailer_start_step, trailer_end_step
+            );
+            const int phase_index =
+                phase >= 0
+                ? phase
+                : ((step >= iti_start_step && step < iti_end_step) ? 3 : 4);
+            cpu_source_by_step[static_cast<std::size_t>(step)] += 1;
+            cpu_source_by_afferent[static_cast<std::size_t>(src)] += 1;
+            cpu_source_by_channel[static_cast<std::size_t>(channel)] += 1;
+            cpu_source_by_phase[static_cast<std::size_t>(phase_index)] += 1;
+            cpu_source_by_phase[4] += 1;
+            cpu_scatter_one_source(
+                stim_bank, src, stim_drive_amp, cpu_v1["I_e_pA"]
+            );
+        }
+        cpu_scatter_spike_flags(
+            v1_to_h_bank, cpu_v1_flags, v1_to_h_drive_amp, cpu_hctx["I_e_pA"]
+        );
+        if (!in_trailer_phase) {
+            cpu_scatter_spike_flags(
+                ctx_to_pred_bank, cpu_hctx_flags, ctx_to_pred_drive_amp,
+                cpu_hpred["I_e_pA"]
+            );
+        }
+        if (in_trailer_phase && normalized_feedback_replay) {
+            cpu_scatter_pre_weights(
+                fb_direct_bank, cpu_hpred_feedback_normalized_weights,
+                feedback_direct_drive_amp, cpu_v1["I_ap_e_pA"]
+            );
+            cpu_scatter_pre_weights(
+                fb_som_bank, cpu_hpred_feedback_normalized_weights,
+                feedback_som_drive_amp, cpu_som["I_e_pA"]
+            );
+        } else {
+            const auto& cpu_feedback_flags =
+                in_trailer_phase ? cpu_hpred_feedback_flags : cpu_hpred_flags;
+            cpu_scatter_spike_flags(
+                fb_direct_bank, cpu_feedback_flags, feedback_direct_drive_amp,
+                cpu_v1["I_ap_e_pA"]
+            );
+            cpu_scatter_spike_flags(
+                fb_som_bank, cpu_feedback_flags, feedback_som_drive_amp,
+                cpu_som["I_e_pA"]
+            );
+        }
+    }
+
+    ensure_cpu_hpred_preprobe_channel_counts();
+
+    result.cpu_raw_counts = {
+        {"v1_e.leader", cpu_v1_leader},
+        {"v1_e.preprobe", cpu_v1_preprobe},
+        {"v1_e.trailer", cpu_v1_trailer},
+        {"v1_som.trailer", cpu_v1_som_trailer},
+        {"hctx_e.leader", cpu_hctx_leader},
+        {"hctx_e.preprobe", cpu_hctx_preprobe},
+        {"hctx_e.trailer", cpu_hctx_trailer},
+        {"hpred_e.leader", cpu_hpred_leader},
+        {"hpred_e.preprobe", cpu_hpred_preprobe},
+        {"hpred_e.trailer", cpu_hpred_trailer},
+    };
+    result.cpu_source_counts = {
+        {"source.events_by_step", cpu_source_by_step},
+        {"source.events_by_afferent", cpu_source_by_afferent},
+        {"source.events_by_channel", cpu_source_by_channel},
+        {"source.events_by_phase", cpu_source_by_phase},
+    };
+    result.cpu_v1_trailer_bin_channel_counts =
+        std::move(cpu_v1_trailer_bin_channel_counts);
+    result.cpu_v1_som_trailer_bin_channel_counts =
+        std::move(cpu_v1_som_trailer_bin_channel_counts);
+    result.cpu_hpred_preprobe_channel_counts =
+        std::move(cpu_hpred_preprobe_channel_counts);
+    result.cpu_hpred_trailer_bin_total_counts =
+        std::move(cpu_hpred_trailer_bin_total_counts);
+    result.cpu_hpred_trailer_bin_channel_counts =
+        std::move(cpu_hpred_trailer_bin_channel_counts);
+    result.cpu_hpred_feedback_held_trailer_bin_total_counts =
+        std::move(cpu_hpred_feedback_held_trailer_bin_total_counts);
+    result.cpu_hpred_feedback_held_trailer_bin_channel_counts =
+        std::move(cpu_hpred_feedback_held_trailer_bin_channel_counts);
+    result.cpu_hpred_feedback_normalized_trailer_bin_total_weights =
+        std::move(cpu_hpred_feedback_normalized_trailer_bin_total_weights);
+    result.cpu_hpred_feedback_normalized_trailer_bin_channel_weights =
+        std::move(cpu_hpred_feedback_normalized_trailer_bin_channel_weights);
+    result.cpu_hpred_feedback_normalized_preprobe_zero =
+        std::move(cpu_hpred_feedback_normalized_preprobe_zero);
+    result.cpu_hpred_feedback_normalized_fallback_used =
+        std::move(cpu_hpred_feedback_normalized_fallback_used);
+    result.cpu_hpred_feedback_normalized_fallback_zero_template =
+        std::move(cpu_hpred_feedback_normalized_fallback_zero_template);
+    result.cpu_hpred_feedback_normalized_leader_template_total_counts =
+        cpu_hpred_feedback_normalized_leader_template_total_counts;
+    result.cpu_hpred_feedback_normalized_leader_template_channel_counts =
+        feedback_replay_leader_templates;
+    result.cpu_v1_predicted_suppression_trailer_channel_signal_sum =
+        std::move(cpu_v1_predicted_suppression_signal_sum);
+    result.cpu_v1_predicted_suppression_trailer_channel_gain_sum =
+        std::move(cpu_v1_predicted_suppression_gain_sum);
+    result.cpu_v1_predicted_suppression_trailer_raw_ie_before_sum =
+        std::move(cpu_v1_predicted_suppression_raw_ie_before_sum);
+    result.cpu_v1_predicted_suppression_trailer_raw_ie_after_sum =
+        std::move(cpu_v1_predicted_suppression_raw_ie_after_sum);
+    result.cpu_v1_predicted_suppression_trailer_raw_ie_delta_sum =
+        std::move(cpu_v1_predicted_suppression_raw_ie_delta_sum);
+    result.source_event_counts = {
+        {"leader", cpu_source_by_phase[0]},
+        {"preprobe", cpu_source_by_phase[1]},
+        {"trailer", cpu_source_by_phase[2]},
+        {"iti", cpu_source_by_phase[3]},
+        {"total", cpu_source_by_phase[4]},
+    };
+    result.cpu_diagnostic_rates_hz = {
+        {"v1_e.leader", counts_to_rate_hz(cpu_v1_leader, leader_start_step, leader_end_step)},
+        {"v1_e.preprobe", counts_to_rate_hz(cpu_v1_preprobe, preprobe_start_step, preprobe_end_step)},
+        {"v1_e.trailer", counts_to_rate_hz(cpu_v1_trailer, trailer_start_step, trailer_end_step)},
+        {"hctx_e.preprobe", counts_to_rate_hz(cpu_hctx_preprobe, preprobe_start_step, preprobe_end_step)},
+        {"hctx_e.trailer", counts_to_rate_hz(cpu_hctx_trailer, trailer_start_step, trailer_end_step)},
+        {"hpred_e.preprobe", counts_to_rate_hz(cpu_hpred_preprobe, preprobe_start_step, preprobe_end_step)},
+        {"hpred_e.trailer", counts_to_rate_hz(cpu_hpred_trailer, trailer_start_step, trailer_end_step)},
+    };
+    result.cpu_q_active_fC = make_v1_q_active_map(
+        cpu_v1e_q_active_fC_by_phase,
+        cpu_v1som_q_active_fC_by_phase
+    );
+    append_prefixed_state(result.cpu_final_state, "v1e", cpu_v1);
+    append_prefixed_state(result.cpu_final_state, "v1som", cpu_som);
+    append_prefixed_state(result.cpu_final_state, "hctx", cpu_hctx);
+    append_prefixed_state(result.cpu_final_state, "hpred", cpu_hpred);
+
+    return result;
+}
+
+FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cuda(
+    const std::string& stim_bank_name,
+    const std::vector<std::int32_t>& stim_pre,
+    const std::vector<std::int32_t>& stim_post,
+    const std::vector<double>& stim_weight,
+    double stim_drive_amp,
+    const std::vector<std::int32_t>& stim_channel,
+    const std::string& v1_to_h_bank_name,
+    const std::vector<std::int32_t>& v1_to_h_pre,
+    const std::vector<std::int32_t>& v1_to_h_post,
+    const std::vector<double>& v1_to_h_weight,
+    double v1_to_h_drive_amp,
+    const std::string& ctx_to_pred_bank_name,
+    const std::vector<std::int32_t>& ctx_to_pred_pre,
+    const std::vector<std::int32_t>& ctx_to_pred_post,
+    const std::vector<double>& ctx_to_pred_weight,
+    double ctx_to_pred_drive_amp,
+    const std::string& feedback_direct_bank_name,
+    const std::vector<std::int32_t>& feedback_direct_pre,
+    const std::vector<std::int32_t>& feedback_direct_post,
+    const std::vector<double>& feedback_direct_weight,
+    double feedback_direct_drive_amp,
+    const std::string& feedback_som_bank_name,
+    const std::vector<std::int32_t>& feedback_som_pre,
+    const std::vector<std::int32_t>& feedback_som_post,
+    const std::vector<double>& feedback_som_weight,
+    double feedback_som_drive_amp,
+    std::int64_t seed,
+    std::int32_t expected_channel,
+    std::int32_t unexpected_channel,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    std::int32_t n_steps,
+    std::int32_t leader_start_step,
+    std::int32_t leader_end_step,
+    std::int32_t preprobe_start_step,
+    std::int32_t preprobe_end_step,
+    std::int32_t trailer_start_step,
+    std::int32_t trailer_end_step,
+    std::int32_t iti_start_step,
+    std::int32_t iti_end_step,
+    const std::string& feedback_replay_mode,
+    double feedback_replay_target_per_bin,
+    const std::string& feedback_replay_fallback_mode,
+    const std::vector<std::int32_t>& feedback_replay_leader_templates,
+    double v1_som_to_e_scale,
+    double v1_som_divisive_scale,
+    double v1_direct_divisive_scale,
+    double v1_feedforward_divisive_scale,
+    std::int32_t v1_feedforward_divisive_gate_source_id,
+    std::int32_t v1_direct_divisive_gate_source_id,
+    double v1_predicted_suppression_scale,
+    double v1_predicted_suppression_neighbor_weight,
+    std::int32_t v1_predicted_suppression_locus_id,
+    double v1_stim_sigma_deg
+) {
+    if (n_steps <= 0 || iti_end_step != n_steps
+        || leader_start_step < 0
+        || leader_start_step >= leader_end_step
+        || leader_end_step > preprobe_start_step
+        || preprobe_start_step >= preprobe_end_step
+        || preprobe_end_step > trailer_start_step
+        || trailer_start_step >= trailer_end_step
+        || trailer_end_step > iti_start_step
+        || iti_start_step >= iti_end_step) {
+        throw std::runtime_error(
+            "seeded source test requires ordered [start,end) Richter phases"
+        );
+    }
+    if (grating_rate_hz < 0.0 || baseline_rate_hz < 0.0) {
+        throw std::runtime_error("seeded source rates must be nonnegative");
+    }
+    if (v1_stim_sigma_deg <= 0.0) {
+        throw std::runtime_error("V1 stimulus sigma must be positive");
+    }
+    if (v1_som_to_e_scale < 0.0) {
+        throw std::runtime_error("V1 SOM->E scale must be nonnegative");
+    }
+    if (v1_som_divisive_scale < 0.0) {
+        throw std::runtime_error("V1 SOM divisive scale must be nonnegative");
+    }
+    if (v1_direct_divisive_scale < 0.0) {
+        throw std::runtime_error("V1 direct divisive scale must be nonnegative");
+    }
+    if (v1_feedforward_divisive_scale < 0.0) {
+        throw std::runtime_error(
+            "V1 feedforward divisive scale must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_scale < 0.0) {
+        throw std::runtime_error(
+            "V1 predicted suppression scale must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_neighbor_weight < 0.0) {
+        throw std::runtime_error(
+            "V1 predicted suppression neighbor weight must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_locus_id
+            != V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE
+        && v1_predicted_suppression_locus_id
+            != V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE) {
+        throw std::runtime_error("V1 predicted suppression locus is invalid");
+    }
+    if (v1_feedforward_divisive_gate_source_id
+            != V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM
+        && v1_feedforward_divisive_gate_source_id
+            != V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+        throw std::runtime_error("V1 feedforward divisive gate source is invalid");
+    }
+    if (v1_direct_divisive_gate_source_id
+            != V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM
+        && v1_direct_divisive_gate_source_id
+            != V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+        throw std::runtime_error("V1 direct divisive gate source is invalid");
+    }
+    const double v1_som_to_e_drive_amp =
+        V1_SOM_TO_E_DRIVE_AMP_PA * v1_som_to_e_scale;
+    const bool normalized_feedback_replay =
+        feedback_replay_mode == "normalized";
+    if (!normalized_feedback_replay && feedback_replay_mode != "raw") {
+        throw std::runtime_error(
+            "feedback replay mode must be raw or normalized"
+        );
+    }
+    if (feedback_replay_target_per_bin < 0.0) {
+        throw std::runtime_error(
+            "feedback replay target per bin must be nonnegative"
+        );
+    }
+    const int feedback_replay_fallback_id =
+        feedback_replay_fallback_mode_id(feedback_replay_fallback_mode);
+    if (!normalized_feedback_replay && feedback_replay_fallback_id != 0) {
+        throw std::runtime_error(
+            "feedback replay fallback requires normalized replay mode"
+        );
+    }
+    validate_feedback_replay_leader_templates(
+        feedback_replay_leader_templates
+    );
+
+    const CsrBank stim_bank = build_csr_bank(
+        stim_bank_name, stim_pre, stim_post, stim_weight
+    );
+    const CsrBank v1_to_h_bank = build_csr_bank(
+        v1_to_h_bank_name, v1_to_h_pre, v1_to_h_post, v1_to_h_weight
+    );
+    const CsrBank ctx_to_pred_bank = build_csr_bank(
+        ctx_to_pred_bank_name, ctx_to_pred_pre, ctx_to_pred_post,
+        ctx_to_pred_weight
+    );
+    const CsrBank fb_direct_bank = build_csr_bank(
+        feedback_direct_bank_name, feedback_direct_pre, feedback_direct_post,
+        feedback_direct_weight
+    );
+    const CsrBank fb_som_bank = build_csr_bank(
+        feedback_som_bank_name, feedback_som_pre, feedback_som_post,
+        feedback_som_weight
+    );
+    const CsrBank v1_som_to_e_bank = build_fixed_v1_som_to_e_bank();
+    if (stim_bank.n_target != V1_E_N
+        || v1_to_h_bank.n_target != H_E_N
+        || ctx_to_pred_bank.n_target != H_E_N
+        || fb_direct_bank.n_target != V1_E_N
+        || fb_som_bank.n_target != V1_SOM_N
+        || v1_som_to_e_bank.n_target != V1_E_N) {
+        throw std::runtime_error("seeded source test target size mismatch");
+    }
+    if (static_cast<int>(stim_channel.size()) != stim_bank.n_pre) {
+        throw std::runtime_error("seeded source test stim_channel size mismatch");
+    }
+    const int n_channels =
+        static_cast<int>(*std::max_element(stim_channel.begin(), stim_channel.end())) + 1;
+    if (expected_channel < 0 || expected_channel >= n_channels
+        || unexpected_channel < 0 || unexpected_channel >= n_channels) {
+        throw std::runtime_error("seeded source test channel index out of range");
+    }
+
+    FrozenRichterSeededSourceResult result;
+    result.seed = seed;
+    result.n_steps = n_steps;
+    result.dt_ms = DT_MS;
+    result.expected_channel = expected_channel;
+    result.unexpected_channel = unexpected_channel;
+    result.phase_steps = {
+        {"leader_start_step", leader_start_step},
+        {"leader_end_step", leader_end_step},
+        {"preprobe_start_step", preprobe_start_step},
+        {"preprobe_end_step", preprobe_end_step},
+        {"trailer_start_step", trailer_start_step},
+        {"trailer_end_step", trailer_end_step},
+        {"iti_start_step", iti_start_step},
+        {"iti_end_step", iti_end_step},
+    };
+    result.edge_counts = {
+        {"v1_stim_to_e", static_cast<std::int32_t>(stim_pre.size())},
+        {"v1_to_h_ctx", static_cast<std::int32_t>(v1_to_h_pre.size())},
+        {"ctx_to_pred", static_cast<std::int32_t>(ctx_to_pred_pre.size())},
+        {"fb_pred_to_v1e_apical", static_cast<std::int32_t>(feedback_direct_pre.size())},
+        {"fb_pred_to_v1som", static_cast<std::int32_t>(feedback_som_pre.size())},
+    };
+    result.rates_hz = {
+        {"grating", grating_rate_hz},
+        {"baseline", baseline_rate_hz},
+        {"v1_stim_sigma_deg", v1_stim_sigma_deg},
+    };
+    const int trailer_steps = trailer_end_step - trailer_start_step;
+    if (trailer_steps <= 0 || (trailer_steps % V1_TRAILER_BIN_COUNT) != 0) {
+        throw std::runtime_error("seeded source trailer window must split into 100 ms bins");
+    }
+    const int trailer_bin_steps = trailer_steps / V1_TRAILER_BIN_COUNT;
+    const int preprobe_steps = preprobe_end_step - preprobe_start_step;
+    if (preprobe_steps != trailer_bin_steps) {
+        throw std::runtime_error(
+            "seeded source H_pred feedback replay requires preprobe window to match trailer bin"
+        );
+    }
+
+    std::map<std::string, std::vector<double>> cuda_v1;
+    std::map<std::string, std::vector<double>> cuda_som;
+    std::map<std::string, std::vector<double>> cuda_hctx;
+    std::map<std::string, std::vector<double>> cuda_hpred;
+    std::vector<std::int32_t> dummy_spikes;
+    init_v1e_feedback_state(cuda_v1, dummy_spikes);
+    init_v1som_feedback_state(cuda_som);
+    init_he_quiet_state(cuda_hctx, dummy_spikes);
+    init_he_quiet_state(cuda_hpred, dummy_spikes);
+    std::vector<std::int32_t> cuda_v1_leader(V1_E_N, 0);
+    std::vector<std::int32_t> cuda_v1_preprobe(V1_E_N, 0);
+    std::vector<std::int32_t> cuda_v1_trailer(V1_E_N, 0);
+    std::vector<std::int32_t> cuda_v1_som_trailer(V1_SOM_N, 0);
+    std::vector<std::int32_t> cuda_v1_som_trailer_bin_channel_counts(
+        V1_TRAILER_BIN_COUNT * V1_N_CHANNELS, 0
+    );
+    std::vector<std::int32_t> cuda_hctx_leader(H_E_N, 0);
+    std::vector<std::int32_t> cuda_hctx_preprobe(H_E_N, 0);
+    std::vector<std::int32_t> cuda_hctx_trailer(H_E_N, 0);
+    std::vector<std::int32_t> cuda_hpred_leader(H_E_N, 0);
+    std::vector<std::int32_t> cuda_hpred_preprobe(H_E_N, 0);
+    std::vector<std::int32_t> cuda_hpred_trailer(H_E_N, 0);
+    std::vector<std::int32_t> cuda_v1_flags(V1_E_N, 0);
+    std::vector<std::int32_t> cuda_som_flags(V1_SOM_N, 0);
+    std::vector<std::int32_t> cuda_hctx_flags(H_E_N, 0);
+    std::vector<std::int32_t> cuda_hpred_flags(H_E_N, 0);
+    std::vector<std::int32_t> cuda_source_by_step(n_steps, 0);
+    std::vector<std::int32_t> cuda_source_by_afferent(stim_bank.n_pre, 0);
+    std::vector<std::int32_t> cuda_source_by_channel(n_channels, 0);
+    std::vector<std::int32_t> cuda_source_by_phase(5, 0);
+    std::vector<double> cuda_v1e_q_active_fC_by_phase(3, 0.0);
+    std::vector<double> cuda_v1som_q_active_fC_by_phase(3, 0.0);
+    std::vector<std::int32_t> cuda_hpred_feedback_replay_flags(
+        static_cast<std::size_t>(preprobe_steps) * H_E_N, 0
+    );
+    std::vector<std::int32_t> cuda_hpred_preprobe_channel_counts(
+        H_N_CHANNELS, 0
+    );
+    std::vector<std::int32_t> cuda_hpred_feedback_held_trailer_bin_total_counts(
+        V1_TRAILER_BIN_COUNT, 0
+    );
+    std::vector<std::int32_t>
+        cuda_hpred_feedback_held_trailer_bin_channel_counts(
+            V1_TRAILER_BIN_COUNT * H_N_CHANNELS, 0
+        );
+    std::vector<double> cuda_hpred_feedback_normalized_weights(H_E_N, 0.0);
+    std::vector<double>
+        cuda_hpred_feedback_normalized_trailer_bin_total_weights(
+            V1_TRAILER_BIN_COUNT, 0.0
+        );
+    std::vector<double>
+        cuda_hpred_feedback_normalized_trailer_bin_channel_weights(
+            V1_TRAILER_BIN_COUNT * H_N_CHANNELS, 0.0
+        );
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_preprobe_zero(1, 0);
+    std::vector<std::int32_t> cuda_hpred_feedback_normalized_fallback_used(1, 0);
+    std::vector<std::int32_t>
+        cuda_hpred_feedback_normalized_fallback_zero_template(1, 0);
+    std::vector<double> cuda_v1_predicted_suppression_signal_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cuda_v1_predicted_suppression_gain_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cuda_v1_predicted_suppression_raw_ie_before_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cuda_v1_predicted_suppression_raw_ie_after_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<double> cuda_v1_predicted_suppression_raw_ie_delta_sum(
+        V1_N_CHANNELS, 0.0
+    );
+    std::vector<std::int32_t> cuda_feedback_replay_leader_channels{
+        expected_channel
+    };
+    std::vector<std::int32_t> cuda_feedback_replay_leader_templates =
+        feedback_replay_leader_templates;
+    if (cuda_feedback_replay_leader_templates.empty()) {
+        cuda_feedback_replay_leader_templates.assign(
+            H_N_CHANNELS * H_N_CHANNELS, 0
+        );
+    }
+    const std::vector<std::int32_t>
+        cuda_hpred_feedback_normalized_leader_template_total_counts =
+            feedback_replay_leader_template_totals(
+                cuda_feedback_replay_leader_templates
+            );
+
+    auto* d_v1_v = device_alloc_copy(cuda_v1["V_soma_mV"]);
+    auto* d_v1_vap = device_alloc_copy(cuda_v1["V_ap_mV"]);
+    auto* d_v1_ie = device_alloc_copy(cuda_v1["I_e_pA"]);
+    auto* d_v1_ii = device_alloc_copy(cuda_v1["I_i_pA"]);
+    auto* d_v1_iape = device_alloc_copy(cuda_v1["I_ap_e_pA"]);
+    auto* d_v1_w = device_alloc_copy(cuda_v1["w_adapt_pA"]);
+    auto* d_v1_ibias = device_alloc_copy(cuda_v1["I_bias_pA"]);
+    auto* d_v1_refrac = device_alloc_copy(cuda_v1["refrac_until_ms"]);
+    auto* d_v1_leader = device_alloc_copy(cuda_v1_leader);
+    auto* d_v1_preprobe = device_alloc_copy(cuda_v1_preprobe);
+    auto* d_v1_trailer = device_alloc_copy(cuda_v1_trailer);
+    auto* d_v1_som_trailer = device_alloc_copy(cuda_v1_som_trailer);
+    auto* d_v1_som_trailer_bin_channel_counts =
+        device_alloc_copy(cuda_v1_som_trailer_bin_channel_counts);
+    auto* d_v1_flags = device_alloc_copy(cuda_v1_flags);
+    auto* d_som_v = device_alloc_copy(cuda_som["V_mV"]);
+    auto* d_som_ie = device_alloc_copy(cuda_som["I_e_pA"]);
+    auto* d_som_ii = device_alloc_copy(cuda_som["I_i_pA"]);
+    auto* d_som_ibias = device_alloc_copy(cuda_som["I_bias_pA"]);
+    auto* d_som_refrac = device_alloc_copy(cuda_som["refrac_until_ms"]);
+    auto* d_som_flags = device_alloc_copy(cuda_som_flags);
+    auto* d_hctx_v = device_alloc_copy(cuda_hctx["V_mV"]);
+    auto* d_hctx_ie = device_alloc_copy(cuda_hctx["I_e_pA"]);
+    auto* d_hctx_ii = device_alloc_copy(cuda_hctx["I_i_pA"]);
+    auto* d_hctx_g = device_alloc_copy(cuda_hctx["g_nmda_h_nS"]);
+    auto* d_hctx_ibias = device_alloc_copy(cuda_hctx["I_bias_pA"]);
+    auto* d_hctx_refrac = device_alloc_copy(cuda_hctx["refrac_until_ms"]);
+    auto* d_hctx_leader = device_alloc_copy(cuda_hctx_leader);
+    auto* d_hctx_preprobe = device_alloc_copy(cuda_hctx_preprobe);
+    auto* d_hctx_trailer = device_alloc_copy(cuda_hctx_trailer);
+    auto* d_hctx_flags = device_alloc_copy(cuda_hctx_flags);
+    auto* d_hpred_v = device_alloc_copy(cuda_hpred["V_mV"]);
+    auto* d_hpred_ie = device_alloc_copy(cuda_hpred["I_e_pA"]);
+    auto* d_hpred_ii = device_alloc_copy(cuda_hpred["I_i_pA"]);
+    auto* d_hpred_g = device_alloc_copy(cuda_hpred["g_nmda_h_nS"]);
+    auto* d_hpred_ibias = device_alloc_copy(cuda_hpred["I_bias_pA"]);
+    auto* d_hpred_refrac = device_alloc_copy(cuda_hpred["refrac_until_ms"]);
+    auto* d_hpred_leader = device_alloc_copy(cuda_hpred_leader);
+    auto* d_hpred_preprobe = device_alloc_copy(cuda_hpred_preprobe);
+    auto* d_hpred_preprobe_channel_counts =
+        device_alloc_copy(cuda_hpred_preprobe_channel_counts);
+    auto* d_hpred_trailer = device_alloc_copy(cuda_hpred_trailer);
+    auto* d_hpred_flags = device_alloc_copy(cuda_hpred_flags);
+    auto* d_stim_channel = device_alloc_copy(stim_channel);
+    auto* d_source_by_step = device_alloc_copy(cuda_source_by_step);
+    auto* d_source_by_afferent = device_alloc_copy(cuda_source_by_afferent);
+    auto* d_source_by_channel = device_alloc_copy(cuda_source_by_channel);
+    auto* d_source_by_phase = device_alloc_copy(cuda_source_by_phase);
+    auto* d_v1e_q_active_fC_by_phase =
+        device_alloc_copy(cuda_v1e_q_active_fC_by_phase);
+    auto* d_v1som_q_active_fC_by_phase =
+        device_alloc_copy(cuda_v1som_q_active_fC_by_phase);
+    auto* d_hpred_feedback_replay_flags =
+        device_alloc_copy(cuda_hpred_feedback_replay_flags);
+    auto* d_hpred_feedback_held_trailer_bin_total_counts =
+        device_alloc_copy(cuda_hpred_feedback_held_trailer_bin_total_counts);
+    auto* d_hpred_feedback_held_trailer_bin_channel_counts =
+        device_alloc_copy(cuda_hpred_feedback_held_trailer_bin_channel_counts);
+    auto* d_hpred_feedback_normalized_weights =
+        device_alloc_copy(cuda_hpred_feedback_normalized_weights);
+    auto* d_hpred_feedback_normalized_trailer_bin_total_weights =
+        device_alloc_copy(
+            cuda_hpred_feedback_normalized_trailer_bin_total_weights
+        );
+    auto* d_hpred_feedback_normalized_trailer_bin_channel_weights =
+        device_alloc_copy(
+            cuda_hpred_feedback_normalized_trailer_bin_channel_weights
+        );
+    auto* d_hpred_feedback_normalized_preprobe_zero =
+        device_alloc_copy(cuda_hpred_feedback_normalized_preprobe_zero);
+    auto* d_hpred_feedback_normalized_fallback_used =
+        device_alloc_copy(cuda_hpred_feedback_normalized_fallback_used);
+    auto* d_hpred_feedback_normalized_fallback_zero_template =
+        device_alloc_copy(
+            cuda_hpred_feedback_normalized_fallback_zero_template
+        );
+    auto* d_v1_predicted_suppression_signal_sum =
+        device_alloc_copy(cuda_v1_predicted_suppression_signal_sum);
+    auto* d_v1_predicted_suppression_gain_sum =
+        device_alloc_copy(cuda_v1_predicted_suppression_gain_sum);
+    auto* d_v1_predicted_suppression_raw_ie_before_sum =
+        device_alloc_copy(cuda_v1_predicted_suppression_raw_ie_before_sum);
+    auto* d_v1_predicted_suppression_raw_ie_after_sum =
+        device_alloc_copy(cuda_v1_predicted_suppression_raw_ie_after_sum);
+    auto* d_v1_predicted_suppression_raw_ie_delta_sum =
+        device_alloc_copy(cuda_v1_predicted_suppression_raw_ie_delta_sum);
+    auto* d_feedback_replay_leader_channels =
+        device_alloc_copy(cuda_feedback_replay_leader_channels);
+    auto* d_feedback_replay_leader_templates =
+        device_alloc_copy(cuda_feedback_replay_leader_templates);
+    auto* d_stim_row_ptr = device_alloc_copy(stim_bank.row_ptr);
+    auto* d_stim_post = device_alloc_copy(stim_bank.post);
+    auto* d_stim_weight = device_alloc_copy(stim_bank.weight);
+    auto* d_v1_to_h_row_ptr = device_alloc_copy(v1_to_h_bank.row_ptr);
+    auto* d_v1_to_h_post = device_alloc_copy(v1_to_h_bank.post);
+    auto* d_v1_to_h_weight = device_alloc_copy(v1_to_h_bank.weight);
+    auto* d_ctx_to_pred_row_ptr = device_alloc_copy(ctx_to_pred_bank.row_ptr);
+    auto* d_ctx_to_pred_post = device_alloc_copy(ctx_to_pred_bank.post);
+    auto* d_ctx_to_pred_weight = device_alloc_copy(ctx_to_pred_bank.weight);
+    auto* d_fb_direct_row_ptr = device_alloc_copy(fb_direct_bank.row_ptr);
+    auto* d_fb_direct_post = device_alloc_copy(fb_direct_bank.post);
+    auto* d_fb_direct_weight = device_alloc_copy(fb_direct_bank.weight);
+    auto* d_fb_som_row_ptr = device_alloc_copy(fb_som_bank.row_ptr);
+    auto* d_fb_som_post = device_alloc_copy(fb_som_bank.post);
+    auto* d_fb_som_weight = device_alloc_copy(fb_som_bank.weight);
+    auto* d_v1_som_to_e_row_ptr = device_alloc_copy(v1_som_to_e_bank.row_ptr);
+    auto* d_v1_som_to_e_post = device_alloc_copy(v1_som_to_e_bank.post);
+    auto* d_v1_som_to_e_weight = device_alloc_copy(v1_som_to_e_bank.weight);
+
+    const int source_blocks = (stim_bank.n_pre + 127) / 128;
+    for (int step = 0; step < n_steps; ++step) {
+        const bool in_trailer_phase =
+            step >= trailer_start_step && step < trailer_end_step;
+        int trailer_bin = -1;
+        const std::int32_t* d_feedback_flags = d_hpred_flags;
+        if (in_trailer_phase) {
+            const int replay_step =
+                (step - trailer_start_step) % preprobe_steps;
+            trailer_bin = (step - trailer_start_step) / trailer_bin_steps;
+            d_feedback_flags =
+                d_hpred_feedback_replay_flags + replay_step * H_E_N;
+        }
+        const std::int32_t* d_feedforward_gate_flags =
+            (v1_feedforward_divisive_gate_source_id
+                    == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK
+                && in_trailer_phase)
+            ? d_feedback_flags
+            : nullptr;
+        const std::int32_t* d_direct_gate_flags =
+            (v1_direct_divisive_gate_source_id
+                    == V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK
+                && in_trailer_phase)
+            ? d_feedback_flags
+            : nullptr;
+        const std::int32_t* d_predicted_suppression_flags =
+            (v1_predicted_suppression_scale > 0.0 && in_trailer_phase)
+            ? d_feedback_flags
+            : nullptr;
+        if (d_predicted_suppression_flags != nullptr
+            && v1_predicted_suppression_locus_id
+                == V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE) {
+            v1e_predicted_raw_ie_suppression_kernel<<<1, 32>>>(
+                1, d_v1_ie, d_predicted_suppression_flags,
+                v1_predicted_suppression_scale,
+                v1_predicted_suppression_neighbor_weight,
+                d_v1_predicted_suppression_signal_sum,
+                d_v1_predicted_suppression_gain_sum,
+                d_v1_predicted_suppression_raw_ie_before_sum,
+                d_v1_predicted_suppression_raw_ie_after_sum,
+                d_v1_predicted_suppression_raw_ie_delta_sum
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "seeded source V1_E predicted raw-I_e suppression launch"
+            );
+        }
+        v1som_q_active_phase_batch_kernel<<<1, 64>>>(
+            1, step, leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step,
+            d_som_ie, d_som_ii, d_v1som_q_active_fC_by_phase
+        );
+        check_cuda(cudaGetLastError(), "seeded source SOM Q_active launch");
+        v1som_step_kernel<<<1, 64>>>(
+            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac,
+            d_som_flags
+        );
+        check_cuda(cudaGetLastError(), "seeded source SOM step launch");
+        count_v1som_trailer_flags_kernel<<<1, 64>>>(
+            step, trailer_start_step, trailer_end_step, trailer_bin_steps,
+            d_som_flags, d_v1_som_trailer,
+            d_v1_som_trailer_bin_channel_counts
+        );
+        check_cuda(cudaGetLastError(), "seeded source SOM telemetry launch");
+        csr_scatter_spike_flags_kernel<<<1, 64>>>(
+            v1_som_to_e_bank.n_pre, d_som_flags, d_v1_som_to_e_row_ptr,
+            d_v1_som_to_e_post, d_v1_som_to_e_weight, v1_som_to_e_drive_amp,
+            d_v1_ii
+        );
+        check_cuda(cudaGetLastError(), "seeded source SOM->V1_E scatter launch");
+        v1e_q_active_phase_batch_kernel<<<1, 256>>>(
+            1, step, leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step,
+            d_v1_ie, d_v1_ii, d_v1_iape, d_v1e_q_active_fC_by_phase
+        );
+        check_cuda(cudaGetLastError(), "seeded source V1_E Q_active launch");
+        v1e_richter_count_step_flags_kernel<<<1, 256>>>(
+            step, leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step,
+            d_v1_v, d_v1_vap, d_v1_ie, d_v1_ii, d_v1_iape, d_v1_w,
+            d_v1_ibias, d_v1_refrac, d_v1_leader, d_v1_preprobe,
+            d_v1_trailer, d_v1_flags, d_som_flags, v1_som_divisive_scale,
+            v1_direct_divisive_scale, v1_feedforward_divisive_scale,
+            d_feedforward_gate_flags, v1_feedforward_divisive_gate_source_id,
+            d_direct_gate_flags, v1_direct_divisive_gate_source_id,
+            v1_predicted_suppression_scale,
+            v1_predicted_suppression_neighbor_weight,
+            v1_predicted_suppression_locus_id,
+            d_predicted_suppression_flags,
+            d_v1_predicted_suppression_signal_sum,
+            d_v1_predicted_suppression_gain_sum
+        );
+        check_cuda(cudaGetLastError(), "seeded source V1 step launch");
+        he_richter_count_step_flags_kernel<<<1, 256>>>(
+            step, leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step,
+            d_hctx_v, d_hctx_ie, d_hctx_ii, d_hctx_g, d_hctx_ibias,
+            d_hctx_refrac, d_hctx_leader, d_hctx_preprobe, nullptr,
+            d_hctx_trailer, d_hctx_flags
+        );
+        check_cuda(cudaGetLastError(), "seeded source H_ctx step launch");
+        he_richter_count_step_flags_kernel<<<1, 256>>>(
+            step, leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step,
+            d_hpred_v, d_hpred_ie, d_hpred_ii, d_hpred_g, d_hpred_ibias,
+            d_hpred_refrac, d_hpred_leader, d_hpred_preprobe,
+            d_hpred_preprobe_channel_counts, d_hpred_trailer, d_hpred_flags
+        );
+        check_cuda(cudaGetLastError(), "seeded source H_pred step launch");
+        const bool in_preprobe_phase =
+            step >= preprobe_start_step && step < preprobe_end_step;
+        if (in_preprobe_phase) {
+            store_hpred_feedback_replay_flags_kernel<<<1, 256>>>(
+                1, step - preprobe_start_step, d_hpred_flags,
+                d_hpred_feedback_replay_flags
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "seeded source H_pred feedback replay store launch"
+            );
+        }
+        seeded_stim_source_scatter_kernel<<<source_blocks, 128>>>(
+            seed, step, stim_bank.n_pre, d_stim_channel, expected_channel,
+            unexpected_channel, grating_rate_hz, baseline_rate_hz,
+            v1_stim_sigma_deg,
+            leader_start_step, leader_end_step, preprobe_start_step,
+            preprobe_end_step, trailer_start_step, trailer_end_step,
+            iti_start_step, iti_end_step, d_stim_row_ptr, d_stim_post,
+            d_stim_weight, stim_drive_amp, d_v1_ie, d_source_by_step,
+            d_source_by_afferent, d_source_by_channel, d_source_by_phase
+        );
+        check_cuda(cudaGetLastError(), "seeded source stimulus scatter launch");
+        csr_scatter_spike_flags_kernel<<<2, 128>>>(
+            v1_to_h_bank.n_pre, d_v1_flags, d_v1_to_h_row_ptr, d_v1_to_h_post,
+            d_v1_to_h_weight, v1_to_h_drive_amp, d_hctx_ie
+        );
+        check_cuda(cudaGetLastError(), "seeded source V1->H scatter launch");
+        if (in_trailer_phase) {
+            count_hpred_feedback_replay_flags_kernel<<<1, 256>>>(
+                1, trailer_bin, d_feedback_flags,
+                d_hpred_feedback_held_trailer_bin_total_counts,
+                d_hpred_feedback_held_trailer_bin_channel_counts
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "seeded source H_pred feedback replay count launch"
+            );
+            if (normalized_feedback_replay && step == trailer_start_step) {
+                build_hpred_normalized_feedback_weights_kernel<<<1, 256>>>(
+                    1, preprobe_steps, feedback_replay_target_per_bin,
+                    d_hpred_preprobe_channel_counts,
+                    d_feedback_replay_leader_channels,
+                    d_feedback_replay_leader_templates,
+                    feedback_replay_fallback_id,
+                    d_hpred_feedback_normalized_preprobe_zero,
+                    d_hpred_feedback_normalized_fallback_used,
+                    d_hpred_feedback_normalized_fallback_zero_template,
+                    d_hpred_feedback_normalized_weights,
+                    d_hpred_feedback_normalized_trailer_bin_total_weights,
+                    d_hpred_feedback_normalized_trailer_bin_channel_weights
+                );
+                check_cuda(
+                    cudaGetLastError(),
+                    "seeded source normalized H_pred feedback build launch"
+                );
+            }
+        }
+        if (!in_trailer_phase) {
+            csr_scatter_spike_flags_kernel<<<2, 128>>>(
+                ctx_to_pred_bank.n_pre, d_hctx_flags, d_ctx_to_pred_row_ptr,
+                d_ctx_to_pred_post, d_ctx_to_pred_weight,
+                ctx_to_pred_drive_amp, d_hpred_ie
+            );
+            check_cuda(cudaGetLastError(), "seeded source ctx->pred scatter launch");
+        }
+        if (in_trailer_phase && normalized_feedback_replay) {
+            csr_scatter_pre_weights_kernel<<<2, 128>>>(
+                fb_direct_bank.n_pre, d_hpred_feedback_normalized_weights,
+                d_fb_direct_row_ptr, d_fb_direct_post, d_fb_direct_weight,
+                feedback_direct_drive_amp, d_v1_iape
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "seeded source normalized feedback direct scatter launch"
+            );
+            csr_scatter_pre_weights_kernel<<<2, 128>>>(
+                fb_som_bank.n_pre, d_hpred_feedback_normalized_weights,
+                d_fb_som_row_ptr, d_fb_som_post, d_fb_som_weight,
+                feedback_som_drive_amp, d_som_ie
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "seeded source normalized feedback SOM scatter launch"
+            );
+        } else {
+            csr_scatter_spike_flags_kernel<<<2, 128>>>(
+                fb_direct_bank.n_pre, d_feedback_flags, d_fb_direct_row_ptr,
+                d_fb_direct_post, d_fb_direct_weight, feedback_direct_drive_amp,
+                d_v1_iape
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "seeded source feedback direct scatter launch"
+            );
+            csr_scatter_spike_flags_kernel<<<2, 128>>>(
+                fb_som_bank.n_pre, d_feedback_flags, d_fb_som_row_ptr,
+                d_fb_som_post, d_fb_som_weight, feedback_som_drive_amp, d_som_ie
+            );
+            check_cuda(cudaGetLastError(), "seeded source feedback SOM scatter launch");
+        }
+    }
+    check_cuda(cudaDeviceSynchronize(), "seeded source final sync");
+
+    copy_device_to_host(d_v1_v, cuda_v1["V_soma_mV"]);
+    copy_device_to_host(d_v1_vap, cuda_v1["V_ap_mV"]);
+    copy_device_to_host(d_v1_ie, cuda_v1["I_e_pA"]);
+    copy_device_to_host(d_v1_ii, cuda_v1["I_i_pA"]);
+    copy_device_to_host(d_v1_iape, cuda_v1["I_ap_e_pA"]);
+    copy_device_to_host(d_v1_w, cuda_v1["w_adapt_pA"]);
+    copy_device_to_host(d_v1_ibias, cuda_v1["I_bias_pA"]);
+    copy_device_to_host(d_v1_refrac, cuda_v1["refrac_until_ms"]);
+    copy_device_to_host(d_v1_leader, cuda_v1_leader);
+    copy_device_to_host(d_v1_preprobe, cuda_v1_preprobe);
+    copy_device_to_host(d_v1_trailer, cuda_v1_trailer);
+    copy_device_to_host(d_v1_som_trailer, cuda_v1_som_trailer);
+    copy_device_to_host(
+        d_v1_som_trailer_bin_channel_counts,
+        cuda_v1_som_trailer_bin_channel_counts
+    );
+    copy_device_to_host(d_som_v, cuda_som["V_mV"]);
+    copy_device_to_host(d_som_ie, cuda_som["I_e_pA"]);
+    copy_device_to_host(d_som_ii, cuda_som["I_i_pA"]);
+    copy_device_to_host(d_som_ibias, cuda_som["I_bias_pA"]);
+    copy_device_to_host(d_som_refrac, cuda_som["refrac_until_ms"]);
+    copy_device_to_host(d_hctx_v, cuda_hctx["V_mV"]);
+    copy_device_to_host(d_hctx_ie, cuda_hctx["I_e_pA"]);
+    copy_device_to_host(d_hctx_ii, cuda_hctx["I_i_pA"]);
+    copy_device_to_host(d_hctx_g, cuda_hctx["g_nmda_h_nS"]);
+    copy_device_to_host(d_hctx_ibias, cuda_hctx["I_bias_pA"]);
+    copy_device_to_host(d_hctx_refrac, cuda_hctx["refrac_until_ms"]);
+    copy_device_to_host(d_hctx_leader, cuda_hctx_leader);
+    copy_device_to_host(d_hctx_preprobe, cuda_hctx_preprobe);
+    copy_device_to_host(d_hctx_trailer, cuda_hctx_trailer);
+    copy_device_to_host(d_hpred_v, cuda_hpred["V_mV"]);
+    copy_device_to_host(d_hpred_ie, cuda_hpred["I_e_pA"]);
+    copy_device_to_host(d_hpred_ii, cuda_hpred["I_i_pA"]);
+    copy_device_to_host(d_hpred_g, cuda_hpred["g_nmda_h_nS"]);
+    copy_device_to_host(d_hpred_ibias, cuda_hpred["I_bias_pA"]);
+    copy_device_to_host(d_hpred_refrac, cuda_hpred["refrac_until_ms"]);
+    copy_device_to_host(d_hpred_leader, cuda_hpred_leader);
+    copy_device_to_host(d_hpred_preprobe, cuda_hpred_preprobe);
+    copy_device_to_host(
+        d_hpred_preprobe_channel_counts,
+        cuda_hpred_preprobe_channel_counts
+    );
+    copy_device_to_host(d_hpred_trailer, cuda_hpred_trailer);
+    copy_device_to_host(d_source_by_step, cuda_source_by_step);
+    copy_device_to_host(d_source_by_afferent, cuda_source_by_afferent);
+    copy_device_to_host(d_source_by_channel, cuda_source_by_channel);
+    copy_device_to_host(d_source_by_phase, cuda_source_by_phase);
+    copy_device_to_host(d_v1e_q_active_fC_by_phase, cuda_v1e_q_active_fC_by_phase);
+    copy_device_to_host(
+        d_v1som_q_active_fC_by_phase,
+        cuda_v1som_q_active_fC_by_phase
+    );
+    copy_device_to_host(
+        d_hpred_feedback_held_trailer_bin_total_counts,
+        cuda_hpred_feedback_held_trailer_bin_total_counts
+    );
+    copy_device_to_host(
+        d_hpred_feedback_held_trailer_bin_channel_counts,
+        cuda_hpred_feedback_held_trailer_bin_channel_counts
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_trailer_bin_total_weights,
+        cuda_hpred_feedback_normalized_trailer_bin_total_weights
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_trailer_bin_channel_weights,
+        cuda_hpred_feedback_normalized_trailer_bin_channel_weights
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_preprobe_zero,
+        cuda_hpred_feedback_normalized_preprobe_zero
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_fallback_used,
+        cuda_hpred_feedback_normalized_fallback_used
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_fallback_zero_template,
+        cuda_hpred_feedback_normalized_fallback_zero_template
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_signal_sum,
+        cuda_v1_predicted_suppression_signal_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_gain_sum,
+        cuda_v1_predicted_suppression_gain_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_raw_ie_before_sum,
+        cuda_v1_predicted_suppression_raw_ie_before_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_raw_ie_after_sum,
+        cuda_v1_predicted_suppression_raw_ie_after_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_raw_ie_delta_sum,
+        cuda_v1_predicted_suppression_raw_ie_delta_sum
+    );
+
+    result.cuda_raw_counts = {
+        {"v1_e.leader", cuda_v1_leader},
+        {"v1_e.preprobe", cuda_v1_preprobe},
+        {"v1_e.trailer", cuda_v1_trailer},
+        {"v1_som.trailer", cuda_v1_som_trailer},
+        {"hctx_e.leader", cuda_hctx_leader},
+        {"hctx_e.preprobe", cuda_hctx_preprobe},
+        {"hctx_e.trailer", cuda_hctx_trailer},
+        {"hpred_e.leader", cuda_hpred_leader},
+        {"hpred_e.preprobe", cuda_hpred_preprobe},
+        {"hpred_e.trailer", cuda_hpred_trailer},
+    };
+    result.cuda_source_counts = {
+        {"source.events_by_step", cuda_source_by_step},
+        {"source.events_by_afferent", cuda_source_by_afferent},
+        {"source.events_by_channel", cuda_source_by_channel},
+        {"source.events_by_phase", cuda_source_by_phase},
+    };
+    result.cuda_hpred_preprobe_channel_counts =
+        std::move(cuda_hpred_preprobe_channel_counts);
+    result.cuda_v1_som_trailer_bin_channel_counts =
+        std::move(cuda_v1_som_trailer_bin_channel_counts);
+    result.cuda_hpred_feedback_held_trailer_bin_total_counts =
+        std::move(cuda_hpred_feedback_held_trailer_bin_total_counts);
+    result.cuda_hpred_feedback_held_trailer_bin_channel_counts =
+        std::move(cuda_hpred_feedback_held_trailer_bin_channel_counts);
+    result.cuda_hpred_feedback_normalized_trailer_bin_total_weights =
+        std::move(cuda_hpred_feedback_normalized_trailer_bin_total_weights);
+    result.cuda_hpred_feedback_normalized_trailer_bin_channel_weights =
+        std::move(cuda_hpred_feedback_normalized_trailer_bin_channel_weights);
+    result.cuda_hpred_feedback_normalized_preprobe_zero =
+        std::move(cuda_hpred_feedback_normalized_preprobe_zero);
+    result.cuda_hpred_feedback_normalized_fallback_used =
+        std::move(cuda_hpred_feedback_normalized_fallback_used);
+    result.cuda_hpred_feedback_normalized_fallback_zero_template =
+        std::move(cuda_hpred_feedback_normalized_fallback_zero_template);
+    result.cuda_hpred_feedback_normalized_leader_template_total_counts =
+        cuda_hpred_feedback_normalized_leader_template_total_counts;
+    result.cuda_hpred_feedback_normalized_leader_template_channel_counts =
+        cuda_feedback_replay_leader_templates;
+    result.cuda_v1_predicted_suppression_trailer_channel_signal_sum =
+        std::move(cuda_v1_predicted_suppression_signal_sum);
+    result.cuda_v1_predicted_suppression_trailer_channel_gain_sum =
+        std::move(cuda_v1_predicted_suppression_gain_sum);
+    result.cuda_v1_predicted_suppression_trailer_raw_ie_before_sum =
+        std::move(cuda_v1_predicted_suppression_raw_ie_before_sum);
+    result.cuda_v1_predicted_suppression_trailer_raw_ie_after_sum =
+        std::move(cuda_v1_predicted_suppression_raw_ie_after_sum);
+    result.cuda_v1_predicted_suppression_trailer_raw_ie_delta_sum =
+        std::move(cuda_v1_predicted_suppression_raw_ie_delta_sum);
+    result.source_event_counts = {
+        {"leader", cuda_source_by_phase[0]},
+        {"preprobe", cuda_source_by_phase[1]},
+        {"trailer", cuda_source_by_phase[2]},
+        {"iti", cuda_source_by_phase[3]},
+        {"total", cuda_source_by_phase[4]},
+    };
+    result.cuda_diagnostic_rates_hz = {
+        {"v1_e.leader", counts_to_rate_hz(cuda_v1_leader, leader_start_step, leader_end_step)},
+        {"v1_e.preprobe", counts_to_rate_hz(cuda_v1_preprobe, preprobe_start_step, preprobe_end_step)},
+        {"v1_e.trailer", counts_to_rate_hz(cuda_v1_trailer, trailer_start_step, trailer_end_step)},
+        {"hctx_e.preprobe", counts_to_rate_hz(cuda_hctx_preprobe, preprobe_start_step, preprobe_end_step)},
+        {"hctx_e.trailer", counts_to_rate_hz(cuda_hctx_trailer, trailer_start_step, trailer_end_step)},
+        {"hpred_e.preprobe", counts_to_rate_hz(cuda_hpred_preprobe, preprobe_start_step, preprobe_end_step)},
+        {"hpred_e.trailer", counts_to_rate_hz(cuda_hpred_trailer, trailer_start_step, trailer_end_step)},
+    };
+    result.cuda_q_active_fC = make_v1_q_active_map(
+        std::array<double, 3>{
+            cuda_v1e_q_active_fC_by_phase[0],
+            cuda_v1e_q_active_fC_by_phase[1],
+            cuda_v1e_q_active_fC_by_phase[2],
+        },
+        std::array<double, 3>{
+            cuda_v1som_q_active_fC_by_phase[0],
+            cuda_v1som_q_active_fC_by_phase[1],
+            cuda_v1som_q_active_fC_by_phase[2],
+        }
+    );
+    append_prefixed_state(result.cuda_final_state, "v1e", cuda_v1);
+    append_prefixed_state(result.cuda_final_state, "v1som", cuda_som);
+    append_prefixed_state(result.cuda_final_state, "hctx", cuda_hctx);
+    append_prefixed_state(result.cuda_final_state, "hpred", cuda_hpred);
+
+    device_free(d_v1_v); device_free(d_v1_vap); device_free(d_v1_ie);
+    device_free(d_v1_ii); device_free(d_v1_iape); device_free(d_v1_w);
+    device_free(d_v1_ibias); device_free(d_v1_refrac);
+    device_free(d_v1_leader); device_free(d_v1_preprobe);
+    device_free(d_v1_trailer); device_free(d_v1_som_trailer);
+    device_free(d_v1_som_trailer_bin_channel_counts);
+    device_free(d_v1_flags);
+    device_free(d_som_v); device_free(d_som_ie); device_free(d_som_ii);
+    device_free(d_som_ibias); device_free(d_som_refrac); device_free(d_som_flags);
+    device_free(d_hctx_v); device_free(d_hctx_ie); device_free(d_hctx_ii);
+    device_free(d_hctx_g); device_free(d_hctx_ibias);
+    device_free(d_hctx_refrac); device_free(d_hctx_leader);
+    device_free(d_hctx_preprobe); device_free(d_hctx_trailer);
+    device_free(d_hctx_flags);
+    device_free(d_hpred_v); device_free(d_hpred_ie); device_free(d_hpred_ii);
+    device_free(d_hpred_g); device_free(d_hpred_ibias);
+    device_free(d_hpred_refrac); device_free(d_hpred_leader);
+    device_free(d_hpred_preprobe); device_free(d_hpred_preprobe_channel_counts);
+    device_free(d_hpred_trailer);
+    device_free(d_hpred_flags);
+    device_free(d_stim_channel); device_free(d_source_by_step);
+    device_free(d_source_by_afferent); device_free(d_source_by_channel);
+    device_free(d_source_by_phase);
+    device_free(d_v1e_q_active_fC_by_phase);
+    device_free(d_v1som_q_active_fC_by_phase);
+    device_free(d_hpred_feedback_replay_flags);
+    device_free(d_hpred_feedback_held_trailer_bin_total_counts);
+    device_free(d_hpred_feedback_held_trailer_bin_channel_counts);
+    device_free(d_hpred_feedback_normalized_weights);
+    device_free(d_hpred_feedback_normalized_trailer_bin_total_weights);
+    device_free(d_hpred_feedback_normalized_trailer_bin_channel_weights);
+    device_free(d_hpred_feedback_normalized_preprobe_zero);
+    device_free(d_hpred_feedback_normalized_fallback_used);
+    device_free(d_hpred_feedback_normalized_fallback_zero_template);
+    device_free(d_v1_predicted_suppression_signal_sum);
+    device_free(d_v1_predicted_suppression_gain_sum);
+    device_free(d_v1_predicted_suppression_raw_ie_before_sum);
+    device_free(d_v1_predicted_suppression_raw_ie_after_sum);
+    device_free(d_v1_predicted_suppression_raw_ie_delta_sum);
+    device_free(d_feedback_replay_leader_channels);
+    device_free(d_feedback_replay_leader_templates);
+    device_free(d_stim_row_ptr); device_free(d_stim_post); device_free(d_stim_weight);
+    device_free(d_v1_to_h_row_ptr); device_free(d_v1_to_h_post);
+    device_free(d_v1_to_h_weight);
+    device_free(d_ctx_to_pred_row_ptr); device_free(d_ctx_to_pred_post);
+    device_free(d_ctx_to_pred_weight);
+    device_free(d_fb_direct_row_ptr); device_free(d_fb_direct_post);
+    device_free(d_fb_direct_weight);
+    device_free(d_fb_som_row_ptr); device_free(d_fb_som_post);
+    device_free(d_fb_som_weight);
+    device_free(d_v1_som_to_e_row_ptr); device_free(d_v1_som_to_e_post);
+    device_free(d_v1_som_to_e_weight);
+
+    return result;
+}
+
+FrozenRichterSeededSourceBatchResult run_frozen_richter_seeded_source_cuda_batched(
+    const std::string& stim_bank_name,
+    const std::vector<std::int32_t>& stim_pre,
+    const std::vector<std::int32_t>& stim_post,
+    const std::vector<double>& stim_weight,
+    double stim_drive_amp,
+    const std::vector<std::int32_t>& stim_channel,
+    const std::string& v1_to_h_bank_name,
+    const std::vector<std::int32_t>& v1_to_h_pre,
+    const std::vector<std::int32_t>& v1_to_h_post,
+    const std::vector<double>& v1_to_h_weight,
+    double v1_to_h_drive_amp,
+    const std::string& ctx_to_pred_bank_name,
+    const std::vector<std::int32_t>& ctx_to_pred_pre,
+    const std::vector<std::int32_t>& ctx_to_pred_post,
+    const std::vector<double>& ctx_to_pred_weight,
+    double ctx_to_pred_drive_amp,
+    const std::string& feedback_direct_bank_name,
+    const std::vector<std::int32_t>& feedback_direct_pre,
+    const std::vector<std::int32_t>& feedback_direct_post,
+    const std::vector<double>& feedback_direct_weight,
+    double feedback_direct_drive_amp,
+    const std::string& feedback_som_bank_name,
+    const std::vector<std::int32_t>& feedback_som_pre,
+    const std::vector<std::int32_t>& feedback_som_post,
+    const std::vector<double>& feedback_som_weight,
+    double feedback_som_drive_amp,
+    const std::vector<std::int64_t>& seeds,
+    const std::vector<std::int32_t>& expected_channels,
+    const std::vector<std::int32_t>& unexpected_channels,
+    double grating_rate_hz,
+    double baseline_rate_hz,
+    std::int32_t n_steps,
+    std::int32_t leader_start_step,
+    std::int32_t leader_end_step,
+    std::int32_t preprobe_start_step,
+    std::int32_t preprobe_end_step,
+    std::int32_t trailer_start_step,
+    std::int32_t trailer_end_step,
+    std::int32_t iti_start_step,
+    std::int32_t iti_end_step,
+    const std::string& feedback_replay_mode,
+    double feedback_replay_target_per_bin,
+    const std::string& feedback_replay_fallback_mode,
+    const std::vector<std::int32_t>& feedback_replay_leader_templates,
+    double v1_som_to_e_scale,
+    double v1_som_divisive_scale,
+    double v1_direct_divisive_scale,
+    double v1_feedforward_divisive_scale,
+    std::int32_t v1_feedforward_divisive_gate_source_id,
+    std::int32_t v1_direct_divisive_gate_source_id,
+    double v1_predicted_suppression_scale,
+    double v1_predicted_suppression_neighbor_weight,
+    std::int32_t v1_predicted_suppression_locus_id,
+    double v1_stim_sigma_deg
+) {
+    if (n_steps <= 0 || iti_end_step != n_steps
+        || leader_start_step < 0
+        || leader_start_step >= leader_end_step
+        || leader_end_step > preprobe_start_step
+        || preprobe_start_step >= preprobe_end_step
+        || preprobe_end_step > trailer_start_step
+        || trailer_start_step >= trailer_end_step
+        || trailer_end_step > iti_start_step
+        || iti_start_step >= iti_end_step) {
+        throw std::runtime_error(
+            "batched seeded source test requires ordered [start,end) Richter phases"
+        );
+    }
+    if (grating_rate_hz < 0.0 || baseline_rate_hz < 0.0) {
+        throw std::runtime_error("batched seeded source rates must be nonnegative");
+    }
+    if (v1_stim_sigma_deg <= 0.0) {
+        throw std::runtime_error("V1 stimulus sigma must be positive");
+    }
+    if (v1_som_to_e_scale < 0.0) {
+        throw std::runtime_error("V1 SOM->E scale must be nonnegative");
+    }
+    if (v1_som_divisive_scale < 0.0) {
+        throw std::runtime_error("V1 SOM divisive scale must be nonnegative");
+    }
+    if (v1_direct_divisive_scale < 0.0) {
+        throw std::runtime_error("V1 direct divisive scale must be nonnegative");
+    }
+    if (v1_feedforward_divisive_scale < 0.0) {
+        throw std::runtime_error(
+            "V1 feedforward divisive scale must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_scale < 0.0) {
+        throw std::runtime_error(
+            "V1 predicted suppression scale must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_neighbor_weight < 0.0) {
+        throw std::runtime_error(
+            "V1 predicted suppression neighbor weight must be nonnegative"
+        );
+    }
+    if (v1_predicted_suppression_locus_id
+            != V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE
+        && v1_predicted_suppression_locus_id
+            != V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE) {
+        throw std::runtime_error("V1 predicted suppression locus is invalid");
+    }
+    if (v1_feedforward_divisive_gate_source_id
+            != V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM
+        && v1_feedforward_divisive_gate_source_id
+            != V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+        throw std::runtime_error("V1 feedforward divisive gate source is invalid");
+    }
+    if (v1_direct_divisive_gate_source_id
+            != V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM
+        && v1_direct_divisive_gate_source_id
+            != V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK) {
+        throw std::runtime_error("V1 direct divisive gate source is invalid");
+    }
+    const double v1_som_to_e_drive_amp =
+        V1_SOM_TO_E_DRIVE_AMP_PA * v1_som_to_e_scale;
+    const bool normalized_feedback_replay =
+        feedback_replay_mode == "normalized";
+    if (!normalized_feedback_replay && feedback_replay_mode != "raw") {
+        throw std::runtime_error(
+            "feedback replay mode must be raw or normalized"
+        );
+    }
+    if (feedback_replay_target_per_bin < 0.0) {
+        throw std::runtime_error(
+            "feedback replay target per bin must be nonnegative"
+        );
+    }
+    const int feedback_replay_fallback_id =
+        feedback_replay_fallback_mode_id(feedback_replay_fallback_mode);
+    if (!normalized_feedback_replay && feedback_replay_fallback_id != 0) {
+        throw std::runtime_error(
+            "feedback replay fallback requires normalized replay mode"
+        );
+    }
+    validate_feedback_replay_leader_templates(
+        feedback_replay_leader_templates
+    );
+    const int trailer_steps = trailer_end_step - trailer_start_step;
+    if (trailer_steps <= 0 || (trailer_steps % V1_TRAILER_BIN_COUNT) != 0) {
+        throw std::runtime_error(
+            "batched seeded source trailer window must split evenly into 5 bins"
+        );
+    }
+    const int trailer_bin_steps = trailer_steps / V1_TRAILER_BIN_COUNT;
+    const int preprobe_steps = preprobe_end_step - preprobe_start_step;
+    if (preprobe_steps != trailer_bin_steps) {
+        throw std::runtime_error(
+            "batched seeded source H_pred feedback replay requires preprobe window to match trailer bin"
+        );
+    }
+    if (seeds.empty()
+        || seeds.size() != expected_channels.size()
+        || seeds.size() != unexpected_channels.size()) {
+        throw std::runtime_error("batched seeded source condition vector size mismatch");
+    }
+    const int n_conditions = static_cast<int>(seeds.size());
+
+    const CsrBank stim_bank = build_csr_bank(
+        stim_bank_name, stim_pre, stim_post, stim_weight
+    );
+    const CsrBank v1_to_h_bank = build_csr_bank(
+        v1_to_h_bank_name, v1_to_h_pre, v1_to_h_post, v1_to_h_weight
+    );
+    const CsrBank ctx_to_pred_bank = build_csr_bank(
+        ctx_to_pred_bank_name, ctx_to_pred_pre, ctx_to_pred_post,
+        ctx_to_pred_weight
+    );
+    const CsrBank fb_direct_bank = build_csr_bank(
+        feedback_direct_bank_name, feedback_direct_pre, feedback_direct_post,
+        feedback_direct_weight
+    );
+    const CsrBank fb_som_bank = build_csr_bank(
+        feedback_som_bank_name, feedback_som_pre, feedback_som_post,
+        feedback_som_weight
+    );
+    const CsrBank v1_som_to_e_bank = build_fixed_v1_som_to_e_bank();
+    if (stim_bank.n_target != V1_E_N
+        || v1_to_h_bank.n_target != H_E_N
+        || ctx_to_pred_bank.n_target != H_E_N
+        || fb_direct_bank.n_target != V1_E_N
+        || fb_som_bank.n_target != V1_SOM_N
+        || v1_som_to_e_bank.n_target != V1_E_N) {
+        throw std::runtime_error("batched seeded source target size mismatch");
+    }
+    if (static_cast<int>(stim_channel.size()) != stim_bank.n_pre) {
+        throw std::runtime_error("batched seeded source stim_channel size mismatch");
+    }
+    const int n_channels =
+        static_cast<int>(*std::max_element(stim_channel.begin(), stim_channel.end())) + 1;
+    for (int condition = 0; condition < n_conditions; ++condition) {
+        if (expected_channels[static_cast<std::size_t>(condition)] < 0
+            || expected_channels[static_cast<std::size_t>(condition)] >= n_channels
+            || unexpected_channels[static_cast<std::size_t>(condition)] < 0
+            || unexpected_channels[static_cast<std::size_t>(condition)] >= n_channels) {
+            throw std::runtime_error("batched seeded source channel index out of range");
+        }
+    }
+
+    std::map<std::string, std::vector<double>> base_v1;
+    std::map<std::string, std::vector<double>> base_som;
+    std::map<std::string, std::vector<double>> base_hctx;
+    std::map<std::string, std::vector<double>> base_hpred;
+    std::vector<std::int32_t> dummy_spikes;
+    init_v1e_feedback_state(base_v1, dummy_spikes);
+    init_v1som_feedback_state(base_som);
+    init_he_quiet_state(base_hctx, dummy_spikes);
+    init_he_quiet_state(base_hpred, dummy_spikes);
+
+    std::vector<double> h_v1_v = repeat_vector(base_v1["V_soma_mV"], n_conditions);
+    std::vector<double> h_v1_vap = repeat_vector(base_v1["V_ap_mV"], n_conditions);
+    std::vector<double> h_v1_ie = repeat_vector(base_v1["I_e_pA"], n_conditions);
+    std::vector<double> h_v1_ii = repeat_vector(base_v1["I_i_pA"], n_conditions);
+    std::vector<double> h_v1_iape = repeat_vector(base_v1["I_ap_e_pA"], n_conditions);
+    std::vector<double> h_v1_w = repeat_vector(base_v1["w_adapt_pA"], n_conditions);
+    std::vector<double> h_v1_ibias = repeat_vector(base_v1["I_bias_pA"], n_conditions);
+    std::vector<double> h_v1_refrac = repeat_vector(base_v1["refrac_until_ms"], n_conditions);
+    std::vector<double> h_som_v = repeat_vector(base_som["V_mV"], n_conditions);
+    std::vector<double> h_som_ie = repeat_vector(base_som["I_e_pA"], n_conditions);
+    std::vector<double> h_som_ii = repeat_vector(base_som["I_i_pA"], n_conditions);
+    std::vector<double> h_som_ibias = repeat_vector(base_som["I_bias_pA"], n_conditions);
+    std::vector<double> h_som_refrac = repeat_vector(base_som["refrac_until_ms"], n_conditions);
+    std::vector<double> h_hctx_v = repeat_vector(base_hctx["V_mV"], n_conditions);
+    std::vector<double> h_hctx_ie = repeat_vector(base_hctx["I_e_pA"], n_conditions);
+    std::vector<double> h_hctx_ii = repeat_vector(base_hctx["I_i_pA"], n_conditions);
+    std::vector<double> h_hctx_g = repeat_vector(base_hctx["g_nmda_h_nS"], n_conditions);
+    std::vector<double> h_hctx_ibias = repeat_vector(base_hctx["I_bias_pA"], n_conditions);
+    std::vector<double> h_hctx_refrac = repeat_vector(base_hctx["refrac_until_ms"], n_conditions);
+    std::vector<double> h_hpred_v = repeat_vector(base_hpred["V_mV"], n_conditions);
+    std::vector<double> h_hpred_ie = repeat_vector(base_hpred["I_e_pA"], n_conditions);
+    std::vector<double> h_hpred_ii = repeat_vector(base_hpred["I_i_pA"], n_conditions);
+    std::vector<double> h_hpred_g = repeat_vector(base_hpred["g_nmda_h_nS"], n_conditions);
+    std::vector<double> h_hpred_ibias = repeat_vector(base_hpred["I_bias_pA"], n_conditions);
+    std::vector<double> h_hpred_refrac = repeat_vector(base_hpred["refrac_until_ms"], n_conditions);
+
+    std::vector<std::int32_t> h_v1_leader_total(n_conditions, 0);
+    std::vector<std::int32_t> h_v1_preprobe_total(n_conditions, 0);
+    std::vector<std::int32_t> h_v1_trailer_total(n_conditions, 0);
+    std::vector<std::int32_t> h_v1_trailer_channel_counts(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0
+    );
+    std::vector<std::int32_t> h_v1_trailer_bin_channel_counts(
+        static_cast<std::size_t>(n_conditions)
+            * V1_TRAILER_BIN_COUNT * V1_N_CHANNELS,
+        0
+    );
+    std::vector<std::int32_t> h_som_trailer_total(n_conditions, 0);
+    std::vector<std::int32_t> h_som_trailer_channel_counts(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0
+    );
+    std::vector<std::int32_t> h_som_trailer_bin_channel_counts(
+        static_cast<std::size_t>(n_conditions)
+            * V1_TRAILER_BIN_COUNT * V1_N_CHANNELS,
+        0
+    );
+    std::vector<double> h_v1e_q_active_fC_by_phase(
+        static_cast<std::size_t>(n_conditions) * 3,
+        0.0
+    );
+    std::vector<double> h_v1som_q_active_fC_by_phase(
+        static_cast<std::size_t>(n_conditions) * 3,
+        0.0
+    );
+    std::vector<std::int32_t> h_hctx_leader_total(n_conditions, 0);
+    std::vector<std::int32_t> h_hctx_preprobe_total(n_conditions, 0);
+    std::vector<std::int32_t> h_hctx_trailer_total(n_conditions, 0);
+    std::vector<std::int32_t> h_hpred_leader_total(n_conditions, 0);
+    std::vector<std::int32_t> h_hpred_preprobe_total(n_conditions, 0);
+    std::vector<std::int32_t> h_hpred_preprobe_channel_counts(
+        static_cast<std::size_t>(n_conditions) * H_N_CHANNELS,
+        0
+    );
+    std::vector<std::int32_t> h_hpred_trailer_total(n_conditions, 0);
+    std::vector<std::int32_t> h_hpred_trailer_bin_total(
+        static_cast<std::size_t>(n_conditions) * V1_TRAILER_BIN_COUNT,
+        0
+    );
+    std::vector<std::int32_t> h_hpred_trailer_bin_channel_counts(
+        static_cast<std::size_t>(n_conditions)
+            * V1_TRAILER_BIN_COUNT * H_N_CHANNELS,
+        0
+    );
+    std::vector<std::int32_t> h_hpred_feedback_replay_flags(
+        static_cast<std::size_t>(preprobe_steps)
+            * static_cast<std::size_t>(n_conditions) * H_E_N,
+        0
+    );
+    std::vector<std::int32_t> h_hpred_feedback_held_trailer_bin_total(
+        static_cast<std::size_t>(n_conditions) * V1_TRAILER_BIN_COUNT,
+        0
+    );
+    std::vector<std::int32_t> h_hpred_feedback_held_trailer_bin_channel_counts(
+        static_cast<std::size_t>(n_conditions)
+            * V1_TRAILER_BIN_COUNT * H_N_CHANNELS,
+        0
+    );
+    std::vector<double> h_hpred_feedback_normalized_weights(
+        static_cast<std::size_t>(n_conditions) * H_E_N,
+        0.0
+    );
+    std::vector<double> h_hpred_feedback_normalized_trailer_bin_total_weights(
+        static_cast<std::size_t>(n_conditions) * V1_TRAILER_BIN_COUNT,
+        0.0
+    );
+    std::vector<double> h_hpred_feedback_normalized_trailer_bin_channel_weights(
+        static_cast<std::size_t>(n_conditions)
+            * V1_TRAILER_BIN_COUNT * H_N_CHANNELS,
+        0.0
+    );
+    std::vector<std::int32_t> h_hpred_feedback_normalized_preprobe_zero(
+        n_conditions, 0
+    );
+    std::vector<std::int32_t> h_hpred_feedback_normalized_fallback_used(
+        n_conditions, 0
+    );
+    std::vector<std::int32_t>
+        h_hpred_feedback_normalized_fallback_zero_template(
+            n_conditions, 0
+        );
+    std::vector<double> h_v1_predicted_suppression_signal_sum(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0.0
+    );
+    std::vector<double> h_v1_predicted_suppression_gain_sum(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0.0
+    );
+    std::vector<double> h_v1_predicted_suppression_raw_ie_before_sum(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0.0
+    );
+    std::vector<double> h_v1_predicted_suppression_raw_ie_after_sum(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0.0
+    );
+    std::vector<double> h_v1_predicted_suppression_raw_ie_delta_sum(
+        static_cast<std::size_t>(n_conditions) * V1_N_CHANNELS,
+        0.0
+    );
+    std::vector<std::int32_t> h_feedback_replay_leader_templates =
+        feedback_replay_leader_templates;
+    if (h_feedback_replay_leader_templates.empty()) {
+        h_feedback_replay_leader_templates.assign(
+            H_N_CHANNELS * H_N_CHANNELS, 0
+        );
+    }
+    const std::vector<std::int32_t>
+        h_hpred_feedback_normalized_leader_template_total_counts =
+            feedback_replay_leader_template_totals(
+                h_feedback_replay_leader_templates
+            );
+    std::vector<std::int32_t> h_source_total(n_conditions, 0);
+    std::vector<std::int32_t> h_v1_flags(
+        static_cast<std::size_t>(n_conditions) * V1_E_N, 0
+    );
+    std::vector<std::int32_t> h_som_flags(
+        static_cast<std::size_t>(n_conditions) * V1_SOM_N, 0
+    );
+    std::vector<std::int32_t> h_hctx_flags(
+        static_cast<std::size_t>(n_conditions) * H_E_N, 0
+    );
+    std::vector<std::int32_t> h_hpred_flags(
+        static_cast<std::size_t>(n_conditions) * H_E_N, 0
+    );
+
+    auto* d_v1_v = device_alloc_copy(h_v1_v);
+    auto* d_v1_vap = device_alloc_copy(h_v1_vap);
+    auto* d_v1_ie = device_alloc_copy(h_v1_ie);
+    auto* d_v1_ii = device_alloc_copy(h_v1_ii);
+    auto* d_v1_iape = device_alloc_copy(h_v1_iape);
+    auto* d_v1_w = device_alloc_copy(h_v1_w);
+    auto* d_v1_ibias = device_alloc_copy(h_v1_ibias);
+    auto* d_v1_refrac = device_alloc_copy(h_v1_refrac);
+    auto* d_som_v = device_alloc_copy(h_som_v);
+    auto* d_som_ie = device_alloc_copy(h_som_ie);
+    auto* d_som_ii = device_alloc_copy(h_som_ii);
+    auto* d_som_ibias = device_alloc_copy(h_som_ibias);
+    auto* d_som_refrac = device_alloc_copy(h_som_refrac);
+    auto* d_som_flags = device_alloc_copy(h_som_flags);
+    auto* d_hctx_v = device_alloc_copy(h_hctx_v);
+    auto* d_hctx_ie = device_alloc_copy(h_hctx_ie);
+    auto* d_hctx_ii = device_alloc_copy(h_hctx_ii);
+    auto* d_hctx_g = device_alloc_copy(h_hctx_g);
+    auto* d_hctx_ibias = device_alloc_copy(h_hctx_ibias);
+    auto* d_hctx_refrac = device_alloc_copy(h_hctx_refrac);
+    auto* d_hpred_v = device_alloc_copy(h_hpred_v);
+    auto* d_hpred_ie = device_alloc_copy(h_hpred_ie);
+    auto* d_hpred_ii = device_alloc_copy(h_hpred_ii);
+    auto* d_hpred_g = device_alloc_copy(h_hpred_g);
+    auto* d_hpred_ibias = device_alloc_copy(h_hpred_ibias);
+    auto* d_hpred_refrac = device_alloc_copy(h_hpred_refrac);
+    auto* d_v1_leader_total = device_alloc_copy(h_v1_leader_total);
+    auto* d_v1_preprobe_total = device_alloc_copy(h_v1_preprobe_total);
+    auto* d_v1_trailer_total = device_alloc_copy(h_v1_trailer_total);
+    auto* d_v1_trailer_channel_counts =
+        device_alloc_copy(h_v1_trailer_channel_counts);
+    auto* d_v1_trailer_bin_channel_counts =
+        device_alloc_copy(h_v1_trailer_bin_channel_counts);
+    auto* d_som_trailer_total = device_alloc_copy(h_som_trailer_total);
+    auto* d_som_trailer_channel_counts =
+        device_alloc_copy(h_som_trailer_channel_counts);
+    auto* d_som_trailer_bin_channel_counts =
+        device_alloc_copy(h_som_trailer_bin_channel_counts);
+    auto* d_v1e_q_active_fC_by_phase =
+        device_alloc_copy(h_v1e_q_active_fC_by_phase);
+    auto* d_v1som_q_active_fC_by_phase =
+        device_alloc_copy(h_v1som_q_active_fC_by_phase);
+    auto* d_hctx_leader_total = device_alloc_copy(h_hctx_leader_total);
+    auto* d_hctx_preprobe_total = device_alloc_copy(h_hctx_preprobe_total);
+    auto* d_hctx_trailer_total = device_alloc_copy(h_hctx_trailer_total);
+    auto* d_hpred_leader_total = device_alloc_copy(h_hpred_leader_total);
+    auto* d_hpred_preprobe_total = device_alloc_copy(h_hpred_preprobe_total);
+    auto* d_hpred_preprobe_channel_counts =
+        device_alloc_copy(h_hpred_preprobe_channel_counts);
+    auto* d_hpred_trailer_total = device_alloc_copy(h_hpred_trailer_total);
+    auto* d_hpred_trailer_bin_total =
+        device_alloc_copy(h_hpred_trailer_bin_total);
+    auto* d_hpred_trailer_bin_channel_counts =
+        device_alloc_copy(h_hpred_trailer_bin_channel_counts);
+    auto* d_hpred_feedback_replay_flags =
+        device_alloc_copy(h_hpred_feedback_replay_flags);
+    auto* d_hpred_feedback_held_trailer_bin_total =
+        device_alloc_copy(h_hpred_feedback_held_trailer_bin_total);
+    auto* d_hpred_feedback_held_trailer_bin_channel_counts =
+        device_alloc_copy(h_hpred_feedback_held_trailer_bin_channel_counts);
+    auto* d_hpred_feedback_normalized_weights =
+        device_alloc_copy(h_hpred_feedback_normalized_weights);
+    auto* d_hpred_feedback_normalized_trailer_bin_total_weights =
+        device_alloc_copy(
+            h_hpred_feedback_normalized_trailer_bin_total_weights
+        );
+    auto* d_hpred_feedback_normalized_trailer_bin_channel_weights =
+        device_alloc_copy(
+            h_hpred_feedback_normalized_trailer_bin_channel_weights
+        );
+    auto* d_hpred_feedback_normalized_preprobe_zero =
+        device_alloc_copy(h_hpred_feedback_normalized_preprobe_zero);
+    auto* d_hpred_feedback_normalized_fallback_used =
+        device_alloc_copy(h_hpred_feedback_normalized_fallback_used);
+    auto* d_hpred_feedback_normalized_fallback_zero_template =
+        device_alloc_copy(
+            h_hpred_feedback_normalized_fallback_zero_template
+        );
+    auto* d_v1_predicted_suppression_signal_sum =
+        device_alloc_copy(h_v1_predicted_suppression_signal_sum);
+    auto* d_v1_predicted_suppression_gain_sum =
+        device_alloc_copy(h_v1_predicted_suppression_gain_sum);
+    auto* d_v1_predicted_suppression_raw_ie_before_sum =
+        device_alloc_copy(h_v1_predicted_suppression_raw_ie_before_sum);
+    auto* d_v1_predicted_suppression_raw_ie_after_sum =
+        device_alloc_copy(h_v1_predicted_suppression_raw_ie_after_sum);
+    auto* d_v1_predicted_suppression_raw_ie_delta_sum =
+        device_alloc_copy(h_v1_predicted_suppression_raw_ie_delta_sum);
+    auto* d_feedback_replay_leader_templates =
+        device_alloc_copy(h_feedback_replay_leader_templates);
+    auto* d_source_total = device_alloc_copy(h_source_total);
+    auto* d_v1_flags = device_alloc_copy(h_v1_flags);
+    auto* d_hctx_flags = device_alloc_copy(h_hctx_flags);
+    auto* d_hpred_flags = device_alloc_copy(h_hpred_flags);
+    auto* d_seeds = device_alloc_copy(seeds);
+    auto* d_expected_channels = device_alloc_copy(expected_channels);
+    auto* d_unexpected_channels = device_alloc_copy(unexpected_channels);
+    auto* d_stim_channel = device_alloc_copy(stim_channel);
+    auto* d_stim_row_ptr = device_alloc_copy(stim_bank.row_ptr);
+    auto* d_stim_post = device_alloc_copy(stim_bank.post);
+    auto* d_stim_weight = device_alloc_copy(stim_bank.weight);
+    auto* d_v1_to_h_row_ptr = device_alloc_copy(v1_to_h_bank.row_ptr);
+    auto* d_v1_to_h_post = device_alloc_copy(v1_to_h_bank.post);
+    auto* d_v1_to_h_weight = device_alloc_copy(v1_to_h_bank.weight);
+    auto* d_ctx_to_pred_row_ptr = device_alloc_copy(ctx_to_pred_bank.row_ptr);
+    auto* d_ctx_to_pred_post = device_alloc_copy(ctx_to_pred_bank.post);
+    auto* d_ctx_to_pred_weight = device_alloc_copy(ctx_to_pred_bank.weight);
+    auto* d_fb_direct_row_ptr = device_alloc_copy(fb_direct_bank.row_ptr);
+    auto* d_fb_direct_post = device_alloc_copy(fb_direct_bank.post);
+    auto* d_fb_direct_weight = device_alloc_copy(fb_direct_bank.weight);
+    auto* d_fb_som_row_ptr = device_alloc_copy(fb_som_bank.row_ptr);
+    auto* d_fb_som_post = device_alloc_copy(fb_som_bank.post);
+    auto* d_fb_som_weight = device_alloc_copy(fb_som_bank.weight);
+    auto* d_v1_som_to_e_row_ptr = device_alloc_copy(v1_som_to_e_bank.row_ptr);
+    auto* d_v1_som_to_e_post = device_alloc_copy(v1_som_to_e_bank.post);
+    auto* d_v1_som_to_e_weight = device_alloc_copy(v1_som_to_e_bank.weight);
+
+    const int v1_blocks = (n_conditions * V1_E_N + 255) / 256;
+    const int som_blocks = (n_conditions * V1_SOM_N + 255) / 256;
+    const int he_blocks = (n_conditions * H_E_N + 255) / 256;
+    const int stim_blocks = (n_conditions * stim_bank.n_pre + 255) / 256;
+    const int v1_to_h_blocks = (n_conditions * v1_to_h_bank.n_pre + 255) / 256;
+    const int ctx_to_pred_blocks =
+        (n_conditions * ctx_to_pred_bank.n_pre + 255) / 256;
+    const int fb_direct_blocks =
+        (n_conditions * fb_direct_bank.n_pre + 255) / 256;
+    const int fb_som_blocks = (n_conditions * fb_som_bank.n_pre + 255) / 256;
+    const int som_to_e_blocks =
+        (n_conditions * v1_som_to_e_bank.n_pre + 255) / 256;
+
+    for (int step = 0; step < n_steps; ++step) {
+        const bool in_trailer_phase =
+            step >= trailer_start_step && step < trailer_end_step;
+        int trailer_bin = -1;
+        const std::int32_t* d_feedback_flags = d_hpred_flags;
+        if (in_trailer_phase) {
+            const int replay_step =
+                (step - trailer_start_step) % preprobe_steps;
+            trailer_bin = (step - trailer_start_step) / trailer_bin_steps;
+            d_feedback_flags =
+                d_hpred_feedback_replay_flags
+                + static_cast<std::size_t>(replay_step) * n_conditions * H_E_N;
+        }
+        const std::int32_t* d_feedforward_gate_flags =
+            (v1_feedforward_divisive_gate_source_id
+                    == V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_FEEDBACK
+                && in_trailer_phase)
+            ? d_feedback_flags
+            : nullptr;
+        const std::int32_t* d_direct_gate_flags =
+            (v1_direct_divisive_gate_source_id
+                    == V1_DIRECT_DIVISIVE_GATE_SOURCE_FEEDBACK
+                && in_trailer_phase)
+            ? d_feedback_flags
+            : nullptr;
+        const std::int32_t* d_predicted_suppression_flags =
+            (v1_predicted_suppression_scale > 0.0 && in_trailer_phase)
+            ? d_feedback_flags
+            : nullptr;
+        if (d_predicted_suppression_flags != nullptr
+            && v1_predicted_suppression_locus_id
+                == V1_PREDICTED_SUPPRESSION_LOCUS_RAW_IE) {
+            const int predicted_blocks = (n_conditions * V1_N_CHANNELS + 255) / 256;
+            v1e_predicted_raw_ie_suppression_kernel<<<predicted_blocks, 256>>>(
+                n_conditions, d_v1_ie, d_predicted_suppression_flags,
+                v1_predicted_suppression_scale,
+                v1_predicted_suppression_neighbor_weight,
+                d_v1_predicted_suppression_signal_sum,
+                d_v1_predicted_suppression_gain_sum,
+                d_v1_predicted_suppression_raw_ie_before_sum,
+                d_v1_predicted_suppression_raw_ie_after_sum,
+                d_v1_predicted_suppression_raw_ie_delta_sum
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "batched seeded source V1_E predicted raw-I_e suppression launch"
+            );
+        }
+        v1som_q_active_phase_batch_kernel<<<som_blocks, 256>>>(
+            n_conditions, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, d_som_ie, d_som_ii,
+            d_v1som_q_active_fC_by_phase
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source SOM Q_active launch");
+        v1som_step_batch_kernel<<<som_blocks, 256>>>(
+            n_conditions, step, trailer_start_step, trailer_end_step, d_som_v,
+            d_som_ie, d_som_ii, d_som_ibias, d_som_refrac,
+            d_som_trailer_total, d_som_trailer_channel_counts,
+            trailer_bin_steps, d_som_trailer_bin_channel_counts, d_som_flags
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source SOM step launch");
+        csr_scatter_spike_flags_batch_kernel<<<som_to_e_blocks, 256>>>(
+            n_conditions, v1_som_to_e_bank.n_pre, d_som_flags,
+            d_v1_som_to_e_row_ptr, d_v1_som_to_e_post, d_v1_som_to_e_weight,
+            v1_som_to_e_drive_amp, V1_E_N, d_v1_ii
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source SOM->V1_E scatter launch");
+        v1e_q_active_phase_batch_kernel<<<v1_blocks, 256>>>(
+            n_conditions, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, d_v1_ie, d_v1_ii, d_v1_iape,
+            d_v1e_q_active_fC_by_phase
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source V1_E Q_active launch");
+        v1e_richter_count_total_batch_kernel<<<v1_blocks, 256>>>(
+            n_conditions, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, d_v1_v, d_v1_vap, d_v1_ie, d_v1_ii, d_v1_iape,
+            d_v1_w, d_v1_ibias, d_v1_refrac, d_v1_leader_total,
+            d_v1_preprobe_total, d_v1_trailer_total,
+            d_v1_trailer_channel_counts, trailer_bin_steps,
+            d_v1_trailer_bin_channel_counts, d_v1_flags, d_som_flags,
+            v1_som_divisive_scale, v1_direct_divisive_scale,
+            v1_feedforward_divisive_scale, d_feedforward_gate_flags,
+            v1_feedforward_divisive_gate_source_id, d_direct_gate_flags,
+            v1_direct_divisive_gate_source_id,
+            v1_predicted_suppression_scale,
+            v1_predicted_suppression_neighbor_weight,
+            v1_predicted_suppression_locus_id,
+            d_predicted_suppression_flags,
+            d_v1_predicted_suppression_signal_sum,
+            d_v1_predicted_suppression_gain_sum
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source V1 step launch");
+        he_richter_count_total_batch_kernel<<<he_blocks, 256>>>(
+            n_conditions, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, d_hctx_v, d_hctx_ie, d_hctx_ii, d_hctx_g,
+            d_hctx_ibias, d_hctx_refrac, d_hctx_leader_total,
+            d_hctx_preprobe_total, nullptr, d_hctx_trailer_total,
+            trailer_bin_steps, nullptr, nullptr, d_hctx_flags
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source H_ctx step launch");
+        he_richter_count_total_batch_kernel<<<he_blocks, 256>>>(
+            n_conditions, step, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, d_hpred_v, d_hpred_ie, d_hpred_ii, d_hpred_g,
+            d_hpred_ibias, d_hpred_refrac, d_hpred_leader_total,
+            d_hpred_preprobe_total, d_hpred_preprobe_channel_counts,
+            d_hpred_trailer_total, trailer_bin_steps, d_hpred_trailer_bin_total,
+            d_hpred_trailer_bin_channel_counts, d_hpred_flags
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source H_pred step launch");
+        const bool in_preprobe_phase =
+            step >= preprobe_start_step && step < preprobe_end_step;
+        if (in_preprobe_phase) {
+            store_hpred_feedback_replay_flags_kernel<<<he_blocks, 256>>>(
+                n_conditions, step - preprobe_start_step, d_hpred_flags,
+                d_hpred_feedback_replay_flags
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "batched seeded source H_pred feedback replay store launch"
+            );
+        }
+        seeded_stim_source_scatter_batch_kernel<<<stim_blocks, 256>>>(
+            n_conditions, d_seeds, step, stim_bank.n_pre, d_stim_channel,
+            d_expected_channels, d_unexpected_channels, grating_rate_hz,
+            baseline_rate_hz, v1_stim_sigma_deg, leader_start_step, leader_end_step,
+            preprobe_start_step, preprobe_end_step, trailer_start_step,
+            trailer_end_step, d_stim_row_ptr, d_stim_post, d_stim_weight,
+            stim_drive_amp, d_v1_ie, d_source_total
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source stimulus scatter launch");
+        csr_scatter_spike_flags_batch_kernel<<<v1_to_h_blocks, 256>>>(
+            n_conditions, v1_to_h_bank.n_pre, d_v1_flags, d_v1_to_h_row_ptr,
+            d_v1_to_h_post, d_v1_to_h_weight, v1_to_h_drive_amp, H_E_N,
+            d_hctx_ie
+        );
+        check_cuda(cudaGetLastError(), "batched seeded source V1->H scatter launch");
+        if (in_trailer_phase) {
+            count_hpred_feedback_replay_flags_kernel<<<he_blocks, 256>>>(
+                n_conditions, trailer_bin, d_feedback_flags,
+                d_hpred_feedback_held_trailer_bin_total,
+                d_hpred_feedback_held_trailer_bin_channel_counts
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "batched seeded source H_pred feedback replay count launch"
+            );
+            if (normalized_feedback_replay && step == trailer_start_step) {
+                build_hpred_normalized_feedback_weights_kernel<<<he_blocks, 256>>>(
+                    n_conditions, preprobe_steps, feedback_replay_target_per_bin,
+                    d_hpred_preprobe_channel_counts,
+                    d_expected_channels,
+                    d_feedback_replay_leader_templates,
+                    feedback_replay_fallback_id,
+                    d_hpred_feedback_normalized_preprobe_zero,
+                    d_hpred_feedback_normalized_fallback_used,
+                    d_hpred_feedback_normalized_fallback_zero_template,
+                    d_hpred_feedback_normalized_weights,
+                    d_hpred_feedback_normalized_trailer_bin_total_weights,
+                    d_hpred_feedback_normalized_trailer_bin_channel_weights
+                );
+                check_cuda(
+                    cudaGetLastError(),
+                    "batched seeded source normalized H_pred feedback build launch"
+                );
+            }
+        }
+        if (!in_trailer_phase) {
+            csr_scatter_spike_flags_batch_kernel<<<ctx_to_pred_blocks, 256>>>(
+                n_conditions, ctx_to_pred_bank.n_pre, d_hctx_flags,
+                d_ctx_to_pred_row_ptr, d_ctx_to_pred_post, d_ctx_to_pred_weight,
+                ctx_to_pred_drive_amp, H_E_N, d_hpred_ie
+            );
+            check_cuda(cudaGetLastError(), "batched seeded source ctx->pred scatter launch");
+        }
+        if (in_trailer_phase && normalized_feedback_replay) {
+            csr_scatter_pre_weights_batch_kernel<<<fb_direct_blocks, 256>>>(
+                n_conditions, fb_direct_bank.n_pre,
+                d_hpred_feedback_normalized_weights, d_fb_direct_row_ptr,
+                d_fb_direct_post, d_fb_direct_weight, feedback_direct_drive_amp,
+                V1_E_N, d_v1_iape
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "batched seeded source normalized feedback direct scatter launch"
+            );
+            csr_scatter_pre_weights_batch_kernel<<<fb_som_blocks, 256>>>(
+                n_conditions, fb_som_bank.n_pre,
+                d_hpred_feedback_normalized_weights, d_fb_som_row_ptr,
+                d_fb_som_post, d_fb_som_weight, feedback_som_drive_amp,
+                V1_SOM_N, d_som_ie
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "batched seeded source normalized feedback SOM scatter launch"
+            );
+        } else {
+            csr_scatter_spike_flags_batch_kernel<<<fb_direct_blocks, 256>>>(
+                n_conditions, fb_direct_bank.n_pre, d_feedback_flags,
+                d_fb_direct_row_ptr, d_fb_direct_post, d_fb_direct_weight,
+                feedback_direct_drive_amp, V1_E_N, d_v1_iape
+            );
+            check_cuda(
+                cudaGetLastError(),
+                "batched seeded source feedback direct scatter launch"
+            );
+            csr_scatter_spike_flags_batch_kernel<<<fb_som_blocks, 256>>>(
+                n_conditions, fb_som_bank.n_pre, d_feedback_flags,
+                d_fb_som_row_ptr, d_fb_som_post, d_fb_som_weight,
+                feedback_som_drive_amp, V1_SOM_N, d_som_ie
+            );
+            check_cuda(cudaGetLastError(), "batched seeded source feedback SOM scatter launch");
+        }
+    }
+    check_cuda(cudaDeviceSynchronize(), "batched seeded source final sync");
+
+    copy_device_to_host(d_v1_leader_total, h_v1_leader_total);
+    copy_device_to_host(d_v1_preprobe_total, h_v1_preprobe_total);
+    copy_device_to_host(d_v1_trailer_total, h_v1_trailer_total);
+    copy_device_to_host(d_v1_trailer_channel_counts, h_v1_trailer_channel_counts);
+    copy_device_to_host(
+        d_v1_trailer_bin_channel_counts,
+        h_v1_trailer_bin_channel_counts
+    );
+    copy_device_to_host(d_som_trailer_total, h_som_trailer_total);
+    copy_device_to_host(
+        d_som_trailer_channel_counts,
+        h_som_trailer_channel_counts
+    );
+    copy_device_to_host(
+        d_som_trailer_bin_channel_counts,
+        h_som_trailer_bin_channel_counts
+    );
+    copy_device_to_host(d_v1e_q_active_fC_by_phase, h_v1e_q_active_fC_by_phase);
+    copy_device_to_host(
+        d_v1som_q_active_fC_by_phase,
+        h_v1som_q_active_fC_by_phase
+    );
+    copy_device_to_host(d_hctx_preprobe_total, h_hctx_preprobe_total);
+    copy_device_to_host(d_hctx_trailer_total, h_hctx_trailer_total);
+    copy_device_to_host(d_hpred_preprobe_total, h_hpred_preprobe_total);
+    copy_device_to_host(
+        d_hpred_preprobe_channel_counts,
+        h_hpred_preprobe_channel_counts
+    );
+    copy_device_to_host(d_hpred_trailer_total, h_hpred_trailer_total);
+    copy_device_to_host(d_hpred_trailer_bin_total, h_hpred_trailer_bin_total);
+    copy_device_to_host(
+        d_hpred_trailer_bin_channel_counts,
+        h_hpred_trailer_bin_channel_counts
+    );
+    copy_device_to_host(
+        d_hpred_feedback_held_trailer_bin_total,
+        h_hpred_feedback_held_trailer_bin_total
+    );
+    copy_device_to_host(
+        d_hpred_feedback_held_trailer_bin_channel_counts,
+        h_hpred_feedback_held_trailer_bin_channel_counts
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_trailer_bin_total_weights,
+        h_hpred_feedback_normalized_trailer_bin_total_weights
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_trailer_bin_channel_weights,
+        h_hpred_feedback_normalized_trailer_bin_channel_weights
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_preprobe_zero,
+        h_hpred_feedback_normalized_preprobe_zero
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_fallback_used,
+        h_hpred_feedback_normalized_fallback_used
+    );
+    copy_device_to_host(
+        d_hpred_feedback_normalized_fallback_zero_template,
+        h_hpred_feedback_normalized_fallback_zero_template
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_signal_sum,
+        h_v1_predicted_suppression_signal_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_gain_sum,
+        h_v1_predicted_suppression_gain_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_raw_ie_before_sum,
+        h_v1_predicted_suppression_raw_ie_before_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_raw_ie_after_sum,
+        h_v1_predicted_suppression_raw_ie_after_sum
+    );
+    copy_device_to_host(
+        d_v1_predicted_suppression_raw_ie_delta_sum,
+        h_v1_predicted_suppression_raw_ie_delta_sum
+    );
+    copy_device_to_host(d_source_total, h_source_total);
+
+    device_free(d_v1_v); device_free(d_v1_vap); device_free(d_v1_ie);
+    device_free(d_v1_ii); device_free(d_v1_iape); device_free(d_v1_w);
+    device_free(d_v1_ibias); device_free(d_v1_refrac);
+    device_free(d_som_v); device_free(d_som_ie); device_free(d_som_ii);
+    device_free(d_som_ibias); device_free(d_som_refrac); device_free(d_som_flags);
+    device_free(d_hctx_v); device_free(d_hctx_ie); device_free(d_hctx_ii);
+    device_free(d_hctx_g); device_free(d_hctx_ibias);
+    device_free(d_hctx_refrac);
+    device_free(d_hpred_v); device_free(d_hpred_ie); device_free(d_hpred_ii);
+    device_free(d_hpred_g); device_free(d_hpred_ibias);
+    device_free(d_hpred_refrac);
+    device_free(d_v1_leader_total); device_free(d_v1_preprobe_total);
+    device_free(d_v1_trailer_total);
+    device_free(d_v1_trailer_channel_counts);
+    device_free(d_v1_trailer_bin_channel_counts);
+    device_free(d_som_trailer_total);
+    device_free(d_som_trailer_channel_counts);
+    device_free(d_som_trailer_bin_channel_counts);
+    device_free(d_v1e_q_active_fC_by_phase);
+    device_free(d_v1som_q_active_fC_by_phase);
+    device_free(d_hctx_leader_total); device_free(d_hctx_preprobe_total);
+    device_free(d_hctx_trailer_total);
+    device_free(d_hpred_leader_total); device_free(d_hpred_preprobe_total);
+    device_free(d_hpred_preprobe_channel_counts);
+    device_free(d_hpred_trailer_total);
+    device_free(d_hpred_trailer_bin_total);
+    device_free(d_hpred_trailer_bin_channel_counts);
+    device_free(d_hpred_feedback_replay_flags);
+    device_free(d_hpred_feedback_held_trailer_bin_total);
+    device_free(d_hpred_feedback_held_trailer_bin_channel_counts);
+    device_free(d_hpred_feedback_normalized_weights);
+    device_free(d_hpred_feedback_normalized_trailer_bin_total_weights);
+    device_free(d_hpred_feedback_normalized_trailer_bin_channel_weights);
+    device_free(d_hpred_feedback_normalized_preprobe_zero);
+    device_free(d_hpred_feedback_normalized_fallback_used);
+    device_free(d_hpred_feedback_normalized_fallback_zero_template);
+    device_free(d_v1_predicted_suppression_signal_sum);
+    device_free(d_v1_predicted_suppression_gain_sum);
+    device_free(d_v1_predicted_suppression_raw_ie_before_sum);
+    device_free(d_v1_predicted_suppression_raw_ie_after_sum);
+    device_free(d_v1_predicted_suppression_raw_ie_delta_sum);
+    device_free(d_feedback_replay_leader_templates);
+    device_free(d_source_total);
+    device_free(d_v1_flags); device_free(d_hctx_flags); device_free(d_hpred_flags);
+    device_free(d_seeds); device_free(d_expected_channels);
+    device_free(d_unexpected_channels); device_free(d_stim_channel);
+    device_free(d_stim_row_ptr); device_free(d_stim_post); device_free(d_stim_weight);
+    device_free(d_v1_to_h_row_ptr); device_free(d_v1_to_h_post);
+    device_free(d_v1_to_h_weight);
+    device_free(d_ctx_to_pred_row_ptr); device_free(d_ctx_to_pred_post);
+    device_free(d_ctx_to_pred_weight);
+    device_free(d_fb_direct_row_ptr); device_free(d_fb_direct_post);
+    device_free(d_fb_direct_weight);
+    device_free(d_fb_som_row_ptr); device_free(d_fb_som_post);
+    device_free(d_fb_som_weight);
+    device_free(d_v1_som_to_e_row_ptr); device_free(d_v1_som_to_e_post);
+    device_free(d_v1_som_to_e_weight);
+
+    FrozenRichterSeededSourceBatchResult result;
+    result.n_conditions = n_conditions;
+    result.v1_leader_total_counts = std::move(h_v1_leader_total);
+    result.v1_preprobe_total_counts = std::move(h_v1_preprobe_total);
+    result.v1_trailer_total_counts = std::move(h_v1_trailer_total);
+    result.v1_trailer_channel_counts = std::move(h_v1_trailer_channel_counts);
+    result.v1_trailer_bin_channel_counts = std::move(h_v1_trailer_bin_channel_counts);
+    result.v1_som_trailer_total_counts = std::move(h_som_trailer_total);
+    result.v1_som_trailer_channel_counts = std::move(h_som_trailer_channel_counts);
+    result.v1_som_trailer_bin_channel_counts =
+        std::move(h_som_trailer_bin_channel_counts);
+    result.v1e_q_active_fC_by_phase = std::move(h_v1e_q_active_fC_by_phase);
+    result.v1som_q_active_fC_by_phase = std::move(h_v1som_q_active_fC_by_phase);
+    result.hctx_preprobe_total_counts = std::move(h_hctx_preprobe_total);
+    result.hctx_trailer_total_counts = std::move(h_hctx_trailer_total);
+    result.hpred_preprobe_total_counts = std::move(h_hpred_preprobe_total);
+    result.hpred_preprobe_channel_counts =
+        std::move(h_hpred_preprobe_channel_counts);
+    result.hpred_trailer_total_counts = std::move(h_hpred_trailer_total);
+    result.hpred_trailer_bin_total_counts = std::move(h_hpred_trailer_bin_total);
+    result.hpred_trailer_bin_channel_counts =
+        std::move(h_hpred_trailer_bin_channel_counts);
+    result.hpred_feedback_held_trailer_bin_total_counts =
+        std::move(h_hpred_feedback_held_trailer_bin_total);
+    result.hpred_feedback_held_trailer_bin_channel_counts =
+        std::move(h_hpred_feedback_held_trailer_bin_channel_counts);
+    result.hpred_feedback_normalized_trailer_bin_total_weights =
+        std::move(h_hpred_feedback_normalized_trailer_bin_total_weights);
+    result.hpred_feedback_normalized_trailer_bin_channel_weights =
+        std::move(h_hpred_feedback_normalized_trailer_bin_channel_weights);
+    result.hpred_feedback_normalized_preprobe_zero =
+        std::move(h_hpred_feedback_normalized_preprobe_zero);
+    result.hpred_feedback_normalized_fallback_used =
+        std::move(h_hpred_feedback_normalized_fallback_used);
+    result.hpred_feedback_normalized_fallback_zero_template =
+        std::move(h_hpred_feedback_normalized_fallback_zero_template);
+    result.hpred_feedback_normalized_leader_template_total_counts =
+        h_hpred_feedback_normalized_leader_template_total_counts;
+    result.hpred_feedback_normalized_leader_template_channel_counts =
+        h_feedback_replay_leader_templates;
+    result.v1_predicted_suppression_trailer_channel_signal_sum =
+        std::move(h_v1_predicted_suppression_signal_sum);
+    result.v1_predicted_suppression_trailer_channel_gain_sum =
+        std::move(h_v1_predicted_suppression_gain_sum);
+    result.v1_predicted_suppression_trailer_raw_ie_before_sum =
+        std::move(h_v1_predicted_suppression_raw_ie_before_sum);
+    result.v1_predicted_suppression_trailer_raw_ie_after_sum =
+        std::move(h_v1_predicted_suppression_raw_ie_after_sum);
+    result.v1_predicted_suppression_trailer_raw_ie_delta_sum =
+        std::move(h_v1_predicted_suppression_raw_ie_delta_sum);
+    result.source_total_counts = std::move(h_source_total);
+    return result;
+}
+
+
 FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_test(
     const std::string& stim_bank_name,
     const std::vector<std::int32_t>& stim_pre,
@@ -6429,462 +10524,80 @@ FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_test(
     std::int32_t iti_start_step,
     std::int32_t iti_end_step
 ) {
-    if (n_steps <= 0 || iti_end_step != n_steps
-        || leader_start_step < 0
-        || leader_start_step >= leader_end_step
-        || leader_end_step > preprobe_start_step
-        || preprobe_start_step >= preprobe_end_step
-        || preprobe_end_step > trailer_start_step
-        || trailer_start_step >= trailer_end_step
-        || trailer_end_step > iti_start_step
-        || iti_start_step >= iti_end_step) {
-        throw std::runtime_error(
-            "seeded source test requires ordered [start,end) Richter phases"
-        );
-    }
-    if (grating_rate_hz < 0.0 || baseline_rate_hz < 0.0) {
-        throw std::runtime_error("seeded source rates must be nonnegative");
-    }
-
-    const CsrBank stim_bank = build_csr_bank(
-        stim_bank_name, stim_pre, stim_post, stim_weight
-    );
-    const CsrBank v1_to_h_bank = build_csr_bank(
-        v1_to_h_bank_name, v1_to_h_pre, v1_to_h_post, v1_to_h_weight
-    );
-    const CsrBank ctx_to_pred_bank = build_csr_bank(
-        ctx_to_pred_bank_name, ctx_to_pred_pre, ctx_to_pred_post,
-        ctx_to_pred_weight
-    );
-    const CsrBank fb_direct_bank = build_csr_bank(
-        feedback_direct_bank_name, feedback_direct_pre, feedback_direct_post,
-        feedback_direct_weight
-    );
-    const CsrBank fb_som_bank = build_csr_bank(
+    FrozenRichterSeededSourceResult result = run_frozen_richter_seeded_source_cpu(
+        stim_bank_name, stim_pre, stim_post, stim_weight, stim_drive_amp,
+        stim_channel, v1_to_h_bank_name, v1_to_h_pre, v1_to_h_post,
+        v1_to_h_weight, v1_to_h_drive_amp, ctx_to_pred_bank_name,
+        ctx_to_pred_pre, ctx_to_pred_post, ctx_to_pred_weight,
+        ctx_to_pred_drive_amp, feedback_direct_bank_name, feedback_direct_pre,
+        feedback_direct_post, feedback_direct_weight, feedback_direct_drive_amp,
         feedback_som_bank_name, feedback_som_pre, feedback_som_post,
-        feedback_som_weight
+        feedback_som_weight, feedback_som_drive_amp, seed, expected_channel,
+        unexpected_channel, grating_rate_hz, baseline_rate_hz, n_steps,
+        leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step,
+        iti_start_step, iti_end_step
     );
-    if (stim_bank.n_target != V1_E_N
-        || v1_to_h_bank.n_target != H_E_N
-        || ctx_to_pred_bank.n_target != H_E_N
-        || fb_direct_bank.n_target != V1_E_N
-        || fb_som_bank.n_target != V1_SOM_N) {
-        throw std::runtime_error("seeded source test target size mismatch");
-    }
-    if (static_cast<int>(stim_channel.size()) != stim_bank.n_pre) {
-        throw std::runtime_error("seeded source test stim_channel size mismatch");
-    }
-    const int n_channels =
-        static_cast<int>(*std::max_element(stim_channel.begin(), stim_channel.end())) + 1;
-    if (expected_channel < 0 || expected_channel >= n_channels
-        || unexpected_channel < 0 || unexpected_channel >= n_channels) {
-        throw std::runtime_error("seeded source test channel index out of range");
-    }
-
-    FrozenRichterSeededSourceResult result;
-    result.seed = seed;
-    result.n_steps = n_steps;
-    result.dt_ms = DT_MS;
-    result.expected_channel = expected_channel;
-    result.unexpected_channel = unexpected_channel;
-    result.phase_steps = {
-        {"leader_start_step", leader_start_step},
-        {"leader_end_step", leader_end_step},
-        {"preprobe_start_step", preprobe_start_step},
-        {"preprobe_end_step", preprobe_end_step},
-        {"trailer_start_step", trailer_start_step},
-        {"trailer_end_step", trailer_end_step},
-        {"iti_start_step", iti_start_step},
-        {"iti_end_step", iti_end_step},
-    };
-    result.edge_counts = {
-        {"v1_stim_to_e", static_cast<std::int32_t>(stim_pre.size())},
-        {"v1_to_h_ctx", static_cast<std::int32_t>(v1_to_h_pre.size())},
-        {"ctx_to_pred", static_cast<std::int32_t>(ctx_to_pred_pre.size())},
-        {"fb_pred_to_v1e_apical", static_cast<std::int32_t>(feedback_direct_pre.size())},
-        {"fb_pred_to_v1som", static_cast<std::int32_t>(feedback_som_pre.size())},
-    };
-    result.rates_hz = {
-        {"grating", grating_rate_hz},
-        {"baseline", baseline_rate_hz},
-    };
-
-    std::map<std::string, std::vector<double>> cpu_v1;
-    std::map<std::string, std::vector<double>> cpu_som;
-    std::map<std::string, std::vector<double>> cpu_hctx;
-    std::map<std::string, std::vector<double>> cpu_hpred;
-    std::vector<std::int32_t> dummy_spikes;
-    init_v1e_feedback_state(cpu_v1, dummy_spikes);
-    init_v1som_feedback_state(cpu_som);
-    init_he_quiet_state(cpu_hctx, dummy_spikes);
-    init_he_quiet_state(cpu_hpred, dummy_spikes);
-
-    std::vector<std::int32_t> cpu_v1_leader(V1_E_N, 0);
-    std::vector<std::int32_t> cpu_v1_preprobe(V1_E_N, 0);
-    std::vector<std::int32_t> cpu_v1_trailer(V1_E_N, 0);
-    std::vector<std::int32_t> cpu_hctx_leader(H_E_N, 0);
-    std::vector<std::int32_t> cpu_hctx_preprobe(H_E_N, 0);
-    std::vector<std::int32_t> cpu_hctx_trailer(H_E_N, 0);
-    std::vector<std::int32_t> cpu_hpred_leader(H_E_N, 0);
-    std::vector<std::int32_t> cpu_hpred_preprobe(H_E_N, 0);
-    std::vector<std::int32_t> cpu_hpred_trailer(H_E_N, 0);
-    std::vector<std::int32_t> cpu_v1_flags(V1_E_N, 0);
-    std::vector<std::int32_t> cpu_hctx_flags(H_E_N, 0);
-    std::vector<std::int32_t> cpu_hpred_flags(H_E_N, 0);
-    std::vector<std::int32_t> cpu_source_by_step(n_steps, 0);
-    std::vector<std::int32_t> cpu_source_by_afferent(stim_bank.n_pre, 0);
-    std::vector<std::int32_t> cpu_source_by_channel(n_channels, 0);
-    std::vector<std::int32_t> cpu_source_by_phase(5, 0);
-
-    for (int step = 0; step < n_steps; ++step) {
-        cpu_v1e_richter_count_step_flags(
-            cpu_v1, cpu_v1_leader, cpu_v1_preprobe, cpu_v1_trailer,
-            cpu_v1_flags, step, leader_start_step, leader_end_step,
-            preprobe_start_step, preprobe_end_step, trailer_start_step,
-            trailer_end_step
+    FrozenRichterSeededSourceResult cuda_result = run_frozen_richter_seeded_source_cuda(
+        stim_bank_name, stim_pre, stim_post, stim_weight, stim_drive_amp,
+        stim_channel, v1_to_h_bank_name, v1_to_h_pre, v1_to_h_post,
+        v1_to_h_weight, v1_to_h_drive_amp, ctx_to_pred_bank_name,
+        ctx_to_pred_pre, ctx_to_pred_post, ctx_to_pred_weight,
+        ctx_to_pred_drive_amp, feedback_direct_bank_name, feedback_direct_pre,
+        feedback_direct_post, feedback_direct_weight, feedback_direct_drive_amp,
+        feedback_som_bank_name, feedback_som_pre, feedback_som_post,
+        feedback_som_weight, feedback_som_drive_amp, seed, expected_channel,
+        unexpected_channel, grating_rate_hz, baseline_rate_hz, n_steps,
+        leader_start_step, leader_end_step, preprobe_start_step,
+        preprobe_end_step, trailer_start_step, trailer_end_step,
+        iti_start_step, iti_end_step
+    );
+    result.cuda_raw_counts = std::move(cuda_result.cuda_raw_counts);
+    result.cuda_source_counts = std::move(cuda_result.cuda_source_counts);
+    result.cuda_diagnostic_rates_hz = std::move(cuda_result.cuda_diagnostic_rates_hz);
+    result.cuda_q_active_fC = std::move(cuda_result.cuda_q_active_fC);
+    result.cuda_final_state = std::move(cuda_result.cuda_final_state);
+    result.source_event_counts = std::move(cuda_result.source_event_counts);
+    result.cuda_hpred_preprobe_channel_counts =
+        std::move(cuda_result.cuda_hpred_preprobe_channel_counts);
+    result.cuda_hpred_feedback_held_trailer_bin_total_counts =
+        std::move(cuda_result.cuda_hpred_feedback_held_trailer_bin_total_counts);
+    result.cuda_hpred_feedback_held_trailer_bin_channel_counts =
+        std::move(cuda_result.cuda_hpred_feedback_held_trailer_bin_channel_counts);
+    result.cuda_hpred_feedback_normalized_trailer_bin_total_weights =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_trailer_bin_total_weights);
+    result.cuda_hpred_feedback_normalized_trailer_bin_channel_weights =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_trailer_bin_channel_weights);
+    result.cuda_hpred_feedback_normalized_preprobe_zero =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_preprobe_zero);
+    result.cuda_hpred_feedback_normalized_fallback_used =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_fallback_used);
+    result.cuda_hpred_feedback_normalized_fallback_zero_template =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_fallback_zero_template);
+    result.cuda_hpred_feedback_normalized_leader_template_total_counts =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_leader_template_total_counts);
+    result.cuda_hpred_feedback_normalized_leader_template_channel_counts =
+        std::move(cuda_result.cuda_hpred_feedback_normalized_leader_template_channel_counts);
+    result.cuda_v1_predicted_suppression_trailer_channel_signal_sum =
+        std::move(
+            cuda_result.cuda_v1_predicted_suppression_trailer_channel_signal_sum
         );
-        cpu_v1som_step(cpu_som, step);
-        cpu_he_richter_count_step_flags(
-            cpu_hctx, cpu_hctx_leader, cpu_hctx_preprobe, cpu_hctx_trailer,
-            cpu_hctx_flags, step, leader_start_step, leader_end_step,
-            preprobe_start_step, preprobe_end_step, trailer_start_step,
-            trailer_end_step
+    result.cuda_v1_predicted_suppression_trailer_channel_gain_sum =
+        std::move(
+            cuda_result.cuda_v1_predicted_suppression_trailer_channel_gain_sum
         );
-        cpu_he_richter_count_step_flags(
-            cpu_hpred, cpu_hpred_leader, cpu_hpred_preprobe, cpu_hpred_trailer,
-            cpu_hpred_flags, step, leader_start_step, leader_end_step,
-            preprobe_start_step, preprobe_end_step, trailer_start_step,
-            trailer_end_step
+    result.cuda_v1_predicted_suppression_trailer_raw_ie_before_sum =
+        std::move(
+            cuda_result.cuda_v1_predicted_suppression_trailer_raw_ie_before_sum
         );
-        for (int src = 0; src < stim_bank.n_pre; ++src) {
-            const int channel = stim_channel[static_cast<std::size_t>(src)];
-            if (!seeded_source_event(
-                    seed, step, src, channel, expected_channel, unexpected_channel,
-                    grating_rate_hz, baseline_rate_hz, leader_start_step,
-                    leader_end_step, preprobe_start_step, preprobe_end_step,
-                    trailer_start_step, trailer_end_step
-                )) {
-                continue;
-            }
-            const int phase = richter_phase_index(
-                step, leader_start_step, leader_end_step, preprobe_start_step,
-                preprobe_end_step, trailer_start_step, trailer_end_step
-            );
-            const int phase_index =
-                phase >= 0
-                ? phase
-                : ((step >= iti_start_step && step < iti_end_step) ? 3 : 4);
-            cpu_source_by_step[static_cast<std::size_t>(step)] += 1;
-            cpu_source_by_afferent[static_cast<std::size_t>(src)] += 1;
-            cpu_source_by_channel[static_cast<std::size_t>(channel)] += 1;
-            cpu_source_by_phase[static_cast<std::size_t>(phase_index)] += 1;
-            cpu_source_by_phase[4] += 1;
-            cpu_scatter_one_source(
-                stim_bank, src, stim_drive_amp, cpu_v1["I_e_pA"]
-            );
-        }
-        cpu_scatter_spike_flags(
-            v1_to_h_bank, cpu_v1_flags, v1_to_h_drive_amp, cpu_hctx["I_e_pA"]
+    result.cuda_v1_predicted_suppression_trailer_raw_ie_after_sum =
+        std::move(
+            cuda_result.cuda_v1_predicted_suppression_trailer_raw_ie_after_sum
         );
-        cpu_scatter_spike_flags(
-            ctx_to_pred_bank, cpu_hctx_flags, ctx_to_pred_drive_amp,
-            cpu_hpred["I_e_pA"]
+    result.cuda_v1_predicted_suppression_trailer_raw_ie_delta_sum =
+        std::move(
+            cuda_result.cuda_v1_predicted_suppression_trailer_raw_ie_delta_sum
         );
-        cpu_scatter_spike_flags(
-            fb_direct_bank, cpu_hpred_flags, feedback_direct_drive_amp,
-            cpu_v1["I_ap_e_pA"]
-        );
-        cpu_scatter_spike_flags(
-            fb_som_bank, cpu_hpred_flags, feedback_som_drive_amp,
-            cpu_som["I_e_pA"]
-        );
-    }
-
-    result.cpu_raw_counts = {
-        {"v1_e.leader", cpu_v1_leader},
-        {"v1_e.preprobe", cpu_v1_preprobe},
-        {"v1_e.trailer", cpu_v1_trailer},
-        {"hctx_e.leader", cpu_hctx_leader},
-        {"hctx_e.preprobe", cpu_hctx_preprobe},
-        {"hctx_e.trailer", cpu_hctx_trailer},
-        {"hpred_e.leader", cpu_hpred_leader},
-        {"hpred_e.preprobe", cpu_hpred_preprobe},
-        {"hpred_e.trailer", cpu_hpred_trailer},
-    };
-    result.cpu_source_counts = {
-        {"source.events_by_step", cpu_source_by_step},
-        {"source.events_by_afferent", cpu_source_by_afferent},
-        {"source.events_by_channel", cpu_source_by_channel},
-        {"source.events_by_phase", cpu_source_by_phase},
-    };
-    result.source_event_counts = {
-        {"leader", cpu_source_by_phase[0]},
-        {"preprobe", cpu_source_by_phase[1]},
-        {"trailer", cpu_source_by_phase[2]},
-        {"iti", cpu_source_by_phase[3]},
-        {"total", cpu_source_by_phase[4]},
-    };
-    result.cpu_diagnostic_rates_hz = {
-        {"v1_e.leader", counts_to_rate_hz(cpu_v1_leader, leader_start_step, leader_end_step)},
-        {"v1_e.preprobe", counts_to_rate_hz(cpu_v1_preprobe, preprobe_start_step, preprobe_end_step)},
-        {"v1_e.trailer", counts_to_rate_hz(cpu_v1_trailer, trailer_start_step, trailer_end_step)},
-        {"hctx_e.preprobe", counts_to_rate_hz(cpu_hctx_preprobe, preprobe_start_step, preprobe_end_step)},
-        {"hctx_e.trailer", counts_to_rate_hz(cpu_hctx_trailer, trailer_start_step, trailer_end_step)},
-        {"hpred_e.preprobe", counts_to_rate_hz(cpu_hpred_preprobe, preprobe_start_step, preprobe_end_step)},
-        {"hpred_e.trailer", counts_to_rate_hz(cpu_hpred_trailer, trailer_start_step, trailer_end_step)},
-    };
-    append_prefixed_state(result.cpu_final_state, "v1e", cpu_v1);
-    append_prefixed_state(result.cpu_final_state, "v1som", cpu_som);
-    append_prefixed_state(result.cpu_final_state, "hctx", cpu_hctx);
-    append_prefixed_state(result.cpu_final_state, "hpred", cpu_hpred);
-
-    std::map<std::string, std::vector<double>> cuda_v1;
-    std::map<std::string, std::vector<double>> cuda_som;
-    std::map<std::string, std::vector<double>> cuda_hctx;
-    std::map<std::string, std::vector<double>> cuda_hpred;
-    init_v1e_feedback_state(cuda_v1, dummy_spikes);
-    init_v1som_feedback_state(cuda_som);
-    init_he_quiet_state(cuda_hctx, dummy_spikes);
-    init_he_quiet_state(cuda_hpred, dummy_spikes);
-    std::vector<std::int32_t> cuda_v1_leader(V1_E_N, 0);
-    std::vector<std::int32_t> cuda_v1_preprobe(V1_E_N, 0);
-    std::vector<std::int32_t> cuda_v1_trailer(V1_E_N, 0);
-    std::vector<std::int32_t> cuda_hctx_leader(H_E_N, 0);
-    std::vector<std::int32_t> cuda_hctx_preprobe(H_E_N, 0);
-    std::vector<std::int32_t> cuda_hctx_trailer(H_E_N, 0);
-    std::vector<std::int32_t> cuda_hpred_leader(H_E_N, 0);
-    std::vector<std::int32_t> cuda_hpred_preprobe(H_E_N, 0);
-    std::vector<std::int32_t> cuda_hpred_trailer(H_E_N, 0);
-    std::vector<std::int32_t> cuda_v1_flags(V1_E_N, 0);
-    std::vector<std::int32_t> cuda_hctx_flags(H_E_N, 0);
-    std::vector<std::int32_t> cuda_hpred_flags(H_E_N, 0);
-    std::vector<std::int32_t> cuda_source_by_step(n_steps, 0);
-    std::vector<std::int32_t> cuda_source_by_afferent(stim_bank.n_pre, 0);
-    std::vector<std::int32_t> cuda_source_by_channel(n_channels, 0);
-    std::vector<std::int32_t> cuda_source_by_phase(5, 0);
-
-    auto* d_v1_v = device_alloc_copy(cuda_v1["V_soma_mV"]);
-    auto* d_v1_vap = device_alloc_copy(cuda_v1["V_ap_mV"]);
-    auto* d_v1_ie = device_alloc_copy(cuda_v1["I_e_pA"]);
-    auto* d_v1_ii = device_alloc_copy(cuda_v1["I_i_pA"]);
-    auto* d_v1_iape = device_alloc_copy(cuda_v1["I_ap_e_pA"]);
-    auto* d_v1_w = device_alloc_copy(cuda_v1["w_adapt_pA"]);
-    auto* d_v1_ibias = device_alloc_copy(cuda_v1["I_bias_pA"]);
-    auto* d_v1_refrac = device_alloc_copy(cuda_v1["refrac_until_ms"]);
-    auto* d_v1_leader = device_alloc_copy(cuda_v1_leader);
-    auto* d_v1_preprobe = device_alloc_copy(cuda_v1_preprobe);
-    auto* d_v1_trailer = device_alloc_copy(cuda_v1_trailer);
-    auto* d_v1_flags = device_alloc_copy(cuda_v1_flags);
-    auto* d_som_v = device_alloc_copy(cuda_som["V_mV"]);
-    auto* d_som_ie = device_alloc_copy(cuda_som["I_e_pA"]);
-    auto* d_som_ii = device_alloc_copy(cuda_som["I_i_pA"]);
-    auto* d_som_ibias = device_alloc_copy(cuda_som["I_bias_pA"]);
-    auto* d_som_refrac = device_alloc_copy(cuda_som["refrac_until_ms"]);
-    auto* d_hctx_v = device_alloc_copy(cuda_hctx["V_mV"]);
-    auto* d_hctx_ie = device_alloc_copy(cuda_hctx["I_e_pA"]);
-    auto* d_hctx_ii = device_alloc_copy(cuda_hctx["I_i_pA"]);
-    auto* d_hctx_g = device_alloc_copy(cuda_hctx["g_nmda_h_nS"]);
-    auto* d_hctx_ibias = device_alloc_copy(cuda_hctx["I_bias_pA"]);
-    auto* d_hctx_refrac = device_alloc_copy(cuda_hctx["refrac_until_ms"]);
-    auto* d_hctx_leader = device_alloc_copy(cuda_hctx_leader);
-    auto* d_hctx_preprobe = device_alloc_copy(cuda_hctx_preprobe);
-    auto* d_hctx_trailer = device_alloc_copy(cuda_hctx_trailer);
-    auto* d_hctx_flags = device_alloc_copy(cuda_hctx_flags);
-    auto* d_hpred_v = device_alloc_copy(cuda_hpred["V_mV"]);
-    auto* d_hpred_ie = device_alloc_copy(cuda_hpred["I_e_pA"]);
-    auto* d_hpred_ii = device_alloc_copy(cuda_hpred["I_i_pA"]);
-    auto* d_hpred_g = device_alloc_copy(cuda_hpred["g_nmda_h_nS"]);
-    auto* d_hpred_ibias = device_alloc_copy(cuda_hpred["I_bias_pA"]);
-    auto* d_hpred_refrac = device_alloc_copy(cuda_hpred["refrac_until_ms"]);
-    auto* d_hpred_leader = device_alloc_copy(cuda_hpred_leader);
-    auto* d_hpred_preprobe = device_alloc_copy(cuda_hpred_preprobe);
-    auto* d_hpred_trailer = device_alloc_copy(cuda_hpred_trailer);
-    auto* d_hpred_flags = device_alloc_copy(cuda_hpred_flags);
-    auto* d_stim_channel = device_alloc_copy(stim_channel);
-    auto* d_source_by_step = device_alloc_copy(cuda_source_by_step);
-    auto* d_source_by_afferent = device_alloc_copy(cuda_source_by_afferent);
-    auto* d_source_by_channel = device_alloc_copy(cuda_source_by_channel);
-    auto* d_source_by_phase = device_alloc_copy(cuda_source_by_phase);
-    auto* d_stim_row_ptr = device_alloc_copy(stim_bank.row_ptr);
-    auto* d_stim_post = device_alloc_copy(stim_bank.post);
-    auto* d_stim_weight = device_alloc_copy(stim_bank.weight);
-    auto* d_v1_to_h_row_ptr = device_alloc_copy(v1_to_h_bank.row_ptr);
-    auto* d_v1_to_h_post = device_alloc_copy(v1_to_h_bank.post);
-    auto* d_v1_to_h_weight = device_alloc_copy(v1_to_h_bank.weight);
-    auto* d_ctx_to_pred_row_ptr = device_alloc_copy(ctx_to_pred_bank.row_ptr);
-    auto* d_ctx_to_pred_post = device_alloc_copy(ctx_to_pred_bank.post);
-    auto* d_ctx_to_pred_weight = device_alloc_copy(ctx_to_pred_bank.weight);
-    auto* d_fb_direct_row_ptr = device_alloc_copy(fb_direct_bank.row_ptr);
-    auto* d_fb_direct_post = device_alloc_copy(fb_direct_bank.post);
-    auto* d_fb_direct_weight = device_alloc_copy(fb_direct_bank.weight);
-    auto* d_fb_som_row_ptr = device_alloc_copy(fb_som_bank.row_ptr);
-    auto* d_fb_som_post = device_alloc_copy(fb_som_bank.post);
-    auto* d_fb_som_weight = device_alloc_copy(fb_som_bank.weight);
-
-    const int source_blocks = (stim_bank.n_pre + 127) / 128;
-    for (int step = 0; step < n_steps; ++step) {
-        v1e_richter_count_step_flags_kernel<<<1, 256>>>(
-            step, leader_start_step, leader_end_step, preprobe_start_step,
-            preprobe_end_step, trailer_start_step, trailer_end_step,
-            d_v1_v, d_v1_vap, d_v1_ie, d_v1_ii, d_v1_iape, d_v1_w,
-            d_v1_ibias, d_v1_refrac, d_v1_leader, d_v1_preprobe,
-            d_v1_trailer, d_v1_flags
-        );
-        check_cuda(cudaGetLastError(), "seeded source V1 step launch");
-        v1som_step_kernel<<<1, 64>>>(
-            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac
-        );
-        check_cuda(cudaGetLastError(), "seeded source SOM step launch");
-        he_richter_count_step_flags_kernel<<<1, 256>>>(
-            step, leader_start_step, leader_end_step, preprobe_start_step,
-            preprobe_end_step, trailer_start_step, trailer_end_step,
-            d_hctx_v, d_hctx_ie, d_hctx_ii, d_hctx_g, d_hctx_ibias,
-            d_hctx_refrac, d_hctx_leader, d_hctx_preprobe, d_hctx_trailer,
-            d_hctx_flags
-        );
-        check_cuda(cudaGetLastError(), "seeded source H_ctx step launch");
-        he_richter_count_step_flags_kernel<<<1, 256>>>(
-            step, leader_start_step, leader_end_step, preprobe_start_step,
-            preprobe_end_step, trailer_start_step, trailer_end_step,
-            d_hpred_v, d_hpred_ie, d_hpred_ii, d_hpred_g, d_hpred_ibias,
-            d_hpred_refrac, d_hpred_leader, d_hpred_preprobe, d_hpred_trailer,
-            d_hpred_flags
-        );
-        check_cuda(cudaGetLastError(), "seeded source H_pred step launch");
-        seeded_stim_source_scatter_kernel<<<source_blocks, 128>>>(
-            seed, step, stim_bank.n_pre, d_stim_channel, expected_channel,
-            unexpected_channel, grating_rate_hz, baseline_rate_hz,
-            leader_start_step, leader_end_step, preprobe_start_step,
-            preprobe_end_step, trailer_start_step, trailer_end_step,
-            iti_start_step, iti_end_step, d_stim_row_ptr, d_stim_post,
-            d_stim_weight, stim_drive_amp, d_v1_ie, d_source_by_step,
-            d_source_by_afferent, d_source_by_channel, d_source_by_phase
-        );
-        check_cuda(cudaGetLastError(), "seeded source stimulus scatter launch");
-        csr_scatter_spike_flags_kernel<<<2, 128>>>(
-            v1_to_h_bank.n_pre, d_v1_flags, d_v1_to_h_row_ptr, d_v1_to_h_post,
-            d_v1_to_h_weight, v1_to_h_drive_amp, d_hctx_ie
-        );
-        check_cuda(cudaGetLastError(), "seeded source V1->H scatter launch");
-        csr_scatter_spike_flags_kernel<<<2, 128>>>(
-            ctx_to_pred_bank.n_pre, d_hctx_flags, d_ctx_to_pred_row_ptr,
-            d_ctx_to_pred_post, d_ctx_to_pred_weight, ctx_to_pred_drive_amp,
-            d_hpred_ie
-        );
-        check_cuda(cudaGetLastError(), "seeded source ctx->pred scatter launch");
-        csr_scatter_spike_flags_kernel<<<2, 128>>>(
-            fb_direct_bank.n_pre, d_hpred_flags, d_fb_direct_row_ptr,
-            d_fb_direct_post, d_fb_direct_weight, feedback_direct_drive_amp,
-            d_v1_iape
-        );
-        check_cuda(cudaGetLastError(), "seeded source feedback direct scatter launch");
-        csr_scatter_spike_flags_kernel<<<2, 128>>>(
-            fb_som_bank.n_pre, d_hpred_flags, d_fb_som_row_ptr, d_fb_som_post,
-            d_fb_som_weight, feedback_som_drive_amp, d_som_ie
-        );
-        check_cuda(cudaGetLastError(), "seeded source feedback SOM scatter launch");
-        check_cuda(cudaDeviceSynchronize(), "seeded source step sync");
-    }
-
-    copy_device_to_host(d_v1_v, cuda_v1["V_soma_mV"]);
-    copy_device_to_host(d_v1_vap, cuda_v1["V_ap_mV"]);
-    copy_device_to_host(d_v1_ie, cuda_v1["I_e_pA"]);
-    copy_device_to_host(d_v1_ii, cuda_v1["I_i_pA"]);
-    copy_device_to_host(d_v1_iape, cuda_v1["I_ap_e_pA"]);
-    copy_device_to_host(d_v1_w, cuda_v1["w_adapt_pA"]);
-    copy_device_to_host(d_v1_ibias, cuda_v1["I_bias_pA"]);
-    copy_device_to_host(d_v1_refrac, cuda_v1["refrac_until_ms"]);
-    copy_device_to_host(d_v1_leader, cuda_v1_leader);
-    copy_device_to_host(d_v1_preprobe, cuda_v1_preprobe);
-    copy_device_to_host(d_v1_trailer, cuda_v1_trailer);
-    copy_device_to_host(d_som_v, cuda_som["V_mV"]);
-    copy_device_to_host(d_som_ie, cuda_som["I_e_pA"]);
-    copy_device_to_host(d_som_ii, cuda_som["I_i_pA"]);
-    copy_device_to_host(d_som_ibias, cuda_som["I_bias_pA"]);
-    copy_device_to_host(d_som_refrac, cuda_som["refrac_until_ms"]);
-    copy_device_to_host(d_hctx_v, cuda_hctx["V_mV"]);
-    copy_device_to_host(d_hctx_ie, cuda_hctx["I_e_pA"]);
-    copy_device_to_host(d_hctx_ii, cuda_hctx["I_i_pA"]);
-    copy_device_to_host(d_hctx_g, cuda_hctx["g_nmda_h_nS"]);
-    copy_device_to_host(d_hctx_ibias, cuda_hctx["I_bias_pA"]);
-    copy_device_to_host(d_hctx_refrac, cuda_hctx["refrac_until_ms"]);
-    copy_device_to_host(d_hctx_leader, cuda_hctx_leader);
-    copy_device_to_host(d_hctx_preprobe, cuda_hctx_preprobe);
-    copy_device_to_host(d_hctx_trailer, cuda_hctx_trailer);
-    copy_device_to_host(d_hpred_v, cuda_hpred["V_mV"]);
-    copy_device_to_host(d_hpred_ie, cuda_hpred["I_e_pA"]);
-    copy_device_to_host(d_hpred_ii, cuda_hpred["I_i_pA"]);
-    copy_device_to_host(d_hpred_g, cuda_hpred["g_nmda_h_nS"]);
-    copy_device_to_host(d_hpred_ibias, cuda_hpred["I_bias_pA"]);
-    copy_device_to_host(d_hpred_refrac, cuda_hpred["refrac_until_ms"]);
-    copy_device_to_host(d_hpred_leader, cuda_hpred_leader);
-    copy_device_to_host(d_hpred_preprobe, cuda_hpred_preprobe);
-    copy_device_to_host(d_hpred_trailer, cuda_hpred_trailer);
-    copy_device_to_host(d_source_by_step, cuda_source_by_step);
-    copy_device_to_host(d_source_by_afferent, cuda_source_by_afferent);
-    copy_device_to_host(d_source_by_channel, cuda_source_by_channel);
-    copy_device_to_host(d_source_by_phase, cuda_source_by_phase);
-
-    result.cuda_raw_counts = {
-        {"v1_e.leader", cuda_v1_leader},
-        {"v1_e.preprobe", cuda_v1_preprobe},
-        {"v1_e.trailer", cuda_v1_trailer},
-        {"hctx_e.leader", cuda_hctx_leader},
-        {"hctx_e.preprobe", cuda_hctx_preprobe},
-        {"hctx_e.trailer", cuda_hctx_trailer},
-        {"hpred_e.leader", cuda_hpred_leader},
-        {"hpred_e.preprobe", cuda_hpred_preprobe},
-        {"hpred_e.trailer", cuda_hpred_trailer},
-    };
-    result.cuda_source_counts = {
-        {"source.events_by_step", cuda_source_by_step},
-        {"source.events_by_afferent", cuda_source_by_afferent},
-        {"source.events_by_channel", cuda_source_by_channel},
-        {"source.events_by_phase", cuda_source_by_phase},
-    };
-    result.cuda_diagnostic_rates_hz = {
-        {"v1_e.leader", counts_to_rate_hz(cuda_v1_leader, leader_start_step, leader_end_step)},
-        {"v1_e.preprobe", counts_to_rate_hz(cuda_v1_preprobe, preprobe_start_step, preprobe_end_step)},
-        {"v1_e.trailer", counts_to_rate_hz(cuda_v1_trailer, trailer_start_step, trailer_end_step)},
-        {"hctx_e.preprobe", counts_to_rate_hz(cuda_hctx_preprobe, preprobe_start_step, preprobe_end_step)},
-        {"hctx_e.trailer", counts_to_rate_hz(cuda_hctx_trailer, trailer_start_step, trailer_end_step)},
-        {"hpred_e.preprobe", counts_to_rate_hz(cuda_hpred_preprobe, preprobe_start_step, preprobe_end_step)},
-        {"hpred_e.trailer", counts_to_rate_hz(cuda_hpred_trailer, trailer_start_step, trailer_end_step)},
-    };
-    append_prefixed_state(result.cuda_final_state, "v1e", cuda_v1);
-    append_prefixed_state(result.cuda_final_state, "v1som", cuda_som);
-    append_prefixed_state(result.cuda_final_state, "hctx", cuda_hctx);
-    append_prefixed_state(result.cuda_final_state, "hpred", cuda_hpred);
-
-    device_free(d_v1_v); device_free(d_v1_vap); device_free(d_v1_ie);
-    device_free(d_v1_ii); device_free(d_v1_iape); device_free(d_v1_w);
-    device_free(d_v1_ibias); device_free(d_v1_refrac);
-    device_free(d_v1_leader); device_free(d_v1_preprobe);
-    device_free(d_v1_trailer); device_free(d_v1_flags);
-    device_free(d_som_v); device_free(d_som_ie); device_free(d_som_ii);
-    device_free(d_som_ibias); device_free(d_som_refrac);
-    device_free(d_hctx_v); device_free(d_hctx_ie); device_free(d_hctx_ii);
-    device_free(d_hctx_g); device_free(d_hctx_ibias);
-    device_free(d_hctx_refrac); device_free(d_hctx_leader);
-    device_free(d_hctx_preprobe); device_free(d_hctx_trailer);
-    device_free(d_hctx_flags);
-    device_free(d_hpred_v); device_free(d_hpred_ie); device_free(d_hpred_ii);
-    device_free(d_hpred_g); device_free(d_hpred_ibias);
-    device_free(d_hpred_refrac); device_free(d_hpred_leader);
-    device_free(d_hpred_preprobe); device_free(d_hpred_trailer);
-    device_free(d_hpred_flags);
-    device_free(d_stim_channel); device_free(d_source_by_step);
-    device_free(d_source_by_afferent); device_free(d_source_by_channel);
-    device_free(d_source_by_phase);
-    device_free(d_stim_row_ptr); device_free(d_stim_post); device_free(d_stim_weight);
-    device_free(d_v1_to_h_row_ptr); device_free(d_v1_to_h_post);
-    device_free(d_v1_to_h_weight);
-    device_free(d_ctx_to_pred_row_ptr); device_free(d_ctx_to_pred_post);
-    device_free(d_ctx_to_pred_weight);
-    device_free(d_fb_direct_row_ptr); device_free(d_fb_direct_post);
-    device_free(d_fb_direct_weight);
-    device_free(d_fb_som_row_ptr); device_free(d_fb_som_post);
-    device_free(d_fb_som_weight);
 
     result.max_abs_error = compare_state(result.cpu_final_state, result.cuda_final_state);
     for (const auto& [key, cpu_counts] : result.cpu_raw_counts) {
@@ -6899,6 +10612,31 @@ FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_test(
         result.max_abs_error["rates." + key] =
             max_abs_diff(cpu_rates, result.cuda_diagnostic_rates_hz.at(key));
     }
+    result.max_abs_error["v1_predicted_suppression.signal_sum"] =
+        max_abs_diff(
+            result.cpu_v1_predicted_suppression_trailer_channel_signal_sum,
+            result.cuda_v1_predicted_suppression_trailer_channel_signal_sum
+        );
+    result.max_abs_error["v1_predicted_suppression.gain_sum"] =
+        max_abs_diff(
+            result.cpu_v1_predicted_suppression_trailer_channel_gain_sum,
+            result.cuda_v1_predicted_suppression_trailer_channel_gain_sum
+        );
+    result.max_abs_error["v1_predicted_suppression.raw_ie_before_sum"] =
+        max_abs_diff(
+            result.cpu_v1_predicted_suppression_trailer_raw_ie_before_sum,
+            result.cuda_v1_predicted_suppression_trailer_raw_ie_before_sum
+        );
+    result.max_abs_error["v1_predicted_suppression.raw_ie_after_sum"] =
+        max_abs_diff(
+            result.cpu_v1_predicted_suppression_trailer_raw_ie_after_sum,
+            result.cuda_v1_predicted_suppression_trailer_raw_ie_after_sum
+        );
+    result.max_abs_error["v1_predicted_suppression.raw_ie_delta_sum"] =
+        max_abs_diff(
+            result.cpu_v1_predicted_suppression_trailer_raw_ie_delta_sum,
+            result.cuda_v1_predicted_suppression_trailer_raw_ie_delta_sum
+        );
     return result;
 }
 
@@ -7255,27 +10993,32 @@ FrozenRichterSeededSourceResult run_frozen_richter_controlled_source_test(
             preprobe_end_step, trailer_start_step, trailer_end_step,
             d_v1_v, d_v1_vap, d_v1_ie, d_v1_ii, d_v1_iape, d_v1_w,
             d_v1_ibias, d_v1_refrac, d_v1_leader, d_v1_preprobe,
-            d_v1_trailer, d_v1_flags
+            d_v1_trailer, d_v1_flags, nullptr, 0.0, 0.0, 0.0, nullptr,
+            V1_FEEDFORWARD_DIVISIVE_GATE_SOURCE_SOM, nullptr,
+            V1_DIRECT_DIVISIVE_GATE_SOURCE_SOM, 0.0, 0.0,
+            V1_PREDICTED_SUPPRESSION_LOCUS_EFFECTIVE_IE, nullptr, nullptr,
+            nullptr
         );
         check_cuda(cudaGetLastError(), "controlled source V1 step launch");
         v1som_step_kernel<<<1, 64>>>(
-            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac
+            step, d_som_v, d_som_ie, d_som_ii, d_som_ibias, d_som_refrac,
+            nullptr
         );
         check_cuda(cudaGetLastError(), "controlled source SOM step launch");
         he_richter_count_step_flags_kernel<<<1, 256>>>(
             step, leader_start_step, leader_end_step, preprobe_start_step,
             preprobe_end_step, trailer_start_step, trailer_end_step,
             d_hctx_v, d_hctx_ie, d_hctx_ii, d_hctx_g, d_hctx_ibias,
-            d_hctx_refrac, d_hctx_leader, d_hctx_preprobe, d_hctx_trailer,
-            d_hctx_flags
+            d_hctx_refrac, d_hctx_leader, d_hctx_preprobe, nullptr,
+            d_hctx_trailer, d_hctx_flags
         );
         check_cuda(cudaGetLastError(), "controlled source H_ctx step launch");
         he_richter_count_step_flags_kernel<<<1, 256>>>(
             step, leader_start_step, leader_end_step, preprobe_start_step,
             preprobe_end_step, trailer_start_step, trailer_end_step,
             d_hpred_v, d_hpred_ie, d_hpred_ii, d_hpred_g, d_hpred_ibias,
-            d_hpred_refrac, d_hpred_leader, d_hpred_preprobe, d_hpred_trailer,
-            d_hpred_flags
+            d_hpred_refrac, d_hpred_leader, d_hpred_preprobe, nullptr,
+            d_hpred_trailer, d_hpred_flags
         );
         check_cuda(cudaGetLastError(), "controlled source H_pred step launch");
         controlled_stim_source_scatter_kernel<<<event_blocks, 128>>>(
@@ -7970,6 +11713,7 @@ static CtxPredTinyTrainerTestResult run_ctx_pred_controlled_trainer_impl(
         {"hpred_post.outside", 0},
     };
 
+    const bool generated_schedule = schedule_variant == -1;
     for (int trial = 0; trial < n_trials; ++trial) {
         const int trial_offset = trial * trial_steps;
         const int leader_pre = leader_pre_cells[static_cast<std::size_t>(trial)];
@@ -7990,14 +11734,37 @@ static CtxPredTinyTrainerTestResult run_ctx_pred_controlled_trainer_impl(
         result.trial_trailer_post_cells.push_back(trailer_post);
         result.gate_steps.push_back(trial_offset + trailer_end_rel);
 
-        result.hctx_pre_event_steps.push_back(trial_offset + 10);
-        result.hctx_pre_event_cells.push_back(leader_pre);
-        result.hctx_pre_event_steps.push_back(trial_offset + leader_end_rel - 1);
-        result.hctx_pre_event_cells.push_back(boundary_pre);
-        result.hpred_post_event_steps.push_back(trial_offset + trailer_start_rel);
-        result.hpred_post_event_cells.push_back(trailer_post);
-        result.hpred_post_event_steps.push_back(trial_offset + trailer_end_rel - 1);
-        result.hpred_post_event_cells.push_back(late_trailer_post);
+        if (generated_schedule) {
+            const int leader_channel = leader_pre / H_E_PER_CHANNEL;
+            const int trailer_channel = trailer_post / H_E_PER_CHANNEL;
+            append_ctx_pred_channel_window_events(
+                result.hctx_pre_event_steps,
+                result.hctx_pre_event_cells,
+                trial_offset,
+                leader_start_rel,
+                trailer_end_rel,
+                leader_channel,
+                CTX_PRED_GENERATED_WINDOW_PERIOD_STEPS
+            );
+            append_ctx_pred_channel_window_events(
+                result.hpred_post_event_steps,
+                result.hpred_post_event_cells,
+                trial_offset,
+                trailer_start_rel,
+                trailer_end_rel,
+                trailer_channel,
+                CTX_PRED_GENERATED_WINDOW_PERIOD_STEPS
+            );
+        } else {
+            result.hctx_pre_event_steps.push_back(trial_offset + 10);
+            result.hctx_pre_event_cells.push_back(leader_pre);
+            result.hctx_pre_event_steps.push_back(trial_offset + leader_end_rel - 1);
+            result.hctx_pre_event_cells.push_back(boundary_pre);
+            result.hpred_post_event_steps.push_back(trial_offset + trailer_start_rel);
+            result.hpred_post_event_cells.push_back(trailer_post);
+            result.hpred_post_event_steps.push_back(trial_offset + trailer_end_rel - 1);
+            result.hpred_post_event_cells.push_back(late_trailer_post);
+        }
     }
 
     for (const int step : result.hctx_pre_event_steps) {
@@ -8029,7 +11796,11 @@ static CtxPredTinyTrainerTestResult run_ctx_pred_controlled_trainer_impl(
         );
     }
 
-    result.initial_w_ctx_pred = init_ctx_pred_test_weights(seed);
+    result.initial_w_ctx_pred = (
+        generated_schedule
+        ? init_ctx_pred_production_weights()
+        : init_ctx_pred_test_weights(seed)
+    );
     result.cpu_ctx_ee_w_final = init_h_ee_placeholder_weights(seed, 101);
     result.cuda_ctx_ee_w_final = result.cpu_ctx_ee_w_final;
     result.cpu_pred_ee_w_final = init_h_ee_placeholder_weights(seed, 202);
@@ -8063,6 +11834,10 @@ static CtxPredTinyTrainerTestResult run_ctx_pred_controlled_trainer_impl(
             const std::vector<double> elig_before = cpu_elig;
             const int n_capped = cpu_ctx_pred_gate_update(cpu_w, cpu_elig);
             append_cpu_gate_telemetry(w_before, cpu_w, elig_before, n_capped);
+            if (generated_schedule) {
+                std::fill(cpu_xpre.begin(), cpu_xpre.end(), 0.0);
+                std::fill(cpu_xpost.begin(), cpu_xpost.end(), 0.0);
+            }
         }
         cpu_ctx_pred_decay_step(cpu_xpre, cpu_xpost, cpu_elig);
         for (std::size_t e = 0; e < result.hctx_pre_event_steps.size(); ++e) {
@@ -8170,6 +11945,24 @@ static CtxPredTinyTrainerTestResult run_ctx_pred_controlled_trainer_impl(
                 elig_before,
                 std::accumulate(cuda_capped_flags.begin(), cuda_capped_flags.end(), 0)
             );
+            if (generated_schedule) {
+                check_cuda(
+                    cudaMemset(
+                        d_xpre,
+                        0,
+                        sizeof(double) * static_cast<std::size_t>(CTX_PRED_N_SYN)
+                    ),
+                    "ctx_pred generated xpre reset"
+                );
+                check_cuda(
+                    cudaMemset(
+                        d_xpost,
+                        0,
+                        sizeof(double) * static_cast<std::size_t>(CTX_PRED_N_SYN)
+                    ),
+                    "ctx_pred generated xpost reset"
+                );
+            }
         }
         ctx_pred_decay_kernel<<<syn_grid, block>>>(
             d_xpre, d_xpost, d_elig, CTX_PRED_N_SYN, decay_coinc, decay_elig
@@ -8343,6 +12136,218 @@ CtxPredTinyTrainerTestResult run_ctx_pred_generated_schedule_test(
         leader_pre_cells,
         trailer_post_cells
     );
+}
+
+NativeStage1TrainResult run_native_stage1_generated_train(
+    std::int64_t seed,
+    const std::vector<std::int32_t>& leader_cells,
+    const std::vector<std::int32_t>& expected_trailer_cells
+) {
+    if (leader_cells.empty()) {
+        throw std::runtime_error("native Stage1 generated train requires nonempty schedule");
+    }
+    if (leader_cells.size() != expected_trailer_cells.size()) {
+        throw std::runtime_error("leader_cells and expected_trailer_cells must have equal length");
+    }
+    for (const int cell : leader_cells) {
+        if (cell < 0 || cell >= CTX_PRED_N_PRE) {
+            throw std::runtime_error("leader_cells contains out-of-range cell");
+        }
+    }
+    for (const int cell : expected_trailer_cells) {
+        if (cell < 0 || cell >= CTX_PRED_N_POST) {
+            throw std::runtime_error("expected_trailer_cells contains out-of-range cell");
+        }
+    }
+
+    const int n_trials = static_cast<int>(leader_cells.size());
+    const int leader_start_rel = 0;
+    const int leader_end_rel = 5000;
+    const int trailer_start_rel = 5000;
+    const int trailer_end_rel = 10000;
+    const int iti_start_rel = trailer_end_rel;
+    const int iti_end_rel = 25000;
+    const int trial_steps = iti_end_rel;
+    const int n_steps = n_trials * trial_steps;
+    const int period_steps = CTX_PRED_GENERATED_WINDOW_PERIOD_STEPS;
+
+    NativeStage1TrainResult result;
+    result.seed = seed;
+    result.n_trials = n_trials;
+    result.n_pre = CTX_PRED_N_PRE;
+    result.n_post = CTX_PRED_N_POST;
+    result.n_syn = CTX_PRED_N_SYN;
+    result.n_steps = n_steps;
+    result.trial_steps = trial_steps;
+    result.dt_ms = DT_MS;
+    result.phase_steps = {
+        {"leader_start_step", leader_start_rel},
+        {"leader_end_step", leader_end_rel},
+        {"trailer_start_step", trailer_start_rel},
+        {"trailer_end_step", trailer_end_rel},
+        {"iti_start_step", iti_start_rel},
+        {"iti_end_step", iti_end_rel},
+    };
+    result.event_counts = {
+        {"hctx_pre.leader", n_trials * ((leader_end_rel - leader_start_rel) / period_steps) * H_E_PER_CHANNEL},
+        {"hctx_pre.trailer", 0},
+        {"hctx_pre.iti", 0},
+        {"hpred_post.leader", 0},
+        {"hpred_post.trailer", n_trials * ((trailer_end_rel - trailer_start_rel) / period_steps)},
+        {"hpred_post.iti", 0},
+    };
+
+    std::vector<double> cuda_w = init_ctx_pred_production_weights();
+    std::vector<double> cuda_xpre(static_cast<std::size_t>(CTX_PRED_N_SYN), 0.0);
+    std::vector<double> cuda_xpost(static_cast<std::size_t>(CTX_PRED_N_SYN), 0.0);
+    std::vector<double> cuda_elig(static_cast<std::size_t>(CTX_PRED_N_SYN), 0.0);
+    std::vector<int> cuda_capped_flags(static_cast<std::size_t>(CTX_PRED_N_PRE), 0);
+
+    auto* d_w = device_alloc_copy(cuda_w);
+    auto* d_xpre = device_alloc_copy(cuda_xpre);
+    auto* d_xpost = device_alloc_copy(cuda_xpost);
+    auto* d_elig = device_alloc_copy(cuda_elig);
+    auto* d_capped_flags = device_alloc_copy(cuda_capped_flags);
+
+    const int block = 256;
+    const int syn_grid = (CTX_PRED_N_SYN + block - 1) / block;
+    const int row_grid = (CTX_PRED_N_PRE + block - 1) / block;
+    const int channel_edge_count = H_E_PER_CHANNEL * CTX_PRED_N_POST;
+    const int channel_grid = (channel_edge_count + block - 1) / block;
+    const double decay_coinc_step = std::exp(-DT_MS / CTX_PRED_TAU_COINC_MS);
+    const double decay_elig_step = std::exp(-DT_MS / CTX_PRED_TAU_ELIG_MS);
+
+    auto decay_by_steps = [&](int delta_steps) {
+        if (delta_steps <= 0) {
+            return;
+        }
+        ctx_pred_decay_kernel<<<syn_grid, block>>>(
+            d_xpre,
+            d_xpost,
+            d_elig,
+            CTX_PRED_N_SYN,
+            std::pow(decay_coinc_step, static_cast<double>(delta_steps)),
+            std::pow(decay_elig_step, static_cast<double>(delta_steps))
+        );
+        check_cuda(cudaGetLastError(), "native Stage1 generated decay launch");
+    };
+
+    auto append_gate_telemetry = [
+        &result,
+        &cuda_capped_flags
+    ](const std::vector<double>& w_before,
+      const std::vector<double>& w_after,
+      const std::vector<double>& elig_before) {
+        result.gate_w_before.push_back(vector_mean(w_before));
+        result.gate_w_after.push_back(vector_mean(w_after));
+        result.gate_dw_sum.push_back(sum_delta(w_before, w_after));
+        result.gate_elig_mean.push_back(vector_mean(elig_before));
+        result.gate_elig_max.push_back(vector_max_value(elig_before));
+        result.gate_row_sum_max.push_back(
+            vector_max_value(ctx_pred_row_sums(w_after))
+        );
+        result.gate_n_capped.push_back(
+            std::accumulate(cuda_capped_flags.begin(), cuda_capped_flags.end(), 0)
+        );
+    };
+
+    for (int trial = 0; trial < n_trials; ++trial) {
+        const int leader_cell = leader_cells[static_cast<std::size_t>(trial)];
+        const int trailer_cell = expected_trailer_cells[static_cast<std::size_t>(trial)];
+        const int leader_channel_start =
+            (leader_cell / H_E_PER_CHANNEL) * H_E_PER_CHANNEL;
+
+        int last_rel = 0;
+        bool have_event = false;
+        for (int rel = leader_start_rel; rel < trailer_end_rel; rel += period_steps) {
+            decay_by_steps(have_event ? (rel - last_rel) : rel);
+            if (rel < leader_end_rel) {
+                ctx_pred_pre_channel_event_kernel<<<channel_grid, block>>>(
+                    d_xpre,
+                    d_xpost,
+                    d_elig,
+                    leader_channel_start,
+                    CTX_PRED_N_POST
+                );
+                check_cuda(
+                    cudaGetLastError(),
+                    "native Stage1 generated leader pre channel event launch"
+                );
+            }
+            if (rel >= trailer_start_rel) {
+                ctx_pred_post_event_kernel<<<1, block>>>(
+                    d_xpre,
+                    d_xpost,
+                    d_elig,
+                    trailer_cell,
+                    CTX_PRED_N_PRE,
+                    CTX_PRED_N_POST
+                );
+                check_cuda(
+                    cudaGetLastError(),
+                    "native Stage1 generated post event launch"
+                );
+            }
+            last_rel = rel;
+            have_event = true;
+        }
+        decay_by_steps(have_event ? (trailer_end_rel - last_rel) : trailer_end_rel);
+
+        std::vector<double> w_before(static_cast<std::size_t>(CTX_PRED_N_SYN));
+        std::vector<double> elig_before(static_cast<std::size_t>(CTX_PRED_N_SYN));
+        check_cuda(cudaDeviceSynchronize(), "native Stage1 generated pre-gate sync");
+        copy_device_to_host(d_w, w_before);
+        copy_device_to_host(d_elig, elig_before);
+        ctx_pred_gate_preclip_kernel<<<syn_grid, block>>>(
+            d_w,
+            d_elig,
+            CTX_PRED_N_SYN,
+            CTX_PRED_ETA,
+            CTX_PRED_M_INTEGRAL,
+            CTX_PRED_GAMMA,
+            CTX_PRED_W_TARGET,
+            CTX_PRED_DT_TRIAL_S,
+            CTX_PRED_W_MAX
+        );
+        check_cuda(
+            cudaGetLastError(),
+            "native Stage1 generated gate preclip launch"
+        );
+        ctx_pred_row_cap_kernel<<<row_grid, block>>>(
+            d_w,
+            CTX_PRED_N_PRE,
+            CTX_PRED_N_POST,
+            CTX_PRED_W_ROW_MAX,
+            d_capped_flags
+        );
+        check_cuda(cudaGetLastError(), "native Stage1 generated row cap launch");
+        check_cuda(cudaDeviceSynchronize(), "native Stage1 generated gate sync");
+
+        std::vector<double> w_after(static_cast<std::size_t>(CTX_PRED_N_SYN));
+        copy_device_to_host(d_w, w_after);
+        copy_device_to_host(d_capped_flags, cuda_capped_flags);
+        append_gate_telemetry(w_before, w_after, elig_before);
+        check_cuda(
+            cudaMemset(d_xpre, 0, sizeof(double) * static_cast<std::size_t>(CTX_PRED_N_SYN)),
+            "native Stage1 generated xpre reset"
+        );
+        check_cuda(
+            cudaMemset(d_xpost, 0, sizeof(double) * static_cast<std::size_t>(CTX_PRED_N_SYN)),
+            "native Stage1 generated xpost reset"
+        );
+    }
+
+    check_cuda(cudaDeviceSynchronize(), "native Stage1 generated final sync");
+    copy_device_to_host(d_w, cuda_w);
+    result.w_ctx_pred_final = cuda_w;
+    result.row_sums = ctx_pred_row_sums(cuda_w);
+
+    device_free(d_w);
+    device_free(d_xpre);
+    device_free(d_xpost);
+    device_free(d_elig);
+    device_free(d_capped_flags);
+    return result;
 }
 
 ManifestSummary inspect_manifest_path(const std::string& path) {
