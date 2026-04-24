@@ -1,6 +1,6 @@
 # Project Summary: Laminar V1-V2 Expectation Suppression Model
 
-**Last updated:** 2026-04-23
+**Last updated:** 2026-04-24
 **Branch:** `dampening-analysis` (active for analysis); `single-network-dual-regime` (training baselines).
 **Default checkpoint for ex-vs-unex / dampening-vs-sharpening analysis (set 2026-04-17):** R1+R2 simple_dual emergent_seed42 (`results/simple_dual/emergent_seed42/checkpoint.pt` on the remote). Network_mm / Network_both remain valid for the per-regime feedback question but are no longer the default model for ex-vs-unex analysis.
 **R1+R2 regime characterisation (2026-04-22, Tasks #15–#26):** **hybrid, not single-regime.** On the paired-fork paradigm (constructive probe, bit-identical pre-probe state), R1+R2 shows **decoder-robust sharpening** in the decoding sign (Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125 on the NEW eval; all signs positive). FWHM behaviour on the paired-fork is paradigm-internally split: the NEW eval has ex FWHM **narrower** than unex (Δ = −1.33°), but the 4-condition `paradigm_readout` paired HMM fork has ex FWHM **wider** than unex (+0.9° to +2.0°) — same paradigm family, different cue/task-state combinations. On observational paradigms (matched_3row_ring, matched_hmm_ring_sequence with --tight-expected, v2_confidence_dissection, plus M3R and VCD with focused+march cue), R1+R2 shows **decoder-robust dampening** in the decoding sign — Δdec_C ∈ {−0.029, −0.063, −0.070, −0.018, −0.013} on those 5 rows. The sign difference between paired-fork (sharpening on decoding) and observational (dampening on decoding) is real, not a decoder artefact. See RESULTS.md §11–§14 for the full evidence.
@@ -507,18 +507,70 @@ No mechanism interpretation beyond these literal comparisons.
 
 **Coverage.** 17 rows — HMM C1/C2/C3/C4 on R1+R2 (4); HMM C1 on legacy a1/b1/c1/e1 (4); the paired-fork assay on R1+R2 (1, the NEW eval); four observational assays on R1+R2 — M3R, HMS, HMS-T, P3P, VCD (5); three of those observational assays re-run with `focused + march cue` modification (3).
 
-**Per-decoder profile (n=17, except Dec A′ which is R1+R2-only n=13).**
+**Per-decoder profile (2026-04-24, 17-row matrix).**
 
-| Decoder | n rows | mean \|Δ\| | max \|Δ\| | rows that agree with row-majority sign | rows where this decoder is the single outlier |
+| Decoder | n rows | mean \|Δ\| | max \|Δ\| | agrees with row-majority sign (ABC) | rows where this decoder is the single outlier (ABC) |
 |---|---:|---:|---:|---:|---:|
-| A | 17 | 0.2024 | 0.3871 | 17 / 17 | 0 |
-| A′ (R1+R2 only) | 13 | 0.2138 | 0.3902 | 13 / 13 (all signs same as Dec A on the same 13 rows) | 0 |
-| B | 17 | 0.0598 | 0.1818 | 12 / 17 | 5 |
-| C | 17 | 0.0399 | 0.1254 | 14 / 17 | 3 |
+| A | 17 | 0.2056 | 0.3871 | 17 / 17 | 0 |
+| A′ (R1+R2 only) | 13 | 0.1902 | 0.3902 | 13 / 13 (matches Dec A sign on all 13) | — |
+| B | 17 | 0.0485 | 0.1434 | 15 / 17 | 2 (HMM C2 / C4 on R1+R2) |
+| C | 17 | 0.0416 | 0.1254 | 13 / 17 | 4 (c1 / e1 legacy; HMS native; HMS-T modified) |
+| D-raw | 17 | 0.0520 | 0.2308 | 10 / 17 | — (not part of ABC triple) |
+| D-shape | 17 | 0.0585 | 0.1656 | 12 / 17 | — |
+| E | 17 | 0.1934 | 0.4359 | 13 R1+R2 sign-match Dec A; 2 legacy sign-flips (a1 / b1 HMM C1) | — |
 
-9 of 17 rows are **all-agree** (every decoder agrees on sign). Dec A amplifies effects the most; Dec C is the most conservative. See RESULTS.md §11 for the full 17-row long-form table (ex/unex/Δ per decoder) and the compact Δ side-by-side with outlier flags.
+11 of 17 rows are ABC all-agree in the 2026-04-24 rerun. Dec A amplifies
+effects the most; Dec C is the most conservative. See RESULTS.md §11 for
+the full 7-column matrix and per-row flags.
 
-**Dec A → Dec A′ swap (2026-04-23).** Dec A is trained jointly with L2/3 during Stage 1 (moving target — L2/3 changes each step). Dec A′ is a fresh `Linear(36, 36)` retrained for 5000 Adam steps on `r_l23` streamed through the fully-trained, **frozen** R1+R2 network (stable target; 10k-HMM top-1 = 0.5486 vs Dec A 0.5413; `frac_same_pred(A, A′) = 0.820`). Replacing Dec A with Dec A′ on the 13 R1+R2 rows produces **zero Δ-sign flips**; `|Δ_A′ − Δ_A|` ≤ 0.094 with median 0.025; holding Δ_B / Δ_C fixed at their original-run values, zero rows change sign-agreement class. The Dec A training-schedule concern does not materially change the 13-row dampening-vs-sharpening pattern. Sources: `checkpoints/decoder_a_prime.pt`, `results/decoder_a_prime_training.json`, `results/decoder_a_prime_stratified_eval.json`, `results/cross_decoder_comprehensive_decAprime.{json,md}`, `results/cross_decoder_comprehensive_decAprime_diff.{json,md}`. Full taxonomy now in `ARCHITECTURE.md` § "Decoders" (4 decoder rows: A / A′ / B / C).
+**Dec A → Dec A′ swap (2026-04-23).** Dec A is trained jointly with L2/3
+during Stage 1 (moving target — L2/3 changes each step). Dec A′ is a fresh
+`Linear(36, 36)` retrained for 5000 Adam steps on `r_l23` streamed through
+the fully-trained, **frozen** R1+R2 network with **50/50** focused/routine
+task_state (stable target; 10k HMM top-1 = 0.5486 vs Dec A 0.5413;
+`frac_same_pred(A, A′) = 0.820`). Replacing Dec A with Dec A′ on the 13
+R1+R2 rows produces **zero Δ-sign flips**; `|Δ_A′ − Δ_A|` ≤ 0.094 with
+median 0.025. The Dec A training-schedule concern does not materially
+change the 13-row dampening-vs-sharpening pattern. Sources:
+`checkpoints/decoder_a_prime.pt`, `results/decoder_a_prime_training.json`,
+`results/decoder_a_prime_stratified_eval.json`,
+`results/cross_decoder_comprehensive_decAprime.{json,md}`,
+`results/cross_decoder_comprehensive_decAprime_diff.{json,md}`.
+
+**Dec D (2026-04-24, FB-ON paired-fork neutral, per-ckpt).** Two variants:
+D-raw on raw `r_l23` and D-shape on `r_l23 / (r_l23.sum(1) + 1e-8)`.
+Paired-fork training with normal feedback (`feedback_scale = 1.0`), balanced
+per (target_ch × branch) at 900 train + 100 val per cell (72 k total) per
+ckpt. Adam lr=1e-3 wd=1e-4 seed=42. Headline signature: **row 12 (HMS-T
+native on R1+R2)** gives Δ_D-shape = +0.166 while Δ_A = −0.303 — a Kok-
+framework "amplitude dampens, orientation shape sharpens under expectation"
+co-occurrence; only row in the 17-row matrix with this divergence at
+material magnitude. Artefacts:
+`checkpoints/decoder_d_fbON_neutral_{raw,shape}_{r1r2,a1,b1,c1,e1}.pt`,
+`results/cross_decoder_comprehensive_withD_fbON.{json,md}`,
+`results/decoder_d_fbON_all_eval.json`, and per-net training JSONs.
+
+**Dec E (2026-04-24, Dec-A-spec post-Stage-2 retrain, per-ckpt).** Same arch
+as Dec A (`Linear(36, 36)+bias`), same lr=1e-3 no-weight-decay, seed 42,
+5000 gradient steps, but trained after Stage 2 on the natural HMM stream
+with the HMM's **own stochastic task_state** (Markov `p_switch=0.2` for
+R1+R2 via yaml; Bernoulli-per-batch for legacy configs where `task_p_switch`
+is unset). On R1+R2 Dec E is effectively isomorphic to Dec A′
+(`frac_same_pred(A′, E) = 0.9722` on 10k HMM; both 0.547 vs Dec A 0.541 top-1).
+On legacy a1 and b1 Dec A **≫** Dec E by ~23 pp top-1 (Dec A ≈ 0.59 vs Dec
+E ≈ 0.35). On these same two networks Dec E is the only decoder of all
+seven to report **Δ_E > 0** (+0.040 on a1, +0.024 on b1) while A / B / C /
+D-raw / D-shape all report Δ < 0 — a real dissociation. Dec E ckpts for
+a1 / b1 / c1 are **step-4000-recovered** due to a post-training legacy-ckpt
+`loss_heads` bug (fix landed in trainer; full write-up in
+`docs/research_log.md`). Artefacts:
+`checkpoints/decoder_e_{r1r2,a1,b1,c1,e1}.pt`,
+`results/decoder_e_training_{net}.json`,
+`results/decoder_e_stratified_eval_{net}.json`,
+`results/cross_decoder_comprehensive_with_all_decoders.{json,md}` (7-column matrix).
+
+Full taxonomy now in `ARCHITECTURE.md` § "Decoders" (six rows: A / A′ / B / C
+/ D-raw / D-shape / E).
 
 ---
 
@@ -560,30 +612,54 @@ Dec A amplifies the sharpening-vs-dampening gap (−0.03 → +0.21 across the fo
 
 ---
 
-## 18. Robust findings summary (2026-04-22)
+## 18. Robust findings summary (updated 2026-04-24)
 
-**Decoder-robust sharpening signature (all three decoders agree on sign).**
+**Decoder-robust sharpening signature (A / B / C all > 0, per 2026-04-24 matrix).**
 
-1. Paired HMM fork NEW eval on R1+R2: Δ_A = +0.387, Δ_B = +0.085, Δ_C = +0.125.
-2. HMM C1 (focused + HMM cue) on R1+R2: Δ_A = +0.309, Δ_B = +0.015, Δ_C = +0.050.
-3. Legacy e1 on HMM C1: Δ_A = +0.213, Δ_B = +0.051, Δ_C = +0.011.
+1. NEW paired-march eval on R1+R2: Δ_A = +0.387, Δ_B = +0.085, Δ_C = +0.125.
+2. HMM C1 (focused + HMM cue) on R1+R2: Δ_A = +0.315, Δ_B = +0.020, Δ_C = +0.066.
+3. HMM C3 (focused + zero cue) on R1+R2: Δ_A = +0.312, Δ_B = +0.014, Δ_C = +0.041.
+4. P3P on R1+R2 (n = 39/branch small): Δ_A = +0.385, Δ_B = +0.029, Δ_C = +0.051.
 
-**Decoder-robust dampening signature (all three decoders agree on sign).**
+**Decoder-robust dampening signature (A / B / C all < 0).**
 
-1. Legacy b1 on HMM C1: Δ_A = −0.032, Δ_B = −0.015, Δ_C = −0.023.
-2. M3R (matched_3row_ring) on R1+R2: Δ_A = −0.150, Δ_B = −0.008, Δ_C = −0.029.
-3. HMS-T (matched_hmm_ring_sequence, tight-expected) on R1+R2: Δ_A = −0.292, Δ_B = −0.182, Δ_C = −0.063.
-4. VCD (v2_confidence_dissection) on R1+R2: Δ_A = −0.165, Δ_B = −0.098, Δ_C = −0.070.
-5. M3R with focused+march cue modification: Δ_A = −0.137, Δ_B = −0.034, Δ_C = −0.018.
-6. VCD with focused+march cue modification: Δ_A = −0.084, Δ_B = −0.026, Δ_C = −0.013.
+1. HMM C1 on a1 legacy: Δ_A = −0.031, Δ_B = −0.006, Δ_C = −0.010. **NEW in 2026-04-24 matrix** (was B-outlier in 2026-04-22 with Δ_B = +0.000; run-to-run drift flipped it to ALL-agree).
+2. HMM C1 on b1 legacy: Δ_A = −0.033, Δ_B = −0.023, Δ_C = −0.028.
+3. M3R on R1+R2: Δ_A = −0.155, Δ_B = −0.011, Δ_C = −0.027.
+4. HMS-T on R1+R2: Δ_A = −0.303, Δ_B = −0.143, Δ_C = −0.078.
+5. VCD-test3 on R1+R2: Δ_A = −0.167, Δ_B = −0.081, Δ_C = −0.071.
+6. M3R modified on R1+R2: Δ_A = −0.136, Δ_B = −0.037, Δ_C = −0.020.
+7. VCD-test3 modified on R1+R2: Δ_A = −0.084, Δ_B = −0.028, Δ_C = −0.010.
 
-**Decoder-dependent (≥ one decoder disagrees on sign — not decoder-robust by the all-three-agree definition).**
+**Decoder-dependent on the A / B / C triple.**
 
-- HMM C2 / C3 / C4 on R1+R2 (Dec B flips sign or sits near zero on the negative side; A and C both positive).
-- Legacy a1 (Dec B is exactly 0.0, no net shift; A and C both negative — A vs C agree on weak dampening, but the strict three-decoder agreement is not met because B is not negative).
-- Legacy c1 (Dec C flips negative; A and B positive).
-- HMS on R1+R2 (Dec C flips positive; A and B negative).
-- P3P (matched_probe_3pass) on R1+R2 (Dec B flips sign; A and C both positive; small n = 38/branch).
-- HMS-T modified (focused + march cue) on R1+R2 (Dec C flips positive; A and B negative).
+- HMM C2 / C4 on R1+R2 (B-outlier in both; A and C positive, B slightly negative).
+- HMM C1 on c1 legacy (C-outlier; A and B positive, C slightly negative — c1 is §1 transition-boundary).
+- **HMM C1 on e1 legacy (re-classified as decoder-dependent in 2026-04-24)**: Δ_A = +0.199, Δ_B = +0.041, **Δ_C = −0.002**. Was "ALL-agree sharpening" in 2026-04-22 with Δ_C = +0.011; run-to-run drift pushed Δ_C across zero. Adding Dec D and Dec E confirms the training-regime-dependence: Dec A / A′ (none for legacy) / Dec E all strongly positive (A = +0.199, E = +0.230), Dec C / Dec D-raw / Dec D-shape near zero. See § 17 "Legacy reference networks" and RESULTS.md §14 "e1 reclassification" for the full breakdown.
+- HMS on R1+R2 (C-outlier; A and B negative, C positive at +0.053).
+- HMS-T modified on R1+R2 (C-outlier; A and B negative, C positive at +0.051).
 
-**R1+R2 is not a single-regime network.** It is decoder-robust-sharpening on the paired-fork paradigm and decoder-robust-dampening on the matched-probe observational paradigms. The paradigm choice, not the decoder choice, drives the sign. This is the load-bearing finding that replaces the earlier "R1+R2 = sharpening" or "R1+R2 = dampening" single-label framings. See RESULTS.md §14 and ARCHITECTURE.md § "Decoders" for cross-references.
+**Dec A vs Dec E dissociation on dampening legacy rows (2026-04-24).** Dec E
+is Dec-A-spec (same arch, same LR, 5000 steps) but trained post-Stage-2 on
+the HMM stream; on R1+R2 Dec E matches Dec A in sign on all 13 rows and
+tracks Dec A′ to `frac_same_pred = 0.972`. On a1 and b1 HMM C1, Dec E flips
+sign relative to Dec A (Δ_A = −0.031 → Δ_E = +0.040 on a1; Δ_A = −0.033 →
+Δ_E = +0.024 on b1). On these same two nets Dec A outperforms Dec E by
+~23 pp top-1 on 10k natural HMM (Dec A ≈ 0.59 vs Dec E ≈ 0.35). The
+co-trained Dec A captures a representational structure on dampening configs
+that 5000 steps of post-Stage-2 natural-HMM training cannot reproduce.
+
+**Dec D Kok-style signature on row 12 (2026-04-24).** HMS-T native on R1+R2
+gives Δ_D-shape = +0.166 while Δ_A = −0.303. Amplitude-sensitive decoders
+report dampening; the shape-normalised Dec D-shape reports sharpening on
+the same `r_l23`. This is the Kok-framework co-occurrence — expectation
+suppresses amplitude while sharpening the orientation-pattern shape. No
+other row in the 17-row matrix shows this divergence at material magnitude.
+
+**R1+R2 is not a single-regime network.** It is decoder-robust-sharpening
+on the paired-fork paradigm (rows 1, 3, 9, 13 in the 2026-04-24 matrix;
+Dec A′ and Dec E confirm) and decoder-robust-dampening on the matched-probe
+observational paradigms (rows 10, 12, 14, 15, 17; plus row 16 / 11 flipping
+under Dec C). The paradigm choice, not the decoder choice, drives the sign
+on R1+R2. This remains the load-bearing finding. See RESULTS.md §14 and
+ARCHITECTURE.md § "Decoders" for cross-references.

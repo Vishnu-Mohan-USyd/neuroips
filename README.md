@@ -27,25 +27,28 @@ writeups for several lines of investigation.
 
 R4 (DeepTemplate + error-mismatch) exhibits the cleanest Richter (2018) preserved-shape dampening signature: peak −15%, total −19%, FWHM matched within 1.5° between expected and unexpected trials. Main visual: `docs/figures/tuning_ring_recentered_r4.png`. The dampening is **task-state-invariant**, so the preregistered BOTH-regime criterion (focused → Kok sharpening, routine → Richter dampening from one network) is **not** met.
 
-## Headline finding (R1+R2 expectation suppression is paradigm-dependent, 2026-04-22)
+## Headline finding (R1+R2 expectation suppression is paradigm-dependent, 2026-04-22; decoder asymmetries added 2026-04-23/24)
 
 Across the 17-row cross-decoder matrix covering paired-fork and observational paradigms (Tasks #15–#26), R1+R2 is a **hybrid network, not a single-regime network**:
 
 - **Paired HMM fork paradigm (constructive probe, bit-identical pre-probe state):** **decoder-robust sharpening.** NEW eval on R1+R2: Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125; Δpeak ≈ +0.15, Δnet ≈ −1.15, ΔFWHM ≈ −1.3° (expected narrower, higher-peak, better-decoded, lower-activity). HMM C1–C4 (all four task-state × cue conditions) give Δdec_C ∈ {+0.088, +0.013, +0.045, +0.041} — all positive.
 - **Matched-probe observational paradigms** — specifically M3R (`matched_3row_ring`), HMS-T (`matched_hmm_ring_sequence --tight-expected`), VCD (`v2_confidence_dissection`), plus the M3R and VCD `focused + march cue` variants: **decoder-robust dampening.** All three decoders give negative Δdec on these 5 rows; M3R Δdec_C = −0.029, HMS-T Δdec_C = −0.063, VCD Δdec_C = −0.070. The plain HMS variant (`matched_hmm_ring_sequence` without `--tight-expected`, row 11) and HMS-T modified (row 16) are NOT decoder-robust — Dec C flips positive on both — so they are excluded from this list.
 
-The paradigm choice, not the decoder choice, drives the sign. Details: `RESULTS.md` § 11–§ 14, `docs/project_summary.md` § 15–§ 18, `ARCHITECTURE.md` § "Decoders", `results/cross_decoder_comprehensive.json`.
+The paradigm choice, not the decoder choice, drives the sign. The 2026-04-24 rerun extends the 17-row matrix to 7 decoder columns (A, A′, B, C, D-raw, D-shape, E) — the hybrid finding holds on all 13 R1+R2 rows. Two legacy rows (a1 and b1 HMM C1) show a **Dec A vs Dec E sign flip** (Δ_A ≈ −0.03 → Δ_E ≈ +0.03), concentrating the only Dec-A-vs-Dec-E disagreements of the full 17-row matrix on dampening legacy configs. Details: `RESULTS.md` § 11–§ 14, `docs/project_summary.md` § 15–§ 18, `ARCHITECTURE.md` § "Decoders", `results/cross_decoder_comprehensive_with_all_decoders.{json,md}`.
 
-### Decoder summary
+### Decoder summary (2026-04-24: 6 decoders in the 7-column matrix)
 
 | Decoder | Training data | 10k natural-HMM top-1 (R1+R2) | Role |
 |---|---|---:|---|
-| **A** | Stage-1 `r_l23` during L2/3 training (moving target — L2/3 changes each step). | 0.5413 | Frozen network readout; amplifier (largest \|Δ\| but never the sign outlier across 17 rows). |
-| **A′** | 5000 Adam steps on `r_l23` from the **frozen, fully-trained** R1+R2 network (stable target; 2026-04-23). | 0.5486 | Stable-target sanity check on Dec A. Zero Δ-sign flips across all 13 R1+R2 rows; `frac_same_pred(A, A′) = 0.820`. |
-| **B** | 5-fold nearest-centroid CV on the analysis set | — | Robustness control; noisiest sign-carrier (outlier in 5 of 17 rows). |
-| **C** | 100k synthetic orientation bumps (never sees unex) | 0.5345 | Preferred decoder for ex-vs-unex; most conservative (smallest \|Δ\|, outlier in 3 of 17 rows). |
+| **A** | Stage-1 `r_l23` during L2/3 training (moving target — L2/3 changes each step); continues training in Stage 2. | 0.5413 | Frozen network readout; amplifier (largest \|Δ\| but never the sign outlier across 17 rows). |
+| **A′** | 5000 Adam steps on `r_l23` from the **frozen, fully-trained** R1+R2 network with **50/50** focused/routine task_state (stable-target; 2026-04-23). | 0.5486 | Stable-target sanity check on Dec A. Zero Δ-sign flips across all 13 R1+R2 rows; `frac_same_pred(A, A′) = 0.820`. R1+R2 only. |
+| **B** | 5-fold nearest-centroid CV on the analysis set. | — | Robustness control; outlier in 2 of 17 rows in 2026-04-24 rerun. |
+| **C** | 100k synthetic orientation bumps (never sees `r_l23` during training). | 0.5345 | Preferred conservative readout for ex-vs-unex; smallest \|Δ\|, outlier in 4 of 17 rows. |
+| **D-raw** | `Linear(36, 36)+bias` per-ckpt on FB-ON paired-fork neutral localizer (900/cell balanced, 72 k samples). Raw `r_l23` input. | 0.3634 | Amplitude-sensitive neutral readout. Per-net val balanced-acc: r1r2 0.187, a1 0.947, b1 0.922, c1 0.618, e1 0.556. |
+| **D-shape** | Same protocol as D-raw but on `r_l23 / (r_l23.sum(1) + 1e-8)` (shape only). | 0.3726 | Shape-only readout. Signals amplitude-normalised pattern. Row 12 (HMS-T) gives Δ_D-shape = +0.166 while Δ_A = −0.303 — a Kok-style co-occurrence. |
+| **E** | Dec-A-spec (`Linear(36, 36)+bias`, Adam lr=1e-3, 5000 steps, seed 42) retrained per-ckpt on the **natural HMM stream with HMM's own stochastic task_state** (Markov p_switch=0.2 or Bernoulli-per-batch per each yaml); post-Stage-2. | 0.5467 | Close to Dec A on R1+R2 (+0.5 pp; `frac_same_pred(A′, E) = 0.9722`), but Dec A ≫ Dec E by ~23 pp on a1 / b1 — dissociation finding. 2 sign flips vs Dec A (a1 + b1 HMM C1). |
 
-**Chance baseline = 1/36 ≈ 2.8%** for 36-way orientation classification. Dec A (top-1 = 0.5413), Dec A′ (top-1 = 0.5486), and Dec C (top-1 = 0.5345) on the 10k natural HMM stream are all ≈ **19× above chance**, well above random performance. `frac_same_pred(A, C) = 0.67`; `frac_same_pred(A, A′) = 0.82` on the same 10k stream. Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders".
+**Chance baseline = 1/36 ≈ 2.8%** for 36-way orientation classification. On R1+R2 the trained decoders A, A′, E, C all sit at 0.53–0.55 (≈ 19× chance); D-raw / D-shape at 0.36–0.37 are lower because the paired-fork focused-only training distribution is out-of-distribution for the 10k HMM eval stream (50/50 focused/routine + ambiguous). Full taxonomy and cross-decoder bias flags: `ARCHITECTURE.md` § "Decoders". Full 17-row matrix with all 7 decoder columns: `results/cross_decoder_comprehensive_with_all_decoders.{json,md}`.
 
 ## Reproducing the rescue figures
 

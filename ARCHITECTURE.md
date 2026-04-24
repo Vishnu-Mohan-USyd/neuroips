@@ -167,31 +167,69 @@ correcting the earlier "subtractive predictive coding" interpretation.
 
 ## Decoders (orientation readout from L2/3)
 
-Three orientation decoders exist in this project. Only Decoder A is part of
-the trained network; B and C are post-hoc analysis tools. All three are
-applied to the same per-trial `r_l23` (single forward pass, three readouts)
-whenever cross-decoder evaluation is performed.
+Six orientation decoders exist in this project (A, A′, B, C, D — with raw and
+shape variants — and E). Only Decoder A is part of the trained network; the
+others are post-hoc analysis tools retrained on frozen networks. All are
+applied to the same per-trial `r_l23` (one forward pass, many readouts)
+whenever a cross-decoder evaluation is performed.
 
-### Full taxonomy (updated 2026-04-22 from Tasks #15–#26)
+### Full taxonomy (updated 2026-04-24 from Tasks #1 / #4 / #5)
 
-| Decoder | Type | Training data | Samples | Sees unexpected in training? | 10k natural-HMM top-1 (R1+R2) | Stratified strengths |
+| Decoder | Type | Training data | Samples | Sees unexpected in training? | 10k natural-HMM top-1 (R1+R2) | Stratified strengths / notes |
 |---|---|---|---|---|---|---|
-| **A** | `Linear(36, 36)` saved with each Stage-1 checkpoint, frozen in Stage 2. | Natural HMM-march `r_l23` activations during Stage-1 training. | All Stage-1 training trials. | **Yes** — natural march already includes jumps/unexpected transitions at the task-state switching rate. | **0.5413** | Best on `jump` stratum (top-1 0.742 vs decC 0.424); best overall `within3` on non-ambiguous trials; weaker than decC on `pi_low_Q1` (0.464 vs 0.502). |
-| **A′** | Standalone `Linear(36, 36)` with bias, trained **only after the network was fully trained and frozen** (stable-target retrain of Dec A). | Natural-HMM `r_l23` streamed through the frozen R1+R2 network (`results/simple_dual/emergent_seed42/checkpoint.pt`). Per-step: batch 32 × seq 25 = 800 readouts at `t∈[9,11]`, ambiguous kept in, 50/50 focused/routine task_state. Adam lr=1e-3, 5000 gradient steps, seed 42; val pool seed 1234 (~8k readouts). Saved at `checkpoints/decoder_a_prime.pt`. Training script: `scripts/train_decoder_a_prime.py`. | 5000 gradient steps × 800 readouts = 4 M readouts total. | **Yes** — same natural HMM stream, but on **stable, post-training L2/3** (net.eval(), all params `requires_grad_(False)` verified at setup). | **0.5486** | `frac_same_pred(A, A′) = 0.8200`; mean circular distance A vs A′ = 0.25 ch. Slight edges on `clean / pi_high_Q4 / high_pred_err_gt20deg` (+1.6 / +2.6 / +2.5 pp vs A); slight deficits on `ambiguous / pi_low_Q1 / low_pred_err_le5deg` (−1.4 / −2.9 / −3.9 pp vs A). |
-| **B** | 5-fold nearest-centroid CV, computed on demand per analysis. | The same `r_l23` activations being analysed (no separate training). | Varies per-assay (set under evaluation). | Inherits exposure from the assay itself (sees whatever trials the analysis contains). | — (not applicable — CV over analysis set) | Robustness control; flips sign in 5 of 17 cross-decoder rows, so not a safe stand-alone reference. |
-| **C** | Standalone `Linear(36, 36)` with bias. | 100k synthetic orientation-bump patterns (50k single-orientation σ=3 ch, amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02). Trained Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. Saved at `checkpoints/decoder_c.pt`. | 100k synthetic. | **No** — trained on clean synthetic bumps only; never sees network `r_l23` or HMM-march context. | **0.5345** | Best on `ambiguous within1` (0.725 vs decA 0.703); best on `pi_low_Q1` (0.502 vs decA 0.464); weaker on `jump` (0.424 vs decA 0.742); best `top1` on `march_smooth` (0.552 vs decA 0.510). |
+| **A** | `Linear(36, 36)` saved with each Stage-1 checkpoint, continues training in Stage 2. | Natural HMM-march `r_l23` activations during Stage-1 + Stage-2 training (moving target — L2/3 changes every step; cf. `src/training/stage1_sensory.py:127-163`). | All Stage-1 + Stage-2 training trials. | **Yes** — natural march includes jumps/unexpected transitions at the task-state switching rate. | **0.5413** | Best on `jump` stratum (top-1 0.742 vs decC 0.424); best overall `within3` on non-ambiguous trials; weaker than decC on `pi_low_Q1` (0.464 vs 0.502). |
+| **A′** | Standalone `Linear(36, 36)` with bias, trained **only after the network was fully trained and frozen** (stable-target retrain of Dec A). | Natural-HMM `r_l23` streamed through the frozen R1+R2 network. Per-step: batch 32 × seq 25 = 800 readouts at `t∈[9,11]`, ambiguous kept in, **50/50 focused/routine task_state** per batch (Task #25 convention). Adam lr=1e-3, 5000 gradient steps, seed 42; val pool seed 1234 (~8k readouts). Saved at `checkpoints/decoder_a_prime.pt`. Training script: `scripts/train_decoder_a_prime.py`. | 5000 gradient steps × 800 readouts = 4 M readouts. | **Yes** — same natural HMM stream, but on **stable, post-training L2/3** (net.eval(), all params `requires_grad_(False)` verified at setup). | **0.5486** | `frac_same_pred(A, A′) = 0.8200`; mean circular distance A vs A′ = 0.25 ch. Slight edges on `clean / pi_high_Q4 / high_pred_err_gt20deg` (+1.6 / +2.6 / +2.5 pp vs A); slight deficits on `ambiguous / pi_low_Q1 / low_pred_err_le5deg` (−1.4 / −2.9 / −3.9 pp vs A). R1+R2 only. |
+| **B** | 5-fold nearest-centroid CV, computed on demand per analysis. | The same `r_l23` activations being analysed (no separate training). | Varies per-assay (set under evaluation). | Inherits exposure from the assay itself. | — (CV over analysis set) | Robustness control; flips sign in 5 of 17 cross-decoder rows, so not a safe stand-alone reference. |
+| **C** | Standalone `Linear(36, 36)` with bias. | 100k synthetic orientation-bump patterns (50k single-orientation σ=3 ch, amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02). Trained Adam lr=1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. Saved at `checkpoints/decoder_c.pt`. | 100k synthetic. | **No** — trained on clean synthetic bumps only; never sees network `r_l23` or HMM-march context. | **0.5345** | Best on `ambiguous within1` (0.725 vs decA 0.703); best on `pi_low_Q1` (0.502 vs decA 0.464); weaker on `jump` (0.424). |
+| **D-raw** | Standalone `Linear(36, 36)` with bias, trained **per-checkpoint** on frozen-network `r_l23` under **normal feedback (`feedback_scale=1.0`)**. | Paired-fork design, natural feedback on: N_pre ∈ U{4..10} march at 5°/step with random direction, probe at target_ch; unex branch sets `march_end_ch = target_ch − D_signed_ch` with `|D_signed_ch|∈{5..18}` (25°–90° rotation). Cue at march expected-next (same for ex and unex). Focused task_state, contrast U[0.4, 1.0]. Balanced 900 train + 100 val per (target_ch × branch) cell = 72 000 samples. Adam lr=1e-3, wd=1e-4, CE, early-stop patience 3 on balanced val, max 30 epochs, seed 42. Training script: `scripts/train_decoder_d_fbON_neutral.py`. | 64 800 train readouts per net. | **Yes** — mix of ex and unex paired-fork trials, all with FB on. | **0.3634** (on R1+R2) | Trained on paired-fork + focused; the 10k HMM stream is OOD (50/50 focused/routine + ambiguous). Per-net val balanced-acc: r1r2 0.187, a1 0.947, b1 0.922, c1 0.618, e1 0.556. |
+| **D-shape** | Same architecture/protocol as D-raw, but trained on `r_l23 / (r_l23.sum(1) + 1e-8)` (row-normalised shape). | Same paired-fork pipeline; input is per-row-normalised r_l23. | Same as D-raw. | **Yes**. | **0.3726** (on R1+R2) | Per-net val balanced-acc: r1r2 0.215, a1 0.946, b1 0.916, c1 0.655, e1 0.559. |
+| **E** | Standalone `Linear(36, 36)` with bias, trained **per-checkpoint post-Stage-2** with the HMM's **own stochastic task_state** (NOT 50/50 pinned). | Natural HMM stream through each frozen fully-trained network. `task_p_switch = 0.2` (Markov per-presentation) for R1+R2 where the yaml sets it; Bernoulli-per-batch for legacy ckpts whose yamls leave `task_p_switch` unset. Cue as HMM produces (75% valid). Readout `r_l23[9:11].mean`. Adam lr=1e-3, **no weight decay**, CE, 5000 gradient steps, seed 42; val pool seed 1234. Training script: `scripts/train_decoder_e.py`. | r1r2 + e1: full 5000 steps. a1 / b1 / c1: **recovered at step 4000** — a post-training Dec A comparison bug (legacy ckpts lack `loss_heads`) prevented the final save; crash-safety snapshot at step 4000 was promoted to final, fix landed in the trainer for future runs. | **Yes**. | **0.5467** (on R1+R2) | `frac_same_pred(A, E) = 0.8201`; `frac_same_pred(A′, E) = 0.9722` on R1+R2 — Dec E effectively isomorphic to Dec A′ on R1+R2. Per-net 10k HMM top-1: r1r2 0.547, a1 0.354, b1 0.351, c1 0.426, e1 0.478 — see "Dec A vs Dec E dissociation" below. |
 
-Agreement between Dec A and Dec C on the 10k natural HMM stream:
-`frac_same_pred = 0.6691`, mean circular distance 0.43 channels (≈ 2.1°).
-Agreement between Dec A and Dec A′ on the same stream:
-`frac_same_pred(A, A′) = 0.8200`, mean circular distance 0.25 channels
-(`frac_same_pred(A′, C) = 0.6367`). **Chance baseline = 1/36 ≈ 0.028** for
-36-way orientation classification; all three decoders (top-1 0.5413 / 0.5486 /
-0.5345) operate ≈ 19× above chance — they are NOT at chance, they are
-well-trained classifiers whose predictions agree on 67–82% of trials. Sources:
-`/tmp/task25_dec_av_c_summary.json` (Task #25; 10 000 trials, seed 42,
-readout window `t∈[9,11]`) and `results/decoder_a_prime_stratified_eval.json`
-(Task #1 Dec A′; same 10 000 trials, same design, adds Dec A′).
+Agreement on the 10k natural HMM stream (same seed=42, Task #25 design):
+
+| Pair | `frac_same_pred` | Mean circular distance (ch) |
+|---|---:|---:|
+| A vs C | 0.6691 | 0.43 |
+| A vs A′ | 0.8200 | 0.25 |
+| A vs E | 0.8201 | — |
+| A′ vs E | 0.9722 | — |
+| E vs C | 0.6359 | — |
+
+**Chance baseline = 1/36 ≈ 0.028** for 36-way orientation classification; the
+trained linear decoders (A, A′, E at 0.541–0.549; C at 0.535) operate ≈ 19×
+above chance. Dec D-raw / D-shape at 0.36–0.37 on R1+R2 10k HMM are lower
+because their training distribution (focused-only paired-fork) is
+out-of-distribution for the HMM stream's 50/50 focused/routine + ambiguous
+mix — see separate note below. Sources: `/tmp/task25_dec_av_c_summary.json`,
+`results/decoder_a_prime_stratified_eval.json`,
+`results/decoder_e_stratified_eval_r1r2.json`,
+`results/decoder_d_fbON_all_eval.json`.
+
+### Dec A vs Dec E dissociation on dampening legacy networks (2026-04-24)
+
+Dec E is Dec-A-spec (same arch, same LR, 5000 gradient steps) but trained
+post-Stage-2 on the natural HMM stream rather than co-trained during Stage 1.
+On R1+R2 and the sharpening-leaning legacy e1 / transitional c1 the two
+decoders converge within ~2 pp top-1. On the dampening legacy networks a1
+and b1 they dissociate:
+
+| Net | Dec A (10k HMM top-1) | Dec E (10k HMM top-1) | Δ (A − E) |
+|---|---:|---:|---:|
+| r1r2 | 0.5413 | 0.5467 | −0.005 |
+| a1 | 0.5907 | 0.3542 | **+0.236** |
+| b1 | 0.5830 | 0.3507 | **+0.232** |
+| c1 | 0.4476 | 0.4257 | +0.022 |
+| e1 | 0.4887 | 0.4778 | +0.011 |
+
+The Dec-A-on-a1/b1 advantage of ~23 pp over a freshly-trained Dec E is a
+substantive dissociation: on the dampening legacy configs, Dec A captures a
+representational structure that 5000 steps of post-Stage-2 natural-HMM
+training cannot reproduce. One interpretation-free consequence: on these
+two networks, the sign/magnitude of Δ(ex−unex) under Dec A may reflect a
+training-regime-specific structure rather than a decoder-robust property of
+the network's L2/3 representation. See `RESULTS.md §11` for the consequent
+Dec A vs Dec E sign-flip finding (2 R1+R2-negligible rows: a1 and b1 HMM C1
+flip from Δ_A=−0.031/−0.033 to Δ_E=+0.040/+0.024).
 
 ### Stable-target decoder sanity check (Dec A′ vs Dec A, 2026-04-23)
 
@@ -223,26 +261,46 @@ distributions appears to amplify sharpening-side magnitudes slightly, not
 flip signs. Full matrix rerun: `results/cross_decoder_comprehensive_decAprime.{json,md}`;
 row-by-row diff: `results/cross_decoder_comprehensive_decAprime_diff.{json,md}`.
 
-### Cross-decoder bias flags (from Task #26, 17-row matrix)
+### Cross-decoder bias flags (from the current 7-column matrix, 2026-04-24)
 
-Measured on `results/cross_decoder_comprehensive.json` (17 ex/unex
-comparisons spanning HMM C1–C4, legacy a1/b1/c1/e1, paired-fork, and four
-observational assays M3R / HMS / HMS-T / P3P / VCD on R1+R2):
+Measured on `results/cross_decoder_comprehensive_with_all_decoders.json` (17
+ex/unex comparisons spanning HMM C1–C4, legacy a1/b1/c1/e1, paired-fork, and
+four observational assays M3R / HMS / HMS-T / P3P / VCD on R1+R2):
 
-- **Dec A:** `mean |Δ| = 0.2024`, `max |Δ| = 0.3871`; never the single
-  sign-outlier. Always aligns with the row majority — but largest Δ of the
-  three decoders in every row, which means A consistently amplifies
-  whatever effect is present.
-- **Dec B:** `mean |Δ| = 0.0598`, `max |Δ| = 0.1818`; outlier in **5 of 17
-  rows** (HMM C2 / C3 / C4 on R1+R2, a1 legacy, P3P on R1+R2). B is the
-  noisiest sign-carrier.
-- **Dec C:** `mean |Δ| = 0.0399`, `max |Δ| = 0.1254`; outlier in **3 of 17
-  rows** (c1 legacy, HMS on R1+R2, HMS-T with focused+march cue on R1+R2).
-  Smallest-magnitude Δ in most rows, consistent with "untrained-on-network,
-  no march exposure."
+- **Dec A:** `mean |Δ| = 0.2056`, `max |Δ| = 0.3871`; never the single
+  sign-outlier in the ABC triple. Always aligns with the A/B/C row
+  majority — but largest-magnitude Δ of the trained decoders in every row.
+- **Dec A′:** `mean |Δ| = 0.1902`, `max |Δ| = 0.3902` (13 R1+R2 rows only).
+  Same sign as Dec A on every R1+R2 row.
+- **Dec B:** `mean |Δ| = 0.0485`, `max |Δ| = 0.1434`; outlier in **2 of 17
+  rows** in the current rerun (HMM C2 / C4 on R1+R2). The earlier 2026-04-22
+  matrix put B outlier on 5 rows; Δ_B run-to-run drift of ±0.03 reshuffles
+  the borderline cases. B is the noisiest sign-carrier regardless.
+- **Dec C:** `mean |Δ| = 0.0416`, `max |Δ| = 0.1254`; outlier in **4 of 17
+  rows** (c1 / e1 legacy; HMS native; HMS-T modified on R1+R2). Smallest-
+  magnitude Δ in most rows; consistent with "untrained-on-network, no march
+  exposure".
+- **Dec D-raw:** `mean |Δ| = 0.0520`, `max |Δ| = 0.2308`. Agrees with ABC
+  majority on 10 of 17 rows; disagrees on 7.
+- **Dec D-shape:** `mean |Δ| = 0.0585`, `max |Δ| = 0.1656`. Agrees with ABC
+  majority on 12 of 17 rows.
+- **Dec E:** `mean |Δ| = 0.1934`, `max |Δ| = 0.4359`. Sign-flips vs Dec A
+  on 2 of 17 rows — both on dampening legacy nets (a1 and b1 HMM C1).
 
-All three decoders agree on sign in 9 of 17 rows. See RESULTS.md §11 for
-the full matrix.
+11 of 17 rows are ABC all-agree in the current matrix. See RESULTS.md §11
+for the full 7-column table and per-row flags.
+
+### Kok-style shape sharpening signature (row 12)
+
+On the HMS-T native (paired HMM ring sequence, tight-expected) assay on
+R1+R2 — row 12 of the 17-row matrix — **Δ_D-shape = +0.166 while Δ_A =
+−0.303, Δ_D-raw = −0.053, Δ_C = −0.078**. Same forward pass, same r_l23:
+amplitude-sensitive decoders (A, D-raw, C) all report **ex < unex**
+(dampening); shape-normalised D-shape reports **ex > unex** (sharpening).
+This is the Kok-framework signature — expectation suppresses net amplitude
+while leaving the orientation-peaked shape more selective. No other row
+shows the divergence at material magnitudes. Source:
+`results/cross_decoder_comprehensive_with_all_decoders.json`.
 
 ### Decoder magnitude amplification (originally framed as "Decoder A artefact" 2026-04-17; re-evaluated 2026-04-22 under Task #26)
 

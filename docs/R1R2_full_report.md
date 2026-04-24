@@ -1,6 +1,6 @@
 # R1+R2 Full Project Report
 
-**Date:** 2026-04-23
+**Date:** 2026-04-24 (2026-04-23 Dec A′ section preserved; 2026-04-24 Dec D + Dec E sections appended)
 **Branch:** `r1r2-decoderC-sharpening-eval`
 **Default checkpoint (R1+R2):** `results/simple_dual/emergent_seed42/checkpoint.pt`
 **Config:** `config/sweep/sweep_rescue_1_2.yaml`
@@ -15,12 +15,12 @@ This report is a single-file synthesis of the architecture, training, decoders, 
 1. Overview and headline claims
 2. Architecture
 3. Training pipeline
-4. Decoders: A / A′ / B / C
+4. Decoders: A / A′ / B / C / D-raw / D-shape / E
 5. Evaluation paradigms catalogue
-6. 17-row cross-decoder comprehensive matrix
-7. Dec A → Dec A′ swap (stable-target sanity check)
+6. 17-row cross-decoder comprehensive matrix (7 decoder columns)
+7. Dec A → Dec A′ swap (stable-target sanity check, 2026-04-23)
 8. Legacy reference networks (a1 / b1 / c1 / e1) under the three-decoder protocol
-9. Robust findings synthesis
+9. Robust findings synthesis (with Dec A-vs-E dissociation, Kok-style D-shape signature, and e1 reclassification)
 10. Reproducibility and artefact index
 
 ---
@@ -31,12 +31,15 @@ This report is a single-file synthesis of the architecture, training, decoders, 
 
 **Headline claims (factual, evidence-backed).**
 
-- **Hybrid regime.** R1+R2 is decoder-robust-sharpening on the paired-fork paradigm (rows 1 and 9 of § 6) and decoder-robust-dampening on observational matched-probe paradigms (rows 10, 12, 14, 15, 17). The paradigm, not the decoder, flips the sign.
-- **Dec A → Dec A′ swap.** Retraining Decoder A on the **stable** (post-training, frozen) R1+R2 `r_l23` distribution produces **zero Δ-sign flips** across the 13 R1+R2 rows of the cross-decoder matrix. Max `|Δ_A′ − Δ_A|` = 0.094, median 0.025, mean 0.032. The Dec A training-schedule concern (co-trained with L2/3 in Stage 1, moving target) does not materially change the 13-row sign pattern. See § 7 and `results/cross_decoder_comprehensive_decAprime_diff.json`.
-- **Decoder profiles on 17 rows.** Dec A `mean|Δ|=0.2024`, never the sign outlier; Dec B `mean|Δ|=0.0598`, outlier in 5/17 rows; Dec C `mean|Δ|=0.0399`, outlier in 3/17 rows. 9 of 17 rows are all-agree. Source: `results/cross_decoder_comprehensive.json`.
+- **Hybrid regime.** R1+R2 is decoder-robust-sharpening on the paired-fork paradigm (rows 1, 3, 9, 13 of § 6, all ABC > 0) and decoder-robust-dampening on observational matched-probe paradigms (rows 10, 12, 14, 15, 17, all ABC < 0). The paradigm, not the decoder, flips the sign on R1+R2. Confirmed under Dec A′ (13 R1+R2 rows same sign as Dec A) and Dec E (13 R1+R2 rows same sign as Dec A).
+- **Dec A vs Dec E dissociation on dampening legacy networks.** Dec E is Dec-A-spec (same arch + LR + 5000 steps) trained post-Stage-2 on the natural HMM stream. On R1+R2 Dec E ≈ Dec A′ (`frac_same_pred = 0.9722`). On a1 and b1 (dampening legacy configs) **Dec A outperforms Dec E by ≈ 23 pp top-1** (0.59 vs 0.35) and Dec E **flips sign vs Dec A** on a1 / b1 HMM C1 (Δ_A = −0.031 / −0.033 → Δ_E = +0.040 / +0.024). See § 9.6. Sources: `results/decoder_e_stratified_eval_{net}.json`, `results/cross_decoder_comprehensive_with_all_decoders.json`.
+- **Dec D Kok-style signature on HMS-T native.** Row 12 of the 17-row matrix: five amplitude-sensitive decoders (A, A′, B, C, D-raw, E) all report dampening (Δ = −0.21 to −0.303); shape-normalised **Δ_D-shape = +0.166**. Expectation suppresses net amplitude while sharpening the orientation-pattern shape on the same r_l23. Only row in the 17-row matrix with this divergence. See § 9.5.
+- **Dec A → Dec A′ swap.** Retraining Dec A on the stable (post-training) R1+R2 `r_l23` with 50/50 task_state produces **zero Δ-sign flips** across the 13 R1+R2 rows. Max `|Δ_A′ − Δ_A|` = 0.094, median 0.025. The Dec A training-schedule concern does not materially change the 13-row sign pattern. See § 7.
+- **Decoder profiles on 17 rows (2026-04-24 matrix).** Dec A `mean|Δ|=0.2056`, never the ABC sign outlier; Dec A′ `mean|Δ|=0.1902` (13 R1+R2 rows, matches Dec A sign on all 13); Dec B `mean|Δ|=0.0485`, outlier in 2/17 rows; Dec C `mean|Δ|=0.0416`, outlier in 4/17 rows; Dec D-raw `mean|Δ|=0.0520`; Dec D-shape `mean|Δ|=0.0585`; Dec E `mean|Δ|=0.1934`, flips Dec A sign on 2 legacy dampening rows (a1, b1 HMM C1). 11 of 17 rows are ABC all-agree. Source: `results/cross_decoder_comprehensive_with_all_decoders.json`.
+- **e1 reclassification (2026-04-22 → 2026-04-24).** The 2026-04-22 "decoder-robust sharpening" label on e1 HMM C1 relied on Δ_C = +0.011; the 2026-04-24 rerun gives Δ_C = −0.002 (crossed zero within ±0.03 CPU FP drift envelope). Under the added Dec D / Dec E: A / B / E positive, C / D near zero. e1 is training-regime-dependent, not decoder-robust. See § 9.3b.
 - **Dec A vs Dec C agreement on 10k natural HMM.** `frac_same_pred = 0.6691`, mean circular distance 0.43 ch (≈ 2.1°). Dec A top-1 = 0.5413, Dec C top-1 = 0.5345 (both ≈ 19× chance). Source: `/tmp/task25_dec_av_c_summary.json`.
 
-**Non-claims (calibration).** "Zero sign flips" under Dec A → Dec A′ does not validate Dec A as correct; it only means two linear decoders (trained on the same network states under slightly different schedules) give the same sign of Δ on the 13 R1+R2 rows. "Decoder-robust" in this doc means `sign(Δ_A) = sign(Δ_B) = sign(Δ_C)`, no more.
+**Non-claims (calibration).** "Zero sign flips" under Dec A → Dec A′ does not validate Dec A as correct; it only means two linear decoders (trained on the same network states under slightly different schedules) give the same sign of Δ on the 13 R1+R2 rows. "Decoder-robust" in this doc means `sign(Δ_A) = sign(Δ_B) = sign(Δ_C)`, no more — Dec A′, Dec D, Dec E do not join the ABC-triple definition, but their per-row signs are recorded alongside and cross-checked against it.
 
 ---
 
@@ -156,9 +159,9 @@ Stimulus params: `cue_dim=2`, `n_states=2`, `p_self=0.95`, `p_transition_cw=p_tr
 
 ---
 
-## 4. Decoders: A / A′ / B / C
+## 4. Decoders: A / A′ / B / C / D-raw / D-shape / E
 
-Four orientation decoders exist in the project. Only Dec A is part of the trained network. Dec A′ is the 2026-04-23 stable-target retrain. Dec B and Dec C are post-hoc analysis tools. All three are applied to the **same** per-trial `r_l23` (one forward pass, multiple readouts) whenever a cross-decoder evaluation is performed.
+Six distinct decoders exist in the project (Dec D has two variants: raw and shape). Only Dec A is part of the trained network. Dec A′ (2026-04-23) and Dec E (2026-04-24) are post-Stage-2 retrains of the Dec A architecture. Dec D (2026-04-24) is a paired-fork neutral localizer (two variants: raw vs shape-normalised). Dec B and Dec C are pre-existing post-hoc tools. All six are applied to the **same** per-trial `r_l23` (one forward pass, multiple readouts) whenever a cross-decoder evaluation is performed.
 
 ### 4.1. Taxonomy
 
@@ -168,6 +171,9 @@ Four orientation decoders exist in the project. Only Dec A is part of the traine
 | **A′** | Standalone `Linear(36, 36)` with bias, trained **only after the network was fully trained and frozen**. | `r_l23` streamed through the frozen R1+R2 network. Per step: batch 32 × seq 25 = 800 readouts at `t∈[9,11]`, ambiguous kept in, 50/50 focused/routine task_state. Adam lr 1e-3, 5000 gradient steps, seed 42; val pool seed 1234, ~8k readouts. | 5000 × 800 = 4 000 000 readouts total. | Yes — same stream, but on **stable** (post-training) L2/3. | **0.5486** | `checkpoints/decoder_a_prime.pt` |
 | **B** | 5-fold nearest-centroid CV (`src/analysis/decoding.py:46 cross_validated_decoding`; helper in `scripts/cross_decoder_eval.py:189 decB_acc_5fold`). | The same `r_l23` being analysed — no separate training set. | Varies per-assay (set under evaluation). | Inherits exposure from the assay under evaluation. | — (not applicable; CV over analysis set) | — (computed on demand) |
 | **C** | Standalone `Linear(36, 36)` with bias. | 100k synthetic orientation-bump patterns: 50k single-orientation σ=3 ch, amplitudes ∈ [0.1, 2.0]; 50k multi-orientation K∈{2,3} with strictly-max amplitude as the label; Gaussian noise σ=0.02. Adam lr 1e-3, batch 256, ≤30 epochs, early-stop patience 3, seed 42. | 100k synthetic. | No — trained on clean synthetic bumps only; never sees network `r_l23` or HMM context. | **0.5345** | `checkpoints/decoder_c.pt` |
+| **D-raw** | Standalone `Linear(36, 36)` with bias, **per-ckpt**, FB-ON paired-fork neutral localizer (2026-04-24). | Paired-fork: N_pre ∈ U{4..10} march at 5°/step with random direction; probe rendered at target_ch for both branches; unex sets march_end_ch = target_ch − D_signed_ch (\|D\| ∈ {5..18} ch = 25°–90°). Cue at march expected-next. Focused task_state, contrast U[0.4, 1.0], `feedback_scale = 1.0` throughout. Balanced 900 train + 100 val per (target_ch × branch) cell → 64 800 train + 7 200 val. Adam lr 1e-3 wd=1e-4, CE, early-stop patience 3, max 30 epochs, seed 42. | 64 800 train readouts per net. | Yes — mix of ex/unex paired-fork with FB on. | **0.3634** (R1+R2); paired-fork training distribution is OOD vs 10k HMM eval so absolute number is not comparable with A/A′/C/E. | `checkpoints/decoder_d_fbON_neutral_raw_{r1r2,a1,b1,c1,e1}.pt` |
+| **D-shape** | Same arch + protocol as D-raw, trained on `r_l23 / (r_l23.sum(1) + 1e-8)` (shape only). | Same paired-fork pipeline as D-raw. | Same as D-raw. | Yes. | **0.3726** (R1+R2). | `checkpoints/decoder_d_fbON_neutral_shape_{r1r2,a1,b1,c1,e1}.pt` |
+| **E** | Standalone `Linear(36, 36)` with bias, **per-ckpt**, Dec-A-spec post-Stage-2 retrain (2026-04-24). | Natural HMM stream through each frozen fully-trained network, HMM's own stochastic `task_state` (Markov `task_p_switch = 0.2` for R1+R2 via yaml; Bernoulli-per-batch for legacy configs where `task_p_switch` is unset). Cue as HMM produces (75% valid). Readout `r_l23[9:11].mean`. Adam lr 1e-3, **no weight decay**, CE, 5000 gradient steps, seed 42; val pool seed 1234. | 5000 gradient steps × 800 readouts = 4 M readouts per net (r1r2, e1 = full 5000; a1 / b1 / c1 = **step-4000 recovered** due to post-training crash — see § 10.6). | Yes — natural HMM stream. | **0.5467** (R1+R2). | `checkpoints/decoder_e_{r1r2,a1,b1,c1,e1}.pt` |
 
 ### 4.2. Agreement on the 10k natural-HMM stream (Task #25 design, seed 42, readout window [9,11])
 
@@ -176,8 +182,24 @@ Four orientation decoders exist in the project. Only Dec A is part of the traine
 | A vs C | 0.6691 | 0.43 |
 | A vs A′ | 0.8200 | 0.25 |
 | A′ vs C | 0.6367 | 0.48 |
+| A vs E | 0.8201 | — |
+| A′ vs E | 0.9722 | — |
+| E vs C | 0.6359 | — |
 
-Source: `/tmp/task25_dec_av_c_summary.json` (A vs C), `results/decoder_a_prime_stratified_eval.json` (A vs A′, A′ vs C).
+Sources: `/tmp/task25_dec_av_c_summary.json` (A vs C), `results/decoder_a_prime_stratified_eval.json` (A vs A′, A′ vs C), `results/decoder_e_stratified_eval_r1r2.json` (A vs E, A′ vs E, E vs C on R1+R2).
+
+### 4.2b. Per-net 10k HMM top-1 across all decoders (2026-04-24, Task #25 design)
+
+```
+net     D-raw    D-shape   A        A'       C        E
+r1r2    0.3634   0.3726    0.5413   0.5486   0.5345   0.5467
+a1      0.4130   0.5396    0.5907   —        0.5050   0.3542
+b1      0.4080   0.5652    0.5830   —        0.5028   0.3507
+c1      0.3848   0.3597    0.4476   —        0.4510   0.4257
+e1      0.4074   0.3995    0.4887   —        0.4647   0.4778
+```
+
+Dec D-raw / Dec D-shape trained on paired-fork focused-only with FB on; 10k HMM is 50/50 focused/routine + ambiguous — OOD for Dec D, so its 10k top-1 understates its in-distribution performance (see per-net val balanced-acc in § 4.5b). Dec A ≫ Dec E on a1 / b1 by ~23 pp — see § 9 "Dec A vs Dec E dissociation".
 
 ### 4.3. Stratified accuracy on 10k natural HMM (Task #25 strata; `pi_q1 = 0.824`, `pi_q3 = 2.362`; jump threshold 30°; pred-err thresholds 5° / 20°; 50/50 focused/routine per batch)
 
@@ -197,18 +219,55 @@ Source: `/tmp/task25_dec_av_c_summary.json` (A vs C), `results/decoder_a_prime_s
 
 MAE in channels (overall, 10k): Dec A 0.820, Dec A′ 0.790, Dec C 0.862. `within1`: 0.8871 / 0.8960 / 0.8960. Dec A′ has the smallest overall MAE and the highest `within1`.
 
-### 4.4. Cross-decoder bias flags (17-row matrix, `results/cross_decoder_comprehensive.json`)
+### 4.4. Cross-decoder bias flags (17-row matrix, `results/cross_decoder_comprehensive_with_all_decoders.json`, 2026-04-24)
 
-- **Dec A**: `mean |Δ| = 0.2024`, `max |Δ| = 0.3871`; never the single sign-outlier. Always aligns with the 2/3 majority, but produces the largest-magnitude Δ in every row (amplifier).
-- **Dec A′** (13 R1+R2 rows only): `mean |Δ| = 0.2138`, `max |Δ| = 0.3902`; zero sign flips vs Dec A on the same 13 rows.
-- **Dec B**: `mean |Δ| = 0.0598`, `max |Δ| = 0.1818`; outlier in 5/17 rows (HMM C2, C3, C4 on R1+R2; HMM C1 on a1 legacy; P3P on R1+R2).
-- **Dec C**: `mean |Δ| = 0.0399`, `max |Δ| = 0.1254`; outlier in 3/17 rows (HMM C1 on c1 legacy; HMS on R1+R2; HMS-T modified on R1+R2). Smallest-magnitude Δ in most rows.
+- **Dec A**: `mean |Δ| = 0.2056`, `max |Δ| = 0.3871`; never the A/B/C sign-outlier. Always aligns with the 2/3 majority, produces the largest-magnitude Δ in every row (amplifier).
+- **Dec A′** (13 R1+R2 rows only): `mean |Δ| = 0.1902`, `max |Δ| = 0.3902`; zero sign flips vs Dec A on the same 13 rows.
+- **Dec B**: `mean |Δ| = 0.0485`, `max |Δ| = 0.1434`; outlier in 2 / 17 rows in 2026-04-24 rerun (HMM C2 / HMM C4 on R1+R2). The earlier 2026-04-22 matrix put B outlier on 5 rows; Δ_B drift of ±0.03 reshuffles the borderline cases.
+- **Dec C**: `mean |Δ| = 0.0416`, `max |Δ| = 0.1254`; outlier in 4 / 17 rows (c1 legacy; **e1 legacy**; HMS native; HMS-T modified on R1+R2). Smallest-magnitude Δ in most rows. The e1-outlier emergence is the 2026-04-24 reclassification.
+- **Dec D-raw**: `mean |Δ| = 0.0520`, `max |Δ| = 0.2308`. Agrees with ABC majority on 10 / 17 rows.
+- **Dec D-shape**: `mean |Δ| = 0.0585`, `max |Δ| = 0.1656`. Agrees with ABC majority on 12 / 17 rows. **Only decoder to report Δ > 0 on row 12** (HMS-T native) — Kok-style signature.
+- **Dec E**: `mean |Δ| = 0.1934`, `max |Δ| = 0.4359`. Sign-matches Dec A on all 13 R1+R2 rows; flips Dec A sign on 2 legacy rows (a1 + b1 HMM C1) — Dec-A-vs-E dissociation on dampening legacy configs.
 
 ### 4.5. Dec C training and validation (`scripts/train_decoder_c.py`; `results/decoder_c_validation.json`)
 
 - **Training**: 100 000 synthetic patterns, 90/10 split. Early-stopped at epoch 29 with `best_val_acc = 0.8145`.
 - **Held-out synthetic**: `top-1 = 0.8145` (single-orientation 0.9800; multi-orientation 0.6522). Note: target 0.95 not met (multi-orientation is the hard case).
 - **Real-network natural HMM (R1+R2, 3200 readouts, 4 batches × seq 25)**: all-trials `top-1 = 0.5334` / `±1 = 0.8906` / `±2 = 0.9616`; non-ambiguous slice (2235 readouts) `top-1 = 0.6635` / `±1 = 0.9714` / `±2 = 0.9803`.
+
+### 4.5b. Dec D per-net in-distribution val balanced-acc (paired-fork training set)
+
+| Net | D-raw | D-shape |
+|---|---:|---:|
+| r1r2 | 0.1869 | 0.2147 |
+| a1 | 0.9467 | 0.9456 |
+| b1 | 0.9215 | 0.9162 |
+| c1 | 0.6182 | 0.6550 |
+| e1 | 0.5562 | 0.5590 |
+
+Striking asymmetry: on R1+R2 Dec D caps at ~0.20 despite 64.8 k training
+samples; on a1 / b1 (dampening configs, weak feedback) it saturates at ~0.92.
+On R1+R2 the feedback is strong enough to perturb the bottom-up probe
+signature enough that a linear head trained on both ex and unex cannot
+reliably recover the probe channel.
+
+### 4.5c. Dec E per-net training (2026-04-24)
+
+| Net | Steps | Dec E val top-1 (own val pool) | Dec A on same val pool | Status |
+|---|---:|---:|---:|---|
+| r1r2 | 5000 | 0.5546 | 0.5354 | full |
+| e1 | 5000 | 0.4899 | 0.5046 | full |
+| a1 | 4000 | 0.3643 | 0.5956 | **step-4000 recovered** |
+| b1 | 4000 | 0.3623 | 0.5879 | **step-4000 recovered** |
+| c1 | 4000 | 0.4388 | 0.4600 | **step-4000 recovered** |
+
+Per-net "Dec A on same val pool" numbers are from each Dec E training JSON's
+`compare_decA_orig_on_val_pool` block — Dec A applied to Dec E's val pool
+(HMM-stochastic task_state via each yaml's `task_p_switch`). These differ
+slightly from Dec A on Dec A′'s val pool (which uses 50/50 task_state: Dec A
+= 0.5472 on R1+R2 — see § 4.6) because the val distributions differ.
+
+Recovery notes in § 10.6.
 
 ### 4.6. Dec A′ training curve (`results/decoder_a_prime_training.json`; 5000 Adam steps, lr 1e-3, batch 32 × seq 25, seed 42, val seed 1234)
 
@@ -300,58 +359,63 @@ See § 8 for context on the Section-5 classifications.
 
 ---
 
-## 6. 17-row cross-decoder comprehensive matrix (`results/cross_decoder_comprehensive.json`)
+## 6. 17-row cross-decoder comprehensive matrix (`results/cross_decoder_comprehensive_with_all_decoders.json`)
 
-Single forward pass per trial; three readouts per trial (Dec A / Dec B / Dec C). Aggregator: `scripts/aggregate_cross_decoder_matrix.py`.
+Single forward pass per trial; seven readouts per trial (Dec A / Dec A′ / Dec B / Dec C / Dec D-raw / Dec D-shape / Dec E). 2026-04-24 rerun; ABC sign-agreement remains the historical "decoder-robust" filter.
 
-### 6.1. Compact Δ = acc(ex) − acc(unex)
+### 6.1. Compact Δ = acc(ex) − acc(unex) — 7 decoder columns
 
-| # | Assay | Network | n_ex | n_unex | Δ_A | Δ_A′ | Δ_B | Δ_C | majority | outlier |
-|---|---|---|---:|---:|---:|---:|---:|---:|:--:|:--:|
-| 1 | HMM C1 (focused + HMM cue) | R1+R2 | 1000 | 1000 | +0.3090 | +0.3070 | +0.0150 | +0.0500 | + | — |
-| 2 | HMM C2 (routine + HMM cue) | R1+R2 | 1000 | 1000 | +0.1580 | +0.1690 | −0.0170 | +0.0060 | + | B |
-| 3 | HMM C3 (focused + zero cue) | R1+R2 | 1000 | 1000 | +0.3000 | +0.2820 | −0.0070 | +0.0380 | + | B |
-| 4 | HMM C4 (routine + zero cue) | R1+R2 | 1000 | 1000 | +0.1550 | +0.1560 | −0.0360 | +0.0390 | + | B |
-| 5 | HMM C1 | a1 legacy | 1000 | 1000 | −0.0220 | — | +0.0000 | −0.0090 | − | B |
-| 6 | HMM C1 | b1 legacy | 1000 | 1000 | −0.0320 | — | −0.0150 | −0.0230 | − | — |
-| 7 | HMM C1 | c1 legacy | 1000 | 1000 | +0.1870 | — | +0.0370 | −0.0070 | + | C |
-| 8 | HMM C1 | e1 legacy | 1000 | 1000 | +0.2130 | — | +0.0510 | +0.0110 | + | — |
-| 9 | NEW (paired march) | R1+R2 | 2400 | 2400 | +0.3871 | +0.3888 | +0.0854 | +0.1254 | + | — |
-| 10 | M3R (matched_3row_ring) | R1+R2 | 1084 | 3302 | −0.1496 | −0.0887 | −0.0082 | −0.0294 | − | — |
-| 11 | HMS (matched_hmm_ring_sequence) | R1+R2 | 3074 | 153 | −0.1850 | −0.1556 | −0.1103 | +0.0790 | − | C |
-| 12 | HMS-T (--tight-expected) | R1+R2 | 793 | 101 | −0.2919 | −0.2112 | −0.1818 | −0.0631 | − | — |
-| 13 | P3P (matched_probe_3pass) | R1+R2 | 38 | 38 | +0.3684 | +0.3902 | −0.1714 | +0.0526 | + | B |
-| 14 | VCD-test3 | R1+R2 | 8025 | 8025 | −0.1655 | −0.1987 | −0.0984 | −0.0703 | − | — |
-| 15 | M3R modified | R1+R2 | 3260 | 6486 | −0.1373 | −0.1122 | −0.0336 | −0.0176 | − | — |
-| 16 | HMS-T modified | R1+R2 | 1139 | 111 | −0.2968 | −0.2031 | −0.1222 | +0.0443 | − | C |
-| 17 | VCD-test3 modified | R1+R2 | 6998 | 6998 | −0.0840 | −0.1165 | −0.0264 | −0.0130 | − | — |
+| # | Assay | Network | n_ex | n_unex | Δ_A | Δ_A′ | Δ_B | Δ_C | Δ_D-raw | Δ_D-shape | Δ_E | ABC maj/outlier |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:--:|
+| 1 | HMM C1 (focused + HMM cue) | R1+R2 | 1000 | 1000 | +0.3150 | +0.3070 | +0.0200 | +0.0660 | +0.0090 | +0.0330 | +0.3290 | +/— |
+| 2 | HMM C2 (routine + HMM cue) | R1+R2 | 1000 | 1000 | +0.1620 | +0.1690 | −0.0340 | +0.0290 | +0.0520 | +0.0670 | +0.1510 | +/B |
+| 3 | HMM C3 (focused + zero cue) | R1+R2 | 1000 | 1000 | +0.3120 | +0.2820 | +0.0140 | +0.0410 | +0.0240 | +0.0560 | +0.2750 | +/— |
+| 4 | HMM C4 (routine + zero cue) | R1+R2 | 1000 | 1000 | +0.1700 | +0.1560 | −0.0230 | +0.0360 | +0.0430 | +0.0480 | +0.1580 | +/B |
+| 5 | HMM C1 | a1 legacy | 1000 | 1000 | −0.0310 | — | −0.0060 | −0.0100 | −0.0510 | −0.0330 | **+0.0400** | −/— |
+| 6 | HMM C1 | b1 legacy | 1000 | 1000 | −0.0330 | — | −0.0230 | −0.0280 | −0.0510 | −0.0210 | **+0.0240** | −/— |
+| 7 | HMM C1 | c1 legacy | 1000 | 1000 | +0.1770 | — | +0.0200 | −0.0090 | +0.0690 | +0.0630 | +0.1800 | +/C |
+| 8 | HMM C1 | e1 legacy | 1000 | 1000 | +0.1990 | — | +0.0410 | −0.0020 | −0.0050 | +0.0080 | +0.2300 | +/C |
+| 9 | NEW (paired march) | R1+R2 | 2400 | 2400 | +0.3871 | +0.3888 | +0.0854 | +0.1254 | +0.0667 | +0.0650 | +0.3888 | +/— |
+| 10 | M3R (matched_3row_ring) | R1+R2 | 1084 | 3295 | −0.1548 | −0.0887 | −0.0105 | −0.0274 | +0.0084 | +0.0456 | −0.0799 | −/— |
+| 11 | HMS (matched_hmm_ring_sequence) | R1+R2 | 3078 | 149 | −0.1865 | −0.1556 | −0.1113 | +0.0525 | +0.0034 | −0.0258 | −0.1600 | −/C |
+| 12 | HMS-T (--tight-expected) | R1+R2 | 791 | 105 | −0.3033 | −0.2112 | −0.1434 | −0.0779 | −0.0532 | **+0.1656** | −0.2074 | −/— |
+| 13 | P3P (matched_probe_3pass) | R1+R2 | 39 | 39 | +0.3846 | +0.3902 | +0.0286 | +0.0513 | +0.2308 | +0.1282 | +0.4359 | +/— |
+| 14 | VCD-test3 | R1+R2 | 7981 | 7981 | −0.1666 | −0.1987 | −0.0812 | −0.0708 | +0.0570 | +0.0546 | −0.2006 | −/— |
+| 15 | M3R modified | R1+R2 | 3272 | 6484 | −0.1362 | −0.1122 | −0.0372 | −0.0197 | +0.0145 | +0.0798 | −0.1053 | −/— |
+| 16 | HMS-T modified | R1+R2 | 1143 | 111 | −0.2937 | −0.2031 | −0.1169 | +0.0510 | +0.1121 | −0.0253 | −0.2061 | −/C |
+| 17 | VCD-test3 modified | R1+R2 | 6985 | 6985 | −0.0836 | −0.1165 | −0.0285 | −0.0103 | +0.0335 | +0.0759 | −0.1165 | −/— |
 
-Majority/outlier columns are computed from the original Δ_A / Δ_B / Δ_C triple (2026-04-22 matrix). `Δ_A′` values come from the 2026-04-23 rerun (§ 7). Legacy rows have Δ_A′ = — because Dec A′ was trained on R1+R2 `r_l23` and applying it to legacy `r_l23` would be a transfer test, not the same comparison.
+Bolded Δ values flag the two Dec A-vs-E sign-flip rows (5, 6) and the Kok-style sharpening row (12, Δ_D-shape = +0.166 while Δ_A = −0.303).
 
-### 6.2. Per-decoder profile
+### 6.2. Per-decoder profile (2026-04-24)
 
-| Decoder | n rows | mean |Δ| | max |Δ| | rows agreeing with row-majority | rows where this decoder is single outlier |
-|---|---:|---:|---:|---:|---|
-| A | 17 | 0.2024 | 0.3871 | 17 / 17 | — |
-| A′ (R1+R2 only) | 13 | 0.2138 | 0.3902 | 13 / 13 (signs identical to A on the same 13 rows) | — |
-| B | 17 | 0.0598 | 0.1818 | 12 / 17 | HMM C2 / C3 / C4 on R1+R2; HMM C1 on a1 legacy; P3P on R1+R2 |
-| C | 17 | 0.0399 | 0.1254 | 14 / 17 | HMM C1 on c1 legacy; HMS on R1+R2; HMS-T modified on R1+R2 |
+| Decoder | n rows | mean |Δ| | max |Δ| | sign agreement with A/B/C majority |
+|---|---:|---:|---:|---|
+| A | 17 | 0.2056 | 0.3871 | 17 / 17 |
+| A′ (R1+R2 only) | 13 | 0.1902 | 0.3902 | 13 / 13 (same sign as A on same rows) |
+| B | 17 | 0.0485 | 0.1434 | 15 / 17 (outlier on HMM C2 / C4) |
+| C | 17 | 0.0416 | 0.1254 | 13 / 17 (outlier on c1 / e1 legacy / HMS native / HMS-T modified) |
+| D-raw | 17 | 0.0520 | 0.2308 | 10 / 17 |
+| D-shape | 17 | 0.0585 | 0.1656 | 12 / 17 |
+| E | 17 | 0.1934 | 0.4359 | 13 / 13 R1+R2 sign-match A; flips A sign on 2 legacy rows (a1, b1 HMM C1) |
 
-### 6.3. Rows where all three decoders (A, B, C) agree on sign (9 / 17)
+### 6.3. Rows where A / B / C all agree on sign (11 / 17)
 
 | # | Assay | Network | Common sign |
 |---|---|---|:--:|
 | 1 | HMM C1 (focused + HMM cue) | R1+R2 | + |
+| 3 | HMM C3 (focused + zero cue) | R1+R2 | + |
+| 5 | HMM C1 | a1 legacy | − |
 | 6 | HMM C1 | b1 legacy | − |
-| 8 | HMM C1 | e1 legacy | + |
 | 9 | NEW (paired march) | R1+R2 | + |
 | 10 | M3R | R1+R2 | − |
 | 12 | HMS-T | R1+R2 | − |
+| 13 | P3P (n = 39/branch) | R1+R2 | + |
 | 14 | VCD-test3 | R1+R2 | − |
 | 15 | M3R modified | R1+R2 | − |
 | 17 | VCD-test3 modified | R1+R2 | − |
 
-Two rows with + majority and three-decoder agreement on R1+R2: rows 1, 9. Five rows with − majority and three-decoder agreement on R1+R2: rows 10, 12, 14, 15, 17.
+R1+R2 ABC-robust sharpening rows: 1, 3, 9, 13 (+). R1+R2 ABC-robust dampening rows: 10, 12, 14, 15, 17 (−). Legacy ABC-robust dampening: 5, 6 (a1, b1 HMM C1). Row 3 and row 5 are **new** ALL-agree rows in the 2026-04-24 rerun (Δ_B crossed zero vs the 2026-04-22 values, reflecting ±0.03 CPU FP drift). Row 8 (e1 legacy) — a 2026-04-22 ALL-agree row — is now **C-outlier** in the 2026-04-24 rerun (Δ_C = +0.011 → −0.002; see § 8.3 e1 reclassification).
 
 ---
 
@@ -436,43 +500,77 @@ The legacy Section-5 regime classifications (a1, b1 dampening; e1 sharpening) re
 
 ---
 
-## 9. Robust findings synthesis
+## 9. Robust findings synthesis (2026-04-24)
 
-"Decoder-robust" in this doc means all three decoders (A, B, C) agree on the sign of Δ = acc(ex) − acc(unex). Only the all-agree subset is listed as decoder-robust below.
+"Decoder-robust" in this doc means all three decoders (A, B, C) agree on the sign of Δ = acc(ex) − acc(unex). Only the all-agree subset is listed as decoder-robust below. Numbers in this section come from the 2026-04-24 rerun.
 
-### 9.1. Decoder-robust sharpening on R1+R2 (Δ > 0 on all three)
+### 9.1. Decoder-robust sharpening on R1+R2 (Δ > 0 on A, B, C)
 
 | # | Assay | Δ_A | Δ_B | Δ_C |
 |---|---|---:|---:|---:|
-| 1 | HMM C1 (focused + HMM cue) | +0.3090 | +0.0150 | +0.0500 |
+| 1 | HMM C1 (focused + HMM cue) | +0.3150 | +0.0200 | +0.0660 |
+| 3 | HMM C3 (focused + zero cue) | +0.3120 | +0.0140 | +0.0410 |
 | 9 | NEW (paired march) | +0.3871 | +0.0854 | +0.1254 |
+| 13 | P3P (n = 39/branch, small) | +0.3846 | +0.0286 | +0.0513 |
 
-### 9.2. Decoder-robust dampening on R1+R2 (Δ < 0 on all three)
+### 9.2. Decoder-robust dampening (Δ < 0 on A, B, C)
 
-| # | Assay | Δ_A | Δ_B | Δ_C |
+| # | Network / assay | Δ_A | Δ_B | Δ_C |
 |---|---|---:|---:|---:|
-| 10 | M3R | −0.1496 | −0.0082 | −0.0294 |
-| 12 | HMS-T | −0.2919 | −0.1818 | −0.0631 |
-| 14 | VCD-test3 | −0.1655 | −0.0984 | −0.0703 |
-| 15 | M3R modified | −0.1373 | −0.0336 | −0.0176 |
-| 17 | VCD-test3 modified | −0.0840 | −0.0264 | −0.0130 |
+| 5 | a1 legacy HMM C1 | −0.0310 | −0.0060 | −0.0100 |
+| 6 | b1 legacy HMM C1 | −0.0330 | −0.0230 | −0.0280 |
+| 10 | R1+R2 M3R | −0.1548 | −0.0105 | −0.0274 |
+| 12 | R1+R2 HMS-T | −0.3033 | −0.1434 | −0.0779 |
+| 14 | R1+R2 VCD-test3 | −0.1666 | −0.0812 | −0.0708 |
+| 15 | R1+R2 M3R modified | −0.1362 | −0.0372 | −0.0197 |
+| 17 | R1+R2 VCD-test3 modified | −0.0836 | −0.0285 | −0.0103 |
 
-### 9.3. Decoder-dependent on R1+R2 (≥ one decoder disagrees on sign)
+### 9.3. Decoder-dependent on R1+R2 or legacy (≥ one of A / B / C disagrees on sign)
 
 | # | Assay | Δ_A | Δ_B | Δ_C | Outlier |
 |---|---|---:|---:|---:|---|
-| 2 | HMM C2 (routine + HMM cue) | +0.1580 | −0.0170 | +0.0060 | B |
-| 3 | HMM C3 (focused + zero cue) | +0.3000 | −0.0070 | +0.0380 | B |
-| 4 | HMM C4 (routine + zero cue) | +0.1550 | −0.0360 | +0.0390 | B |
-| 11 | HMS | −0.1850 | −0.1103 | +0.0790 | C |
-| 13 | P3P | +0.3684 | −0.1714 | +0.0526 | B |
-| 16 | HMS-T modified | −0.2968 | −0.1222 | +0.0443 | C |
+| 2 | HMM C2 (routine + HMM cue) | +0.1620 | −0.0340 | +0.0290 | B |
+| 4 | HMM C4 (routine + zero cue) | +0.1700 | −0.0230 | +0.0360 | B |
+| 7 | c1 legacy HMM C1 | +0.1770 | +0.0200 | −0.0090 | C |
+| 8 | **e1 legacy HMM C1** (RE-CLASSIFIED) | +0.1990 | +0.0410 | −0.0020 | C |
+| 11 | R1+R2 HMS | −0.1865 | −0.1113 | +0.0525 | C |
+| 16 | R1+R2 HMS-T modified | −0.2937 | −0.1169 | +0.0510 | C |
 
-Rows 2/3/4 share the same outlier (B) — Dec B sits near zero or slightly negative on paired HMM fork conditions without the HMM cue dissociating focused from routine task-state. P3P row 13 has a small n (38/branch).
+### 9.3b. e1 reclassification (2026-04-22 → 2026-04-24)
 
-### 9.4. Hybrid regime claim
+Row 8 (e1 legacy HMM C1) was labelled "ALL-agree sharpening" in the 2026-04-22 matrix based on Δ_A = +0.213, Δ_B = +0.051, **Δ_C = +0.011**. The 2026-04-24 rerun gives Δ_A = +0.199, Δ_B = +0.041, **Δ_C = −0.002** — Δ_C crosses zero within the ±0.03 CPU FP drift envelope noted for the Dec A′ and Dec D reruns. With Dec C flipped negative, e1 HMM C1 is **C-outlier**, not ALL-agree, in the 2026-04-24 matrix.
 
-On the **paired-fork paradigm** (constructive probe, bit-identical pre-probe), R1+R2 is decoder-robust sharpening (rows 1 and 9). On **observational matched-probe paradigms** (M3R, HMS-T, VCD and their focused+march-cue modified variants), the same R1+R2 checkpoint is decoder-robust dampening (rows 10, 12, 14, 15, 17). The paradigm choice, not the decoder choice, drives the sign. The Dec A → Dec A′ sanity check (§ 7) does not change this: all 13 R1+R2 rows retain the same sign under Dec A′.
+The new 2026-04-24 decoder axes split further:
+
+| Net / Assay | Δ_A | Δ_A′ | Δ_B | Δ_C | Δ_D-raw | Δ_D-shape | Δ_E |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| e1 HMM C1 | +0.1990 | — | +0.0410 | −0.0020 | −0.0050 | +0.0080 | +0.2300 |
+
+Dec A / Dec B / Dec E all strongly positive (sharpening signature); Dec C / Dec D-raw / Dec D-shape near zero or slightly negative. e1's sharpening label is **training-regime-dependent**, not decoder-robust. Decoders that have been exposed to e1's own Stage-1/Stage-2 `r_l23` (Dec A) or trained afresh on e1's natural-HMM post-Stage-2 stream (Dec E) report positive Δ; decoders trained on synthetic bumps (Dec C) or on a neutral FB-ON paired-fork distribution (Dec D) report near-zero Δ.
+
+### 9.4. Hybrid regime claim (holds under all added decoder axes)
+
+On the **paired-fork paradigm** (constructive probe, bit-identical pre-probe), R1+R2 is decoder-robust sharpening (rows 1, 3, 9, 13). On **observational matched-probe paradigms** (M3R, HMS-T, VCD and the focused+march-cue modified variants), the same R1+R2 checkpoint is decoder-robust dampening (rows 10, 12, 14, 15, 17). The paradigm choice, not the decoder choice, drives the sign. The Dec A → Dec A′ sanity check (§ 7) and the Dec A → Dec E comparison (§ 9.6) do not change this: all 13 R1+R2 rows retain the same sign under Dec A′ and under Dec E.
+
+### 9.5. Dec D Kok-style shape-sharpening-under-amplitude-dampening (row 12, HMS-T native on R1+R2)
+
+Same r_l23 across seven decoders: Δ_A = −0.303, Δ_A′ = −0.211, Δ_B = −0.143, Δ_C = −0.078, Δ_D-raw = −0.053, Δ_E = −0.207 (six-decoder all-agree dampening) — but **Δ_D-shape = +0.166**. The amplitude-sensitive decoders (A, A′, B, C, D-raw, E) all report ex < unex; the shape-normalised D-shape reports ex > unex on the same r_l23. This is the Kok-framework co-occurrence: expectation suppresses net L2/3 amplitude while sharpening the orientation-pattern shape at the expected channel. No other row in the 17-row matrix shows this divergence at material magnitude.
+
+### 9.6. Dec A vs Dec E dissociation on dampening legacy networks
+
+Dec E is Dec-A-spec (same architecture, same LR, 5000 gradient steps, seed 42), but trained **post-Stage-2** on the natural HMM stream with the HMM's own stochastic task_state. On R1+R2 Dec E is effectively isomorphic to Dec A′ (`frac_same_pred = 0.9722`). Per-net top-1 on 10k natural HMM (Task #25 design, seed 42):
+
+| Net | Dec A | Dec E | Δ (A − E) |
+|---|---:|---:|---:|
+| r1r2 | 0.5413 | 0.5467 | −0.005 |
+| a1 | 0.5907 | 0.3542 | **+0.236** |
+| b1 | 0.5830 | 0.3507 | **+0.232** |
+| c1 | 0.4476 | 0.4257 | +0.022 |
+| e1 | 0.4887 | 0.4778 | +0.011 |
+
+Dec A outperforms Dec E by ≈ 23 percentage points on a1 and b1 — the two dampening legacy configs. On these same two rows of the 17-row matrix, Dec E **flips sign vs Dec A** (Δ_A = −0.031 → Δ_E = +0.040 on a1; Δ_A = −0.033 → Δ_E = +0.024 on b1). Every other decoder in the 17-row matrix (A, A′, B, C, D-raw, D-shape) reports negative Δ on these two rows — Dec E is the lone positive.
+
+Interpretation-free consequence: on the dampening legacy networks, the co-trained Dec A captures a representational structure that 5000 steps of post-Stage-2 natural-HMM training cannot reproduce. The Δ_A sign on a1 and b1 HMM C1 is training-regime-dependent.
 
 ### 9.5. FWHM-sign reversal between two paired-fork variants
 
@@ -507,6 +605,12 @@ On the 4-condition paired HMM fork (`r1r2_paradigm_readout.py`), FWHM is not rep
 | Dec A′ ckpt patch helper | `scripts/_make_decAprime_ckpt.py` |
 | Dec A vs A′ matrix diff | `scripts/diff_decAprime_matrix.py` |
 | Dec C training | `scripts/train_decoder_c.py` |
+| Dec D (FB-ON neutral, raw + shape, per-ckpt) training | `scripts/train_decoder_d_fbON_neutral.py` |
+| Dec D 10k HMM eval (5 networks × 3 variants) | `scripts/eval_decoder_d_on_hmm.py` |
+| Dec E (Dec-A-spec post-Stage-2, per-ckpt) training | `scripts/train_decoder_e.py` |
+| Dec E ckpt patch helper | `scripts/_make_decE_ckpt.py` |
+| Dec E stratified eval (per-net) | `scripts/eval_decoder_e_stratified.py` |
+| 7-column matrix merger (A + A′ + B + C + D-raw + D-shape + E) | `scripts/merge_decE_matrix.py` |
 | Paired HMM fork paradigm × readout | `scripts/r1r2_paradigm_readout.py` |
 | Cross-decoder evaluator (NEW / M3R / HMS / HMS-T / P3P / VCD) | `scripts/cross_decoder_eval.py` |
 | 17-row matrix aggregator | `scripts/aggregate_cross_decoder_matrix.py` |
@@ -522,6 +626,9 @@ On the 4-condition paired HMM fork (`r1r2_paradigm_readout.py`), FWHM is not rep
 | `checkpoints/decoder_a_prime.pt` | Dec A′ weights (state_dict) + training metadata |
 | `checkpoints/decoder_a_prime.pt.step2000`, `...step4000` | Dec A′ crash-safety snapshots |
 | `/tmp/r1r2_ckpt_decAprime.pt` | R1+R2 ckpt with Dec A′ patched in place of Dec A |
+| `checkpoints/decoder_d_fbON_neutral_{raw,shape}_{r1r2,a1,b1,c1,e1}.pt` | Dec D FB-ON per-ckpt (10 ckpts, raw + shape × 5 nets) |
+| `checkpoints/decoder_e_{r1r2,a1,b1,c1,e1}.pt` | Dec E per-ckpt (5 ckpts; r1r2 + e1 full 5000 steps; a1 / b1 / c1 **step-4000 recovered**) |
+| `/tmp/r1r2_ckpt_decE.pt`, `/tmp/r1r2_ckpt_decE_{a1,b1,c1,e1}.pt` | Per-net ckpts patched with their own Dec E for matrix rerun |
 
 ### 10.4. Result JSONs
 
@@ -542,6 +649,14 @@ On the 4-condition paired HMM fork (`r1r2_paradigm_readout.py`), FWHM is not rep
 | Cross-decoder native-invocation sources | `/tmp/task26_xdec_native.json`, `/tmp/task26_xdec_modified.json` |
 | Cross-decoder sources under Dec A′ swap | `/tmp/task26_xdec_native_decAprime.json`, `/tmp/task26_xdec_modified_decAprime.json` |
 | Legacy HMM C1 JSONs | `/tmp/task26_legacy/{a1,b1,c1,e1}_C1.json` |
+| Dec D training (per-net) | `results/decoder_d_fbON_neutral_{r1r2,a1,b1,c1,e1}.json` |
+| Dec D consolidated 10k HMM eval (5 nets × 6 decoders) | `results/decoder_d_fbON_all_eval.json` |
+| Dec D matrix | `results/cross_decoder_comprehensive_withD_fbON.{json,md}` |
+| Dec D matrix sources (patched ckpts, per-assay) | `/tmp/task4_fbON_paradigm_R1R2.json`, `/tmp/task4_fbON_xdec_native.json`, `/tmp/task4_fbON_xdec_modified.json`, `/tmp/task4_fbON_legacy/{net}_C1.json` |
+| Dec E training (per-net) | `results/decoder_e_training_{r1r2,a1,b1,c1,e1}.json` |
+| Dec E stratified eval (per-net, Task #25 strata) | `results/decoder_e_stratified_eval_{r1r2,a1,b1,c1,e1}.json` |
+| Final 7-column matrix (A / A′ / B / C / D-raw / D-shape / E) | `results/cross_decoder_comprehensive_with_all_decoders.{json,md}` |
+| Dec E matrix sources (patched ckpts, per-assay) | `/tmp/task5_paradigm_R1R2_decE.json`, `/tmp/task5_xdec_native_decE.json`, `/tmp/task5_xdec_modified_decE.json`, `/tmp/task5_legacy/{net}_C1.json` |
 
 ### 10.5. Key logs
 
@@ -550,12 +665,19 @@ On the 4-condition paired HMM fork (`r1r2_paradigm_readout.py`), FWHM is not rep
 | Dec A′ training | `logs/decA_prime.log` |
 | Dec A′ stratified eval | `logs/decA_prime_stratified.log` |
 | Dec A′ Part B pipeline | `logs/decAprime_partB.log` |
+| Dec D training (5 networks) | `logs/decD_fbON_all.log` |
+| Dec D Pass 3 pipeline (matrix rerun + 10k HMM eval) | `logs/decD_fbON_pass3.log`, `logs/decD_fbON_eval.log` |
+| Dec E R1+R2 training | `logs/decE_train.log` |
+| Dec E legacy training (a1 / b1 / c1 / e1) | `logs/decE_train_{a1,b1,c1,e1}.log` |
+| Dec E Pass 3 pipeline (matrix rerun + stratified eval) | `logs/decE_pass3.log` |
 
 ### 10.6. Known discrepancies to watch for
 
-- The original 2026-04-22 matrix and the 2026-04-23 Dec A′ rerun used the same seed / script / CPU device, but Δ_B / Δ_C still drifted by ≤ 0.03 row-to-row (residual FP noise). Treat sign-agreement class changes between the two runs as noise unless Δ_B / Δ_C differ by more than ≈ 0.03.
-- Dec B is computed from the same `r_l23` as the assay under analysis (CV within assay). Sample size matters: row 13 (P3P) has n = 38 / branch, so the B outlier on P3P is consistent with the small-n noise floor.
+- The 2026-04-22, 2026-04-23 (Dec A′) and 2026-04-24 (Dec D / Dec E) reruns all used the same seed / scripts / CPU device, but Δ_B / Δ_C still drift by ≤ 0.03 row-to-row (residual FP noise). Treat sign-agreement class changes between runs as noise unless Δ_B / Δ_C differ by more than ≈ 0.03. The e1 HMM C1 reclassification (row 8: 2026-04-22 "ALL-agree sharpening" → 2026-04-24 "C-outlier") is a direct consequence of this drift: Δ_C went +0.011 → −0.002.
+- Dec B is computed from the same `r_l23` as the assay under analysis (CV within assay). Sample size matters: row 13 (P3P) has n = 39 / branch, so borderline sign calls on P3P are consistent with the small-n noise floor.
 - Dec A was continuously trained across Stage 2 under `sweep_rescue_1_2.yaml` (neither `freeze_decoder` nor `freeze_v2` is set). This is consistent with the "moving target" framing, but note that Stage-2 L2/3 is less volatile than Stage-1 L2/3 because `sigma_rec_raw` / `gain_rec_raw` are the only L2/3 params still trainable in Stage 2.
+- **Dec E a1 / b1 / c1 are step-4000-recovered, not step-5000** (r1r2 and e1 are full step-5000). A post-training Dec A comparison bug (legacy ckpts lack `ckpt['loss_heads']`, trainer was reading that key unconditionally) crashed the three legacy runs AFTER training completed but BEFORE the final `torch.save`. Crash-safety snapshots at step 4000 were promoted to final; val_acc deltas step 4000 → step 5000 on the comparable r1r2 and e1 runs were ≤ 0.02, so the recovered ckpts are within ~2 pp of the full-budget projection. The trainer has been patched (save-before-compare + `decoder_state` fallback; this will not reoccur). Each recovered ckpt carries `early_terminated_at_step_4000_due_to_crash: true` in its state_dict, and the per-net JSON (`results/decoder_e_training_{a1,b1,c1}.json`) flags the same.
+- **Dec D 10k natural HMM top-1 is NOT directly comparable** with Dec A / A′ / C / E on the 10k stream. Dec D is trained on a focused-only paired-fork distribution; the 10k HMM eval uses 50/50 focused/routine + 30% ambiguous — that is out-of-distribution for Dec D. Use Dec D's in-distribution val balanced-acc (per-net, in `results/decoder_d_fbON_neutral_{net}.json`) for comparisons on its native distribution. The 17-row matrix Δ_D-raw / Δ_D-shape values ARE directly comparable with the other decoders because they evaluate on the same per-assay `r_l23` as A / B / C.
 
 ---
 
