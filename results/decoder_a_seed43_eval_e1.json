@@ -1,0 +1,26 @@
+{
+  "task": "Task #4 \u2014 Dec A seed 43 reproducibility eval",
+  "net_name": "e1",
+  "ckpt_seed43": "/mnt/c/Users/User/codingproj/freshstart/checkpoints/net_seed43_e1.pt",
+  "ckpt_seed42": "/tmp/remote_ckpts/e1/checkpoint.pt",
+  "config": "/mnt/c/Users/User/codingproj/freshstart/config/sweep/sweep_e1.yaml",
+  "eval_protocol": {
+    "seed": 42,
+    "n_trials": 10000,
+    "batch_size": 16,
+    "seq_length": 25,
+    "readout_window": [
+      9,
+      11
+    ],
+    "task_state": "50/50 focused/routine",
+    "feedback_scale": 1.0
+  },
+  "samepool": {
+    "n_readouts": 250000,
+    "decA_seed43_top1": 0.488576,
+    "decA_seed42_top1": 0.454468,
+    "gap_seed43_minus_seed42": 0.03410800000000003,
+    "wall_clock_seconds": 252.91957354545593
+  }
+}
