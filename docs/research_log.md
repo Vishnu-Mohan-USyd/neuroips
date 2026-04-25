@@ -18,6 +18,31 @@
 
 ---
 
+## 2026-04-25 — Retraction: Dec A vs retrain "dissociation" on a1 / b1 is an Adam @ 5k optimisation-insufficiency artefact (Debugger Task #5 + Coder Task #6)
+
+**Context:** The 2026-04-24 entry below reported a "Dec A vs Dec E dissociation on dampening legacy networks" — Dec A top-1 ≈ 0.59 vs Dec E ≈ 0.35 on a1 / b1, with Dec E flipping Δ sign on rows 5 / 6 of the 17-row matrix (Δ_A = −0.031 / −0.033 → Δ_E = +0.040 / +0.024). The reading that "Dec A captures a representational structure that 5000 steps of post-Stage-2 natural-HMM training cannot reproduce" was checked by Debugger (Task #5) and Coder (Task #6).
+
+**What was tested (Debugger Task #5).** On a1's frozen final L2/3 with fixed eval features, sklearn LBFGS reaches top-1 0.70; torch Adam lr=1e-3 reaches 0.364 at 5 000 steps (||W||=143), 0.511 at 10k, 0.626 at 15k, 0.662 at 20k, and approaches the LBFGS ceiling with init from sklearn at ||W||≈1900 / acc=0.70. The 5 000-step retrain decoder weight norms (Dec A′ 144.9, Dec E 119.2, Dec A_cotrained 150.1) match the Adam-at-step-5000 trajectory point exactly. Dec A's ||W||=82.5 / top-1=0.59 is a small-norm solution shaped by Stage-1 co-training of decoder + L2/3 + PV (`src/training/stage1_sensory.py:120-129`). On r1r2, Adam at 5 000 steps already saturates at 0.545 ≈ Dec A 0.547; there is no gap because r1r2's r_l23 has sharper per-orientation signal. H5 (implementation artefact) falsified; H2 (train/eval-mode divergence) falsified; H3 (training-distribution artefact) falsified; H4 (Dec A is a sharp local peak) falsified; H1 (Stage-1 co-training) **confirmed** as upstream mechanism but NOT sufficient to predict that retrains *cannot* reach Dec A — because the information is present in the eval features (sklearn proves 0.70). Full evidence chain in `/tmp/debug_dec_a_advantage_report.md`.
+
+**What was tested (Coder Task #6 Part A).** Re-ran Dec A′ training at 20 000 Adam steps (vs 5 000 in Task #1) on r1r2, a1, b1. No other config changes: same lr 1e-3 Adam, seed 42, batch 32, seq 25, 50/50 task_state, same `scripts/train_decoder_a_prime.py`. Saved to NEW paths (`checkpoints/decoder_a_prime_20k_{net}.pt`, `results/decoder_a_prime_training_20k_{net}.json`) so the 5k baseline is preserved. 3-parallel launch via detached tmux; total wall-clock ~4.78 hrs. Stratified 10k HMM eval (Task #2 convention) on each new ckpt. Pass criterion: r1r2 stable + a1 / b1 each gain ≥ +20 pp from 5k → 20k.
+
+**Outcome.** 10k HMM stratified top-1 (seed 42, 50/50 task_state):
+
+```
+net    Dec_A_orig  Dec_A_prime_5k  Dec_A_prime_20k  gap_20k_minus_5k
+r1r2       0.5413          0.5486           0.5729           +0.0243
+a1         0.5907          0.3659           0.6709           +0.3050
+b1         0.5830          0.3562           0.6625           +0.3063
+```
+
+PASS confirmed: r1r2 stable (+2.4 pp); a1 gains +30.5 pp; b1 gains +30.6 pp. Both a1 and b1 20k Dec A′ exceed Dec A original by +8.0 / +7.9 pp. The "retrains cannot recover Dec A's accuracy" claim is decisively refuted — given sufficient Adam budget, retrains BEAT Dec A.
+
+**Decision/next step:** The 2026-04-24 "dissociation" framing is retracted across docs in this same commit: ARCHITECTURE.md § "Dec A vs retrained-decoder top-1 gap on dampening legacy networks" replaces the old "dissociation" section; RESULTS.md § 11 "Dec A → retrain comparison" replaces the old "Dec A → Dec E comparison (2 sign flips)"; RESULTS.md § 14 retracts the dissociation cross-reference; README.md headline retracts the sign-flip claim; docs/project_summary.md § 15 + § 18 replace the dissociation paragraph; docs/R1R2_full_report.md § 1 headline + § 4 + § 6 + § 9.6 + § 10.6 revised. Sign flags on rows 5 / 6 (a1 / b1 HMM C1) are flagged as unreliable for any 5 000-step retrain. Whether the signs reproduce under 20 000-step retrains is a separate open question (could re-run the 17-row matrix under 20k retrains as a follow-up — not in Task #6 scope). The Dec A → Dec A′ swap on R1+R2 (2026-04-23 entry) stands unchanged: zero sign flips on R1+R2, independent of this correction (R1+R2 Dec A′ at 5k already saturates so the 5k retrain there was never under-trained).
+
+**Pointers:** `/tmp/debug_dec_a_advantage_report.md` (Debugger Task #5 full evidence chain, H1–H5 verdicts, Adam-on-features trajectory table on a1, r1r2 negative control); Part A artefacts: `checkpoints/decoder_a_prime_20k_{r1r2,a1,b1}.pt`, `results/decoder_a_prime_training_20k_{net}.json`, `results/decoder_a_prime_20k_stratified_eval_{net}.json`, `logs/task6_decA_prime_20k/`. Doc retractions: ARCHITECTURE.md, RESULTS.md § 11 + § 14, README.md, `docs/project_summary.md` § 15 + § 18, `docs/R1R2_full_report.md` § 1 + § 4.4 + § 6 + § 9.6 + § 10.6.
+
+---
+
 ## 2026-04-24 — Decoder D (FB-ON neutral, 2 variants) + Decoder E (Dec-A-spec, post-Stage-2) per-ckpt + 7-column matrix + Dec A vs Dec E dissociation
 
 **Context:** The 2026-04-22 matrix had three decoders (A/B/C). 2026-04-23 added Dec A′ (R1+R2 only) as a stable-target sanity check on Dec A. This entry adds two further axes: Dec D — a neutral FB-ON localizer trained on each frozen fully-trained network with a balanced paired-fork ex+unex dataset — and Dec E — a Dec-A-spec retrain that uses the natural HMM stream's own stochastic task_state (NOT 50/50 pinned). Both are per-ckpt across all 5 networks (R1+R2 + a1 / b1 / c1 / e1). The 17-row matrix now has 7 decoder columns.

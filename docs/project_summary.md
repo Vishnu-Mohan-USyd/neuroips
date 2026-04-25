@@ -550,24 +550,33 @@ material magnitude. Artefacts:
 `results/cross_decoder_comprehensive_withD_fbON.{json,md}`,
 `results/decoder_d_fbON_all_eval.json`, and per-net training JSONs.
 
-**Dec E (2026-04-24, Dec-A-spec post-Stage-2 retrain, per-ckpt).** Same arch
-as Dec A (`Linear(36, 36)+bias`), same lr=1e-3 no-weight-decay, seed 42,
-5000 gradient steps, but trained after Stage 2 on the natural HMM stream
-with the HMM's **own stochastic task_state** (Markov `p_switch=0.2` for
-R1+R2 via yaml; Bernoulli-per-batch for legacy configs where `task_p_switch`
-is unset). On R1+R2 Dec E is effectively isomorphic to Dec A′
-(`frac_same_pred(A′, E) = 0.9722` on 10k HMM; both 0.547 vs Dec A 0.541 top-1).
-On legacy a1 and b1 Dec A **≫** Dec E by ~23 pp top-1 (Dec A ≈ 0.59 vs Dec
-E ≈ 0.35). On these same two networks Dec E is the only decoder of all
-seven to report **Δ_E > 0** (+0.040 on a1, +0.024 on b1) while A / B / C /
-D-raw / D-shape all report Δ < 0 — a real dissociation. Dec E ckpts for
-a1 / b1 / c1 are **step-4000-recovered** due to a post-training legacy-ckpt
-`loss_heads` bug (fix landed in trainer; full write-up in
-`docs/research_log.md`). Artefacts:
+**Dec E (2026-04-24, Dec-A-spec post-Stage-2 retrain, per-ckpt; 2026-04-25 retraction).**
+Same arch as Dec A (`Linear(36, 36)+bias`), same lr=1e-3 no-weight-decay,
+seed 42, 5000 gradient steps, trained after Stage 2 on the natural HMM
+stream with the HMM's own stochastic task_state. On R1+R2 Dec E is
+effectively isomorphic to Dec A′ (`frac_same_pred(A′, E) = 0.9722`; both
+0.547 vs Dec A 0.541 top-1). On a1 / b1 Dec E caps at top-1 ≈ 0.35 vs
+Dec A 0.59. The earlier "real dissociation" reading has been retracted:
+Debugger Task #5 (`/tmp/debug_dec_a_advantage_report.md`) and Coder Task #6
+Part A jointly show this is an Adam @ 5 000-step optimisation-insufficiency
+artefact on dampened frozen L2/3, not a representational disagreement. At
+20 000 Adam steps Dec A′ reaches 0.6709 on a1 (+30.5 pp vs 5k 0.3659; +8.0 pp
+above Dec A original) and 0.6625 on b1 (+30.6 pp vs 5k 0.3562; +7.9 pp
+above Dec A); on r1r2 Dec A′ at 20k = 0.5729 (stable, +2.4 pp vs 5k 0.5486)
+because r1r2's r_l23 has sharper per-orientation signal so Adam already
+saturates at 5k. Stage-1 co-training of L2/3 + decoder shapes Dec A's
+small-||W||=82.5 solution (H1 confirmed) but does NOT prevent retrains
+from recovering. The Δ_E sign flags on a1 / b1 HMM C1 are artefacts of
+the same under-training and not decoder disagreements. Dec E ckpts for
+a1 / b1 / c1 are **step-4000-recovered** due to an unrelated post-training
+legacy-ckpt `loss_heads` bug (fix landed in trainer); orthogonal to this
+retraction. Artefacts:
 `checkpoints/decoder_e_{r1r2,a1,b1,c1,e1}.pt`,
 `results/decoder_e_training_{net}.json`,
 `results/decoder_e_stratified_eval_{net}.json`,
-`results/cross_decoder_comprehensive_with_all_decoders.{json,md}` (7-column matrix).
+`results/cross_decoder_comprehensive_with_all_decoders.{json,md}`,
+`checkpoints/decoder_a_prime_20k_{r1r2,a1,b1}.pt`,
+`results/decoder_a_prime_20k_stratified_eval_{net}.json`.
 
 Full taxonomy now in `ARCHITECTURE.md` § "Decoders" (six rows: A / A′ / B / C
 / D-raw / D-shape / E).
@@ -639,15 +648,24 @@ Dec A amplifies the sharpening-vs-dampening gap (−0.03 → +0.21 across the fo
 - HMS on R1+R2 (C-outlier; A and B negative, C positive at +0.053).
 - HMS-T modified on R1+R2 (C-outlier; A and B negative, C positive at +0.051).
 
-**Dec A vs Dec E dissociation on dampening legacy rows (2026-04-24).** Dec E
-is Dec-A-spec (same arch, same LR, 5000 steps) but trained post-Stage-2 on
-the HMM stream; on R1+R2 Dec E matches Dec A in sign on all 13 rows and
-tracks Dec A′ to `frac_same_pred = 0.972`. On a1 and b1 HMM C1, Dec E flips
-sign relative to Dec A (Δ_A = −0.031 → Δ_E = +0.040 on a1; Δ_A = −0.033 →
-Δ_E = +0.024 on b1). On these same two nets Dec A outperforms Dec E by
-~23 pp top-1 on 10k natural HMM (Dec A ≈ 0.59 vs Dec E ≈ 0.35). The
-co-trained Dec A captures a representational structure on dampening configs
-that 5000 steps of post-Stage-2 natural-HMM training cannot reproduce.
+**Dec A vs 5k-retrain top-1 gap on dampening legacy rows (retraction 2026-04-25).**
+The earlier "Dec A vs Dec E dissociation" finding has been re-interpreted.
+Debugger Task #5 (`/tmp/debug_dec_a_advantage_report.md`) and Coder Task #6
+Part A jointly show the gap is an Adam @ 5 000-step optimisation-insufficiency
+artefact on frozen-dampened L2/3, not a representational dissociation. On a1
+unpenalised LBFGS reaches 0.70; Adam stalls at 0.36 at step 5 000 and reaches
+0.66 by step 20 000. Retraining Dec A′ for 20 000 steps gives a1 = 0.6709
+(+30.5 pp vs 5k 0.3659; +8.0 pp ABOVE Dec A original 0.591), b1 = 0.6625
+(+30.6 pp vs 5k 0.3562; +7.9 pp ABOVE Dec A 0.583), r1r2 = 0.5729 (stable,
++2.4 pp vs 5k 0.5486 — already saturated at 5k because r1r2's r_l23 has
+sharper per-orientation signal). Dec A's 0.59 with ||W||=82.5 is a small-norm
+solution from Stage-1 co-training of L2/3 + decoder
+(`src/training/stage1_sensory.py:120-129`); the co-training is real (H1
+confirmed) but does not block retrains. The Δ_E sign flags on a1 / b1 HMM
+C1 are under-trained-Adam artefacts, not decoder disagreements. Sources:
+`results/decoder_a_prime_20k_stratified_eval_{r1r2,a1,b1}.json`,
+`checkpoints/decoder_a_prime_20k_{net}.pt`,
+`/tmp/debug_dec_a_advantage_report.md`.
 
 **Dec D Kok-style signature on row 12 (2026-04-24).** HMS-T native on R1+R2
 gives Δ_D-shape = +0.166 while Δ_A = −0.303. Amplitude-sensitive decoders

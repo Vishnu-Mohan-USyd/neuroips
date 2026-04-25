@@ -453,9 +453,11 @@ unchanged in their aggregation semantics.
 | 16 | HMS-T modified (focused + march cue) | R1+R2 | 1143 | 111 | −0.2937 | −0.2031 | −0.1169 | +0.0510 | +0.1121 | −0.0253 | −0.2061 | −/C |
 | 17 | VCD-test3 modified (focused + march cue) | R1+R2 | 6985 | 6985 | −0.0836 | −0.1165 | −0.0285 | −0.0103 | +0.0335 | +0.0759 | −0.1165 | −/— |
 
-Bolded Δ values flag the two sign-flip rows (rows 5 and 6, where Dec E
-reverses the sign that A/B/C/D agree on) and the Kok-style sharpening
-signature (row 12, Δ_D-shape = +0.166 while Δ_A = −0.303).
+The bolded Δ_E values on rows 5 and 6 (a1 / b1 HMM C1) are retained for
+table completeness but flagged as unreliable: Dec E is under-trained Adam
+on frozen-dampened L2/3 (see "Dec A → retrain comparison" retraction below).
+Row 12's Δ_D-shape = +0.166 vs Δ_A = −0.303 Kok-style sharpening signature
+is independent of this correction.
 
 `Δ_A′` values come from `results/cross_decoder_comprehensive_decAprime.json`
 (2026-04-23 rerun with Dec A′ in place of Dec A on R1+R2 rows; legacy rows
@@ -500,7 +502,7 @@ own stored Dec A):
 | C | 17 | 0.0416 | 0.1254 | 11 | 13 | 4 | HMM C1 on c1 / e1 legacy; HMS native; HMS-T modified on R1+R2 |
 | D-raw | 17 | 0.0520 | 0.2308 | — | 10 | 7 | See rows where D-raw disagrees w/ ABC maj |
 | D-shape | 17 | 0.0585 | 0.1656 | — | 12 | 5 | See rows where D-shape disagrees w/ ABC maj |
-| E | 17 | 0.1934 | 0.4359 | — | (see Dec A vs E flips below) | — | Lone positive on a1 and b1 HMM C1 |
+| E | 17 | 0.1934 | 0.4359 | — | (see Dec A → retrain comparison below) | — | Lone positive on a1 / b1 HMM C1 — Adam-under-trained artefact |
 
 Decoder A produces the largest-magnitude Δs (mean |Δ| ≈ 4× that of B/C) and
 always agrees with the A/B/C majority sign. Decoder A′ (trained on stable,
@@ -508,9 +510,11 @@ post-training L2/3 with 50/50 task_state) produces Δ of near-identical
 magnitude to Dec A on the 13 R1+R2 rows (mean |Δ| 0.1902 vs 0.2056) and
 identical sign on all 13. Decoder E (Dec-A-spec but post-Stage-2, HMM-
 stochastic task_state, seed 42, 5000 grad steps) matches Dec A on all 13
-R1+R2 rows in sign and within ±0.05 in magnitude, but **flips Dec A sign
-on 2 of 4 legacy rows** (a1 and b1 HMM C1; see "Dec A vs Dec E dissociation"
-below). Decoders B and C are the smallest-magnitude, noisiest sign-carriers.
+R1+R2 rows in sign and within ±0.05 in magnitude, but shows nominal sign
+flags on **2 of 4 legacy rows** (a1 and b1 HMM C1) — these Δ are unreliable
+artefacts of Adam @ 5k under-training on dampened L2/3 (see "Dec A → retrain
+comparison" retraction below). Decoders B and C are the smallest-magnitude,
+noisiest sign-carriers.
 Decoder D-raw and D-shape are magnitude-sensitive (D-raw) and shape-
 normalised (D-shape); their sign-agreement with ABC majority is 10/17 and
 12/17 respectively.
@@ -557,32 +561,54 @@ Dec A moving-target concern:
 The "moving target during Stage 1" concern for Dec A does not change the
 13-row R1+R2 sign pattern.
 
-### Dec A → Dec E comparison (2 sign flips, 2026-04-24)
+### Dec A → retrain comparison (Dec E / Dec A′ / Dec A_cotrained sign flags on a1 / b1 are optimisation-insufficiency artefacts, 2026-04-25 retraction)
 
 Dec E is Dec-A-spec (same arch, same LR, 5000 gradient steps) trained
 **post-Stage-2** on the natural HMM stream with the HMM's own stochastic
-task_state (Markov `task_p_switch=0.2` for R1+R2 via yaml; Bernoulli per
-batch for legacy configs that don't set it). Per-checkpoint, so each legacy
-ckpt has its own Dec E. On R1+R2 rows Dec E matches Dec A in sign on all 13
-rows and tracks Dec A′ tightly (`frac_same_pred(A′, E) = 0.9722` on 10k
-natural HMM). On legacy dampening rows:
+task_state. Per-checkpoint. On R1+R2 rows Dec E matches Dec A in sign on
+all 13 rows and tracks Dec A′ tightly (`frac_same_pred(A′, E) = 0.9722` on
+10k natural HMM). On legacy dampening rows the 5k-retrain numbers nominally
+sign-flag (Δ_A = −0.031 / −0.033 → Δ_E = +0.040 / +0.024) but the Δ on those
+rows is unreliable.
 
-| Row | Network | Δ_A | Δ_A′ | Δ_B | Δ_C | Δ_D-raw | Δ_D-shape | Δ_E |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| 5 | a1 legacy | −0.0310 | — | −0.0060 | −0.0100 | −0.0510 | −0.0330 | **+0.0400** |
-| 6 | b1 legacy | −0.0330 | — | −0.0230 | −0.0280 | −0.0510 | −0.0210 | **+0.0240** |
+The earlier reading that "Dec A captures a representational structure that
+5000 steps of post-Stage-2 natural-HMM training cannot reproduce" has been
+retracted. Debugger Task #5 (`/tmp/debug_dec_a_advantage_report.md`)
+established that on a1's frozen L2/3, unpenalised LBFGS reaches top-1 0.70;
+torch Adam lr=1e-3 reaches 0.66 by step 20 000 (||W||=488) but stalls at 0.36
+at step 5 000 (||W||=143). The 5 000-step retrain decoder weight norms
+(Dec A′ 144.9, Dec E 119.2, Dec A_cotrained 150.1) match the
+Adam-at-step-5000 trajectory point. Dec A reaches 0.59 with ||W||=82.5
+because Stage 1 co-trained L2/3 + PV jointly with the decoder
+(`src/training/stage1_sensory.py:120-129`); the small-norm solution is an
+artefact of the co-trained training path, not a representational ceiling.
+On r1r2 there is no gap because Adam at 5 000 steps already saturates
+(0.545 ≈ Dec A 0.547) — r1r2's r_l23 has sharper per-orientation signal
+so smaller ||W|| suffices.
 
-On these two rows **every other decoder — A, B, C, D-raw, D-shape — reports
-ex < unex, while Dec E reports ex > unex**. Under the larger picture: on the
-10k natural HMM stream, Dec A ≫ Dec E by **≈ 23 percentage points** on a1
-and b1 (Dec A top-1 ~0.59 vs Dec E top-1 ~0.35), versus ≈ 0 gap on R1+R2, c1,
-and e1. One interpretation-free consequence: on these dampening legacy nets,
-the Dec A decoder captures a representational structure that 5000 steps of
-post-Stage-2 natural-HMM training cannot reproduce, and the Δ_A sign on these
-rows is training-regime-dependent. Full per-net stratified:
-`results/decoder_e_stratified_eval_{r1r2,a1,b1,c1,e1}.json`. Dec E ckpts for
-a1 / b1 / c1 are **step-4000-recovered** (full write-up in
-`docs/research_log.md` 2026-04-24 entry); r1r2 and e1 ran the full 5000 steps.
+Task #6 Part A confirms the correction empirically. 20 000-step Dec A′
+retrains on r1r2, a1, b1 (same script, same config, only `--n-steps
+5000 → 20000`):
+
+| Net | Dec A | Dec A′ (5k) | Dec A′ (20k, Task #6) | gap (20k − 5k) |
+|---|---:|---:|---:|---:|
+| r1r2 | 0.5413 | 0.5486 | **0.5729** | +0.0243 |
+| a1 | 0.5907 | 0.3659 | **0.6709** | +0.3050 |
+| b1 | 0.5830 | 0.3562 | **0.6625** | +0.3063 |
+
+a1 / b1 retrains gain +30 pp going 5k → 20k and exceed Dec A original by
++7.9 / +8.0 pp; r1r2 is stable (+2.4 pp). Sign flags on a1 / b1 HMM C1 are
+artefacts of the same under-training and should not be read as decoder
+disagreements. Whether the signs reproduce under 20 000-step retrain
+decoders is a separate open question (could re-run the 17-row matrix under
+20k retrains; not in Task #6 scope). Sources:
+`/tmp/debug_dec_a_advantage_report.md` (full evidence chain),
+`checkpoints/decoder_a_prime_20k_{r1r2,a1,b1}.pt`,
+`results/decoder_a_prime_training_20k_{net}.json`,
+`results/decoder_a_prime_20k_stratified_eval_{net}.json`. Full per-net 5k
+Dec E stratified: `results/decoder_e_stratified_eval_{r1r2,a1,b1,c1,e1}.json`
+(a1 / b1 / c1 are step-4000-recovered, see `docs/research_log.md`
+2026-04-24 entry; orthogonal to this retraction).
 
 ### Kok-style shape-sharpening-under-amplitude-dampening (row 12, HMS-T native on R1+R2)
 
@@ -830,13 +856,11 @@ in 2026-04-24 split further:
 - C / D-raw / D-shape axis: near zero or weakly negative.
 
 The e1 sharpening label is **training-regime-dependent**, not decoder-robust.
-Trained decoders that were exposed to a1/b1/c1/e1's own Stage-1/Stage-2
-dynamics (Dec A, Dec E) report positive Δ; decoders trained on either synthetic
-bumps (Dec C) or a neutral FB-ON paired-fork distribution (Dec D) report
-near-zero Δ. This is consistent with the Dec A vs Dec E dissociation noted
-in § 11 (Dec A ≫ Dec E by ~23 pp on a1 and b1 10k-HMM top-1) — on dampening
-legacy nets the co-trained linear head recovers a signal that a freshly-
-trained post-Stage-2 head cannot match.
+The Δ_C reclassification (+0.011 → −0.002) is a genuine ±0.03 CPU FP
+run-to-run drift across reruns and stands as observed. The previously cited
+"Dec A vs Dec E dissociation on a1 / b1" cross-reference has been retracted
+(see § 11 "Dec A → retrain comparison"); the e1 reclassification itself does
+not depend on the retracted reading.
 
 ### R1+R2 is hybrid, not single-regime
 
@@ -861,13 +885,19 @@ eliminating the "moving target during Stage 1" concern for Dec A). Zero
 
 ### Dec E sanity check (2026-04-24) and Dec D Kok-signature flag
 
-Dec E (Dec-A-spec retrain with HMM-stochastic task_state per each ckpt's
-yaml; per-network) preserves Dec A's sign on **all 13 R1+R2 rows** and on
-the e1 / c1 legacy rows, but **flips Dec A's sign on a1 and b1 HMM C1**
-(Δ_A = −0.031 / −0.033 → Δ_E = +0.040 / +0.024). The a1 HMM C1 row therefore
-has conflicting axes: A / B / C / D-raw / D-shape all negative (ALL-agree
-dampening), while Dec E alone is positive. b1 HMM C1 is the same pattern —
-Dec E is the lone positive across all seven decoders.
+**Retraction (2026-04-25).** The earlier "Dec A vs Dec E dissociation on
+dampening legacy configs" framing has been retracted. See § 11
+"Dec A → retrain comparison" above for the optimisation-insufficiency
+correction and Task #6 Part A 20k-retrain evidence
+(`results/decoder_a_prime_20k_stratified_eval_{r1r2,a1,b1}.json`).
+
+Dec E preserves Dec A's sign on **all 13 R1+R2 rows** and on the e1 / c1
+legacy rows. On a1 / b1 HMM C1 Dec E shows a nominal sign flag
+(Δ_A = −0.031 / −0.033 → Δ_E = +0.040 / +0.024) but these Δ are unreliable:
+Debugger Task #5 and Task #6 Part A jointly establish that any 5 000-step
+Adam retrain on a1 / b1 frozen-dampened L2/3 is optimisation-insufficient
+(stalls at top-1 ≈ 0.36 with ||W|| ≈ 143; reaches ≈ 0.66 at step 20 000).
+The flag is not a decoder disagreement.
 
 Dec D on row 12 (HMS-T native on R1+R2) reveals a **shape-sharpening-under-
 amplitude-dampening signature**: Δ_D-shape = +0.166 while Δ_A = −0.303,
