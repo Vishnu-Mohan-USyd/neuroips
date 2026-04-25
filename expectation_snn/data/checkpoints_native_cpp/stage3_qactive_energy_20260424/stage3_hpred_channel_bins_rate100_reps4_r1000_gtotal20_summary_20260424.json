@@ -1,0 +1,298 @@
+{
+  "artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal20_hpred_bins.json",
+  "behavior_regression_check_vs_existing_gtotal20_artifact": {
+    "baseline_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal_gtotal20.json",
+    "count_fields_checked": [
+      "hctx_e_preprobe_total_counts",
+      "hctx_e_trailer_total_counts",
+      "hpred_e_preprobe_total_counts",
+      "hpred_e_trailer_total_counts",
+      "hpred_e_trailer_100ms_total_counts",
+      "v1_e_trailer_channel_counts",
+      "v1_e_trailer_100ms_channel_counts"
+    ],
+    "count_metric_fields_checked": [
+      "expected_v1_trailer_count_per_trial",
+      "unexpected_v1_trailer_count_per_trial",
+      "dampening_unexpected_minus_expected"
+    ],
+    "existing_count_metrics_identical": true,
+    "existing_count_trial_fields_identical": true,
+    "max_abs_q_active_metric_delta_fC": 7.450580596923828e-09,
+    "new_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal20_hpred_bins.json",
+    "new_hpred_channel_field_present": true
+  },
+  "bin_width_ms": 100,
+  "conditions": {
+    "expected": {
+      "hpred_e_trailer_100ms_channel_counts": {
+        "actual_channel_count_per_trial_500ms": 593.3333333333334,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          153.33333333333334,
+          118.0,
+          113.33333333333333,
+          97.33333333333333,
+          111.33333333333333
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.7916666666666666,
+          0.5833333333333334,
+          0.5416666666666666,
+          0.875,
+          0.625
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.7916666666666666,
+          0.5833333333333334,
+          0.5416666666666666,
+          0.875,
+          0.625
+        ],
+        "predicted_channel_count_per_trial_500ms": 593.3333333333334,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          153.33333333333334,
+          118.0,
+          113.33333333333333,
+          97.33333333333333,
+          111.33333333333333
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "top_channel_count_per_trial_by_100ms_bin": [
+          157.33333333333334,
+          125.33333333333333,
+          120.66666666666667,
+          99.33333333333333,
+          119.33333333333333
+        ]
+      },
+      "v1_e_trailer_100ms_channel_counts": {
+        "actual_channel_count_per_trial_500ms": 288.0,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          76.0,
+          57.333333333333336,
+          52.666666666666664,
+          51.333333333333336,
+          50.666666666666664
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          0.9583333333333334,
+          1.0,
+          1.0,
+          0.9166666666666666
+        ],
+        "argmax_matches_predicted_fraction_500ms": 1.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          1.0,
+          0.9583333333333334,
+          1.0,
+          1.0,
+          0.9166666666666666
+        ],
+        "predicted_channel_count_per_trial_500ms": 288.0,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          76.0,
+          57.333333333333336,
+          52.666666666666664,
+          51.333333333333336,
+          50.666666666666664
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "top_channel_count_per_trial_by_100ms_bin": [
+          76.0,
+          58.0,
+          52.666666666666664,
+          51.333333333333336,
+          52.0
+        ]
+      }
+    },
+    "unexpected": {
+      "hpred_e_trailer_100ms_channel_counts": {
+        "actual_channel_count_per_trial_500ms": 600.0,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          148.66666666666666,
+          128.66666666666666,
+          109.33333333333333,
+          107.0,
+          106.33333333333333
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.1875,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.5,
+          0.7083333333333334,
+          0.7083333333333334,
+          0.8020833333333334,
+          0.6875
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.09375,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.20833333333333334,
+          0.19791666666666666,
+          0.21875,
+          0.22916666666666666,
+          0.17708333333333334
+        ],
+        "predicted_channel_count_per_trial_500ms": 219.16666666666666,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          64.66666666666667,
+          44.833333333333336,
+          38.833333333333336,
+          35.333333333333336,
+          35.5
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": -380.8333333333333,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          -84.0,
+          -83.83333333333333,
+          -70.5,
+          -71.66666666666667,
+          -70.83333333333333
+        ],
+        "top_channel_count_per_trial_by_100ms_bin": [
+          161.5,
+          134.0,
+          114.83333333333333,
+          110.16666666666667,
+          112.16666666666667
+        ]
+      },
+      "v1_e_trailer_100ms_channel_counts": {
+        "actual_channel_count_per_trial_500ms": 282.5,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          74.5,
+          59.166666666666664,
+          49.833333333333336,
+          50.166666666666664,
+          48.833333333333336
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          0.9791666666666666,
+          0.9479166666666666,
+          0.96875,
+          0.9895833333333334
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 3.1666666666666665,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          0.5,
+          1.5,
+          0.5,
+          0.5,
+          0.16666666666666666
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": -279.3333333333333,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          -74.0,
+          -57.666666666666664,
+          -49.333333333333336,
+          -49.666666666666664,
+          -48.666666666666664
+        ],
+        "top_channel_count_per_trial_by_100ms_bin": [
+          74.5,
+          59.5,
+          50.666666666666664,
+          50.666666666666664,
+          49.0
+        ]
+      }
+    }
+  },
+  "diagnostic_interpretation": {
+    "reason": "H_pred did not show a stronger predicted-channel signal than actual-channel signal on unexpected trials, or V1 did not remain actual-dominant.",
+    "supports_blocker": "hpred_weakness_or_not_predicted_dominant",
+    "unexpected_hpred_predicted_minus_actual_500ms": -380.8333333333333,
+    "unexpected_v1_predicted_minus_actual_500ms": -279.3333333333333
+  },
+  "expected_fraction": 0.2,
+  "feedback": {
+    "g_total": 2,
+    "r": 1000,
+    "resolved_g_direct": 1.998001998001998,
+    "resolved_g_som": 0.001998001998001998
+  },
+  "metrics": {
+    "dampening_unexpected_minus_expected": 12.5,
+    "expected_dampening_sign": "expected_less_than_unexpected",
+    "expected_v1_trailer_count_per_trial": 617.3333333333334,
+    "expected_v1_trailer_q_active_fC_per_trial": 20184304.910073675,
+    "expected_v1e_trailer_q_active_fC_per_trial": 20181013.53245223,
+    "expected_v1som_trailer_q_active_fC_per_trial": 3291.3776214459244,
+    "unexpected_v1_trailer_count_per_trial": 629.8333333333334,
+    "unexpected_v1_trailer_q_active_fC_per_trial": 20363080.378275283,
+    "unexpected_v1e_trailer_q_active_fC_per_trial": 20359723.952813763,
+    "unexpected_v1som_trailer_q_active_fC_per_trial": 3356.42546152091
+  },
+  "n_trials": {
+    "expected": 24,
+    "total": 120,
+    "unexpected": 96
+  },
+  "predicted_channel_rule": "(leader_channel + 2) % 12; learned expected +1 orientation step at channel stride 2",
+  "q_active_energy_fC": {
+    "definition": "integrated active charge; V1_E=sum(abs(I_e)+abs(I_i)+abs(I_ap_e))*dt_ms, V1_SOM=sum(abs(I_e)+abs(I_i))*dt_ms; pA*ms equals fC",
+    "expected": {
+      "v1_trailer_q_active_fC_per_trial": 20184304.910073675,
+      "v1e_trailer_q_active_fC_per_trial": 20181013.53245223,
+      "v1som_trailer_q_active_fC_per_trial": 3291.3776214459244
+    },
+    "unexpected": {
+      "v1_trailer_q_active_fC_per_trial": 20363080.378275283,
+      "v1e_trailer_q_active_fC_per_trial": 20359723.952813763,
+      "v1som_trailer_q_active_fC_per_trial": 3356.42546152091
+    }
+  },
+  "schedule": {
+    "dt_ms": 0.1,
+    "expected_step": 1,
+    "expected_trials": 24,
+    "iti_ms": 1500.0,
+    "leader_ms": 500.0,
+    "orientation_channel_stride": 2,
+    "preprobe_ms": 100.0,
+    "reps_expected": 4,
+    "reps_unexpected": 4,
+    "trailer_ms": 500.0,
+    "unexpected_steps": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "unexpected_trials": 96
+  },
+  "source_command": "expectation_snn_native richter-dampening --checkpoint ...stage1_ctx_pred_seed42_n72.json --out ...hpred_bins.json --seed 4242 --reps-expected 4 --reps-unexpected 4 --execution-mode gpu_only_production --grating-rate-hz 100 --baseline-rate-hz 0 --feedback-g-total 2.0 --feedback-r 1000",
+  "timing_seconds": {
+    "run": 2.816117457,
+    "total_excluding_build": 2.819514073,
+    "write": 0.001589692
+  },
+  "trailer_window_ms": 500
+}

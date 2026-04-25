@@ -1,0 +1,357 @@
+{
+  "activity": {
+    "delta_unexpected_minus_expected": 23.83333333333337,
+    "expected_v1_trailer_count_per_trial": 538.6666666666666,
+    "unexpected_v1_trailer_count_per_trial": 562.5
+  },
+  "artifact_kind": "v1_feedforward_feedback_gate_summary",
+  "build_log_path": "/workspace/neuroips_gpu_migration_20260422/logs/native_ff_feedback_gate_build_20260424.log",
+  "energy": {
+    "delta_v1_total_unexpected_minus_expected": 21062.790749413893,
+    "delta_v1e_unexpected_minus_expected": 14462.790764130652,
+    "delta_v1som_unexpected_minus_expected": 6599.9999852834735,
+    "expected_v1_total_q_fC_per_trial": 14680172.839648794,
+    "expected_v1e_q_fC_per_trial": 12642972.839637151,
+    "expected_v1som_q_fC_per_trial": 2037200.0000116425,
+    "unexpected_v1_total_q_fC_per_trial": 14701235.630398208,
+    "unexpected_v1e_q_fC_per_trial": 12657435.630401282,
+    "unexpected_v1som_q_fC_per_trial": 2043799.999996926
+  },
+  "go_no_go": {
+    "activity_direction_pass": true,
+    "criteria": "GO requires expected lower V1 total Q, expected lower V1 activity, and expected lower full actual decoding accuracy than unexpected.",
+    "decoder_separation_pass": false,
+    "energy_direction_pass": true,
+    "full_decoder_expected_actual_accuracy": 1.0,
+    "full_decoder_unexpected_actual_accuracy": 1.0,
+    "verdict": "NO-GO"
+  },
+  "log_path": "/workspace/neuroips_gpu_migration_20260422/logs/native_ff_feedback_gate_rate100_ffdiv050_20260424.log",
+  "parity_reps1": {
+    "field_max_abs_diff": 0,
+    "fields": {
+      "hpred_feedback_held_trailer_100ms_channel_counts": {
+        "len": 1800,
+        "max_abs": 0
+      },
+      "is_expected": {
+        "len": 30,
+        "max_abs": 0
+      },
+      "leader_channel": {
+        "len": 30,
+        "max_abs": 0
+      },
+      "leader_orientation": {
+        "len": 30,
+        "max_abs": 0
+      },
+      "trailer_channel": {
+        "len": 30,
+        "max_abs": 0
+      },
+      "trailer_orientation": {
+        "len": 30,
+        "max_abs": 0
+      },
+      "v1_e_trailer_100ms_channel_counts": {
+        "len": 1800,
+        "max_abs": 0
+      },
+      "v1_e_trailer_channel_counts": {
+        "len": 360,
+        "max_abs": 0
+      },
+      "v1_som_trailer_100ms_channel_counts": {
+        "len": 1800,
+        "max_abs": 0
+      },
+      "v1_som_trailer_channel_counts": {
+        "len": 360,
+        "max_abs": 0
+      }
+    },
+    "metric_diffs": {
+      "dampening_unexpected_minus_expected": 0.0,
+      "expected_v1_trailer_count_per_trial": 0.0,
+      "expected_v1_trailer_q_active_fC_per_trial": 1.0058283805847168e-06,
+      "expected_v1e_trailer_q_active_fC_per_trial": 1.0281801223754883e-06,
+      "expected_v1som_trailer_q_active_fC_per_trial": 2.1886080503463745e-08,
+      "unexpected_v1_trailer_count_per_trial": 0.0,
+      "unexpected_v1_trailer_q_active_fC_per_trial": 1.825392246246338e-07,
+      "unexpected_v1e_trailer_q_active_fC_per_trial": 1.7136335372924805e-07,
+      "unexpected_v1som_trailer_q_active_fC_per_trial": 1.1408701539039612e-08
+    },
+    "metrics_max_abs_diff": 1.0281801223754883e-06
+  },
+  "paths": {
+    "cpu_reps1": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010_v1ffdiv050_ffgate_feedback_cpu_reference.json",
+    "gpu_reps1": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010_v1ffdiv050_ffgate_feedback_gpu_only_production.json",
+    "patch_diff": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/native_ff_feedback_gate_patch_20260424.diff",
+    "target_reps4": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010_v1ffdiv050_ffgate_feedback.json"
+  },
+  "settings": {
+    "baseline_rate_hz": 0,
+    "checkpoint": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json",
+    "feedback_g_total": 2,
+    "feedback_r": 0.3333333333333333,
+    "feedback_replay_mode": "raw",
+    "feedback_som_center_weight": 0.1,
+    "rate_hz": 100,
+    "reps_expected": 4,
+    "reps_unexpected": 4,
+    "seed": 4242,
+    "v1_feedforward_divisive_denominator": "1 + scale * same_channel_current_step_feedback_hpred_spike_count_during_trailer",
+    "v1_feedforward_divisive_gate_source": "feedback",
+    "v1_feedforward_divisive_scale": 0.5
+  },
+  "timing_seconds": {
+    "run": 3.650693696,
+    "total_excluding_build": 3.665298593,
+    "write": 0.011870564
+  },
+  "v1_e_channel_decode": {
+    "expected": {
+      "100ms_actual_channel_count_mean": [
+        69.33333333333333,
+        54.0,
+        53.333333333333336,
+        46.0,
+        47.333333333333336
+      ],
+      "100ms_actual_minus_predicted_count_mean": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "100ms_actual_share_mean": [
+        0.522005772005772,
+        0.505869708994709,
+        0.5255621693121694,
+        0.5209986772486772,
+        0.4844742063492063
+      ],
+      "100ms_predicted_channel_count_mean": [
+        69.33333333333333,
+        54.0,
+        53.333333333333336,
+        46.0,
+        47.333333333333336
+      ],
+      "100ms_total_count_mean": [
+        134.0,
+        108.66666666666667,
+        104.66666666666667,
+        92.66666666666667,
+        98.66666666666667
+      ],
+      "actual_channel_count_mean": 270.0,
+      "actual_minus_predicted_count_mean": 0.0,
+      "actual_share_mean": 0.5022373721362692,
+      "decoder_100ms_actual_accuracy": [
+        1.0,
+        0.9583333333333334,
+        0.9166666666666666,
+        0.9166666666666666,
+        0.8333333333333334
+      ],
+      "decoder_100ms_expected_accuracy": [
+        1.0,
+        0.9583333333333334,
+        0.9166666666666666,
+        0.9166666666666666,
+        0.8333333333333334
+      ],
+      "decoder_full_actual_accuracy": 1.0,
+      "decoder_full_expected_accuracy": 1.0,
+      "predicted_channel_count_mean": 270.0,
+      "predicted_share_mean": 0.5022373721362692,
+      "total_count_mean": 538.6666666666666,
+      "trials": 24
+    },
+    "unexpected": {
+      "100ms_actual_channel_count_mean": [
+        66.83333333333333,
+        53.666666666666664,
+        44.166666666666664,
+        44.333333333333336,
+        43.833333333333336
+      ],
+      "100ms_actual_minus_predicted_count_mean": [
+        66.5,
+        52.833333333333336,
+        43.333333333333336,
+        43.833333333333336,
+        43.166666666666664
+      ],
+      "100ms_actual_share_mean": [
+        0.4654558982683983,
+        0.4685632365319865,
+        0.43960400132275135,
+        0.4494006283068783,
+        0.4449446097883598
+      ],
+      "100ms_predicted_channel_count_mean": [
+        0.3333333333333333,
+        0.8333333333333334,
+        0.8333333333333334,
+        0.5,
+        0.6666666666666666
+      ],
+      "100ms_total_count_mean": [
+        144.5,
+        115.83333333333333,
+        103.0,
+        99.5,
+        99.66666666666667
+      ],
+      "actual_channel_count_mean": 252.83333333333334,
+      "actual_minus_predicted_count_mean": 249.66666666666666,
+      "actual_share_mean": 0.45058487907625827,
+      "decoder_100ms_actual_accuracy": [
+        0.9583333333333334,
+        0.8229166666666666,
+        0.6979166666666666,
+        0.7395833333333334,
+        0.75
+      ],
+      "decoder_100ms_expected_accuracy": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "decoder_full_actual_accuracy": 1.0,
+      "decoder_full_expected_accuracy": 0.0,
+      "predicted_channel_count_mean": 3.1666666666666665,
+      "predicted_share_mean": 0.005676371819604367,
+      "total_count_mean": 562.5,
+      "trials": 96
+    }
+  },
+  "v1_som_channel_counts": {
+    "expected": {
+      "100ms_actual_channel_count_mean": [
+        1.8333333333333333,
+        1.8333333333333333,
+        1.8333333333333333,
+        1.8333333333333333,
+        1.8333333333333333
+      ],
+      "100ms_actual_minus_predicted_count_mean": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "100ms_actual_share_mean": [
+        0.02594098333228768,
+        0.025876880768185118,
+        0.02594098333228768,
+        0.025876880768185118,
+        0.02594098333228768
+      ],
+      "100ms_predicted_channel_count_mean": [
+        1.8333333333333333,
+        1.8333333333333333,
+        1.8333333333333333,
+        1.8333333333333333,
+        1.8333333333333333
+      ],
+      "100ms_total_count_mean": [
+        60.333333333333336,
+        60.5,
+        60.5,
+        60.5,
+        60.5
+      ],
+      "actual_channel_count_mean": 9.166666666666666,
+      "actual_minus_predicted_count_mean": 0.0,
+      "actual_share_mean": 0.025914736613127574,
+      "decoder_100ms_actual_accuracy": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "decoder_100ms_expected_accuracy": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "decoder_full_actual_accuracy": 0.0,
+      "decoder_full_expected_accuracy": 0.0,
+      "predicted_channel_count_mean": 9.166666666666666,
+      "predicted_share_mean": 0.025914736613127574,
+      "total_count_mean": 302.3333333333333,
+      "trials": 24
+    },
+    "unexpected": {
+      "100ms_actual_channel_count_mean": [
+        0.08333333333333333,
+        0.08333333333333333,
+        0.08333333333333333,
+        0.08333333333333333,
+        0.08333333333333333
+      ],
+      "100ms_actual_minus_predicted_count_mean": [
+        -2.5,
+        -2.5416666666666665,
+        -2.5,
+        -2.5416666666666665,
+        -2.5
+      ],
+      "100ms_actual_share_mean": [
+        0.0008506944444444444,
+        0.0008506944444444444,
+        0.0008506944444444444,
+        0.0008506944444444444,
+        0.0008506944444444444
+      ],
+      "100ms_predicted_channel_count_mean": [
+        2.5833333333333335,
+        2.625,
+        2.5833333333333335,
+        2.625,
+        2.5833333333333335
+      ],
+      "100ms_total_count_mean": [
+        63.583333333333336,
+        63.625,
+        63.583333333333336,
+        63.583333333333336,
+        63.75
+      ],
+      "actual_channel_count_mean": 0.4166666666666667,
+      "actual_minus_predicted_count_mean": -12.583333333333334,
+      "actual_share_mean": 0.0008506944444444444,
+      "decoder_100ms_actual_accuracy": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "decoder_100ms_expected_accuracy": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "decoder_full_actual_accuracy": 0.0,
+      "decoder_full_expected_accuracy": 0.0,
+      "predicted_channel_count_mean": 13.0,
+      "predicted_share_mean": 0.037064349885266086,
+      "total_count_mean": 318.125,
+      "trials": 96
+    }
+  }
+}

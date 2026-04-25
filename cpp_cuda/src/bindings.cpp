@@ -1244,7 +1244,11 @@ PYBIND11_MODULE(_native_cuda, m) {
            std::int32_t trailer_start_step,
            std::int32_t trailer_end_step,
            std::int32_t iti_start_step,
-           std::int32_t iti_end_step) {
+           std::int32_t iti_end_step,
+           std::int32_t v1_error_comparator_mode_id,
+           double v1_error_sensory_gain,
+           double v1_error_prediction_gain,
+           std::int32_t v1_error_prediction_shift) {
             const std::string stim_prefix = "syn_v1_stim_to_e";
             const std::string v1_to_h_prefix = "syn_v1_to_h_ctx";
             const std::string ctx_to_pred_prefix = "syn_ctx_to_pred";
@@ -1291,7 +1295,11 @@ PYBIND11_MODULE(_native_cuda, m) {
                     trailer_start_step,
                     trailer_end_step,
                     iti_start_step,
-                    iti_end_step
+                    iti_end_step,
+                    v1_error_comparator_mode_id,
+                    v1_error_sensory_gain,
+                    v1_error_prediction_gain,
+                    v1_error_prediction_shift
                 )
             );
         },
@@ -1310,6 +1318,10 @@ PYBIND11_MODULE(_native_cuda, m) {
         py::arg("trailer_end_step") = 100,
         py::arg("iti_start_step") = 100,
         py::arg("iti_end_step") = 120,
+        py::arg("v1_error_comparator_mode_id") = 0,
+        py::arg("v1_error_sensory_gain") = 1.0,
+        py::arg("v1_error_prediction_gain") = 1.0,
+        py::arg("v1_error_prediction_shift") = 0,
         "Run seeded bounded frozen-Richter source-generation parity primitive"
     );
     m.def(

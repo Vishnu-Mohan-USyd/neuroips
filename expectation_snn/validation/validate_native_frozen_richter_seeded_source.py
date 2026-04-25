@@ -22,6 +22,8 @@ RAW_COUNT_KEYS = (
     "v1_e.leader",
     "v1_e.preprobe",
     "v1_e.trailer",
+    "v1_error.trailer",
+    "v1_error_neg.trailer",
     "hctx_e.leader",
     "hctx_e.preprobe",
     "hctx_e.trailer",
@@ -104,22 +106,38 @@ def main() -> int:
             unexpected_channel=1,
             grating_rate_hz=500.0,
             baseline_rate_hz=0.0,
-            n_steps=120,
+            n_steps=100,
             leader_start_step=0,
             leader_end_step=30,
             preprobe_start_step=30,
-            preprobe_end_step=60,
-            trailer_start_step=60,
-            trailer_end_step=100,
-            iti_start_step=100,
-            iti_end_step=120,
+            preprobe_end_step=38,
+            trailer_start_step=38,
+            trailer_end_step=78,
+            iti_start_step=78,
+            iti_end_step=100,
         )
         result_a = run_frozen_richter_seeded_source_test(arrays, seed=12345, **kwargs)
         result_b = run_frozen_richter_seeded_source_test(arrays, seed=12345, **kwargs)
         result_c = run_frozen_richter_seeded_source_test(arrays, seed=54321, **kwargs)
+        result_error = run_frozen_richter_seeded_source_test(
+            arrays,
+            seed=12345,
+            v1_error_comparator_mode_id=1,
+            v1_error_sensory_gain=1.0,
+            v1_error_prediction_gain=1.0,
+            **kwargs,
+        )
+        result_signed_error = run_frozen_richter_seeded_source_test(
+            arrays,
+            seed=12345,
+            v1_error_comparator_mode_id=2,
+            v1_error_sensory_gain=1.0,
+            v1_error_prediction_gain=1.0,
+            **kwargs,
+        )
 
     assert result_a["seed"] == 12345
-    assert result_a["n_steps"] == 120
+    assert result_a["n_steps"] == 100
     assert np.isclose(result_a["dt_ms"], 0.1, atol=0.0, rtol=0.0)
     assert result_a["expected_channel"] == 0
     assert result_a["unexpected_channel"] == 1
@@ -127,11 +145,11 @@ def main() -> int:
         "leader_start_step": 0,
         "leader_end_step": 30,
         "preprobe_start_step": 30,
-        "preprobe_end_step": 60,
-        "trailer_start_step": 60,
-        "trailer_end_step": 100,
-        "iti_start_step": 100,
-        "iti_end_step": 120,
+        "preprobe_end_step": 38,
+        "trailer_start_step": 38,
+        "trailer_end_step": 78,
+        "iti_start_step": 78,
+        "iti_end_step": 100,
     }
     assert result_a["edge_counts"] == {
         "v1_stim_to_e": 3840,
@@ -143,12 +161,17 @@ def main() -> int:
     assert result_a["rates_hz"] == {
         "grating": 500.0,
         "baseline": 0.0,
+        "v1_stim_sigma_deg": 22.0,
     }
 
     _assert_int_maps_equal(result_a, "raw_counts", RAW_COUNT_KEYS)
     _assert_int_maps_equal(result_a, "source_counts", SOURCE_COUNT_KEYS)
     _assert_rate_maps_equal(result_a)
     _assert_same_seed_equal(result_a, result_b)
+    _assert_int_maps_equal(result_error, "raw_counts", RAW_COUNT_KEYS)
+    assert _max_error(result_error) <= TOL
+    _assert_int_maps_equal(result_signed_error, "raw_counts", RAW_COUNT_KEYS)
+    assert _max_error(result_signed_error) <= TOL
 
     source_by_step = _as_int_array(
         result_a, "cpu", "source_counts", "source.events_by_step"
@@ -162,7 +185,7 @@ def main() -> int:
     source_by_phase = _as_int_array(
         result_a, "cpu", "source_counts", "source.events_by_phase"
     )
-    assert source_by_step.shape == (120,)
+    assert source_by_step.shape == (100,)
     assert source_by_afferent.shape == (240,)
     assert source_by_channel.shape == (12,)
     assert source_by_phase.shape == (5,)
@@ -212,7 +235,7 @@ def main() -> int:
     print(
         "validate_native_frozen_richter_seeded_source: PASS",
         f"backend_info={backend_info()}",
-        "phases=leader:[0,30),preprobe:[30,60),trailer:[60,100),iti:[100,120)",
+        "phases=leader:[0,30),preprobe:[30,38),trailer:[38,78),iti:[78,100)",
         "schedule=expected_channel:0 leader/preprobe,unexpected_channel:1 trailer",
         f"source_events={result_a['source_event_counts']}",
         f"source_by_channel={source_by_channel.tolist()}",

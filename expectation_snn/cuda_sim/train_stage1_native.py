@@ -37,8 +37,14 @@ from expectation_snn.cuda_sim.native import (
 N_H_E = 192
 N_H_EE_SYN = N_H_E * (N_H_E - 1)
 N_CTX_PRED_SYN = N_H_E * N_H_E
+N_H_CHANNELS = 12
+N_H_E_PER_CHANNEL = 16
 N_ORIENTATIONS = 6
-N_CELLS_PER_ORIENTATION = N_H_E // N_ORIENTATIONS
+H_RICHTER_CHANNEL_STRIDE = N_H_CHANNELS // N_ORIENTATIONS
+N_CELLS_PER_ORIENTATION = N_H_E_PER_CHANNEL
+NATIVE_STAGE1_CTX_PRED_DRIVE_PA = 400.0
+NATIVE_STAGE1_PRED_E_UNIFORM_BIAS_PA = 100.0
+NATIVE_STAGE1_W_INIT_FRAC = 0.0
 NATIVE_STAGE1_CHECKPOINT_SCHEMA_VERSION = 1
 DEFAULT_DT_MS = 0.1
 DEFAULT_NATIVE_CHECKPOINT_DIR = (
@@ -52,6 +58,11 @@ STABLE_HASH_EXCLUDE_KEYS = frozenset({
     "native_backend_info",
     "native_stable_content_sha256",
     "native_wall_seconds",
+    "native_schedule_wall_seconds",
+    "native_train_wall_seconds",
+    "native_gate_eval_wall_seconds",
+    "native_checkpoint_write_wall_seconds",
+    "native_total_wall_seconds",
 })
 H_CONTEXT_PERSISTENCE_MIN_MS = 200.0
 H_CONTEXT_PERSISTENCE_MAX_MS = 500.0
@@ -162,11 +173,21 @@ def _require_shape(name: str, value: np.ndarray, shape: tuple[int, ...]) -> np.n
 
 
 def _infer_trial_orientation_indices(cells: np.ndarray) -> np.ndarray:
-    """Map controlled H-cell ids to orientation bins for metadata only."""
+    """Map H-cell ids to Richter orientation bins for metadata only.
+
+    Native generated schedules embed the six Richter orientations on the
+    12-channel H ring as even H channels: orientation ``k`` maps to H channel
+    ``2*k`` and each H channel has 16 excitatory cells.  Older controlled
+    tiny fixtures may use arbitrary H cells; for those, return the raw H
+    channel so metadata remains honest rather than inventing a 6-bin mapping.
+    """
     cells = np.asarray(cells, dtype=np.int32)
     if np.any((cells < 0) | (cells >= N_H_E)):
         raise ValueError("controlled H-cell ids must be in [0, 192)")
-    return np.floor_divide(cells, N_CELLS_PER_ORIENTATION).astype(np.int32)
+    channels = np.floor_divide(cells, N_H_E_PER_CHANNEL).astype(np.int32)
+    if np.all((channels % H_RICHTER_CHANNEL_STRIDE) == 0):
+        return np.floor_divide(channels, H_RICHTER_CHANNEL_STRIDE).astype(np.int32)
+    return channels
 
 
 def compute_native_stage1_gate_metrics(
@@ -234,6 +255,18 @@ def compute_native_stage1_gate_metrics(
     provisional = True
     ctx_rate = float(h_metrics["ctx_max_cell_rate_hz"])
     pred_rate = float(h_metrics["pred_max_cell_rate_hz"])
+    ctx_channel_rate = float(h_metrics["ctx_max_channel_rate_hz"])
+    pred_channel_rate = float(h_metrics["pred_max_channel_rate_hz"])
+    no_runaway_max_cell_rate = float(
+        h_metrics.get("no_runaway_max_cell_rate_hz", max(ctx_rate, pred_rate))
+    )
+    no_runaway_max_channel_rate = float(
+        h_metrics.get("no_runaway_max_channel_rate_hz", max(ctx_channel_rate, pred_channel_rate))
+    )
+    ctx_population_rate = float(h_metrics["ctx_population_rate_hz"])
+    pred_population_rate = float(h_metrics["pred_population_rate_hz"])
+    ctx_inh_population_rate = float(h_metrics["ctx_inh_population_rate_hz"])
+    pred_inh_population_rate = float(h_metrics["pred_inh_population_rate_hz"])
     return {
         "schema_version": 1,
         "provisional": provisional,
@@ -268,16 +301,23 @@ def compute_native_stage1_gate_metrics(
         "h_prediction_pretrailer_forecast_threshold": H_PRED_FORECAST_PROB_MIN,
         "h_prediction_pretrailer_forecast_pass": bool(forecast_pass),
         "no_runaway_max_rate_hz": no_runaway_max_rate,
+        "no_runaway_population_max_rate_hz": float(
+            h_metrics.get("no_runaway_population_max_rate_hz", no_runaway_max_rate)
+        ),
+        "no_runaway_max_cell_rate_hz": no_runaway_max_cell_rate,
+        "no_runaway_max_channel_rate_hz": no_runaway_max_channel_rate,
         "no_runaway_threshold_hz": NO_RUNAWAY_MAX_RATE_HZ,
         "no_runaway_pass": bool(no_runaway_pass),
+        "h_context_population_rate_hz": ctx_population_rate,
+        "h_prediction_population_rate_hz": pred_population_rate,
+        "h_context_inh_population_rate_hz": ctx_inh_population_rate,
+        "h_prediction_inh_population_rate_hz": pred_inh_population_rate,
         "h_context_max_native_h_rate_hz": ctx_rate,
         "h_prediction_max_native_h_rate_hz": pred_rate,
         "h_context_max_controlled_event_rate_hz": ctx_rate,
         "h_prediction_max_controlled_event_rate_hz": pred_rate,
-        "h_context_max_channel_rate_hz": float(h_metrics["ctx_max_channel_rate_hz"]),
-        "h_prediction_max_channel_rate_hz": float(
-            h_metrics["pred_max_channel_rate_hz"],
-        ),
+        "h_context_max_channel_rate_hz": ctx_channel_rate,
+        "h_prediction_max_channel_rate_hz": pred_channel_rate,
         "h_prediction_pretrailer_forecast_trial_count": int(
             h_metrics["forecast_trial_count"],
         ),
@@ -324,10 +364,13 @@ def build_small_generated_stage1_schedule(
     if pairs.shape != (int(n_trials), 2):
         raise AssertionError(f"unexpected generated pairs shape {pairs.shape}")
 
-    offsets = np.arange(int(n_trials), dtype=np.int32) % N_CELLS_PER_ORIENTATION
-    leader_cells = pairs[:, 0] * N_CELLS_PER_ORIENTATION + offsets
-    trailer_cells = pairs[:, 1] * N_CELLS_PER_ORIENTATION + offsets
-    expected_trailer_cells = expected * N_CELLS_PER_ORIENTATION + offsets
+    offsets = np.arange(int(n_trials), dtype=np.int32) % N_H_E_PER_CHANNEL
+    leader_h_channels = pairs[:, 0] * H_RICHTER_CHANNEL_STRIDE
+    trailer_h_channels = pairs[:, 1] * H_RICHTER_CHANNEL_STRIDE
+    expected_trailer_h_channels = expected * H_RICHTER_CHANNEL_STRIDE
+    leader_cells = leader_h_channels * N_H_E_PER_CHANNEL + offsets
+    trailer_cells = trailer_h_channels * N_H_E_PER_CHANNEL + offsets
+    expected_trailer_cells = expected_trailer_h_channels * N_H_E_PER_CHANNEL + offsets
 
     pairs_sha256 = _sha256_array(pairs)
     return {
@@ -348,10 +391,15 @@ def build_small_generated_stage1_schedule(
         "metadata_json": {
             "source": "richter_biased_training_schedule",
             "controlled_event_mapping": (
-                "cell = orientation_idx * 32 + trial_offset_mod_32"
+                "cell = (orientation_idx * 2) * 16 + trial_offset_mod_16"
             ),
             "pairs_sha256": pairs_sha256,
-            "native_generated_trainer_status": "consumed_by_native_controlled_trainer",
+            "native_generated_trainer_status": "consumed_by_native_channel_window_trainer",
+            "h_channels": "12 channels x 16 E cells; Richter orientations use even H channels",
+            "bounded_trace_boundary": (
+                "generated trainer clears xpre/xpost after each delayed gate "
+                "to approximate production long-ITI coincidence-trace decay"
+            ),
         },
     }
 
@@ -510,8 +558,14 @@ def write_native_stage1_ctx_pred_checkpoint(
     )
     row_cap_limit = 3.0
     row_cap_ok = bool(float(row_sums.max()) <= row_cap_limit + 5e-12)
+    gate_t0 = time.perf_counter()
     gate_metrics = compute_native_stage1_gate_metrics(native_result, schedule)
+    native_gate_wall = float(time.perf_counter() - gate_t0)
     native_scientific_passed = bool(gate_metrics["all_pass"])
+    native_schedule_wall = float(native_result.get("native_schedule_wall_seconds", 0.0))
+    native_train_wall = float(
+        native_result.get("native_train_wall_seconds", native_result.get("native_wall_seconds", 0.0))
+    )
     report = {
         "artifact_kind": "native_stage1_ctx_pred_schema_checkpoint",
         "scientific_stage1_passed": native_scientific_passed,
@@ -543,6 +597,11 @@ def write_native_stage1_ctx_pred_checkpoint(
         n_trials=np.int32(n_trials),
         dt_ms=np.float64(dt_ms),
         native_wall_seconds=np.float64(native_result.get("native_wall_seconds", 0.0)),
+        native_schedule_wall_seconds=np.float64(native_schedule_wall),
+        native_train_wall_seconds=np.float64(native_train_wall),
+        native_gate_eval_wall_seconds=np.float64(native_gate_wall),
+        native_checkpoint_write_wall_seconds=np.float64(0.0),
+        native_total_wall_seconds=np.float64(0.0),
         native_backend_info=np.bytes_(str(native_result.get("native_backend_info", ""))),
         passed=np.bool_(native_scientific_passed),
         native_schema_checkpoint_written=np.bool_(True),
@@ -641,8 +700,29 @@ def write_native_stage1_ctx_pred_checkpoint(
             gate_metrics["h_prediction_pretrailer_forecast_pass"],
         ),
         no_runaway_max_rate_hz=np.float64(gate_metrics["no_runaway_max_rate_hz"]),
+        no_runaway_population_max_rate_hz=np.float64(
+            gate_metrics["no_runaway_population_max_rate_hz"],
+        ),
+        no_runaway_max_cell_rate_hz=np.float64(
+            gate_metrics["no_runaway_max_cell_rate_hz"],
+        ),
+        no_runaway_max_channel_rate_hz=np.float64(
+            gate_metrics["no_runaway_max_channel_rate_hz"],
+        ),
         no_runaway_threshold_hz=np.float64(gate_metrics["no_runaway_threshold_hz"]),
         no_runaway_pass=np.bool_(gate_metrics["no_runaway_pass"]),
+        h_context_population_rate_hz=np.float64(
+            gate_metrics["h_context_population_rate_hz"],
+        ),
+        h_prediction_population_rate_hz=np.float64(
+            gate_metrics["h_prediction_population_rate_hz"],
+        ),
+        h_context_inh_population_rate_hz=np.float64(
+            gate_metrics["h_context_inh_population_rate_hz"],
+        ),
+        h_prediction_inh_population_rate_hz=np.float64(
+            gate_metrics["h_prediction_inh_population_rate_hz"],
+        ),
         h_context_max_controlled_event_rate_hz=np.float64(
             gate_metrics["h_context_max_controlled_event_rate_hz"],
         ),
@@ -691,7 +771,29 @@ def write_native_stage1_ctx_pred_checkpoint(
             cfg.pred_e_uniform_bias_pA,
         ),
     )
-    _write_npz_with_stable_hash(out_path, payload)
+    write_t0 = time.perf_counter()
+    stable_hash = _write_npz_with_stable_hash(out_path, payload)
+    checkpoint_write_wall = float(time.perf_counter() - write_t0)
+    total_wall = (
+        native_schedule_wall
+        + native_train_wall
+        + native_gate_wall
+        + checkpoint_write_wall
+    )
+    with np.load(out_path, allow_pickle=False) as data:
+        arrays = {key: data[key] for key in data.files}
+    arrays["native_checkpoint_write_wall_seconds"] = np.float64(
+        checkpoint_write_wall,
+    )
+    arrays["native_total_wall_seconds"] = np.float64(total_wall)
+    arrays["native_wall_seconds"] = np.float64(total_wall)
+    np.savez(out_path, **arrays)
+    check_hash = stable_npz_content_hash(out_path)
+    if check_hash != stable_hash:
+        raise AssertionError(
+            "stable content hash changed after timing telemetry update: "
+            f"{stable_hash} != {check_hash}"
+        )
     return out_path
 
 
@@ -722,31 +824,53 @@ def write_generated_schedule_stage1_checkpoint(
     p_bias: float = 0.80,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     """Run the native generated-schedule smoke trainer and write a checkpoint."""
+    schedule_t0 = time.perf_counter()
     schedule = build_small_generated_stage1_schedule(
         seed=int(seed),
         n_trials=int(n_trials),
         p_bias=float(p_bias),
     )
-    t0 = time.perf_counter()
+    schedule_wall = float(time.perf_counter() - schedule_t0)
     native_backend = backend_info()
+    train_t0 = time.perf_counter()
     result = run_ctx_pred_generated_schedule_test(
         seed=int(seed),
         leader_pre_cells=np.asarray(schedule["leader_pre_cells"], dtype=np.int32),
         trailer_post_cells=np.asarray(schedule["trailer_post_cells"], dtype=np.int32),
     )
-    result["native_wall_seconds"] = float(time.perf_counter() - t0)
+    train_wall = float(time.perf_counter() - train_t0)
+    result["native_schedule_wall_seconds"] = schedule_wall
+    result["native_train_wall_seconds"] = train_wall
+    result["native_gate_eval_wall_seconds"] = 0.0
+    result["native_wall_seconds"] = train_wall
     result["native_backend_info"] = native_backend
     if int(result["n_trials"]) != int(schedule["n_trials"]):
         raise AssertionError(
             f"native result n_trials={result['n_trials']} does not match "
             f"schedule n_trials={schedule['n_trials']}"
         )
+    ctx_pred_cfg = HContextPredictionConfig(
+        drive_amp_ctx_pred_pA=NATIVE_STAGE1_CTX_PRED_DRIVE_PA,
+        pred_e_uniform_bias_pA=NATIVE_STAGE1_PRED_E_UNIFORM_BIAS_PA,
+        w_init_frac=NATIVE_STAGE1_W_INIT_FRAC,
+    )
     path = write_native_stage1_ctx_pred_checkpoint(
         result,
         out_path,
         seed=int(seed),
         schedule_metadata=schedule,
+        ctx_pred_cfg=ctx_pred_cfg,
     )
+    with np.load(path, allow_pickle=False) as data:
+        for key in (
+            "native_schedule_wall_seconds",
+            "native_train_wall_seconds",
+            "native_gate_eval_wall_seconds",
+            "native_checkpoint_write_wall_seconds",
+            "native_total_wall_seconds",
+            "native_wall_seconds",
+        ):
+            result[key] = float(data[key])
     return path, result, schedule
 
 

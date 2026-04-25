@@ -1,0 +1,9 @@
+{
+  "cpu": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_feedback_r1000_gtotal20_ctxpred_gate_cpu.json",
+  "gpu": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_feedback_r1000_gtotal20_ctxpred_gate_gpu.json",
+  "max_metric_delta": 1.7248094081878662e-06,
+  "max_q_active_delta_fC": 1.7248094081878662e-06,
+  "parity_pass": true,
+  "top_diffs": [],
+  "trial_diffs": []
+}

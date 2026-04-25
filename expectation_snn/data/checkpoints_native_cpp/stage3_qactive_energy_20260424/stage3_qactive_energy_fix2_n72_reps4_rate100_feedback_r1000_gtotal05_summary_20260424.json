@@ -1,0 +1,137 @@
+{
+  "artifact_kind": "native_qactive_energy_feedback_g_total_summary",
+  "decoder_100ms_by_bin": [
+    {
+      "bin_index": 0,
+      "expected_actual_accuracy": 1.0,
+      "expected_expected_accuracy": 1.0,
+      "unexpected_actual_accuracy": 1.0,
+      "unexpected_expected_accuracy": 0.0,
+      "unexpected_minus_expected_actual_accuracy": 0.0,
+      "window_ms": [
+        0,
+        100
+      ]
+    },
+    {
+      "bin_index": 1,
+      "expected_actual_accuracy": 0.9166666666666666,
+      "expected_expected_accuracy": 0.9166666666666666,
+      "unexpected_actual_accuracy": 0.8645833333333334,
+      "unexpected_expected_accuracy": 0.0,
+      "unexpected_minus_expected_actual_accuracy": -0.05208333333333326,
+      "window_ms": [
+        100,
+        200
+      ]
+    },
+    {
+      "bin_index": 2,
+      "expected_actual_accuracy": 0.8333333333333334,
+      "expected_expected_accuracy": 0.8333333333333334,
+      "unexpected_actual_accuracy": 0.7604166666666666,
+      "unexpected_expected_accuracy": 0.0,
+      "unexpected_minus_expected_actual_accuracy": -0.07291666666666674,
+      "window_ms": [
+        200,
+        300
+      ]
+    },
+    {
+      "bin_index": 3,
+      "expected_actual_accuracy": 0.8333333333333334,
+      "expected_expected_accuracy": 0.8333333333333334,
+      "unexpected_actual_accuracy": 0.7604166666666666,
+      "unexpected_expected_accuracy": 0.0,
+      "unexpected_minus_expected_actual_accuracy": -0.07291666666666674,
+      "window_ms": [
+        300,
+        400
+      ]
+    },
+    {
+      "bin_index": 4,
+      "expected_actual_accuracy": 0.75,
+      "expected_expected_accuracy": 0.75,
+      "unexpected_actual_accuracy": 0.7916666666666666,
+      "unexpected_expected_accuracy": 0.0,
+      "unexpected_minus_expected_actual_accuracy": 0.04166666666666663,
+      "window_ms": [
+        400,
+        500
+      ]
+    }
+  ],
+  "decoder_full_trailer_500ms": {
+    "expected_actual_accuracy": 1.0,
+    "trial_argmax_matches_actual": 1.0,
+    "trial_argmax_matches_expected": 0.2,
+    "unexpected_actual_accuracy": 1.0,
+    "unexpected_minus_expected_actual_accuracy": 0.0
+  },
+  "energy_delta_unexpected_minus_expected_fC_per_trial": {
+    "v1": 11826.701635029167,
+    "v1e": 11817.284840129316,
+    "v1som": 9.416794901080152
+  },
+  "energy_fC_per_trial": {
+    "definition": "integrated active charge; V1_E=sum(abs(I_e)+abs(I_i)+abs(I_ap_e))*dt_ms, V1_SOM=sum(abs(I_e)+abs(I_i))*dt_ms; pA*ms equals fC",
+    "expected": {
+      "v1_trailer_q_active_fC_per_trial": 12693889.752727667,
+      "v1e_trailer_q_active_fC_per_trial": 12693094.348167649,
+      "v1som_trailer_q_active_fC_per_trial": 795.4045600175483
+    },
+    "unexpected": {
+      "v1_trailer_q_active_fC_per_trial": 12705716.454362696,
+      "v1e_trailer_q_active_fC_per_trial": 12704911.633007778,
+      "v1som_trailer_q_active_fC_per_trial": 804.8213549186285
+    }
+  },
+  "feedback": {
+    "g_total": 0.5,
+    "r": 1000,
+    "resolved_g_direct": 0.4995004995004995,
+    "resolved_g_som": 0.0004995004995004995
+  },
+  "g_total": 0.5,
+  "go_no_go": "NO-GO",
+  "go_no_go_checks": {
+    "expected_lower_100ms_decoder_actual_accuracy_all_bins": false,
+    "expected_lower_full_decoder_actual_accuracy": false,
+    "expected_lower_v1_activity": true,
+    "expected_lower_v1_total_q_active": true
+  },
+  "inputs": {
+    "artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal_gtotal05.json",
+    "checkpoint": {
+      "W_ctx_pred_fnv1a64": "0d76364697641ab3",
+      "W_ctx_pred_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json.W_ctx_pred.f64.bin",
+      "content_hash_fnv1a64": "53e76e762ba1c8fc",
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json"
+    },
+    "log": "/workspace/neuroips_gpu_migration_20260422/logs/native_feedback_g_total_rate100_reps4_r1000_gtotal05_20260424.log"
+  },
+  "log_extract": {
+    "exact_command": "/workspace/neuroips_gpu_migration_20260422/build_native_cuda/expectation_snn_native richter-dampening --checkpoint /workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json --out /workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal_gtotal05.json --seed 4242 --reps-expected 4 --reps-unexpected 4 --execution-mode gpu_only_production --grating-rate-hz 100 --baseline-rate-hz 0 --feedback-g-total 0.5 --feedback-r 1000",
+    "exit_code": 0,
+    "path": "/workspace/neuroips_gpu_migration_20260422/logs/native_feedback_g_total_rate100_reps4_r1000_gtotal05_20260424.log",
+    "wall_run_seconds": 5.737156019,
+    "wall_total_excluding_build_seconds": 5.743243558
+  },
+  "measurement_only": true,
+  "no_code_edits_for_run": true,
+  "q_active_definition": "integrated active charge; V1_E=sum(abs(I_e)+abs(I_i)+abs(I_ap_e))*dt_ms, V1_SOM=sum(abs(I_e)+abs(I_i))*dt_ms; pA*ms equals fC",
+  "schema_version": 1,
+  "timing_seconds": {
+    "run": 5.737156019,
+    "total_excluding_build": 5.743243558,
+    "write": 0.003362927
+  },
+  "v1_activity": {
+    "expected_v1_e_trailer_population_hz": 6.194444444444445,
+    "expected_v1_trailer_count_per_trial": 594.6666666666666,
+    "unexpected_minus_expected_count_per_trial": 10,
+    "unexpected_v1_e_trailer_population_hz": 6.298611111111111,
+    "unexpected_v1_trailer_count_per_trial": 604.6666666666666
+  }
+}

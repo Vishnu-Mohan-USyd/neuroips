@@ -1,6 +1,7 @@
 """Validate bounded GPU-native n=72 Stage-1 ctx_pred checkpoint generation."""
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -62,6 +63,11 @@ def _assert_checkpoint_schema(path: Path, schedule: dict, result: dict) -> None:
             "max_cpu_cuda_error",
             "W_ctx_pred_delta_abs_sum",
             "native_wall_seconds",
+            "native_schedule_wall_seconds",
+            "native_train_wall_seconds",
+            "native_gate_eval_wall_seconds",
+            "native_checkpoint_write_wall_seconds",
+            "native_total_wall_seconds",
             "native_backend_info",
             "native_stable_content_sha256",
             "native_gate_metrics_schema_version",
@@ -85,8 +91,18 @@ def _assert_checkpoint_schema(path: Path, schedule: dict, result: dict) -> None:
             "h_prediction_pretrailer_start_step",
             "h_prediction_pretrailer_end_step",
             "ctx_pred_gate_drive_amp_pA",
+            "h_context_population_rate_hz",
+            "h_prediction_population_rate_hz",
+            "h_context_inh_population_rate_hz",
+            "h_prediction_inh_population_rate_hz",
+            "h_context_max_native_h_rate_hz",
             "h_prediction_max_native_h_rate_hz",
+            "h_context_max_channel_rate_hz",
+            "h_prediction_max_channel_rate_hz",
             "no_runaway_max_rate_hz",
+            "no_runaway_population_max_rate_hz",
+            "no_runaway_max_cell_rate_hz",
+            "no_runaway_max_channel_rate_hz",
             "no_runaway_pass",
             "passed",
             "native_scientific_stage1_passed",
@@ -123,6 +139,7 @@ def _assert_checkpoint_schema(path: Path, schedule: dict, result: dict) -> None:
 
         W_init = np.asarray(data["W_ctx_pred_init"], dtype=np.float64)
         W_final = np.asarray(data["W_ctx_pred_final"], dtype=np.float64)
+        assert np.allclose(W_init, 0.0, atol=TOL, rtol=0.0)
         row_sums = np.asarray(data["row_sum_final"], dtype=np.float64)
         gate_dw_sum = np.asarray(data["gate_dw_sum"], dtype=np.float64)
         gate_elig_max = np.asarray(data["gate_elig_max"], dtype=np.float64)
@@ -143,6 +160,18 @@ def _assert_checkpoint_schema(path: Path, schedule: dict, result: dict) -> None:
         assert np.any(np.abs(gate_dw_sum) > 0.0)
         assert np.any(gate_elig_max > 0.0)
         assert float(data["native_wall_seconds"]) > 0.0
+        assert float(data["native_schedule_wall_seconds"]) >= 0.0
+        assert float(data["native_train_wall_seconds"]) > 0.0
+        assert float(data["native_gate_eval_wall_seconds"]) > 0.0
+        assert float(data["native_checkpoint_write_wall_seconds"]) > 0.0
+        assert float(data["native_total_wall_seconds"]) >= (
+            float(data["native_train_wall_seconds"])
+            + float(data["native_gate_eval_wall_seconds"])
+        )
+        assert np.isclose(
+            float(data["native_wall_seconds"]),
+            float(data["native_total_wall_seconds"]),
+        )
         assert "device_count" in _decode_bytes(data["native_backend_info"])
         assert _decode_bytes(data["native_stable_content_sha256"]) == (
             stable_npz_content_hash(path)
@@ -161,6 +190,12 @@ def _assert_checkpoint_schema(path: Path, schedule: dict, result: dict) -> None:
         assert int(data["h_prediction_pretrailer_start_step"]) == 2000
         assert int(data["h_prediction_pretrailer_end_step"]) == 3000
         assert np.isclose(float(data["ctx_pred_gate_drive_amp_pA"]), 400.0)
+        assert np.isclose(float(data["ctx_pred_drive_amp_ctx_pred_pA"]), 400.0)
+        assert np.isclose(float(data["ctx_pred_pred_e_uniform_bias_pA"]), 100.0)
+        cfg = json.loads(_decode_bytes(data["ctx_pred_config_json"]))
+        assert np.isclose(float(cfg["drive_amp_ctx_pred_pA"]), 400.0)
+        assert np.isclose(float(cfg["pred_e_uniform_bias_pA"]), 100.0)
+        assert np.isclose(float(cfg["w_init_frac"]), 0.0)
         assert np.array_equal(
             data["h_gate_leader_channels"],
             np.asarray(schedule["leader_pre_cells"], dtype=np.int32) // 16,
@@ -184,7 +219,24 @@ def _assert_checkpoint_schema(path: Path, schedule: dict, result: dict) -> None:
         forecast_pass = (
             float(data["h_prediction_pretrailer_forecast_probability"]) >= 0.25
         )
+        population_rates = (
+            float(data["h_context_population_rate_hz"]),
+            float(data["h_prediction_population_rate_hz"]),
+            float(data["h_context_inh_population_rate_hz"]),
+            float(data["h_prediction_inh_population_rate_hz"]),
+        )
         no_runaway_pass = float(data["no_runaway_max_rate_hz"]) <= 80.0
+        assert np.isclose(float(data["no_runaway_max_rate_hz"]), max(population_rates))
+        assert np.isclose(
+            float(data["no_runaway_population_max_rate_hz"]),
+            float(data["no_runaway_max_rate_hz"]),
+        )
+        assert float(data["no_runaway_max_cell_rate_hz"]) >= float(
+            data["no_runaway_max_rate_hz"]
+        )
+        assert float(data["no_runaway_max_channel_rate_hz"]) >= float(
+            data["no_runaway_max_rate_hz"]
+        )
         assert bool(data["h_context_persistence_pass"]) == h_persist_pass
         assert bool(data["h_prediction_pretrailer_forecast_pass"]) == forecast_pass
         assert bool(data["no_runaway_pass"]) == no_runaway_pass
@@ -239,7 +291,18 @@ def _assert_same_seed_reproducible(a_path: Path, b_path: Path) -> None:
         "h_prediction_pretrailer_start_step",
         "h_prediction_pretrailer_end_step",
         "ctx_pred_gate_drive_amp_pA",
+        "h_context_population_rate_hz",
+        "h_prediction_population_rate_hz",
+        "h_context_inh_population_rate_hz",
+        "h_prediction_inh_population_rate_hz",
+        "h_context_max_native_h_rate_hz",
+        "h_prediction_max_native_h_rate_hz",
+        "h_context_max_channel_rate_hz",
+        "h_prediction_max_channel_rate_hz",
         "no_runaway_max_rate_hz",
+        "no_runaway_population_max_rate_hz",
+        "no_runaway_max_cell_rate_hz",
+        "no_runaway_max_channel_rate_hz",
         "no_runaway_pass",
     )
     for key in deterministic_keys:
@@ -286,6 +349,7 @@ def main() -> int:
             f"gate_n_capped_sum={int(np.sum(data['gate_n_capped']))}",
             f"row_sum_max={float(row_sums.max()):.12f}",
             f"delta_abs_sum={float(data['W_ctx_pred_delta_abs_sum']):.12e}",
+            f"W_init_max={float(np.max(data['W_ctx_pred_init'])):.12e}",
             f"native_wall_seconds={float(data['native_wall_seconds']):.6f}",
             f"max_cpu_cuda_error={float(data['max_cpu_cuda_error']):.3e}",
             f"h_context_persistence_ms={float(data['h_context_persistence_ms']):.6f}",

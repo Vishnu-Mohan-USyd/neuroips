@@ -1,0 +1,245 @@
+{
+  "build_log": "/workspace/neuroips_gpu_migration_20260422/logs/native_v1_sigma_build_20260424.log",
+  "checkpoint": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json",
+  "experiment": "v1_stim_sigma_surface_rate100_supported_baseline",
+  "parity_log": "/workspace/neuroips_gpu_migration_20260422/logs/native_v1_sigma_parity_20260424.log",
+  "parity_sigma22_reps1": {
+    "cpu_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_sigma22_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010_cpu_reference.json",
+    "cpu_sigma_recorded": 22,
+    "gpu_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_sigma22_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010_gpu_only_production.json",
+    "gpu_sigma_recorded": 22,
+    "max_metric_abs_diff": 1.0300427675247192e-06,
+    "selected_count_fields_exact_equal": true
+  },
+  "patch_diff": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/native_v1_stim_sigma_patch_20260424.diff",
+  "runs": {
+    "sigma16": {
+      "artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_sigma16_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010.json",
+      "go_criteria": "unexpected V1 total Q/activity higher than expected and unexpected full decoder actual accuracy higher than expected",
+      "go_no_go": "NO-GO",
+      "q_activity": {
+        "v1_activity": {
+          "expected": 414,
+          "unexpected": 426.5,
+          "unexpected_minus_expected": 12.5
+        },
+        "v1_e_q": {
+          "expected": 9174459.782960417,
+          "unexpected": 9100936.27251798,
+          "unexpected_minus_expected": -73523.5104424376
+        },
+        "v1_som_q": {
+          "expected": 1469600.000003698,
+          "unexpected": 1424500.0000007518,
+          "unexpected_minus_expected": -45100.00000294624
+        },
+        "v1_total_q": {
+          "expected": 10644059.782964114,
+          "unexpected": 10525436.272518732,
+          "unexpected_minus_expected": -118623.51044538245
+        }
+      },
+      "sigma_deg": 16.0,
+      "stimulus_recorded": {
+        "baseline_rate_hz": 0,
+        "grating_rate_hz": 100,
+        "v1_stim_sigma_deg": 16
+      },
+      "v1_e_predicted_actual": {
+        "deltas_unexpected_minus_expected": {
+          "decoder_100ms_actual_accuracy_by_bin": [
+            0.0,
+            -0.03125,
+            -0.04166666666666674,
+            -0.09375,
+            0.05208333333333337
+          ],
+          "decoder_full_actual_accuracy": 0.0,
+          "v1_e_actual_minus_predicted_count": 250.16666666666666,
+          "v1_e_actual_minus_predicted_count_by_100ms_bin": [
+            65.16666666666667,
+            53.833333333333336,
+            44.666666666666664,
+            43.5,
+            43.0
+          ],
+          "v1_e_actual_share": -0.04839601129315663
+        },
+        "expected": {
+          "decoder_100ms_actual_accuracy_by_bin": [
+            1.0,
+            1.0,
+            0.9583333333333334,
+            1.0,
+            0.875
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "trial_count": 24,
+          "v1_e_actual_count_mean": 262.6666666666667,
+          "v1_e_actual_minus_predicted_count_by_100ms_bin": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "v1_e_actual_minus_predicted_count_mean": 0.0,
+          "v1_e_actual_minus_predicted_share_by_100ms_bin": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "v1_e_actual_share_mean": 0.6360964923521145,
+          "v1_e_predicted_count_mean": 262.6666666666667,
+          "v1_e_predicted_share_mean": 0.6360964923521145
+        },
+        "unexpected": {
+          "decoder_100ms_actual_accuracy_by_bin": [
+            1.0,
+            0.96875,
+            0.9166666666666666,
+            0.90625,
+            0.9270833333333334
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "trial_count": 96,
+          "v1_e_actual_count_mean": 250.16666666666666,
+          "v1_e_actual_minus_predicted_count_by_100ms_bin": [
+            65.16666666666667,
+            53.833333333333336,
+            44.666666666666664,
+            43.5,
+            43.0
+          ],
+          "v1_e_actual_minus_predicted_count_mean": 250.16666666666666,
+          "v1_e_actual_minus_predicted_share_by_100ms_bin": [
+            0.617195767195767,
+            0.6106398809523809,
+            0.5811135912698413,
+            0.5937582671957672,
+            0.5880704365079367
+          ],
+          "v1_e_actual_share_mean": 0.5877004810589579,
+          "v1_e_predicted_count_mean": 0.0,
+          "v1_e_predicted_share_mean": 0.0
+        }
+      },
+      "wall_seconds": 3.96
+    },
+    "sigma22_existing_baseline": {
+      "artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010.json",
+      "go_criteria": "unexpected V1 total Q/activity higher than expected and unexpected full decoder actual accuracy higher than expected",
+      "go_no_go": "NO-GO",
+      "note": "existing supported-baseline artifact; predates explicit stimulus sigma field and corresponds to default 22 deg",
+      "q_activity": {
+        "v1_activity": {
+          "expected": 541.3333333333334,
+          "unexpected": 563.6666666666666,
+          "unexpected_minus_expected": 22.333333333333258
+        },
+        "v1_e_q": {
+          "expected": 12642972.839637151,
+          "unexpected": 12657435.630401274,
+          "unexpected_minus_expected": 14462.790764123201
+        },
+        "v1_som_q": {
+          "expected": 2037200.0000116422,
+          "unexpected": 2043799.999996926,
+          "unexpected_minus_expected": 6599.999985283706
+        },
+        "v1_total_q": {
+          "expected": 14680172.839648793,
+          "unexpected": 14701235.6303982,
+          "unexpected_minus_expected": 21062.790749408305
+        }
+      },
+      "sigma_deg": 22.0,
+      "stimulus_recorded": null,
+      "v1_e_predicted_actual": {
+        "deltas_unexpected_minus_expected": {
+          "decoder_100ms_actual_accuracy_by_bin": [
+            -0.04166666666666663,
+            -0.13541666666666674,
+            -0.26041666666666674,
+            -0.21875,
+            -0.09375
+          ],
+          "decoder_full_actual_accuracy": 0.0,
+          "v1_e_actual_minus_predicted_count": 250.0,
+          "v1_e_actual_minus_predicted_count_by_100ms_bin": [
+            66.5,
+            53.0,
+            43.666666666666664,
+            43.666666666666664,
+            43.166666666666664
+          ],
+          "v1_e_actual_share": -0.05307592451244253
+        },
+        "expected": {
+          "decoder_100ms_actual_accuracy_by_bin": [
+            1.0,
+            0.9583333333333334,
+            0.9583333333333334,
+            0.9583333333333334,
+            0.8333333333333334
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "trial_count": 24,
+          "v1_e_actual_count_mean": 272.0,
+          "v1_e_actual_minus_predicted_count_by_100ms_bin": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "v1_e_actual_minus_predicted_count_mean": 0.0,
+          "v1_e_actual_minus_predicted_share_by_100ms_bin": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "v1_e_actual_share_mean": 0.5033176038379431,
+          "v1_e_predicted_count_mean": 272.0,
+          "v1_e_predicted_share_mean": 0.5033176038379431
+        },
+        "unexpected": {
+          "decoder_100ms_actual_accuracy_by_bin": [
+            0.9583333333333334,
+            0.8229166666666666,
+            0.6979166666666666,
+            0.7395833333333334,
+            0.7395833333333334
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "trial_count": 96,
+          "v1_e_actual_count_mean": 253.16666666666666,
+          "v1_e_actual_minus_predicted_count_by_100ms_bin": [
+            66.5,
+            53.0,
+            43.666666666666664,
+            43.666666666666664,
+            43.166666666666664
+          ],
+          "v1_e_actual_minus_predicted_count_mean": 250.0,
+          "v1_e_actual_minus_predicted_share_by_100ms_bin": [
+            0.4627438822751319,
+            0.4625323172198173,
+            0.43332093253968246,
+            0.44445271164021155,
+            0.436164847883598
+          ],
+          "v1_e_actual_share_mean": 0.4502416793255006,
+          "v1_e_predicted_count_mean": 3.1666666666666665,
+          "v1_e_predicted_share_mean": 0.0056578037863304525
+        }
+      },
+      "wall_seconds": null
+    }
+  },
+  "sigma16_log": "/workspace/neuroips_gpu_migration_20260422/logs/native_v1_sigma16_reps4_20260424.log"
+}

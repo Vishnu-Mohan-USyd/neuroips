@@ -1,0 +1,467 @@
+{
+  "artifact_kind": "ff_feedback_gate_feedforward_divisive_scale_bracket_rollup",
+  "fixed_settings": {
+    "baseline_rate_hz": 0,
+    "checkpoint": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json",
+    "execution_mode": "gpu_only_production",
+    "feedback_g_total": 2.0,
+    "feedback_r": 0.3333333333333333,
+    "feedback_replay_mode": "raw",
+    "feedback_som_center_weight": 0.1,
+    "rate_hz": 100,
+    "reps_expected": 4,
+    "reps_unexpected": 4,
+    "seed": 4242,
+    "v1_feedforward_divisive_gate_source": "feedback"
+  },
+  "log_path": "/workspace/neuroips_gpu_migration_20260422/logs/native_ff_feedback_gate_scale_bracket_rate100_20260424.log",
+  "scales": {
+    "0.5": {
+      "activity": {
+        "delta_unexpected_minus_expected": 23.83333333333337,
+        "expected_v1_count": 538.6666666666666,
+        "unexpected_v1_count": 562.5
+      },
+      "artifact_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010_v1ffdiv050_ffgate_feedback.json",
+      "content_hash_fnv1a64": "61d7bb6ce40c9e28",
+      "decoder_bin_actual_accuracy_gap_unexpected_minus_expected": [
+        -0.04166666666666663,
+        -0.13541666666666674,
+        -0.21875,
+        -0.17708333333333326,
+        -0.08333333333333337
+      ],
+      "energy": {
+        "delta_v1_total_unexpected_minus_expected": 21062.790749413893,
+        "delta_v1e_unexpected_minus_expected": 14462.790764130652,
+        "delta_v1som_unexpected_minus_expected": 6599.9999852834735,
+        "expected_v1_total_q_fC": 14680172.839648794,
+        "expected_v1e_q_fC": 12642972.839637151,
+        "expected_v1som_q_fC": 2037200.0000116425,
+        "unexpected_v1_total_q_fC": 14701235.630398208,
+        "unexpected_v1e_q_fC": 12657435.630401282,
+        "unexpected_v1som_q_fC": 2043799.999996926
+      },
+      "go_no_go": {
+        "activity_direction_pass": true,
+        "decoder_separation_pass": false,
+        "energy_direction_pass": true,
+        "full_decoder_expected_actual_accuracy": 1.0,
+        "full_decoder_unexpected_actual_accuracy": 1.0,
+        "verdict": "NO-GO"
+      },
+      "log_wall_seconds": 3.83,
+      "timing_seconds": {
+        "run": 3.650693696,
+        "total_excluding_build": 3.665298593,
+        "write": 0.011870564
+      },
+      "v1e_predicted_actual": {
+        "expected": {
+          "100ms_actual_count_mean": [
+            69.33333333333333,
+            54.0,
+            53.333333333333336,
+            46.0,
+            47.333333333333336
+          ],
+          "100ms_actual_minus_predicted_count_mean": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "100ms_actual_share_mean": [
+            0.522005772005772,
+            0.505869708994709,
+            0.5255621693121694,
+            0.5209986772486772,
+            0.4844742063492063
+          ],
+          "100ms_predicted_count_mean": [
+            69.33333333333333,
+            54.0,
+            53.333333333333336,
+            46.0,
+            47.333333333333336
+          ],
+          "actual_count_mean": 270.0,
+          "actual_minus_predicted_count_mean": 0.0,
+          "actual_share_mean": 0.5022373721362692,
+          "decoder_100ms_actual_accuracy": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9166666666666666,
+            0.8333333333333334
+          ],
+          "decoder_100ms_expected_accuracy": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9166666666666666,
+            0.8333333333333334
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "decoder_full_expected_accuracy": 1.0,
+          "predicted_count_mean": 270.0,
+          "predicted_share_mean": 0.5022373721362692,
+          "total_count_mean": 538.6666666666666,
+          "trials": 24
+        },
+        "unexpected": {
+          "100ms_actual_count_mean": [
+            66.83333333333333,
+            53.666666666666664,
+            44.166666666666664,
+            44.333333333333336,
+            43.833333333333336
+          ],
+          "100ms_actual_minus_predicted_count_mean": [
+            66.5,
+            52.833333333333336,
+            43.333333333333336,
+            43.833333333333336,
+            43.166666666666664
+          ],
+          "100ms_actual_share_mean": [
+            0.4654558982683983,
+            0.4685632365319865,
+            0.43960400132275135,
+            0.4494006283068783,
+            0.4449446097883598
+          ],
+          "100ms_predicted_count_mean": [
+            0.3333333333333333,
+            0.8333333333333334,
+            0.8333333333333334,
+            0.5,
+            0.6666666666666666
+          ],
+          "actual_count_mean": 252.83333333333334,
+          "actual_minus_predicted_count_mean": 249.66666666666666,
+          "actual_share_mean": 0.45058487907625827,
+          "decoder_100ms_actual_accuracy": [
+            0.9583333333333334,
+            0.8229166666666666,
+            0.6979166666666666,
+            0.7395833333333334,
+            0.75
+          ],
+          "decoder_100ms_expected_accuracy": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "decoder_full_expected_accuracy": 0.0,
+          "predicted_count_mean": 3.1666666666666665,
+          "predicted_share_mean": 0.005676371819604367,
+          "total_count_mean": 562.5,
+          "trials": 96
+        }
+      }
+    },
+    "1.0": {
+      "activity": {
+        "delta_unexpected_minus_expected": 23.666666666666742,
+        "expected_v1_count": 538.6666666666666,
+        "unexpected_v1_count": 562.3333333333334
+      },
+      "artifact_path": null,
+      "content_hash_fnv1a64": "402de25b0d9dbabc",
+      "decoder_bin_actual_accuracy_gap_unexpected_minus_expected": [
+        -0.04166666666666663,
+        -0.125,
+        -0.21875,
+        -0.17708333333333326,
+        -0.08333333333333337
+      ],
+      "energy": {
+        "delta_v1_total_unexpected_minus_expected": 21062.790749410167,
+        "delta_v1e_unexpected_minus_expected": 14462.790764125064,
+        "delta_v1som_unexpected_minus_expected": 6599.999985283706,
+        "expected_v1_total_q_fC": 14680172.839648793,
+        "expected_v1e_q_fC": 12642972.839637151,
+        "expected_v1som_q_fC": 2037200.0000116422,
+        "unexpected_v1_total_q_fC": 14701235.630398203,
+        "unexpected_v1e_q_fC": 12657435.630401276,
+        "unexpected_v1som_q_fC": 2043799.999996926
+      },
+      "go_no_go": {
+        "activity_direction_pass": true,
+        "decoder_separation_pass": false,
+        "energy_direction_pass": true,
+        "full_decoder_expected_actual_accuracy": 1.0,
+        "full_decoder_unexpected_actual_accuracy": 1.0,
+        "verdict": "NO-GO"
+      },
+      "log_wall_seconds": 3.96,
+      "timing_seconds": {
+        "run": 3.783186091,
+        "total_excluding_build": 3.79925979,
+        "write": 0.013157946
+      },
+      "v1e_predicted_actual": {
+        "expected": {
+          "100ms_actual_count_mean": [
+            69.33333333333333,
+            54.0,
+            53.333333333333336,
+            46.0,
+            47.333333333333336
+          ],
+          "100ms_actual_minus_predicted_count_mean": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "100ms_actual_share_mean": [
+            0.522005772005772,
+            0.505869708994709,
+            0.5255621693121694,
+            0.5209986772486772,
+            0.4844742063492063
+          ],
+          "100ms_predicted_count_mean": [
+            69.33333333333333,
+            54.0,
+            53.333333333333336,
+            46.0,
+            47.333333333333336
+          ],
+          "actual_count_mean": 270.0,
+          "actual_minus_predicted_count_mean": 0.0,
+          "actual_share_mean": 0.5022373721362692,
+          "decoder_100ms_actual_accuracy": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9166666666666666,
+            0.8333333333333334
+          ],
+          "decoder_100ms_expected_accuracy": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9166666666666666,
+            0.8333333333333334
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "decoder_full_expected_accuracy": 1.0,
+          "predicted_count_mean": 270.0,
+          "predicted_share_mean": 0.5022373721362692,
+          "total_count_mean": 538.6666666666666,
+          "trials": 24
+        },
+        "unexpected": {
+          "100ms_actual_count_mean": [
+            66.66666666666667,
+            53.833333333333336,
+            44.166666666666664,
+            44.166666666666664,
+            43.833333333333336
+          ],
+          "100ms_actual_minus_predicted_count_mean": [
+            66.33333333333333,
+            53.0,
+            43.333333333333336,
+            43.666666666666664,
+            43.166666666666664
+          ],
+          "100ms_actual_share_mean": [
+            0.46487719456469456,
+            0.4692866161616161,
+            0.43960400132275135,
+            0.44865658068783065,
+            0.4449446097883598
+          ],
+          "100ms_predicted_count_mean": [
+            0.3333333333333333,
+            0.8333333333333334,
+            0.8333333333333334,
+            0.5,
+            0.6666666666666666
+          ],
+          "actual_count_mean": 252.66666666666666,
+          "actual_minus_predicted_count_mean": 249.5,
+          "actual_share_mean": 0.45042731605104813,
+          "decoder_100ms_actual_accuracy": [
+            0.9583333333333334,
+            0.8333333333333334,
+            0.6979166666666666,
+            0.7395833333333334,
+            0.75
+          ],
+          "decoder_100ms_expected_accuracy": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "decoder_full_expected_accuracy": 0.0,
+          "predicted_count_mean": 3.1666666666666665,
+          "predicted_share_mean": 0.005685125321004928,
+          "total_count_mean": 562.3333333333334,
+          "trials": 96
+        }
+      }
+    },
+    "2.0": {
+      "activity": {
+        "delta_unexpected_minus_expected": 23.666666666666742,
+        "expected_v1_count": 538.6666666666666,
+        "unexpected_v1_count": 562.3333333333334
+      },
+      "artifact_path": null,
+      "content_hash_fnv1a64": "9036a8f1bfdd4ffa",
+      "decoder_bin_actual_accuracy_gap_unexpected_minus_expected": [
+        -0.04166666666666663,
+        -0.125,
+        -0.21875,
+        -0.17708333333333326,
+        -0.08333333333333337
+      ],
+      "energy": {
+        "delta_v1_total_unexpected_minus_expected": 21062.79074941203,
+        "delta_v1e_unexpected_minus_expected": 14462.79076412879,
+        "delta_v1som_unexpected_minus_expected": 6599.9999852834735,
+        "expected_v1_total_q_fC": 14680172.83964879,
+        "expected_v1e_q_fC": 12642972.839637147,
+        "expected_v1som_q_fC": 2037200.0000116425,
+        "unexpected_v1_total_q_fC": 14701235.630398203,
+        "unexpected_v1e_q_fC": 12657435.630401276,
+        "unexpected_v1som_q_fC": 2043799.999996926
+      },
+      "go_no_go": {
+        "activity_direction_pass": true,
+        "decoder_separation_pass": false,
+        "energy_direction_pass": true,
+        "full_decoder_expected_actual_accuracy": 1.0,
+        "full_decoder_unexpected_actual_accuracy": 1.0,
+        "verdict": "NO-GO"
+      },
+      "log_wall_seconds": 3.83,
+      "timing_seconds": {
+        "run": 3.677761196,
+        "total_excluding_build": 3.693473532,
+        "write": 0.012852803
+      },
+      "v1e_predicted_actual": {
+        "expected": {
+          "100ms_actual_count_mean": [
+            69.33333333333333,
+            54.0,
+            53.333333333333336,
+            46.0,
+            47.333333333333336
+          ],
+          "100ms_actual_minus_predicted_count_mean": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "100ms_actual_share_mean": [
+            0.522005772005772,
+            0.505869708994709,
+            0.5255621693121694,
+            0.5209986772486772,
+            0.4844742063492063
+          ],
+          "100ms_predicted_count_mean": [
+            69.33333333333333,
+            54.0,
+            53.333333333333336,
+            46.0,
+            47.333333333333336
+          ],
+          "actual_count_mean": 270.0,
+          "actual_minus_predicted_count_mean": 0.0,
+          "actual_share_mean": 0.5022373721362692,
+          "decoder_100ms_actual_accuracy": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9166666666666666,
+            0.8333333333333334
+          ],
+          "decoder_100ms_expected_accuracy": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9166666666666666,
+            0.8333333333333334
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "decoder_full_expected_accuracy": 1.0,
+          "predicted_count_mean": 270.0,
+          "predicted_share_mean": 0.5022373721362692,
+          "total_count_mean": 538.6666666666666,
+          "trials": 24
+        },
+        "unexpected": {
+          "100ms_actual_count_mean": [
+            66.66666666666667,
+            53.833333333333336,
+            44.166666666666664,
+            44.166666666666664,
+            43.833333333333336
+          ],
+          "100ms_actual_minus_predicted_count_mean": [
+            66.33333333333333,
+            53.0,
+            43.333333333333336,
+            43.666666666666664,
+            43.166666666666664
+          ],
+          "100ms_actual_share_mean": [
+            0.46487719456469456,
+            0.4692866161616161,
+            0.43960400132275135,
+            0.44865658068783065,
+            0.4449446097883598
+          ],
+          "100ms_predicted_count_mean": [
+            0.3333333333333333,
+            0.8333333333333334,
+            0.8333333333333334,
+            0.5,
+            0.6666666666666666
+          ],
+          "actual_count_mean": 252.66666666666666,
+          "actual_minus_predicted_count_mean": 249.5,
+          "actual_share_mean": 0.45042731605104813,
+          "decoder_100ms_actual_accuracy": [
+            0.9583333333333334,
+            0.8333333333333334,
+            0.6979166666666666,
+            0.7395833333333334,
+            0.75
+          ],
+          "decoder_100ms_expected_accuracy": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "decoder_full_actual_accuracy": 1.0,
+          "decoder_full_expected_accuracy": 0.0,
+          "predicted_count_mean": 3.1666666666666665,
+          "predicted_share_mean": 0.005685125321004928,
+          "total_count_mean": 562.3333333333334,
+          "trials": 96
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_stage1_ctx_pred_heldout_eval",
+  "backend": "native_cxx_cuda_executable",
+  "checkpoint": {
+    "json_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix1/stage1_ctx_pred_seed42_n12.json",
+    "w_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix1/stage1_ctx_pred_seed42_n12.json.W_ctx_pred.f64.bin",
+    "content_hash_fnv1a64": "68b37a6ad477bbeb",
+    "W_ctx_pred_fnv1a64": "683ec853b183c8b3",
+    "seed": 42,
+    "n_trials": 12
+  },
+  "heldout_schedule_seed": 4242,
+  "heldout_schedule_hash_fnv1a64": "7f5d2c0fc06d711b",
+  "n_trials": 12,
+  "phase_steps": {"late_end_step": 5600, "late_start_step": 3800, "leader_end_step": 800, "leader_start_step": 0, "persistence_end_step": 3800, "persistence_start_step": 800, "pretrailer_end_step": 3000, "pretrailer_start_step": 2000, "trailer_end_step": 4800, "trailer_start_step": 4000},
+  "schedule": {
+    "pairs": [[2,3],[0,4],[3,4],[3,4],[5,0],[5,0],[1,0],[4,3],[2,3],[1,5],[0,1],[4,5]],
+    "expected_trailer_idx": [3,1,4,4,0,0,2,5,3,2,1,5],
+    "is_expected": [1,0,1,1,1,1,0,0,1,0,1,1],
+    "leader_cells": [64,1,98,99,164,165,38,135,72,41,10,139],
+    "trailer_cells": [96,129,130,131,4,5,6,103,104,169,42,171]
+  },
+  "metrics": {"ctx_inh_population_rate_hz": 9.0625000000000018, "ctx_inh_total_spikes": 1044, "ctx_max_cell_rate_hz": 78.333333333333343, "ctx_max_channel_rate_hz": 78.333333333333343, "ctx_population_rate_hz": 6.5277777777777786, "ctx_pred_gate_drive_amp_pA": 400, "ctx_total_spikes": 9024, "forecast_trial_count": 8, "gate_metric_source_native_h_dynamics": 1, "h_context_peak_bin_ms": 10, "h_context_persistence_max_ms": 500, "h_context_persistence_min_ms": 200, "h_context_persistence_ms": 214, "h_context_persistence_pass": 1, "h_prediction_pretrailer_end_step": 3000, "h_prediction_pretrailer_forecast_pass": 1, "h_prediction_pretrailer_forecast_probability": 0.66666666666666663, "h_prediction_pretrailer_forecast_threshold": 0.25, "h_prediction_pretrailer_start_step": 2000, "n_trials": 12, "no_runaway_max_cell_rate_hz": 223.33333333333334, "no_runaway_max_channel_rate_hz": 223.33333333333334, "no_runaway_max_rate_hz": 25.902777777777779, "no_runaway_pass": 1, "no_runaway_population_max_rate_hz": 25.902777777777779, "no_runaway_threshold_hz": 80, "pred_inh_population_rate_hz": 25.902777777777779, "pred_inh_total_spikes": 2984, "pred_max_cell_rate_hz": 223.33333333333334, "pred_max_channel_rate_hz": 223.33333333333334, "pred_population_rate_hz": 18.564814814814817, "pred_pretrailer_target_spikes": 2688, "pred_total_spikes": 25664},
+  "max_cpu_cuda_error": 0,
+  "timing_seconds": {"eval": 1.5158142029999999},
+  "per_trial": {
+    "leader_channels": [4,0,6,6,10,10,2,8,4,2,0,8],
+    "trailer_channels": [6,8,8,8,0,0,0,6,6,10,2,10],
+    "ctx_persistence_ms_by_trial": [214,214,214,214,214,214,214,214,214,214,214,214],
+    "pred_pretrailer_target_counts": [336,0,336,336,336,336,0,0,336,0,336,336],
+    "pred_pretrailer_channel_counts": [[0,0,0,0,0,0,336,0,0,0,0,0],[0,0,336,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,336,0,0,0],[0,0,0,0,0,0,0,0,336,0,0,0],[336,0,0,0,0,0,0,0,0,0,0,0],[336,0,0,0,0,0,0,0,0,0,0,0],[0,0,0,0,336,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,336,0],[0,0,0,0,0,0,336,0,0,0,0,0],[0,0,0,0,336,0,0,0,0,0,0,0],[0,0,336,0,0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0,0,0,336,0]]
+  },
+  "content_hash_fnv1a64": "467dabb70f417b41"
+}

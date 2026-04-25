@@ -64,8 +64,24 @@ def _assert_gate_logic(path: Path) -> dict:
             "h_prediction_pretrailer_end_step",
             "ctx_pred_gate_drive_amp_pA",
             "no_runaway_max_rate_hz",
+            "no_runaway_population_max_rate_hz",
+            "no_runaway_max_cell_rate_hz",
+            "no_runaway_max_channel_rate_hz",
             "no_runaway_threshold_hz",
             "no_runaway_pass",
+            "h_context_population_rate_hz",
+            "h_prediction_population_rate_hz",
+            "h_context_inh_population_rate_hz",
+            "h_prediction_inh_population_rate_hz",
+            "h_context_max_native_h_rate_hz",
+            "h_prediction_max_native_h_rate_hz",
+            "h_context_max_channel_rate_hz",
+            "h_prediction_max_channel_rate_hz",
+            "native_schedule_wall_seconds",
+            "native_train_wall_seconds",
+            "native_gate_eval_wall_seconds",
+            "native_checkpoint_write_wall_seconds",
+            "native_total_wall_seconds",
             "passed",
             "native_scientific_stage1_passed",
             "native_stable_content_sha256",
@@ -103,6 +119,26 @@ def _assert_gate_logic(path: Path) -> dict:
         forecast_pass = bool(data["h_prediction_pretrailer_forecast_pass"])
         no_runaway_rate = float(data["no_runaway_max_rate_hz"])
         no_runaway_pass = bool(data["no_runaway_pass"])
+        population_rates = (
+            float(data["h_context_population_rate_hz"]),
+            float(data["h_prediction_population_rate_hz"]),
+            float(data["h_context_inh_population_rate_hz"]),
+            float(data["h_prediction_inh_population_rate_hz"]),
+        )
+        assert np.isclose(no_runaway_rate, max(population_rates))
+        assert np.isclose(
+            float(data["no_runaway_population_max_rate_hz"]),
+            no_runaway_rate,
+        )
+        assert float(data["no_runaway_max_cell_rate_hz"]) >= no_runaway_rate
+        assert float(data["no_runaway_max_channel_rate_hz"]) >= no_runaway_rate
+        assert float(data["native_train_wall_seconds"]) > 0.0
+        assert float(data["native_gate_eval_wall_seconds"]) > 0.0
+        assert float(data["native_checkpoint_write_wall_seconds"]) > 0.0
+        assert float(data["native_total_wall_seconds"]) >= (
+            float(data["native_train_wall_seconds"])
+            + float(data["native_gate_eval_wall_seconds"])
+        )
 
         assert np.isclose(
             float(data["h_context_persistence_min_ms"]),
@@ -129,6 +165,16 @@ def _assert_gate_logic(path: Path) -> dict:
         thresholds_all_pass = bool(h_persist_pass and forecast_pass and no_runaway_pass)
         assert bool(data["native_gate_thresholds_all_pass"]) == thresholds_all_pass
         assert metrics["thresholds_all_pass"] == thresholds_all_pass
+        assert np.isclose(metrics["no_runaway_max_rate_hz"], no_runaway_rate)
+        assert np.isclose(metrics["no_runaway_population_max_rate_hz"], no_runaway_rate)
+        assert np.isclose(
+            metrics["no_runaway_max_cell_rate_hz"],
+            float(data["no_runaway_max_cell_rate_hz"]),
+        )
+        assert np.isclose(
+            metrics["h_prediction_population_rate_hz"],
+            float(data["h_prediction_population_rate_hz"]),
+        )
         assert bool(data["native_gate_metrics_all_pass"]) is False
         assert metrics["all_pass"] is False
         assert bool(data["passed"]) is False
@@ -155,6 +201,15 @@ def _assert_gate_logic(path: Path) -> dict:
             "h_context_persistence_ms": h_persist,
             "forecast_probability": forecast,
             "no_runaway_max_rate_hz": no_runaway_rate,
+            "no_runaway_max_cell_rate_hz": float(data["no_runaway_max_cell_rate_hz"]),
+            "h_context_population_rate_hz": population_rates[0],
+            "h_prediction_population_rate_hz": population_rates[1],
+            "h_context_inh_population_rate_hz": population_rates[2],
+            "h_prediction_inh_population_rate_hz": population_rates[3],
+            "native_train_wall_seconds": float(data["native_train_wall_seconds"]),
+            "native_gate_eval_wall_seconds": float(data["native_gate_eval_wall_seconds"]),
+            "native_checkpoint_write_wall_seconds": float(data["native_checkpoint_write_wall_seconds"]),
+            "native_total_wall_seconds": float(data["native_total_wall_seconds"]),
             "thresholds_all_pass": thresholds_all_pass,
             "source": metrics["metric_source"],
         }

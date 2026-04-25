@@ -48,7 +48,13 @@ constexpr double kV1PredictedSuppressionScaleDefault = 0.0;
 constexpr double kV1PredictedSuppressionNeighborWeightDefault = 0.0;
 constexpr int kV1PredictedSuppressionLocusEffectiveIe = 0;
 constexpr int kV1PredictedSuppressionLocusRawIe = 1;
+constexpr int kV1ErrorComparatorModeOff = 0;
+constexpr int kV1ErrorComparatorModeFixedSymmetric = 1;
+constexpr int kV1ErrorComparatorModeSignedNormalized = 2;
+constexpr double kPi = 3.14159265358979323846;
 constexpr double kV1StimSigmaDegDefault = 22.0;
+constexpr double kLearnedHpredV1DirectRowSum = 16.0;
+constexpr double kLearnedHpredV1SomRowSum = 4.4;
 constexpr int kTrailerSteps = 5000;
 constexpr std::array<int, kNOrientations> kDerangement{{1, 2, 3, 4, 5, 0}};
 
@@ -67,6 +73,9 @@ struct Args {
     std::int32_t repeats = 20;
     std::int32_t schedule_variant = 0;
     std::int32_t n_trials = 72;
+    std::string stage1_prediction_target = "orientation_cell";
+    bool stage1_learn_feedback_direct = false;
+    bool stage1_learn_feedback_som = false;
     bool threshold_case = false;
     std::string population = "h_e";
     std::string fixture = "generated";
@@ -81,6 +90,8 @@ struct Args {
     double feedback_g_total = kFeedbackGTotalDefault;
     double feedback_r = kFeedbackRDefault;
     double feedback_som_center_weight = kFeedbackSomCenterWeightDefault;
+    std::string feedback_direct_source = "fixed";
+    std::string feedback_som_source = "fixed";
     double v1_som_to_e_scale = kV1SomToEScaleDefault;
     double v1_som_divisive_scale = kV1SomDivisiveScaleDefault;
     double v1_direct_divisive_scale = kV1DirectDivisiveScaleDefault;
@@ -93,6 +104,10 @@ struct Args {
     double v1_predicted_suppression_neighbor_weight =
         kV1PredictedSuppressionNeighborWeightDefault;
     std::string v1_predicted_suppression_locus = "effective_ie";
+    std::string v1_error_comparator_mode = "off";
+    double v1_error_sensory_gain = 1.0;
+    double v1_error_prediction_gain = 1.0;
+    std::int32_t v1_error_prediction_shift = 0;
     std::string feedback_replay_mode = "raw";
     double feedback_replay_target_per_bin =
         kFeedbackReplayTargetPerBinDefault;
@@ -117,6 +132,12 @@ struct Stage1CheckpointMeta {
     std::string w_hash;
     std::int64_t seed = 0;
     std::int32_t n_trials = 0;
+    bool has_learned_hpred_v1direct = false;
+    std::filesystem::path learned_hpred_v1direct_path;
+    std::string learned_hpred_v1direct_hash;
+    bool has_learned_hpred_v1som = false;
+    std::filesystem::path learned_hpred_v1som_path;
+    std::string learned_hpred_v1som_hash;
 };
 
 void print_usage(std::ostream& os) {
@@ -137,6 +158,9 @@ void print_usage(std::ostream& os) {
        << "  --out PATH                  JSON/result artifact path\n"
        << "  --checkpoint PATH           native Stage1 JSON checkpoint for richter-dampening\n"
        << "  --fixture generated|tiny    default generated\n"
+       << "  --stage1-prediction-target orientation_cell|v1_template  default orientation_cell\n"
+       << "  --stage1-learn-feedback-direct learn checkpointed H_pred->V1_E direct/apical prediction route\n"
+       << "  --stage1-learn-feedback-som learn checkpointed H_pred->V1_SOM prediction route\n"
        << "\n"
        << "stage1-heldout-eval options:\n"
        << "  --checkpoint PATH           native Stage1 JSON checkpoint to evaluate\n"
@@ -150,6 +174,8 @@ void print_usage(std::ostream& os) {
        << "  --feedback-g-total X        richter feedback total weight scale, default 1.0\n"
        << "  --feedback-r X              richter feedback direct/SOM balance r, default 1.0\n"
        << "  --feedback-som-center-weight X  same-channel H_pred -> V1_SOM kernel weight, default 0.0\n"
+       << "  --feedback-direct-source fixed|learned|learned-shifted|disabled  H_pred->V1_E direct/apical route source, default fixed\n"
+       << "  --feedback-som-source fixed|learned|learned-shifted|disabled  H_pred->V1_SOM route source, default fixed\n"
        << "  --v1-som-to-e-scale X       V1_SOM -> V1_E inhibitory drive scale, default 1.0\n"
        << "  --v1-som-divisive-scale X   same-channel V1_SOM divisive E/apical gain scale, default 0.0\n"
        << "  --v1-direct-divisive-scale X  same-channel V1_SOM divisive apical/direct gain scale, default 0.0\n"
@@ -159,6 +185,10 @@ void print_usage(std::ostream& os) {
        << "  --v1-predicted-suppression-scale X  prediction-matched V1_E feedforward suppression scale, default 0.0\n"
        << "  --v1-predicted-suppression-neighbor-weight X  ±1 channel prediction suppression neighbor weight, default 0.0\n"
        << "  --v1-predicted-suppression-locus effective_ie|raw_ie  suppression locus, default effective_ie\n"
+       << "  --v1-error-comparator-mode off|fixed_symmetric|signed_normalized  separate V1_ERROR residual population, default off\n"
+       << "  --v1-error-sensory-gain X  V1_ERROR bottom-up sensory gain, default 1.0\n"
+       << "  --v1-error-prediction-gain X  V1_ERROR held-H_pred prediction inhibitory gain, default 1.0\n"
+       << "  --v1-error-prediction-shift N  rotate H_pred prediction channel before V1_ERROR comparator, default 0\n"
        << "  --feedback-replay-mode MODE trailer feedback source: raw|normalized, default raw\n"
        << "  --feedback-replay-fallback MODE normalized zero-preprobe fallback: none|leader|flat, default none\n"
        << "  --feedback-replay-target-per-100ms-bin X  normalized replay target, default 314.1666666666667\n"
@@ -233,6 +263,12 @@ Args parse_args(int argc, char** argv) {
             args.schedule_variant = parse_i32(key, require_value(key));
         } else if (key == "--n-trials") {
             args.n_trials = parse_i32(key, require_value(key));
+        } else if (key == "--stage1-prediction-target") {
+            args.stage1_prediction_target = require_value(key);
+        } else if (key == "--stage1-learn-feedback-direct") {
+            args.stage1_learn_feedback_direct = true;
+        } else if (key == "--stage1-learn-feedback-som") {
+            args.stage1_learn_feedback_som = true;
         } else if (key == "--out") {
             args.out_path = require_value(key);
         } else if (key == "--checkpoint") {
@@ -253,6 +289,10 @@ Args parse_args(int argc, char** argv) {
             args.feedback_r = std::stod(require_value(key));
         } else if (key == "--feedback-som-center-weight") {
             args.feedback_som_center_weight = std::stod(require_value(key));
+        } else if (key == "--feedback-direct-source") {
+            args.feedback_direct_source = require_value(key);
+        } else if (key == "--feedback-som-source") {
+            args.feedback_som_source = require_value(key);
         } else if (key == "--v1-som-to-e-scale") {
             args.v1_som_to_e_scale = std::stod(require_value(key));
         } else if (key == "--v1-som-divisive-scale") {
@@ -272,6 +312,14 @@ Args parse_args(int argc, char** argv) {
                 std::stod(require_value(key));
         } else if (key == "--v1-predicted-suppression-locus") {
             args.v1_predicted_suppression_locus = require_value(key);
+        } else if (key == "--v1-error-comparator-mode") {
+            args.v1_error_comparator_mode = require_value(key);
+        } else if (key == "--v1-error-sensory-gain") {
+            args.v1_error_sensory_gain = std::stod(require_value(key));
+        } else if (key == "--v1-error-prediction-gain") {
+            args.v1_error_prediction_gain = std::stod(require_value(key));
+        } else if (key == "--v1-error-prediction-shift") {
+            args.v1_error_prediction_shift = parse_i32(key, require_value(key));
         } else if (key == "--feedback-replay-mode") {
             args.feedback_replay_mode = require_value(key);
         } else if (key == "--feedback-replay-fallback") {
@@ -374,6 +422,21 @@ const char* v1_predicted_suppression_target_description(
     return "V1_E_feedforward_somatic_effective_ie_only";
 }
 
+std::int32_t v1_error_comparator_mode_id(const std::string& mode) {
+    if (mode == "off") {
+        return kV1ErrorComparatorModeOff;
+    }
+    if (mode == "fixed_symmetric") {
+        return kV1ErrorComparatorModeFixedSymmetric;
+    }
+    if (mode == "signed_normalized") {
+        return kV1ErrorComparatorModeSignedNormalized;
+    }
+    throw std::runtime_error(
+        "richter-dampening --v1-error-comparator-mode must be off, fixed_symmetric, or signed_normalized"
+    );
+}
+
 std::uint64_t fnv1a_update(
     std::uint64_t hash,
     const void* data,
@@ -401,6 +464,14 @@ std::uint64_t fnv1a_update_vector(
     hash = fnv1a_update_scalar(hash, size);
     if (!values.empty()) {
         hash = fnv1a_update(hash, values.data(), values.size() * sizeof(T));
+    }
+    return hash;
+}
+
+std::uint64_t fnv1a_update_string(std::uint64_t hash, const std::string& value) {
+    hash = fnv1a_update_scalar(hash, static_cast<std::uint64_t>(value.size()));
+    if (!value.empty()) {
+        hash = fnv1a_update(hash, value.data(), value.size());
     }
     return hash;
 }
@@ -601,6 +672,40 @@ std::array<std::int32_t, kV1Channels> v1_som_trailer_channel_counts(
     return out;
 }
 
+std::array<std::int32_t, kV1Channels> v1_error_trailer_channel_counts(
+    const std::map<std::string, std::vector<std::int32_t>>& raw_counts
+) {
+    const auto it = raw_counts.find("v1_error.trailer");
+    if (it == raw_counts.end()) {
+        return {};
+    }
+    if (it->second.size() != static_cast<std::size_t>(kV1Channels * kV1CellsPerChannel)) {
+        throw std::runtime_error("v1_error.trailer count vector size mismatch");
+    }
+    std::array<std::int32_t, kV1Channels> out{};
+    for (std::size_t idx = 0; idx < it->second.size(); ++idx) {
+        out[idx / kV1CellsPerChannel] += it->second[idx];
+    }
+    return out;
+}
+
+std::array<std::int32_t, kV1Channels> v1_error_neg_trailer_channel_counts(
+    const std::map<std::string, std::vector<std::int32_t>>& raw_counts
+) {
+    const auto it = raw_counts.find("v1_error_neg.trailer");
+    if (it == raw_counts.end()) {
+        return {};
+    }
+    if (it->second.size() != static_cast<std::size_t>(kV1Channels * kV1CellsPerChannel)) {
+        throw std::runtime_error("v1_error_neg.trailer count vector size mismatch");
+    }
+    std::array<std::int32_t, kV1Channels> out{};
+    for (std::size_t idx = 0; idx < it->second.size(); ++idx) {
+        out[idx / kV1CellsPerChannel] += it->second[idx];
+    }
+    return out;
+}
+
 std::array<double, kV1Channels> v1_trailer_channel_rates_hz(
     const std::array<std::int32_t, kV1Channels>& counts
 ) {
@@ -745,6 +850,237 @@ GeneratedSchedule build_heldout_schedule(
     throw std::runtime_error("unknown heldout schedule mode: " + mode);
 }
 
+std::array<double, kV1Channels> v1_template_channel_weights(int center_channel) {
+    if (center_channel < 0 || center_channel >= kV1Channels) {
+        throw std::runtime_error("V1 template center channel out of range");
+    }
+    std::array<double, kV1Channels> weights{};
+    double total = 0.0;
+    for (int channel = 0; channel < kV1Channels; ++channel) {
+        const int raw_delta = std::abs(channel - center_channel);
+        const int wrapped_delta = std::min(raw_delta, kV1Channels - raw_delta);
+        const double d_rad =
+            static_cast<double>(wrapped_delta) * kPi / static_cast<double>(kV1Channels);
+        const double sigma_rad = kV1StimSigmaDegDefault * kPi / 180.0;
+        const double weight = std::exp(-0.5 * (d_rad / sigma_rad) * (d_rad / sigma_rad));
+        weights[static_cast<std::size_t>(channel)] = weight;
+        total += weight;
+    }
+    if (total <= 0.0) {
+        throw std::runtime_error("V1 template total weight is zero");
+    }
+    for (double& value : weights) {
+        value /= total;
+    }
+    return weights;
+}
+
+std::vector<double> build_learned_hpred_v1som_weights(
+    const GeneratedSchedule& schedule,
+    const std::string& prediction_target
+) {
+    if (prediction_target != "orientation_cell" && prediction_target != "v1_template") {
+        throw std::runtime_error("learned feedback requires a known Stage1 prediction target");
+    }
+    std::vector<double> weights(static_cast<std::size_t>(192 * 48), 0.0);
+    for (std::size_t trial = 0; trial < schedule.expected_trailer_idx.size(); ++trial) {
+        const int center_channel =
+            schedule.expected_trailer_idx[trial] * 2;
+        const auto src_template = prediction_target == "v1_template"
+            ? v1_template_channel_weights(center_channel)
+            : [&]() {
+                std::array<double, kV1Channels> one_hot{};
+                one_hot[static_cast<std::size_t>(center_channel)] = 1.0;
+                return one_hot;
+            }();
+        const auto som_template = v1_template_channel_weights(center_channel);
+        for (int src_channel = 0; src_channel < kV1Channels; ++src_channel) {
+            for (int src_cell = 0; src_cell < kHCellsPerChannel; ++src_cell) {
+                const int pre = src_channel * kHCellsPerChannel + src_cell;
+                for (int som_channel = 0; som_channel < kV1Channels; ++som_channel) {
+                    const double channel_weight =
+                        src_template[static_cast<std::size_t>(src_channel)]
+                        * som_template[static_cast<std::size_t>(som_channel)];
+                    for (int som_cell = 0; som_cell < kV1SomCellsPerChannel; ++som_cell) {
+                        const int post = som_channel * kV1SomCellsPerChannel + som_cell;
+                        weights[static_cast<std::size_t>(pre * 48 + post)] +=
+                            channel_weight / static_cast<double>(kV1SomCellsPerChannel);
+                    }
+                }
+            }
+        }
+    }
+    for (int pre = 0; pre < 192; ++pre) {
+        double row_sum = 0.0;
+        for (int post = 0; post < 48; ++post) {
+            row_sum += weights[static_cast<std::size_t>(pre * 48 + post)];
+        }
+        if (row_sum > 0.0) {
+            const double scale = kLearnedHpredV1SomRowSum / row_sum;
+            for (int post = 0; post < 48; ++post) {
+                weights[static_cast<std::size_t>(pre * 48 + post)] *= scale;
+            }
+        }
+    }
+    return weights;
+}
+
+std::vector<double> build_learned_hpred_v1direct_weights(
+    const GeneratedSchedule& schedule,
+    const std::string& prediction_target
+) {
+    if (prediction_target != "orientation_cell" && prediction_target != "v1_template") {
+        throw std::runtime_error("learned feedback requires a known Stage1 prediction target");
+    }
+    std::vector<double> weights(static_cast<std::size_t>(192 * 192), 0.0);
+    for (std::size_t trial = 0; trial < schedule.expected_trailer_idx.size(); ++trial) {
+        const int center_channel =
+            schedule.expected_trailer_idx[trial] * 2;
+        const auto src_template = prediction_target == "v1_template"
+            ? v1_template_channel_weights(center_channel)
+            : [&]() {
+                std::array<double, kV1Channels> one_hot{};
+                one_hot[static_cast<std::size_t>(center_channel)] = 1.0;
+                return one_hot;
+            }();
+        const auto v1_template = v1_template_channel_weights(center_channel);
+        for (int src_channel = 0; src_channel < kV1Channels; ++src_channel) {
+            for (int src_cell = 0; src_cell < kHCellsPerChannel; ++src_cell) {
+                const int pre = src_channel * kHCellsPerChannel + src_cell;
+                for (int v1_channel = 0; v1_channel < kV1Channels; ++v1_channel) {
+                    const double channel_weight =
+                        src_template[static_cast<std::size_t>(src_channel)]
+                        * v1_template[static_cast<std::size_t>(v1_channel)];
+                    for (int v1_cell = 0; v1_cell < kV1CellsPerChannel; ++v1_cell) {
+                        const int post = v1_channel * kV1CellsPerChannel + v1_cell;
+                        weights[static_cast<std::size_t>(pre * 192 + post)] +=
+                            channel_weight / static_cast<double>(kV1CellsPerChannel);
+                    }
+                }
+            }
+        }
+    }
+    for (int pre = 0; pre < 192; ++pre) {
+        double row_sum = 0.0;
+        for (int post = 0; post < 192; ++post) {
+            row_sum += weights[static_cast<std::size_t>(pre * 192 + post)];
+        }
+        if (row_sum > 0.0) {
+            const double scale = kLearnedHpredV1DirectRowSum / row_sum;
+            for (int post = 0; post < 192; ++post) {
+                weights[static_cast<std::size_t>(pre * 192 + post)] *= scale;
+            }
+        }
+    }
+    return weights;
+}
+
+std::vector<double> hpred_v1direct_row_sums(const std::vector<double>& weights) {
+    if (weights.size() != static_cast<std::size_t>(192 * 192)) {
+        throw std::runtime_error("W_hpred_v1direct must have length 36864");
+    }
+    std::vector<double> out(192, 0.0);
+    for (int pre = 0; pre < 192; ++pre) {
+        for (int post = 0; post < 192; ++post) {
+            out[static_cast<std::size_t>(pre)] +=
+                weights[static_cast<std::size_t>(pre * 192 + post)];
+        }
+    }
+    return out;
+}
+
+std::vector<double> hpred_v1som_row_sums(const std::vector<double>& weights) {
+    if (weights.size() != static_cast<std::size_t>(192 * 48)) {
+        throw std::runtime_error("W_hpred_v1som must have length 9216");
+    }
+    std::vector<double> out(192, 0.0);
+    for (int pre = 0; pre < 192; ++pre) {
+        for (int post = 0; post < 48; ++post) {
+            out[static_cast<std::size_t>(pre)] +=
+                weights[static_cast<std::size_t>(pre * 48 + post)];
+        }
+    }
+    return out;
+}
+
+std::map<std::string, double> stage1_template_prediction_metrics(
+    const GeneratedSchedule& schedule,
+    const expectation_snn_cuda::Stage1HGateDynamicsResult& gates
+) {
+    if (schedule.n_trials <= 0
+        || gates.cuda_pred_pretrailer_channel_counts.size()
+            != static_cast<std::size_t>(schedule.n_trials) * kV1Channels) {
+        throw std::runtime_error("Stage1 template metric shape mismatch");
+    }
+    double cosine_sum = 0.0;
+    double mse_sum = 0.0;
+    double target_weighted_count_sum = 0.0;
+    double expected_channel_count_sum = 0.0;
+    double total_count_sum = 0.0;
+    std::int32_t argmax_matches = 0;
+    for (int trial = 0; trial < schedule.n_trials; ++trial) {
+        const int expected_channel =
+            schedule.expected_trailer_idx[static_cast<std::size_t>(trial)] * 2;
+        const auto target = v1_template_channel_weights(expected_channel);
+        double count_total = 0.0;
+        double dot = 0.0;
+        double count_norm2 = 0.0;
+        double target_norm2 = 0.0;
+        int argmax_channel = 0;
+        double argmax_count = -1.0;
+        for (int channel = 0; channel < kV1Channels; ++channel) {
+            const double count = static_cast<double>(
+                gates.cuda_pred_pretrailer_channel_counts[
+                    static_cast<std::size_t>(trial) * kV1Channels
+                    + static_cast<std::size_t>(channel)
+                ]
+            );
+            count_total += count;
+            if (count > argmax_count) {
+                argmax_count = count;
+                argmax_channel = channel;
+            }
+        }
+        for (int channel = 0; channel < kV1Channels; ++channel) {
+            const double count = static_cast<double>(
+                gates.cuda_pred_pretrailer_channel_counts[
+                    static_cast<std::size_t>(trial) * kV1Channels
+                    + static_cast<std::size_t>(channel)
+                ]
+            );
+            const double prob = count_total > 0.0 ? count / count_total : 0.0;
+            const double target_prob = target[static_cast<std::size_t>(channel)];
+            dot += prob * target_prob;
+            count_norm2 += prob * prob;
+            target_norm2 += target_prob * target_prob;
+            const double delta = prob - target_prob;
+            mse_sum += delta * delta / static_cast<double>(kV1Channels);
+            target_weighted_count_sum += count * target_prob;
+        }
+        expected_channel_count_sum += static_cast<double>(
+            gates.cuda_pred_pretrailer_channel_counts[
+                static_cast<std::size_t>(trial) * kV1Channels
+                + static_cast<std::size_t>(expected_channel)
+            ]
+        );
+        total_count_sum += count_total;
+        if (argmax_channel == expected_channel) {
+            ++argmax_matches;
+        }
+        const double denom = std::sqrt(count_norm2) * std::sqrt(target_norm2);
+        cosine_sum += denom > 0.0 ? dot / denom : 0.0;
+    }
+    return {
+        {"v1_template_cosine_mean", cosine_sum / schedule.n_trials},
+        {"v1_template_probability_mse_mean", mse_sum / schedule.n_trials},
+        {"v1_template_target_weighted_count_mean", target_weighted_count_sum / schedule.n_trials},
+        {"v1_template_expected_channel_count_mean", expected_channel_count_sum / schedule.n_trials},
+        {"v1_template_total_count_mean", total_count_sum / schedule.n_trials},
+        {"v1_template_argmax_matches_expected_channel_fraction",
+            static_cast<double>(argmax_matches) / schedule.n_trials},
+    };
+}
+
 std::uint64_t schedule_hash(const GeneratedSchedule& schedule) {
     std::uint64_t hash = 1469598103934665603ull;
     hash = fnv1a_update_scalar(hash, schedule.seed);
@@ -771,10 +1107,13 @@ std::uint64_t artifact_hash(
     hash = fnv1a_update_scalar(hash, drive_pa);
     hash = fnv1a_update_scalar(hash, pred_bias_pa);
     hash = fnv1a_update_scalar(hash, w_init_frac);
+    hash = fnv1a_update_string(hash, train.prediction_target);
     hash = fnv1a_update_vector(hash, train.w_ctx_pred_final);
     hash = fnv1a_update_vector(hash, train.row_sums);
     hash = fnv1a_update_vector(hash, train.gate_dw_sum);
     hash = fnv1a_update_vector(hash, train.gate_elig_max);
+    hash = fnv1a_update_vector(hash, train.w_hpred_v1direct_final);
+    hash = fnv1a_update_vector(hash, train.w_hpred_v1som_final);
     return hash;
 }
 
@@ -798,6 +1137,8 @@ void write_binary_vector(const std::filesystem::path& path, const std::vector<do
 void write_stage1_json(
     const std::filesystem::path& json_path,
     const std::filesystem::path& w_path,
+    const std::filesystem::path& hpred_v1direct_path,
+    const std::filesystem::path& hpred_v1som_path,
     const GeneratedSchedule& schedule,
     const expectation_snn_cuda::NativeStage1TrainResult& train,
     const expectation_snn_cuda::Stage1HGateDynamicsResult& gates,
@@ -819,6 +1160,7 @@ void write_stage1_json(
     const double forecast = metrics.at("h_prediction_pretrailer_forecast_probability");
     const double no_runaway = metrics.at("no_runaway_max_rate_hz");
     const double max_cell = metrics.at("no_runaway_max_cell_rate_hz");
+    const auto template_metrics = stage1_template_prediction_metrics(schedule, gates);
     const bool thresholds_pass = persistence >= 200.0 && persistence <= 500.0
         && forecast >= 0.25 && no_runaway <= 80.0;
     out << std::setprecision(17);
@@ -834,6 +1176,15 @@ void write_stage1_json(
     out << "  \"n_trials\": " << schedule.n_trials << ",\n";
     out << "  \"p_bias\": " << kPBias << ",\n";
     out << "  \"derangement\": [1,2,3,4,5,0],\n";
+    out << "  \"stage1_prediction_task\": {"
+        << "\"objective\": \"predict_future_lower_level_v1e_trailer_template_from_context_leader\", "
+        << "\"target\": \"" << json_escape(train.prediction_target) << "\", "
+        << "\"target_uses_expected_leader_derangement_only\": true, "
+        << "\"uses_q_activity_decoder_metrics\": false, "
+        << "\"uses_richter_expected_unexpected_eval_metrics\": false, "
+        << "\"uses_actual_unexpected_trailer_labels\": false, "
+        << "\"v1_template_sigma_deg\": " << kV1StimSigmaDegDefault
+        << "},\n";
     out << "  \"h_layout\": {\"channels\": 12, \"cells_per_channel\": 16, \"orientation_channel_stride\": 2},\n";
     out << "  \"timing_ms\": {\"leader\": 500.0, \"trailer\": 500.0, \"iti\": 1500.0, \"dt\": 0.1},\n";
     out << "  \"ctx_pred_constants\": {\"drive_amp_ctx_pred_pA\": 400.0, \"pred_e_uniform_bias_pA\": 100.0, \"w_init_frac\": 0.0, \"tau_coinc_ms\": 500.0, \"tau_elig_ms\": 1000.0, \"eta\": 0.001, \"gamma\": 0.0001, \"w_target\": 0.0075, \"w_row_max\": 3.0},\n";
@@ -862,6 +1213,59 @@ void write_stage1_json(
     out << "  },\n";
     const std::string w_hash = hash_hex(fnv1a_update_vector(1469598103934665603ull, train.w_ctx_pred_final));
     out << "  \"checkpoint\": {\"W_ctx_pred_path\": \"" << json_escape(w_path.string()) << "\", \"dtype\": \"float64\", \"shape\": [36864], \"W_ctx_pred_fnv1a64\": \"" << w_hash << "\"},\n";
+    out << "  \"learned_feedback\": {";
+    if (!train.w_hpred_v1direct_final.empty()) {
+        const std::string direct_hash = hash_hex(
+            fnv1a_update_vector(1469598103934665603ull, train.w_hpred_v1direct_final)
+        );
+        const double row_sum_max = train.w_hpred_v1direct_row_sums.empty()
+            ? 0.0
+            : *std::max_element(
+                train.w_hpred_v1direct_row_sums.begin(),
+                train.w_hpred_v1direct_row_sums.end()
+            );
+        out << "\"hpred_to_v1direct\": {"
+            << "\"enabled\": true, "
+            << "\"objective\": \"predict_future_sensory_driven_v1e_template_from_hpred_template\", "
+            << "\"uses_q_activity_decoder_metrics\": false, "
+            << "\"uses_richter_expected_unexpected_eval_metrics\": false, "
+            << "\"uses_actual_unexpected_trailer_labels\": false, "
+            << "\"W_hpred_v1direct_path\": \"" << json_escape(hpred_v1direct_path.string())
+            << "\", \"dtype\": \"float64\", \"shape\": [36864], "
+            << "\"W_hpred_v1direct_fnv1a64\": \"" << direct_hash << "\", "
+            << "\"row_sum_target\": " << kLearnedHpredV1DirectRowSum
+            << ", \"row_sum_max\": " << row_sum_max
+            << "}";
+    } else {
+        out << "\"hpred_to_v1direct\": {\"enabled\": false}";
+    }
+    out << ", ";
+    if (!train.w_hpred_v1som_final.empty()) {
+        const std::string som_hash = hash_hex(
+            fnv1a_update_vector(1469598103934665603ull, train.w_hpred_v1som_final)
+        );
+        const double row_sum_max = train.w_hpred_v1som_row_sums.empty()
+            ? 0.0
+            : *std::max_element(
+                train.w_hpred_v1som_row_sums.begin(),
+                train.w_hpred_v1som_row_sums.end()
+            );
+        out << "\"hpred_to_v1som\": {"
+            << "\"enabled\": true, "
+            << "\"objective\": \"predict_future_sensory_driven_v1som_template_from_hpred_template\", "
+            << "\"uses_q_activity_decoder_metrics\": false, "
+            << "\"uses_richter_expected_unexpected_eval_metrics\": false, "
+            << "\"uses_actual_unexpected_trailer_labels\": false, "
+            << "\"W_hpred_v1som_path\": \"" << json_escape(hpred_v1som_path.string())
+            << "\", \"dtype\": \"float64\", \"shape\": [9216], "
+            << "\"W_hpred_v1som_fnv1a64\": \"" << som_hash << "\", "
+            << "\"row_sum_target\": " << kLearnedHpredV1SomRowSum
+            << ", \"row_sum_max\": " << row_sum_max
+            << "}";
+    } else {
+        out << "\"hpred_to_v1som\": {\"enabled\": false}";
+    }
+    out << "},\n";
     out << "  \"metrics\": {\n";
     out << "    \"h_context_persistence_ms\": " << persistence << ",\n";
     out << "    \"h_context_persistence_pass\": " << (persistence >= 200.0 && persistence <= 500.0 ? "true" : "false") << ",\n";
@@ -876,6 +1280,14 @@ void write_stage1_json(
     out << max_gate_error << ",\n";
     out << "    \"thresholds_pass\": " << (thresholds_pass ? "true" : "false") << "\n";
     out << "  },\n";
+    out << "  \"target_prediction_metrics\": {";
+    bool metrics_first = true;
+    for (const auto& [key, value] : template_metrics) {
+        if (!metrics_first) out << ", ";
+        metrics_first = false;
+        out << "\"" << json_escape(key) << "\": " << value;
+    }
+    out << "},\n";
     out << "  \"weight_stats\": {\"delta_abs_sum\": ";
     double delta_abs_sum = 0.0;
     for (const double value : train.w_ctx_pred_final) delta_abs_sum += std::abs(value);
@@ -958,6 +1370,15 @@ void write_stage1_heldout_eval_json(
         out << "\"" << json_escape(key) << "\": " << value;
     }
     out << "},\n";
+    const auto template_metrics = stage1_template_prediction_metrics(schedule, gates);
+    out << "  \"target_prediction_metrics\": {";
+    bool metrics_first = true;
+    for (const auto& [key, value] : template_metrics) {
+        if (!metrics_first) out << ", ";
+        metrics_first = false;
+        out << "\"" << json_escape(key) << "\": " << value;
+    }
+    out << "},\n";
     double max_gate_error = 0.0;
     for (const auto& [_, value] : gates.max_abs_error) {
         max_gate_error = std::max(max_gate_error, value);
@@ -1015,12 +1436,16 @@ struct ConditionAccum {
     double v1_preprobe = 0.0;
     double v1_trailer = 0.0;
     double v1_som_trailer = 0.0;
+    double v1_error_trailer = 0.0;
+    double v1_error_neg_trailer = 0.0;
     double v1e_leader_q_active_fC = 0.0;
     double v1e_preprobe_q_active_fC = 0.0;
     double v1e_trailer_q_active_fC = 0.0;
     double v1som_leader_q_active_fC = 0.0;
     double v1som_preprobe_q_active_fC = 0.0;
     double v1som_trailer_q_active_fC = 0.0;
+    double v1error_trailer_q_active_fC = 0.0;
+    double v1error_neg_trailer_q_active_fC = 0.0;
     double hctx_preprobe = 0.0;
     double hctx_trailer = 0.0;
     double hpred_preprobe = 0.0;
@@ -1029,11 +1454,17 @@ struct ConditionAccum {
     double max_error = 0.0;
     std::array<std::int32_t, kV1Channels> v1_trailer_channel_counts{};
     std::array<std::int32_t, kV1Channels> v1_som_trailer_channel_counts{};
+    std::array<std::int32_t, kV1Channels> v1_error_trailer_channel_counts{};
+    std::array<std::int32_t, kV1Channels> v1_error_neg_trailer_channel_counts{};
     std::array<std::int32_t, kV1Channels> hpred_preprobe_channel_counts{};
     std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>
         v1_trailer_bin_channel_counts{};
     std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>
         v1_som_trailer_bin_channel_counts{};
+    std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>
+        v1_error_trailer_bin_channel_counts{};
+    std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>
+        v1_error_neg_trailer_bin_channel_counts{};
     std::array<std::int32_t, kTrailerBinCount> hpred_trailer_bin_total_counts{};
     std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>
         hpred_trailer_bin_channel_counts{};
@@ -1145,6 +1576,10 @@ bool extract_json_bool(const std::string& text, const std::string& key) {
     throw std::runtime_error("malformed JSON bool value for key: " + key);
 }
 
+bool json_has_key(const std::string& text, const std::string& key) {
+    return text.find("\"" + key + "\"") != std::string::npos;
+}
+
 std::int64_t extract_json_int(const std::string& text, const std::string& key) {
     const std::string needle = "\"" + key + "\"";
     const std::size_t key_pos = text.find(needle);
@@ -1165,28 +1600,40 @@ bool json_contains_shape_36864(const std::string& text) {
         || text.find("\"shape\":[36864]") != std::string::npos;
 }
 
-std::vector<double> read_w_binary(const std::filesystem::path& path) {
+std::vector<double> read_f64_binary(
+    const std::filesystem::path& path,
+    std::size_t expected_len,
+    const std::string& label
+) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-        throw std::runtime_error("failed to open W binary: " + path.string());
+        throw std::runtime_error("failed to open " + label + " binary: " + path.string());
     }
     in.seekg(0, std::ios::end);
     const std::streamoff n_bytes = in.tellg();
     in.seekg(0, std::ios::beg);
-    if (n_bytes != static_cast<std::streamoff>(36864 * sizeof(double))) {
-        throw std::runtime_error("W binary byte size does not match float64[36864]");
+    if (n_bytes != static_cast<std::streamoff>(expected_len * sizeof(double))) {
+        throw std::runtime_error(
+            label + " binary byte size does not match expected float64 length"
+        );
     }
-    std::vector<double> w(36864);
-    in.read(reinterpret_cast<char*>(w.data()), n_bytes);
+    std::vector<double> values(expected_len);
+    in.read(reinterpret_cast<char*>(values.data()), n_bytes);
     if (!in) {
-        throw std::runtime_error("failed to read W binary: " + path.string());
+        throw std::runtime_error("failed to read " + label + " binary: " + path.string());
     }
-    return w;
+    return values;
+}
+
+std::vector<double> read_w_binary(const std::filesystem::path& path) {
+    return read_f64_binary(path, 36864, "W_ctx_pred");
 }
 
 Stage1CheckpointMeta validate_stage1_checkpoint(
     const std::filesystem::path& json_path,
-    std::vector<double>& w_out
+    std::vector<double>& w_out,
+    std::vector<double>* learned_hpred_v1direct_out = nullptr,
+    std::vector<double>* learned_hpred_v1som_out = nullptr
 ) {
     const std::string text = read_text_file(json_path);
     Stage1CheckpointMeta meta;
@@ -1220,19 +1667,112 @@ Stage1CheckpointMeta validate_stage1_checkpoint(
     if (actual_w_hash != meta.w_hash) {
         throw std::runtime_error("checkpoint W hash mismatch: " + actual_w_hash + " != " + meta.w_hash);
     }
+    if (json_has_key(text, "W_hpred_v1direct_path")) {
+        meta.has_learned_hpred_v1direct = true;
+        meta.learned_hpred_v1direct_path = extract_json_string(text, "W_hpred_v1direct_path");
+        if (meta.learned_hpred_v1direct_path.is_relative()) {
+            meta.learned_hpred_v1direct_path =
+                json_path.parent_path() / meta.learned_hpred_v1direct_path;
+        }
+        meta.learned_hpred_v1direct_hash =
+            extract_json_string(text, "W_hpred_v1direct_fnv1a64");
+        std::vector<double> learned = read_f64_binary(
+            meta.learned_hpred_v1direct_path,
+            static_cast<std::size_t>(192 * 192),
+            "W_hpred_v1direct"
+        );
+        const std::string actual_learned_hash =
+            hash_hex(fnv1a_update_vector(1469598103934665603ull, learned));
+        if (actual_learned_hash != meta.learned_hpred_v1direct_hash) {
+            throw std::runtime_error(
+                "checkpoint W_hpred_v1direct hash mismatch: "
+                + actual_learned_hash + " != " + meta.learned_hpred_v1direct_hash
+            );
+        }
+        if (learned_hpred_v1direct_out != nullptr) {
+            *learned_hpred_v1direct_out = std::move(learned);
+        }
+    } else if (learned_hpred_v1direct_out != nullptr) {
+        learned_hpred_v1direct_out->clear();
+    }
+    if (json_has_key(text, "W_hpred_v1som_path")) {
+        meta.has_learned_hpred_v1som = true;
+        meta.learned_hpred_v1som_path = extract_json_string(text, "W_hpred_v1som_path");
+        if (meta.learned_hpred_v1som_path.is_relative()) {
+            meta.learned_hpred_v1som_path =
+                json_path.parent_path() / meta.learned_hpred_v1som_path;
+        }
+        meta.learned_hpred_v1som_hash =
+            extract_json_string(text, "W_hpred_v1som_fnv1a64");
+        std::vector<double> learned = read_f64_binary(
+            meta.learned_hpred_v1som_path,
+            static_cast<std::size_t>(192 * 48),
+            "W_hpred_v1som"
+        );
+        const std::string actual_learned_hash =
+            hash_hex(fnv1a_update_vector(1469598103934665603ull, learned));
+        if (actual_learned_hash != meta.learned_hpred_v1som_hash) {
+            throw std::runtime_error(
+                "checkpoint W_hpred_v1som hash mismatch: "
+                + actual_learned_hash + " != " + meta.learned_hpred_v1som_hash
+            );
+        }
+        if (learned_hpred_v1som_out != nullptr) {
+            *learned_hpred_v1som_out = std::move(learned);
+        }
+    } else if (learned_hpred_v1som_out != nullptr) {
+        learned_hpred_v1som_out->clear();
+    }
     return meta;
 }
 
 NativeTopology make_native_topology(
     const std::vector<double>& w_ctx_pred,
     const FeedbackBalance& feedback,
-    double feedback_som_center_weight = kFeedbackSomCenterWeightDefault
+    double feedback_som_center_weight = kFeedbackSomCenterWeightDefault,
+    const std::vector<double>& learned_hpred_v1direct =
+        std::vector<double>(),
+    const std::string& feedback_direct_source = "fixed",
+    const std::vector<double>& learned_hpred_v1som =
+        std::vector<double>(),
+    const std::string& feedback_som_source = "fixed"
 ) {
     if (w_ctx_pred.size() != 36864) {
         throw std::runtime_error("ctx_pred W must have length 36864");
     }
     if (feedback_som_center_weight < 0.0) {
         throw std::runtime_error("feedback SOM center weight must be nonnegative");
+    }
+    const bool use_fixed_direct = feedback_direct_source == "fixed";
+    const bool use_learned_direct = feedback_direct_source == "learned";
+    const bool use_shifted_direct = feedback_direct_source == "learned-shifted";
+    const bool disable_direct = feedback_direct_source == "disabled";
+    if (!use_fixed_direct && !use_learned_direct && !use_shifted_direct
+        && !disable_direct) {
+        throw std::runtime_error(
+            "feedback direct source must be fixed, learned, learned-shifted, or disabled"
+        );
+    }
+    const bool use_fixed_som = feedback_som_source == "fixed";
+    const bool use_learned_som = feedback_som_source == "learned";
+    const bool use_shifted_som = feedback_som_source == "learned-shifted";
+    const bool disable_som = feedback_som_source == "disabled";
+    if (!use_fixed_som && !use_learned_som && !use_shifted_som && !disable_som) {
+        throw std::runtime_error(
+            "feedback SOM source must be fixed, learned, learned-shifted, or disabled"
+        );
+    }
+    if ((use_learned_som || use_shifted_som)
+        && learned_hpred_v1som.size() != static_cast<std::size_t>(192 * 48)) {
+        throw std::runtime_error(
+            "learned feedback SOM source requires checkpointed W_hpred_v1som length 9216"
+        );
+    }
+    if ((use_learned_direct || use_shifted_direct)
+        && learned_hpred_v1direct.size() != static_cast<std::size_t>(192 * 192)) {
+        throw std::runtime_error(
+            "learned feedback direct source requires checkpointed W_hpred_v1direct length 36864"
+        );
     }
     NativeTopology t;
     t.stim_pre.reserve(3840);
@@ -1272,20 +1812,73 @@ NativeTopology make_native_topology(
             t.ctx_to_pred_w.push_back(w_ctx_pred[static_cast<std::size_t>(pre * 192 + post)]);
         }
     }
-    t.fb_direct_pre.reserve(3072);
-    t.fb_direct_post.reserve(3072);
-    t.fb_direct_w.reserve(3072);
+    if (use_fixed_direct) {
+        t.fb_direct_pre.reserve(3072);
+        t.fb_direct_post.reserve(3072);
+        t.fb_direct_w.reserve(3072);
+    } else if (use_learned_direct || use_shifted_direct) {
+        t.fb_direct_pre.reserve(static_cast<std::size_t>(192 * 192));
+        t.fb_direct_post.reserve(static_cast<std::size_t>(192 * 192));
+        t.fb_direct_w.reserve(static_cast<std::size_t>(192 * 192));
+    } else {
+        t.fb_direct_pre.reserve(1);
+        t.fb_direct_post.reserve(1);
+        t.fb_direct_w.reserve(1);
+    }
     const int fb_som_center_edges =
-        feedback_som_center_weight > 0.0 ? 768 : 0;
-    t.fb_som_pre.reserve(3072 + fb_som_center_edges);
-    t.fb_som_post.reserve(3072 + fb_som_center_edges);
-    t.fb_som_w.reserve(3072 + fb_som_center_edges);
+        use_fixed_som && feedback_som_center_weight > 0.0 ? 768 : 0;
+    if (use_fixed_som) {
+        t.fb_som_pre.reserve(3072 + fb_som_center_edges);
+        t.fb_som_post.reserve(3072 + fb_som_center_edges);
+        t.fb_som_w.reserve(3072 + fb_som_center_edges);
+    } else if (use_learned_som || use_shifted_som) {
+        t.fb_som_pre.reserve(static_cast<std::size_t>(192 * 48));
+        t.fb_som_post.reserve(static_cast<std::size_t>(192 * 48));
+        t.fb_som_w.reserve(static_cast<std::size_t>(192 * 48));
+    } else {
+        t.fb_som_pre.reserve(1);
+        t.fb_som_post.reserve(1);
+        t.fb_som_w.reserve(1);
+    }
     for (int pre = 0; pre < 192; ++pre) {
         const int channel = pre / 16;
-        for (int k = 0; k < 16; ++k) {
-            t.fb_direct_pre.push_back(pre);
-            t.fb_direct_post.push_back(channel * 16 + k);
-            t.fb_direct_w.push_back(feedback.g_direct);
+        if (use_learned_direct || use_shifted_direct) {
+            const int source_pre = use_shifted_direct
+                ? (((channel + 2) % kV1Channels) * 16 + (pre % 16))
+                : pre;
+            for (int post = 0; post < 192; ++post) {
+                t.fb_direct_pre.push_back(pre);
+                t.fb_direct_post.push_back(post);
+                t.fb_direct_w.push_back(
+                    learned_hpred_v1direct[
+                        static_cast<std::size_t>(source_pre * 192 + post)
+                    ] * feedback.g_direct
+                );
+            }
+        } else if (use_fixed_direct) {
+            for (int k = 0; k < 16; ++k) {
+                t.fb_direct_pre.push_back(pre);
+                t.fb_direct_post.push_back(channel * 16 + k);
+                t.fb_direct_w.push_back(feedback.g_direct);
+            }
+        }
+        if (use_learned_som || use_shifted_som) {
+            const int source_pre = use_shifted_som
+                ? (((channel + 2) % kV1Channels) * 16 + (pre % 16))
+                : pre;
+            for (int post = 0; post < 48; ++post) {
+                t.fb_som_pre.push_back(pre);
+                t.fb_som_post.push_back(post);
+                t.fb_som_w.push_back(
+                    learned_hpred_v1som[
+                        static_cast<std::size_t>(source_pre * 48 + post)
+                    ] * feedback.g_som
+                );
+            }
+            continue;
+        }
+        if (disable_som) {
+            continue;
         }
         if (feedback_som_center_weight > 0.0) {
             for (int som_cell = 0; som_cell < 4; ++som_cell) {
@@ -1309,6 +1902,16 @@ NativeTopology make_native_topology(
                 t.fb_som_w.push_back(kernel_weight * feedback.g_som);
             }
         }
+    }
+    if (disable_direct) {
+        t.fb_direct_pre.push_back(191);
+        t.fb_direct_post.push_back(191);
+        t.fb_direct_w.push_back(0.0);
+    }
+    if (disable_som) {
+        t.fb_som_pre.push_back(191);
+        t.fb_som_post.push_back(47);
+        t.fb_som_w.push_back(0.0);
     }
     return t;
 }
@@ -1410,16 +2013,26 @@ void accumulate_condition(
     const auto trailer_channel_counts = v1_trailer_channel_counts(raw_counts);
     const auto som_trailer_channel_counts =
         v1_som_trailer_channel_counts(raw_counts);
+    const auto error_trailer_channel_counts =
+        v1_error_trailer_channel_counts(raw_counts);
+    const auto error_neg_trailer_channel_counts =
+        v1_error_neg_trailer_channel_counts(raw_counts);
     acc.v1_leader += sum_counts(raw_counts, "v1_e.leader");
     acc.v1_preprobe += sum_counts(raw_counts, "v1_e.preprobe");
     acc.v1_trailer += sum_counts(raw_counts, "v1_e.trailer");
     acc.v1_som_trailer += sum_counts(raw_counts, "v1_som.trailer");
+    acc.v1_error_trailer += sum_counts(raw_counts, "v1_error.trailer");
+    acc.v1_error_neg_trailer += sum_counts(raw_counts, "v1_error_neg.trailer");
     acc.v1e_leader_q_active_fC += q_active_value(q_active, "v1e.leader");
     acc.v1e_preprobe_q_active_fC += q_active_value(q_active, "v1e.preprobe");
     acc.v1e_trailer_q_active_fC += q_active_value(q_active, "v1e.trailer");
     acc.v1som_leader_q_active_fC += q_active_value(q_active, "v1som.leader");
     acc.v1som_preprobe_q_active_fC += q_active_value(q_active, "v1som.preprobe");
     acc.v1som_trailer_q_active_fC += q_active_value(q_active, "v1som.trailer");
+    acc.v1error_trailer_q_active_fC +=
+        q_active_value(q_active, "v1error.trailer");
+    acc.v1error_neg_trailer_q_active_fC +=
+        q_active_value(q_active, "v1error_neg.trailer");
     acc.hctx_preprobe += sum_counts(raw_counts, "hctx_e.preprobe");
     acc.hctx_trailer += sum_counts(raw_counts, "hctx_e.trailer");
     acc.hpred_preprobe += sum_counts(raw_counts, "hpred_e.preprobe");
@@ -1429,11 +2042,19 @@ void accumulate_condition(
         acc.v1_trailer_channel_counts[channel] += trailer_channel_counts[channel];
         acc.v1_som_trailer_channel_counts[channel] +=
             som_trailer_channel_counts[channel];
+        acc.v1_error_trailer_channel_counts[channel] +=
+            error_trailer_channel_counts[channel];
+        acc.v1_error_neg_trailer_channel_counts[channel] +=
+            error_neg_trailer_channel_counts[channel];
     }
     if (execution_mode == "cpu_reference") {
         if (r.cpu_v1_trailer_bin_channel_counts.size()
                 != static_cast<std::size_t>(kTrailerBinCount) * kV1Channels
             || r.cpu_v1_som_trailer_bin_channel_counts.size()
+                != static_cast<std::size_t>(kTrailerBinCount) * kV1Channels
+            || r.cpu_v1_error_trailer_bin_channel_counts.size()
+                != static_cast<std::size_t>(kTrailerBinCount) * kV1Channels
+            || r.cpu_v1_error_neg_trailer_bin_channel_counts.size()
                 != static_cast<std::size_t>(kTrailerBinCount) * kV1Channels
             || r.cpu_hpred_preprobe_channel_counts.size()
                 != static_cast<std::size_t>(kV1Channels)
@@ -1526,6 +2147,14 @@ void accumulate_condition(
                     static_cast<std::size_t>(bin)
                 ][static_cast<std::size_t>(channel)] +=
                     r.cpu_v1_som_trailer_bin_channel_counts[flat];
+                acc.v1_error_trailer_bin_channel_counts[
+                    static_cast<std::size_t>(bin)
+                ][static_cast<std::size_t>(channel)] +=
+                    r.cpu_v1_error_trailer_bin_channel_counts[flat];
+                acc.v1_error_neg_trailer_bin_channel_counts[
+                    static_cast<std::size_t>(bin)
+                ][static_cast<std::size_t>(channel)] +=
+                    r.cpu_v1_error_neg_trailer_bin_channel_counts[flat];
                 acc.hpred_trailer_bin_channel_counts[static_cast<std::size_t>(bin)]
                     [static_cast<std::size_t>(channel)] +=
                         r.cpu_hpred_trailer_bin_channel_counts[flat];
@@ -1549,12 +2178,17 @@ void accumulate_condition(ConditionAccum& acc, const ConditionAccum& single) {
     acc.v1_preprobe += single.v1_preprobe;
     acc.v1_trailer += single.v1_trailer;
     acc.v1_som_trailer += single.v1_som_trailer;
+    acc.v1_error_trailer += single.v1_error_trailer;
+    acc.v1_error_neg_trailer += single.v1_error_neg_trailer;
     acc.v1e_leader_q_active_fC += single.v1e_leader_q_active_fC;
     acc.v1e_preprobe_q_active_fC += single.v1e_preprobe_q_active_fC;
     acc.v1e_trailer_q_active_fC += single.v1e_trailer_q_active_fC;
     acc.v1som_leader_q_active_fC += single.v1som_leader_q_active_fC;
     acc.v1som_preprobe_q_active_fC += single.v1som_preprobe_q_active_fC;
     acc.v1som_trailer_q_active_fC += single.v1som_trailer_q_active_fC;
+    acc.v1error_trailer_q_active_fC += single.v1error_trailer_q_active_fC;
+    acc.v1error_neg_trailer_q_active_fC +=
+        single.v1error_neg_trailer_q_active_fC;
     acc.hctx_preprobe += single.hctx_preprobe;
     acc.hctx_trailer += single.hctx_trailer;
     acc.hpred_preprobe += single.hpred_preprobe;
@@ -1569,6 +2203,10 @@ void accumulate_condition(ConditionAccum& acc, const ConditionAccum& single) {
     for (std::size_t channel = 0; channel < acc.v1_trailer_channel_counts.size(); ++channel) {
         acc.v1_trailer_channel_counts[channel] += single.v1_trailer_channel_counts[channel];
         acc.v1_som_trailer_channel_counts[channel] += single.v1_som_trailer_channel_counts[channel];
+        acc.v1_error_trailer_channel_counts[channel] +=
+            single.v1_error_trailer_channel_counts[channel];
+        acc.v1_error_neg_trailer_channel_counts[channel] +=
+            single.v1_error_neg_trailer_channel_counts[channel];
         acc.hpred_preprobe_channel_counts[channel] +=
             single.hpred_preprobe_channel_counts[channel];
         acc.v1_predicted_suppression_trailer_channel_signal_sum[channel] +=
@@ -1596,6 +2234,10 @@ void accumulate_condition(ConditionAccum& acc, const ConditionAccum& single) {
                 single.v1_trailer_bin_channel_counts[bin][channel];
             acc.v1_som_trailer_bin_channel_counts[bin][channel] +=
                 single.v1_som_trailer_bin_channel_counts[bin][channel];
+            acc.v1_error_trailer_bin_channel_counts[bin][channel] +=
+                single.v1_error_trailer_bin_channel_counts[bin][channel];
+            acc.v1_error_neg_trailer_bin_channel_counts[bin][channel] +=
+                single.v1_error_neg_trailer_bin_channel_counts[bin][channel];
             acc.hpred_trailer_bin_channel_counts[bin][channel] +=
                 single.hpred_trailer_bin_channel_counts[bin][channel];
             acc.hpred_feedback_held_trailer_bin_channel_counts[bin][channel] +=
@@ -1633,7 +2275,11 @@ expectation_snn_cuda::FrozenRichterSeededSourceResult run_native_richter_conditi
         kV1PredictedSuppressionNeighborWeightDefault,
     std::int32_t v1_predicted_suppression_locus_id =
         kV1PredictedSuppressionLocusEffectiveIe,
-    double v1_stim_sigma_deg = kV1StimSigmaDegDefault
+    double v1_stim_sigma_deg = kV1StimSigmaDegDefault,
+    std::int32_t v1_error_comparator_mode_id = kV1ErrorComparatorModeOff,
+    double v1_error_sensory_gain = 1.0,
+    double v1_error_prediction_gain = 1.0,
+    std::int32_t v1_error_prediction_shift = 0
 ) {
     if (execution_mode == "gpu_only_production") {
         return expectation_snn_cuda::run_frozen_richter_seeded_source_cuda(
@@ -1690,7 +2336,11 @@ expectation_snn_cuda::FrozenRichterSeededSourceResult run_native_richter_conditi
             v1_predicted_suppression_scale,
             v1_predicted_suppression_neighbor_weight,
             v1_predicted_suppression_locus_id,
-            v1_stim_sigma_deg
+            v1_stim_sigma_deg,
+            v1_error_comparator_mode_id,
+            v1_error_sensory_gain,
+            v1_error_prediction_gain,
+            v1_error_prediction_shift
         );
     }
     if (execution_mode == "cpu_reference") {
@@ -1748,7 +2398,11 @@ expectation_snn_cuda::FrozenRichterSeededSourceResult run_native_richter_conditi
             v1_predicted_suppression_scale,
             v1_predicted_suppression_neighbor_weight,
             v1_predicted_suppression_locus_id,
-            v1_stim_sigma_deg
+            v1_stim_sigma_deg,
+            v1_error_comparator_mode_id,
+            v1_error_sensory_gain,
+            v1_error_prediction_gain,
+            v1_error_prediction_shift
         );
     }
     throw std::runtime_error("unknown execution mode: " + execution_mode);
@@ -1778,7 +2432,11 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
         kV1PredictedSuppressionNeighborWeightDefault,
     std::int32_t v1_predicted_suppression_locus_id =
         kV1PredictedSuppressionLocusEffectiveIe,
-    double v1_stim_sigma_deg = kV1StimSigmaDegDefault
+    double v1_stim_sigma_deg = kV1StimSigmaDegDefault,
+    std::int32_t v1_error_comparator_mode_id = kV1ErrorComparatorModeOff,
+    double v1_error_sensory_gain = 1.0,
+    double v1_error_prediction_gain = 1.0,
+    std::int32_t v1_error_prediction_shift = 0
 ) {
     if (specs.empty()) {
         return {};
@@ -1848,7 +2506,11 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
         v1_predicted_suppression_scale,
         v1_predicted_suppression_neighbor_weight,
         v1_predicted_suppression_locus_id,
-        v1_stim_sigma_deg
+        v1_stim_sigma_deg,
+        v1_error_comparator_mode_id,
+        v1_error_sensory_gain,
+        v1_error_prediction_gain,
+        v1_error_prediction_shift
     );
     if (static_cast<std::size_t>(batch.n_conditions) != specs.size()) {
         throw std::runtime_error("batched Richter result size mismatch");
@@ -1872,8 +2534,28 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
                 * static_cast<std::size_t>(kV1Channels)) {
         throw std::runtime_error("batched Richter SOM trailer count size mismatch");
     }
+    if (batch.v1_error_trailer_total_counts.size() != specs.size()
+        || batch.v1_error_trailer_channel_counts.size()
+            != specs.size() * static_cast<std::size_t>(kV1Channels)
+        || batch.v1_error_trailer_bin_channel_counts.size()
+            != specs.size() * static_cast<std::size_t>(kTrailerBinCount)
+                * static_cast<std::size_t>(kV1Channels)) {
+        throw std::runtime_error("batched Richter V1_ERROR trailer count size mismatch");
+    }
+    if (batch.v1_error_neg_trailer_total_counts.size() != specs.size()
+        || batch.v1_error_neg_trailer_channel_counts.size()
+            != specs.size() * static_cast<std::size_t>(kV1Channels)
+        || batch.v1_error_neg_trailer_bin_channel_counts.size()
+            != specs.size() * static_cast<std::size_t>(kTrailerBinCount)
+                * static_cast<std::size_t>(kV1Channels)) {
+        throw std::runtime_error(
+            "batched Richter V1_ERROR_NEG trailer count size mismatch"
+        );
+    }
     if (batch.v1e_q_active_fC_by_phase.size() != specs.size() * 3
-        || batch.v1som_q_active_fC_by_phase.size() != specs.size() * 3) {
+        || batch.v1som_q_active_fC_by_phase.size() != specs.size() * 3
+        || batch.v1error_q_active_fC_by_phase.size() != specs.size() * 3
+        || batch.v1error_neg_q_active_fC_by_phase.size() != specs.size() * 3) {
         throw std::runtime_error("batched Richter Q_active phase size mismatch");
     }
     if (batch.hpred_preprobe_channel_counts.size()
@@ -1949,6 +2631,9 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
         out[i].v1_preprobe = batch.v1_preprobe_total_counts[i];
         out[i].v1_trailer = batch.v1_trailer_total_counts[i];
         out[i].v1_som_trailer = batch.v1_som_trailer_total_counts[i];
+        out[i].v1_error_trailer = batch.v1_error_trailer_total_counts[i];
+        out[i].v1_error_neg_trailer =
+            batch.v1_error_neg_trailer_total_counts[i];
         out[i].v1e_leader_q_active_fC =
             batch.v1e_q_active_fC_by_phase[i * 3 + 0];
         out[i].v1e_preprobe_q_active_fC =
@@ -1961,6 +2646,10 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
             batch.v1som_q_active_fC_by_phase[i * 3 + 1];
         out[i].v1som_trailer_q_active_fC =
             batch.v1som_q_active_fC_by_phase[i * 3 + 2];
+        out[i].v1error_trailer_q_active_fC =
+            batch.v1error_q_active_fC_by_phase[i * 3 + 2];
+        out[i].v1error_neg_trailer_q_active_fC =
+            batch.v1error_neg_q_active_fC_by_phase[i * 3 + 2];
         out[i].hctx_preprobe = batch.hctx_preprobe_total_counts[i];
         out[i].hctx_trailer = batch.hctx_trailer_total_counts[i];
         out[i].hpred_preprobe = batch.hpred_preprobe_total_counts[i];
@@ -1983,6 +2672,17 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
                     i * static_cast<std::size_t>(kV1Channels)
                     + static_cast<std::size_t>(channel)
                 ];
+            out[i].v1_error_trailer_channel_counts[static_cast<std::size_t>(channel)] =
+                batch.v1_error_trailer_channel_counts[
+                    i * static_cast<std::size_t>(kV1Channels)
+                    + static_cast<std::size_t>(channel)
+                ];
+            out[i].v1_error_neg_trailer_channel_counts[
+                static_cast<std::size_t>(channel)
+            ] = batch.v1_error_neg_trailer_channel_counts[
+                i * static_cast<std::size_t>(kV1Channels)
+                + static_cast<std::size_t>(channel)
+            ];
             out[i].hpred_preprobe_channel_counts[
                 static_cast<std::size_t>(channel)
             ] = batch.hpred_preprobe_channel_counts[
@@ -2037,6 +2737,26 @@ std::vector<ConditionAccum> run_native_richter_conditions_batched(
                 ][
                     static_cast<std::size_t>(channel)
                 ] = batch.v1_som_trailer_bin_channel_counts[
+                    (i * static_cast<std::size_t>(kTrailerBinCount)
+                        + static_cast<std::size_t>(bin))
+                        * static_cast<std::size_t>(kV1Channels)
+                    + static_cast<std::size_t>(channel)
+                ];
+                out[i].v1_error_trailer_bin_channel_counts[
+                    static_cast<std::size_t>(bin)
+                ][
+                    static_cast<std::size_t>(channel)
+                ] = batch.v1_error_trailer_bin_channel_counts[
+                    (i * static_cast<std::size_t>(kTrailerBinCount)
+                        + static_cast<std::size_t>(bin))
+                        * static_cast<std::size_t>(kV1Channels)
+                    + static_cast<std::size_t>(channel)
+                ];
+                out[i].v1_error_neg_trailer_bin_channel_counts[
+                    static_cast<std::size_t>(bin)
+                ][
+                    static_cast<std::size_t>(channel)
+                ] = batch.v1_error_neg_trailer_bin_channel_counts[
                     (i * static_cast<std::size_t>(kTrailerBinCount)
                         + static_cast<std::size_t>(bin))
                         * static_cast<std::size_t>(kV1Channels)
@@ -2589,6 +3309,12 @@ int stage1_train_generated(const Args& args) {
         throw std::runtime_error("stage1-train --fixture generated requires --out PATH");
     }
     const auto total_t0 = std::chrono::steady_clock::now();
+    if (args.stage1_prediction_target != "orientation_cell"
+        && args.stage1_prediction_target != "v1_template") {
+        throw std::runtime_error(
+            "stage1-train --stage1-prediction-target must be orientation_cell or v1_template"
+        );
+    }
     const auto schedule_t0 = std::chrono::steady_clock::now();
     const GeneratedSchedule schedule = build_generated_schedule(args.seed, args.n_trials);
     const auto schedule_t1 = std::chrono::steady_clock::now();
@@ -2604,11 +3330,28 @@ int stage1_train_generated(const Args& args) {
             expected_channel * kHCellsPerChannel + expected_cell_offset
         );
     }
-    const auto train = expectation_snn_cuda::run_native_stage1_generated_train(
+    auto train = expectation_snn_cuda::run_native_stage1_generated_train(
         args.seed,
         schedule.leader_cells,
-        expected_trailer_cells
+        expected_trailer_cells,
+        args.stage1_prediction_target
     );
+    if (args.stage1_learn_feedback_direct) {
+        train.w_hpred_v1direct_final = build_learned_hpred_v1direct_weights(
+            schedule,
+            args.stage1_prediction_target
+        );
+        train.w_hpred_v1direct_row_sums =
+            hpred_v1direct_row_sums(train.w_hpred_v1direct_final);
+    }
+    if (args.stage1_learn_feedback_som) {
+        train.w_hpred_v1som_final = build_learned_hpred_v1som_weights(
+            schedule,
+            args.stage1_prediction_target
+        );
+        train.w_hpred_v1som_row_sums =
+            hpred_v1som_row_sums(train.w_hpred_v1som_final);
+    }
     const auto train_t1 = std::chrono::steady_clock::now();
 
     const auto gate_t0 = std::chrono::steady_clock::now();
@@ -2637,10 +3380,20 @@ int stage1_train_generated(const Args& args) {
 
     const std::filesystem::path json_path = args.out_path;
     const std::filesystem::path w_path = std::filesystem::path(args.out_path.string() + ".W_ctx_pred.f64.bin");
+    const std::filesystem::path hpred_v1direct_path =
+        std::filesystem::path(args.out_path.string() + ".W_hpred_v1direct.f64.bin");
+    const std::filesystem::path hpred_v1som_path =
+        std::filesystem::path(args.out_path.string() + ".W_hpred_v1som.f64.bin");
     const std::string content_hash = hash_hex(artifact_hash(schedule, train));
 
     const auto write_t0 = std::chrono::steady_clock::now();
     write_binary_vector(w_path, train.w_ctx_pred_final);
+    if (!train.w_hpred_v1direct_final.empty()) {
+        write_binary_vector(hpred_v1direct_path, train.w_hpred_v1direct_final);
+    }
+    if (!train.w_hpred_v1som_final.empty()) {
+        write_binary_vector(hpred_v1som_path, train.w_hpred_v1som_final);
+    }
     const auto write_mid = std::chrono::steady_clock::now();
     const double schedule_wall = std::chrono::duration<double>(schedule_t1 - schedule_t0).count();
     const double train_wall = std::chrono::duration<double>(train_t1 - train_t0).count();
@@ -2649,6 +3402,8 @@ int stage1_train_generated(const Args& args) {
     write_stage1_json(
         json_path,
         w_path,
+        hpred_v1direct_path,
+        hpred_v1som_path,
         schedule,
         train,
         gates,
@@ -2676,8 +3431,15 @@ int stage1_train_generated(const Args& args) {
               << "fixture=generated\n"
               << "seed=" << args.seed << "\n"
               << "n_trials=" << args.n_trials << "\n"
+              << "stage1_prediction_target=" << args.stage1_prediction_target << "\n"
+              << "stage1_learn_feedback_direct=" << (args.stage1_learn_feedback_direct ? 1 : 0) << "\n"
+              << "stage1_learn_feedback_som=" << (args.stage1_learn_feedback_som ? 1 : 0) << "\n"
               << "json_path=" << json_path << "\n"
               << "W_ctx_pred_path=" << w_path << "\n"
+              << "W_hpred_v1direct_path="
+              << (train.w_hpred_v1direct_final.empty() ? std::filesystem::path("") : hpred_v1direct_path) << "\n"
+              << "W_hpred_v1som_path="
+              << (train.w_hpred_v1som_final.empty() ? std::filesystem::path("") : hpred_v1som_path) << "\n"
               << "content_hash_fnv1a64=" << content_hash << "\n"
               << "h_context_persistence_ms=" << persistence << "\n"
               << "forecast_probability=" << forecast << "\n"
@@ -2827,6 +3589,22 @@ int richter_dampening(const Args& args) {
             "richter-dampening --feedback-som-center-weight must be nonnegative"
         );
     }
+    if (args.feedback_direct_source != "fixed"
+        && args.feedback_direct_source != "learned"
+        && args.feedback_direct_source != "learned-shifted"
+        && args.feedback_direct_source != "disabled") {
+        throw std::runtime_error(
+            "richter-dampening --feedback-direct-source must be fixed, learned, learned-shifted, or disabled"
+        );
+    }
+    if (args.feedback_som_source != "fixed"
+        && args.feedback_som_source != "learned"
+        && args.feedback_som_source != "learned-shifted"
+        && args.feedback_som_source != "disabled") {
+        throw std::runtime_error(
+            "richter-dampening --feedback-som-source must be fixed, learned, learned-shifted, or disabled"
+        );
+    }
     if (args.v1_som_to_e_scale < 0.0) {
         throw std::runtime_error(
             "richter-dampening --v1-som-to-e-scale must be nonnegative"
@@ -2857,10 +3635,18 @@ int richter_dampening(const Args& args) {
             "richter-dampening --v1-predicted-suppression-neighbor-weight must be nonnegative"
         );
     }
+    if (args.v1_error_sensory_gain < 0.0
+        || args.v1_error_prediction_gain < 0.0) {
+        throw std::runtime_error(
+            "richter-dampening V1_ERROR comparator gains must be nonnegative"
+        );
+    }
     const std::int32_t v1_predicted_suppression_locus =
         v1_predicted_suppression_locus_id(
             args.v1_predicted_suppression_locus
         );
+    const std::int32_t v1_error_comparator_mode =
+        v1_error_comparator_mode_id(args.v1_error_comparator_mode);
     const std::int32_t v1_feedforward_divisive_gate_source =
         v1_feedforward_divisive_gate_source_id(
             args.v1_feedforward_divisive_gate_source
@@ -2877,10 +3663,28 @@ int richter_dampening(const Args& args) {
     const auto total_t0 = std::chrono::steady_clock::now();
 
     std::vector<double> w_ctx_pred;
+    std::vector<double> w_hpred_v1direct;
+    std::vector<double> w_hpred_v1som;
     const Stage1CheckpointMeta checkpoint = validate_stage1_checkpoint(
         args.checkpoint_path,
-        w_ctx_pred
+        w_ctx_pred,
+        &w_hpred_v1direct,
+        &w_hpred_v1som
     );
+    if ((args.feedback_direct_source == "learned"
+         || args.feedback_direct_source == "learned-shifted")
+        && !checkpoint.has_learned_hpred_v1direct) {
+        throw std::runtime_error(
+            "richter-dampening learned feedback direct source requires checkpointed W_hpred_v1direct"
+        );
+    }
+    if ((args.feedback_som_source == "learned"
+         || args.feedback_som_source == "learned-shifted")
+        && !checkpoint.has_learned_hpred_v1som) {
+        throw std::runtime_error(
+            "richter-dampening learned feedback SOM source requires checkpointed W_hpred_v1som"
+        );
+    }
     const FeedbackBalance feedback = resolve_feedback_balance(
         args.feedback_g_total,
         args.feedback_r
@@ -2888,12 +3692,22 @@ int richter_dampening(const Args& args) {
     const NativeTopology topology = make_native_topology(
         w_ctx_pred,
         feedback,
-        args.feedback_som_center_weight
+        args.feedback_som_center_weight,
+        w_hpred_v1direct,
+        args.feedback_direct_source,
+        w_hpred_v1som,
+        args.feedback_som_source
     );
+    const std::size_t expected_fb_direct_edges =
+        (args.feedback_direct_source == "fixed")
+        ? 3072u
+        : ((args.feedback_direct_source == "disabled") ? 1u : 36864u);
     const std::size_t expected_fb_som_edges =
-        3072u + (args.feedback_som_center_weight > 0.0 ? 768u : 0u);
+        (args.feedback_som_source == "fixed")
+        ? 3072u + (args.feedback_som_center_weight > 0.0 ? 768u : 0u)
+        : ((args.feedback_som_source == "disabled") ? 1u : 9216u);
     if (topology.stim_pre.size() != 3840 || topology.v1_to_h_pre.size() != 21504
-        || topology.ctx_to_pred_pre.size() != 36864 || topology.fb_direct_pre.size() != 3072
+        || topology.ctx_to_pred_pre.size() != 36864 || topology.fb_direct_pre.size() != expected_fb_direct_edges
         || topology.fb_som_pre.size() != expected_fb_som_edges) {
         throw std::runtime_error("native Richter topology edge count invariant failed");
     }
@@ -2913,6 +3727,8 @@ int richter_dampening(const Args& args) {
         semantic_hash,
         args.feedback_som_center_weight
     );
+    semantic_hash = fnv1a_update_string(semantic_hash, args.feedback_direct_source);
+    semantic_hash = fnv1a_update_string(semantic_hash, args.feedback_som_source);
     semantic_hash = fnv1a_update_scalar(
         semantic_hash,
         args.v1_som_to_e_scale
@@ -2952,6 +3768,23 @@ int richter_dampening(const Args& args) {
         args.v1_predicted_suppression_locus.data(),
         args.v1_predicted_suppression_locus.size()
     );
+    semantic_hash = fnv1a_update(
+        semantic_hash,
+        args.v1_error_comparator_mode.data(),
+        args.v1_error_comparator_mode.size()
+    );
+    semantic_hash = fnv1a_update_scalar(
+        semantic_hash,
+        args.v1_error_sensory_gain
+    );
+    semantic_hash = fnv1a_update_scalar(
+        semantic_hash,
+        args.v1_error_prediction_gain
+    );
+    semantic_hash = fnv1a_update_scalar(
+        semantic_hash,
+        args.v1_error_prediction_shift
+    );
     semantic_hash = fnv1a_update_scalar(semantic_hash, feedback.g_direct);
     semantic_hash = fnv1a_update_scalar(semantic_hash, feedback.g_som);
     semantic_hash = fnv1a_update(
@@ -2970,13 +3803,31 @@ int richter_dampening(const Args& args) {
     );
     semantic_hash = fnv1a_update(semantic_hash, checkpoint.content_hash.data(), checkpoint.content_hash.size());
     semantic_hash = fnv1a_update(semantic_hash, checkpoint.w_hash.data(), checkpoint.w_hash.size());
+    semantic_hash = fnv1a_update(
+        semantic_hash,
+        checkpoint.learned_hpred_v1direct_hash.data(),
+        checkpoint.learned_hpred_v1direct_hash.size()
+    );
+    semantic_hash = fnv1a_update(
+        semantic_hash,
+        checkpoint.learned_hpred_v1som_hash.data(),
+        checkpoint.learned_hpred_v1som_hash.size()
+    );
     std::vector<std::array<std::int32_t, kV1Channels>> trial_v1_trailer_channel_counts;
     std::vector<std::array<std::int32_t, kV1Channels>>
         trial_v1_som_trailer_channel_counts;
+    std::vector<std::array<std::int32_t, kV1Channels>>
+        trial_v1_error_trailer_channel_counts;
+    std::vector<std::array<std::int32_t, kV1Channels>>
+        trial_v1_error_neg_trailer_channel_counts;
     std::vector<std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>>
         trial_v1_trailer_100ms_channel_counts;
     std::vector<std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>>
         trial_v1_som_trailer_100ms_channel_counts;
+    std::vector<std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>>
+        trial_v1_error_trailer_100ms_channel_counts;
+    std::vector<std::array<std::array<std::int32_t, kV1Channels>, kTrailerBinCount>>
+        trial_v1_error_neg_trailer_100ms_channel_counts;
     std::vector<std::int32_t> trial_index;
     std::vector<std::int32_t> trial_schedule_index;
     std::vector<std::int32_t> trial_is_expected;
@@ -3021,14 +3872,22 @@ int richter_dampening(const Args& args) {
         trial_v1_predicted_suppression_trailer_raw_ie_delta_sum;
     std::vector<double> trial_v1e_trailer_q_active_fC;
     std::vector<double> trial_v1som_trailer_q_active_fC;
+    std::vector<double> trial_v1error_trailer_q_active_fC;
+    std::vector<double> trial_v1error_neg_trailer_q_active_fC;
+    std::vector<double> trial_v1error_total_trailer_q_active_fC;
+    std::vector<double> trial_v1error_signed_trailer_q_active_fC;
     std::vector<double> trial_v1_trailer_q_active_fC;
     const std::size_t total_trials_capacity =
         static_cast<std::size_t>(args.reps_expected) * 6
         + static_cast<std::size_t>(args.reps_unexpected) * 24;
     trial_v1_trailer_channel_counts.reserve(total_trials_capacity);
     trial_v1_som_trailer_channel_counts.reserve(total_trials_capacity);
+    trial_v1_error_trailer_channel_counts.reserve(total_trials_capacity);
+    trial_v1_error_neg_trailer_channel_counts.reserve(total_trials_capacity);
     trial_v1_trailer_100ms_channel_counts.reserve(total_trials_capacity);
     trial_v1_som_trailer_100ms_channel_counts.reserve(total_trials_capacity);
+    trial_v1_error_trailer_100ms_channel_counts.reserve(total_trials_capacity);
+    trial_v1_error_neg_trailer_100ms_channel_counts.reserve(total_trials_capacity);
     trial_index.reserve(total_trials_capacity);
     trial_schedule_index.reserve(total_trials_capacity);
     trial_is_expected.reserve(total_trials_capacity);
@@ -3082,6 +3941,10 @@ int richter_dampening(const Args& args) {
     );
     trial_v1e_trailer_q_active_fC.reserve(total_trials_capacity);
     trial_v1som_trailer_q_active_fC.reserve(total_trials_capacity);
+    trial_v1error_trailer_q_active_fC.reserve(total_trials_capacity);
+    trial_v1error_neg_trailer_q_active_fC.reserve(total_trials_capacity);
+    trial_v1error_total_trailer_q_active_fC.reserve(total_trials_capacity);
+    trial_v1error_signed_trailer_q_active_fC.reserve(total_trials_capacity);
     trial_v1_trailer_q_active_fC.reserve(total_trials_capacity);
 
     const auto run_t0 = std::chrono::steady_clock::now();
@@ -3101,11 +3964,23 @@ int richter_dampening(const Args& args) {
         trial_v1_som_trailer_channel_counts.push_back(
             acc.v1_som_trailer_channel_counts
         );
+        trial_v1_error_trailer_channel_counts.push_back(
+            acc.v1_error_trailer_channel_counts
+        );
+        trial_v1_error_neg_trailer_channel_counts.push_back(
+            acc.v1_error_neg_trailer_channel_counts
+        );
         trial_v1_trailer_100ms_channel_counts.push_back(
             acc.v1_trailer_bin_channel_counts
         );
         trial_v1_som_trailer_100ms_channel_counts.push_back(
             acc.v1_som_trailer_bin_channel_counts
+        );
+        trial_v1_error_trailer_100ms_channel_counts.push_back(
+            acc.v1_error_trailer_bin_channel_counts
+        );
+        trial_v1_error_neg_trailer_100ms_channel_counts.push_back(
+            acc.v1_error_neg_trailer_bin_channel_counts
         );
         trial_hctx_e_preprobe_total_counts.push_back(
             static_cast<std::int32_t>(acc.hctx_preprobe)
@@ -3176,6 +4051,20 @@ int richter_dampening(const Args& args) {
         );
         trial_v1e_trailer_q_active_fC.push_back(acc.v1e_trailer_q_active_fC);
         trial_v1som_trailer_q_active_fC.push_back(acc.v1som_trailer_q_active_fC);
+        trial_v1error_trailer_q_active_fC.push_back(
+            acc.v1error_trailer_q_active_fC
+        );
+        trial_v1error_neg_trailer_q_active_fC.push_back(
+            acc.v1error_neg_trailer_q_active_fC
+        );
+        trial_v1error_total_trailer_q_active_fC.push_back(
+            acc.v1error_trailer_q_active_fC
+            + acc.v1error_neg_trailer_q_active_fC
+        );
+        trial_v1error_signed_trailer_q_active_fC.push_back(
+            acc.v1error_trailer_q_active_fC
+            - acc.v1error_neg_trailer_q_active_fC
+        );
         trial_v1_trailer_q_active_fC.push_back(
             acc.v1e_trailer_q_active_fC + acc.v1som_trailer_q_active_fC
         );
@@ -3203,6 +4092,22 @@ int richter_dampening(const Args& args) {
             semantic_hash = fnv1a_update_scalar(semantic_hash, count);
         }
         for (const auto& bin_counts : acc.v1_som_trailer_bin_channel_counts) {
+            for (const auto count : bin_counts) {
+                semantic_hash = fnv1a_update_scalar(semantic_hash, count);
+            }
+        }
+        for (const auto count : acc.v1_error_trailer_channel_counts) {
+            semantic_hash = fnv1a_update_scalar(semantic_hash, count);
+        }
+        for (const auto& bin_counts : acc.v1_error_trailer_bin_channel_counts) {
+            for (const auto count : bin_counts) {
+                semantic_hash = fnv1a_update_scalar(semantic_hash, count);
+            }
+        }
+        for (const auto count : acc.v1_error_neg_trailer_channel_counts) {
+            semantic_hash = fnv1a_update_scalar(semantic_hash, count);
+        }
+        for (const auto& bin_counts : acc.v1_error_neg_trailer_bin_channel_counts) {
             for (const auto count : bin_counts) {
                 semantic_hash = fnv1a_update_scalar(semantic_hash, count);
             }
@@ -3294,6 +4199,14 @@ int richter_dampening(const Args& args) {
         semantic_hash = fnv1a_update_scalar(
             semantic_hash,
             trial_v1som_trailer_q_active_fC.back()
+        );
+        semantic_hash = fnv1a_update_scalar(
+            semantic_hash,
+            trial_v1error_trailer_q_active_fC.back()
+        );
+        semantic_hash = fnv1a_update_scalar(
+            semantic_hash,
+            trial_v1error_neg_trailer_q_active_fC.back()
         );
         semantic_hash = fnv1a_update_scalar(
             semantic_hash,
@@ -3400,7 +4313,11 @@ int richter_dampening(const Args& args) {
             args.v1_predicted_suppression_scale,
             args.v1_predicted_suppression_neighbor_weight,
             v1_predicted_suppression_locus,
-            args.v1_stim_sigma_deg
+            args.v1_stim_sigma_deg,
+            v1_error_comparator_mode,
+            args.v1_error_sensory_gain,
+            args.v1_error_prediction_gain,
+            args.v1_error_prediction_shift
         );
         for (std::size_t i = 0; i < expected_specs.size(); ++i) {
             accumulate_condition(expected, expected_batch[i]);
@@ -3429,7 +4346,11 @@ int richter_dampening(const Args& args) {
             args.v1_predicted_suppression_scale,
             args.v1_predicted_suppression_neighbor_weight,
             v1_predicted_suppression_locus,
-            args.v1_stim_sigma_deg
+            args.v1_stim_sigma_deg,
+            v1_error_comparator_mode,
+            args.v1_error_sensory_gain,
+            args.v1_error_prediction_gain,
+            args.v1_error_prediction_shift
         );
         for (std::size_t i = 0; i < unexpected_specs.size(); ++i) {
             accumulate_condition(unexpected, unexpected_batch[i]);
@@ -3463,7 +4384,11 @@ int richter_dampening(const Args& args) {
                 args.v1_predicted_suppression_scale,
                 args.v1_predicted_suppression_neighbor_weight,
                 v1_predicted_suppression_locus,
-                args.v1_stim_sigma_deg
+                args.v1_stim_sigma_deg,
+                v1_error_comparator_mode,
+                args.v1_error_sensory_gain,
+                args.v1_error_prediction_gain,
+                args.v1_error_prediction_shift
             );
             ConditionAccum single;
             accumulate_condition(single, result, args.execution_mode);
@@ -3493,7 +4418,11 @@ int richter_dampening(const Args& args) {
                 args.v1_predicted_suppression_scale,
                 args.v1_predicted_suppression_neighbor_weight,
                 v1_predicted_suppression_locus,
-                args.v1_stim_sigma_deg
+                args.v1_stim_sigma_deg,
+                v1_error_comparator_mode,
+                args.v1_error_sensory_gain,
+                args.v1_error_prediction_gain,
+                args.v1_error_prediction_shift
             );
             ConditionAccum single;
             accumulate_condition(single, result, args.execution_mode);
@@ -3517,6 +4446,26 @@ int richter_dampening(const Args& args) {
     const double expected_v1_trailer_per_trial = per_trial(expected.v1_trailer, expected_trials);
     const double unexpected_v1_trailer_per_trial = per_trial(unexpected.v1_trailer, unexpected_trials);
     const double dampening = unexpected_v1_trailer_per_trial - expected_v1_trailer_per_trial;
+    const double expected_v1_error_trailer_per_trial =
+        per_trial(expected.v1_error_trailer, expected_trials);
+    const double unexpected_v1_error_trailer_per_trial =
+        per_trial(unexpected.v1_error_trailer, unexpected_trials);
+    const double expected_v1_error_neg_trailer_per_trial =
+        per_trial(expected.v1_error_neg_trailer, expected_trials);
+    const double unexpected_v1_error_neg_trailer_per_trial =
+        per_trial(unexpected.v1_error_neg_trailer, unexpected_trials);
+    const double expected_v1_error_total_trailer_per_trial =
+        expected_v1_error_trailer_per_trial
+        + expected_v1_error_neg_trailer_per_trial;
+    const double unexpected_v1_error_total_trailer_per_trial =
+        unexpected_v1_error_trailer_per_trial
+        + unexpected_v1_error_neg_trailer_per_trial;
+    const double expected_v1_error_signed_trailer_per_trial =
+        expected_v1_error_trailer_per_trial
+        - expected_v1_error_neg_trailer_per_trial;
+    const double unexpected_v1_error_signed_trailer_per_trial =
+        unexpected_v1_error_trailer_per_trial
+        - unexpected_v1_error_neg_trailer_per_trial;
     const double expected_v1e_trailer_q_active_fC_per_trial =
         per_trial(expected.v1e_trailer_q_active_fC, expected_trials);
     const double unexpected_v1e_trailer_q_active_fC_per_trial =
@@ -3525,6 +4474,26 @@ int richter_dampening(const Args& args) {
         per_trial(expected.v1som_trailer_q_active_fC, expected_trials);
     const double unexpected_v1som_trailer_q_active_fC_per_trial =
         per_trial(unexpected.v1som_trailer_q_active_fC, unexpected_trials);
+    const double expected_v1error_trailer_q_active_fC_per_trial =
+        per_trial(expected.v1error_trailer_q_active_fC, expected_trials);
+    const double unexpected_v1error_trailer_q_active_fC_per_trial =
+        per_trial(unexpected.v1error_trailer_q_active_fC, unexpected_trials);
+    const double expected_v1error_neg_trailer_q_active_fC_per_trial =
+        per_trial(expected.v1error_neg_trailer_q_active_fC, expected_trials);
+    const double unexpected_v1error_neg_trailer_q_active_fC_per_trial =
+        per_trial(unexpected.v1error_neg_trailer_q_active_fC, unexpected_trials);
+    const double expected_v1error_total_trailer_q_active_fC_per_trial =
+        expected_v1error_trailer_q_active_fC_per_trial
+        + expected_v1error_neg_trailer_q_active_fC_per_trial;
+    const double unexpected_v1error_total_trailer_q_active_fC_per_trial =
+        unexpected_v1error_trailer_q_active_fC_per_trial
+        + unexpected_v1error_neg_trailer_q_active_fC_per_trial;
+    const double expected_v1error_signed_trailer_q_active_fC_per_trial =
+        expected_v1error_trailer_q_active_fC_per_trial
+        - expected_v1error_neg_trailer_q_active_fC_per_trial;
+    const double unexpected_v1error_signed_trailer_q_active_fC_per_trial =
+        unexpected_v1error_trailer_q_active_fC_per_trial
+        - unexpected_v1error_neg_trailer_q_active_fC_per_trial;
     const double expected_v1_trailer_q_active_fC_per_trial =
         expected_v1e_trailer_q_active_fC_per_trial
         + expected_v1som_trailer_q_active_fC_per_trial;
@@ -3535,8 +4504,12 @@ int richter_dampening(const Args& args) {
         static_cast<std::size_t>(expected_trials + unexpected_trials);
     if (trial_v1_trailer_channel_counts.size() != total_trials
         || trial_v1_som_trailer_channel_counts.size() != total_trials
+        || trial_v1_error_trailer_channel_counts.size() != total_trials
+        || trial_v1_error_neg_trailer_channel_counts.size() != total_trials
         || trial_v1_trailer_100ms_channel_counts.size() != total_trials
         || trial_v1_som_trailer_100ms_channel_counts.size() != total_trials
+        || trial_v1_error_trailer_100ms_channel_counts.size() != total_trials
+        || trial_v1_error_neg_trailer_100ms_channel_counts.size() != total_trials
         || trial_index.size() != total_trials
         || trial_schedule_index.size() != total_trials
         || trial_is_expected.size() != total_trials
@@ -3578,6 +4551,10 @@ int richter_dampening(const Args& args) {
             != total_trials
         || trial_v1e_trailer_q_active_fC.size() != total_trials
         || trial_v1som_trailer_q_active_fC.size() != total_trials
+        || trial_v1error_trailer_q_active_fC.size() != total_trials
+        || trial_v1error_neg_trailer_q_active_fC.size() != total_trials
+        || trial_v1error_total_trailer_q_active_fC.size() != total_trials
+        || trial_v1error_signed_trailer_q_active_fC.size() != total_trials
         || trial_v1_trailer_q_active_fC.size() != total_trials) {
         throw std::runtime_error("trial_data vector size mismatch");
     }
@@ -3728,11 +4705,50 @@ int richter_dampening(const Args& args) {
     out << "  \"checkpoint\": {\"path\": \"" << json_escape(checkpoint.json_path.string())
         << "\", \"content_hash_fnv1a64\": \"" << checkpoint.content_hash
         << "\", \"W_ctx_pred_path\": \"" << json_escape(checkpoint.w_path.string())
-        << "\", \"W_ctx_pred_fnv1a64\": \"" << checkpoint.w_hash << "\"},\n";
+        << "\", \"W_ctx_pred_fnv1a64\": \"" << checkpoint.w_hash
+        << "\", \"has_learned_hpred_v1direct\": "
+        << (checkpoint.has_learned_hpred_v1direct ? "true" : "false")
+        << ", \"has_learned_hpred_v1som\": "
+        << (checkpoint.has_learned_hpred_v1som ? "true" : "false");
+    if (checkpoint.has_learned_hpred_v1direct) {
+        out << ", \"W_hpred_v1direct_path\": \""
+            << json_escape(checkpoint.learned_hpred_v1direct_path.string())
+            << "\", \"W_hpred_v1direct_fnv1a64\": \""
+            << checkpoint.learned_hpred_v1direct_hash << "\"";
+    }
+    if (checkpoint.has_learned_hpred_v1som) {
+        out << ", \"W_hpred_v1som_path\": \""
+            << json_escape(checkpoint.learned_hpred_v1som_path.string())
+            << "\", \"W_hpred_v1som_fnv1a64\": \""
+            << checkpoint.learned_hpred_v1som_hash << "\"";
+    }
+    out << "},\n";
     out << "  \"feedback\": {\"g_total\": " << args.feedback_g_total
         << ", \"r\": " << args.feedback_r
         << ", \"resolved_g_direct\": " << feedback.g_direct
         << ", \"resolved_g_som\": " << feedback.g_som
+        << ", \"direct_source\": \"" << json_escape(args.feedback_direct_source)
+        << "\""
+        << ", \"direct_source_description\": \""
+        << (args.feedback_direct_source == "fixed"
+            ? "static_same_channel_hpred_to_v1e_apical_kernel"
+            : (args.feedback_direct_source == "learned"
+               ? "checkpointed_prediction_task_hpred_to_v1e_direct_apical_weights"
+               : (args.feedback_direct_source == "learned-shifted"
+                  ? "checkpointed_direct_weights_with_hpred_source_channel_rotated_by_plus_two_control"
+                  : "direct_feedback_disabled_zero_weight_sentinel")))
+        << "\""
+        << ", \"som_source\": \"" << json_escape(args.feedback_som_source)
+        << "\""
+        << ", \"som_source_description\": \""
+        << (args.feedback_som_source == "fixed"
+            ? "static_center_surround_kernel"
+            : (args.feedback_som_source == "learned"
+               ? "checkpointed_prediction_task_hpred_to_v1som_weights"
+               : (args.feedback_som_source == "learned-shifted"
+                  ? "checkpointed_weights_with_hpred_source_channel_rotated_by_plus_two_control"
+                  : "som_feedback_disabled_zero_weight_sentinel")))
+        << "\""
         << ", \"som_kernel_center_weight\": "
         << args.feedback_som_center_weight
         << ", \"som_kernel_surround_d1_weight\": "
@@ -3804,6 +4820,17 @@ int richter_dampening(const Args& args) {
             args.v1_predicted_suppression_locus
         )
         << "\""
+        << ", \"v1_error_comparator_mode\": \""
+        << json_escape(args.v1_error_comparator_mode)
+        << "\""
+        << ", \"v1_error_comparator_description\": "
+        << "\"separate_measurement_only_v1_error_population; fixed_symmetric uses ERR+ sensory_excitation_minus_held_hpred_prediction_inhibition; signed_normalized adds ERR- prediction_excitation_minus_sensory_inhibition using normalized_preprobe_hpred_shape; no_v1_feedback\""
+        << ", \"v1_error_sensory_gain\": "
+        << args.v1_error_sensory_gain
+        << ", \"v1_error_prediction_gain\": "
+        << args.v1_error_prediction_gain
+        << ", \"v1_error_prediction_shift\": "
+        << args.v1_error_prediction_shift
         << "},\n";
     out << "  \"feedback_replay\": {\"mode\": \""
         << json_escape(args.feedback_replay_mode)
@@ -3858,23 +4885,59 @@ int richter_dampening(const Args& args) {
         << expected_v1e_trailer_q_active_fC_per_trial
         << ", \"v1som_trailer_q_active_fC_per_trial\": "
         << expected_v1som_trailer_q_active_fC_per_trial
+        << ", \"v1error_trailer_q_active_fC_per_trial\": "
+        << expected_v1error_trailer_q_active_fC_per_trial
+        << ", \"v1error_neg_trailer_q_active_fC_per_trial\": "
+        << expected_v1error_neg_trailer_q_active_fC_per_trial
+        << ", \"v1error_total_trailer_q_active_fC_per_trial\": "
+        << expected_v1error_total_trailer_q_active_fC_per_trial
+        << ", \"v1error_signed_trailer_q_active_fC_per_trial\": "
+        << expected_v1error_signed_trailer_q_active_fC_per_trial
         << ", \"v1_trailer_q_active_fC_per_trial\": "
         << expected_v1_trailer_q_active_fC_per_trial << "},\n";
     out << "    \"unexpected\": {\"v1e_trailer_q_active_fC_per_trial\": "
         << unexpected_v1e_trailer_q_active_fC_per_trial
         << ", \"v1som_trailer_q_active_fC_per_trial\": "
         << unexpected_v1som_trailer_q_active_fC_per_trial
+        << ", \"v1error_trailer_q_active_fC_per_trial\": "
+        << unexpected_v1error_trailer_q_active_fC_per_trial
+        << ", \"v1error_neg_trailer_q_active_fC_per_trial\": "
+        << unexpected_v1error_neg_trailer_q_active_fC_per_trial
+        << ", \"v1error_total_trailer_q_active_fC_per_trial\": "
+        << unexpected_v1error_total_trailer_q_active_fC_per_trial
+        << ", \"v1error_signed_trailer_q_active_fC_per_trial\": "
+        << unexpected_v1error_signed_trailer_q_active_fC_per_trial
         << ", \"v1_trailer_q_active_fC_per_trial\": "
         << unexpected_v1_trailer_q_active_fC_per_trial << "}\n";
     out << "  },\n";
     out << "  \"raw_counts\": {\n";
     out << "    \"expected\": {\"v1_e\": {\"leader\": " << expected.v1_leader
         << ", \"preprobe\": " << expected.v1_preprobe << ", \"trailer\": " << expected.v1_trailer
+        << "}, \"v1_error\": {\"trailer\": " << expected.v1_error_trailer
+        << ", \"trailer_per_trial\": " << expected_v1_error_trailer_per_trial
+        << "}, \"v1_error_neg\": {\"trailer\": "
+        << expected.v1_error_neg_trailer
+        << ", \"trailer_per_trial\": "
+        << expected_v1_error_neg_trailer_per_trial
+        << "}, \"v1_error_total\": {\"trailer_per_trial\": "
+        << expected_v1_error_total_trailer_per_trial
+        << "}, \"v1_error_signed\": {\"trailer_per_trial\": "
+        << expected_v1_error_signed_trailer_per_trial
         << "}, \"hctx_e\": {\"preprobe\": " << expected.hctx_preprobe
         << ", \"trailer\": " << expected.hctx_trailer << "}, \"hpred_e\": {\"preprobe\": "
         << expected.hpred_preprobe << ", \"trailer\": " << expected.hpred_trailer << "}},\n";
     out << "    \"unexpected\": {\"v1_e\": {\"leader\": " << unexpected.v1_leader
         << ", \"preprobe\": " << unexpected.v1_preprobe << ", \"trailer\": " << unexpected.v1_trailer
+        << "}, \"v1_error\": {\"trailer\": " << unexpected.v1_error_trailer
+        << ", \"trailer_per_trial\": " << unexpected_v1_error_trailer_per_trial
+        << "}, \"v1_error_neg\": {\"trailer\": "
+        << unexpected.v1_error_neg_trailer
+        << ", \"trailer_per_trial\": "
+        << unexpected_v1_error_neg_trailer_per_trial
+        << "}, \"v1_error_total\": {\"trailer_per_trial\": "
+        << unexpected_v1_error_total_trailer_per_trial
+        << "}, \"v1_error_signed\": {\"trailer_per_trial\": "
+        << unexpected_v1_error_signed_trailer_per_trial
         << "}, \"hctx_e\": {\"preprobe\": " << unexpected.hctx_preprobe
         << ", \"trailer\": " << unexpected.hctx_trailer << "}, \"hpred_e\": {\"preprobe\": "
         << unexpected.hpred_preprobe << ", \"trailer\": " << unexpected.hpred_trailer << "}}\n";
@@ -3987,11 +5050,35 @@ int richter_dampening(const Args& args) {
     out << "    \"v1_som_trailer_100ms_channel_counts\": ";
     write_fixed_cube_json(out, trial_v1_som_trailer_100ms_channel_counts);
     out << ",\n";
+    out << "    \"v1_error_trailer_channel_counts\": ";
+    write_fixed_matrix_json(out, trial_v1_error_trailer_channel_counts);
+    out << ",\n";
+    out << "    \"v1_error_trailer_100ms_channel_counts\": ";
+    write_fixed_cube_json(out, trial_v1_error_trailer_100ms_channel_counts);
+    out << ",\n";
+    out << "    \"v1_error_neg_trailer_channel_counts\": ";
+    write_fixed_matrix_json(out, trial_v1_error_neg_trailer_channel_counts);
+    out << ",\n";
+    out << "    \"v1_error_neg_trailer_100ms_channel_counts\": ";
+    write_fixed_cube_json(out, trial_v1_error_neg_trailer_100ms_channel_counts);
+    out << ",\n";
     out << "    \"v1e_trailer_q_active_fC\": ";
     write_vector_json(out, trial_v1e_trailer_q_active_fC);
     out << ",\n";
     out << "    \"v1som_trailer_q_active_fC\": ";
     write_vector_json(out, trial_v1som_trailer_q_active_fC);
+    out << ",\n";
+    out << "    \"v1error_trailer_q_active_fC\": ";
+    write_vector_json(out, trial_v1error_trailer_q_active_fC);
+    out << ",\n";
+    out << "    \"v1error_neg_trailer_q_active_fC\": ";
+    write_vector_json(out, trial_v1error_neg_trailer_q_active_fC);
+    out << ",\n";
+    out << "    \"v1error_total_trailer_q_active_fC\": ";
+    write_vector_json(out, trial_v1error_total_trailer_q_active_fC);
+    out << ",\n";
+    out << "    \"v1error_signed_trailer_q_active_fC\": ";
+    write_vector_json(out, trial_v1error_signed_trailer_q_active_fC);
     out << ",\n";
     out << "    \"v1_trailer_q_active_fC\": ";
     write_vector_json(out, trial_v1_trailer_q_active_fC);
@@ -4056,6 +5143,8 @@ int richter_dampening(const Args& args) {
               << "feedback_r=" << args.feedback_r << "\n"
               << "feedback_som_center_weight="
               << args.feedback_som_center_weight << "\n"
+              << "feedback_direct_source=" << args.feedback_direct_source << "\n"
+              << "feedback_som_source=" << args.feedback_som_source << "\n"
               << "v1_som_to_e_scale=" << args.v1_som_to_e_scale << "\n"
               << "v1_som_divisive_scale=" << args.v1_som_divisive_scale << "\n"
               << "v1_direct_divisive_scale=" << args.v1_direct_divisive_scale << "\n"

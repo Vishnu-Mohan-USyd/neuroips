@@ -269,6 +269,10 @@ def run_frozen_richter_seeded_source_test(
     trailer_end_step: int = 100,
     iti_start_step: int = 100,
     iti_end_step: int = 120,
+    v1_error_comparator_mode_id: int = 0,
+    v1_error_sensory_gain: float = 1.0,
+    v1_error_prediction_gain: float = 1.0,
+    v1_error_prediction_shift: int = 0,
 ) -> dict[str, Any]:
     """Run seeded source generation with CPU/CUDA parity and diagnostic counts."""
     prepared = {str(k): np.asarray(v) for k, v in arrays.items()}
@@ -289,6 +293,10 @@ def run_frozen_richter_seeded_source_test(
             int(trailer_end_step),
             int(iti_start_step),
             int(iti_end_step),
+            int(v1_error_comparator_mode_id),
+            float(v1_error_sensory_gain),
+            float(v1_error_prediction_gain),
+            int(v1_error_prediction_shift),
         )
     )
 

@@ -1,0 +1,1187 @@
+{
+  "artifacts": {
+    "center_0_25": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center025.json",
+    "center_0_5": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center050.json",
+    "center_0_baseline_existing": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_preprobe_channels.json",
+    "center_1_0": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center100.json"
+  },
+  "changed_files": [
+    "cpp_cuda/src/native_cli.cpp"
+  ],
+  "commands": {
+    "build": "cmake --build build_native_cuda -j 8",
+    "parity": "richter-dampening rate100 reps1 r033 gtotal20 raw replay --feedback-som-center-weight 0.5, GPU and CPU",
+    "sweep": "richter-dampening rate100 reps4 r033 gtotal20 raw replay --feedback-som-center-weight 0.25,0.5,1.0"
+  },
+  "go_no_go": {
+    "best_center_weight": null,
+    "criteria": "expected condition must have lower V1 Q_active, lower V1 activity, and lower full actual-decoder accuracy than unexpected",
+    "verdict": "NO-GO"
+  },
+  "logs": {
+    "build": "/workspace/neuroips_gpu_migration_20260422/logs/native_som_center_build_20260424.log",
+    "parity": "/workspace/neuroips_gpu_migration_20260422/logs/native_som_center_parity_rate100_reps1_20260424.log",
+    "sweep": "/workspace/neuroips_gpu_migration_20260422/logs/native_som_center_sweep_rate100_reps4_20260424.log"
+  },
+  "parity": {
+    "cpu_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center050_cpu.json",
+    "gpu_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps1_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center050_gpu.json",
+    "max_abs_diff_by_field": {
+      "edge_counts": 0.0,
+      "feedback": 0.0,
+      "feedback_replay": 0.0,
+      "metrics": 2.2351741790771484e-06,
+      "q_active_energy_fC": 2.2351741790771484e-06,
+      "rates_hz": 0.0,
+      "raw_counts": 0.0,
+      "trial_data": 4.071742296218872e-06
+    },
+    "pass_tolerance_1e_minus_5": true
+  },
+  "runs": {
+    "center_0_25": {
+      "content_hash_fnv1a64": "6ca600a490937ded",
+      "delta_unexpected_minus_expected": {
+        "activity_v1_trailer_count_per_trial": 31.83333333333337,
+        "actual_margin": -30.16666666666667,
+        "actual_share": -0.04785841942905977,
+        "full_decoder_actual_accuracy": 0.0,
+        "q_active_v1_fC_per_trial": -90574.06470428407
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9583333333333334,
+            0.7916666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            96.0,
+            96.0,
+            96.0,
+            96.0,
+            96.0
+          ],
+          "predicted_channel": [
+            96.0,
+            96.0,
+            96.0,
+            96.0,
+            96.0
+          ],
+          "total": [
+            312.6666666666667,
+            312.6666666666667,
+            312.6666666666667,
+            312.6666666666667,
+            312.6666666666667
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 480.0,
+          "predicted_channel": 480.0,
+          "predicted_minus_actual": 0.0,
+          "total": 1563.3333333333333
+        },
+        "n_trials": 24,
+        "q_active_v1_fC_per_trial_mean": 15149715.873923859,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 263.3333333333333,
+          "actual_margin": 122.66666666666667,
+          "actual_share": 0.4991887737499691,
+          "total_count": 528.6666666666666
+        }
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.375,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.25,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": false,
+        "expected_lower_full_decoder_actual_accuracy": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center025.json",
+      "timing_seconds": {
+        "run": 3.637670685,
+        "total_excluding_build": 3.651659156,
+        "write": 0.011335051
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.84375,
+            0.7083333333333334,
+            0.7395833333333334,
+            0.7395833333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            29.5,
+            29.5,
+            29.5,
+            29.5,
+            29.5
+          ],
+          "predicted_channel": [
+            94.5,
+            94.5,
+            94.5,
+            94.5,
+            94.5
+          ],
+          "total": [
+            306.5,
+            306.5,
+            306.5,
+            306.5,
+            306.5
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 147.5,
+          "predicted_channel": 472.5,
+          "predicted_minus_actual": 325.0,
+          "total": 1532.5
+        },
+        "n_trials": 96,
+        "q_active_v1_fC_per_trial_mean": 15059141.809219575,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 252.33333333333334,
+          "actual_margin": 92.5,
+          "actual_share": 0.45133035432090934,
+          "total_count": 560.5
+        }
+      }
+    },
+    "center_0_5": {
+      "content_hash_fnv1a64": "86d9c46f11b68156",
+      "delta_unexpected_minus_expected": {
+        "activity_v1_trailer_count_per_trial": 42.83333333333337,
+        "actual_margin": -24.83333333333333,
+        "actual_share": -0.04470336957684162,
+        "full_decoder_actual_accuracy": 0.0,
+        "q_active_v1_fC_per_trial": -168115.93455901183
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9166666666666666,
+            0.875,
+            0.9166666666666666,
+            0.75
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            94.0,
+            94.0,
+            94.0,
+            94.0,
+            94.0
+          ],
+          "predicted_channel": [
+            94.0,
+            94.0,
+            94.0,
+            94.0,
+            94.0
+          ],
+          "total": [
+            307.3333333333333,
+            307.3333333333333,
+            307.3333333333333,
+            307.3333333333333,
+            307.3333333333333
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 470.0,
+          "predicted_channel": 470.0,
+          "predicted_minus_actual": 0.0,
+          "total": 1536.6666666666667
+        },
+        "n_trials": 24,
+        "q_active_v1_fC_per_trial_mean": 15754161.750980815,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 252.66666666666666,
+          "actual_margin": 114.0,
+          "actual_share": 0.49408094952301546,
+          "total_count": 512.6666666666666
+        }
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.75,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.5,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": false,
+        "expected_lower_full_decoder_actual_accuracy": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center050.json",
+      "timing_seconds": {
+        "run": 3.571723948,
+        "total_excluding_build": 3.586123802,
+        "write": 0.011731393
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.8541666666666666,
+            0.7083333333333334,
+            0.71875,
+            0.7083333333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            29.0,
+            29.0,
+            29.0,
+            29.0,
+            29.0
+          ],
+          "predicted_channel": [
+            91.5,
+            91.5,
+            91.5,
+            91.5,
+            91.5
+          ],
+          "total": [
+            298.0,
+            298.0,
+            298.0,
+            298.0,
+            298.0
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 145.0,
+          "predicted_channel": 457.5,
+          "predicted_minus_actual": 312.5,
+          "total": 1490.0
+        },
+        "n_trials": 96,
+        "q_active_v1_fC_per_trial_mean": 15586045.816421792,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 249.0,
+          "actual_margin": 89.16666666666667,
+          "actual_share": 0.44937757994617383,
+          "total_count": 555.5
+        }
+      }
+    },
+    "center_0_baseline_existing": {
+      "content_hash_fnv1a64": "4d0b7698708bac82",
+      "delta_unexpected_minus_expected": {
+        "activity_v1_trailer_count_per_trial": 22.66666666666663,
+        "actual_margin": -42.0,
+        "actual_share": -0.05666886976011315,
+        "full_decoder_actual_accuracy": 0.0,
+        "q_active_v1_fC_per_trial": 48326.924046929926
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3072,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9583333333333334,
+            0.8333333333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667
+          ],
+          "predicted_channel": [
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667
+          ],
+          "total": [
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 473.3333333333333,
+          "predicted_channel": 473.3333333333333,
+          "predicted_minus_actual": 0.0,
+          "total": 1553.3333333333333
+        },
+        "n_trials": 24,
+        "q_active_v1_fC_per_trial_mean": 14508340.600904033,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 274.0,
+          "actual_margin": 136.0,
+          "actual_share": 0.5068787432698724,
+          "total_count": 541.3333333333334
+        }
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.0,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.0,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "schema_note": "inferred for older baseline artifact without feedback_replay block"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": true,
+        "expected_lower_full_decoder_actual_accuracy": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_preprobe_channels.json",
+      "timing_seconds": {
+        "run": 3.563100769,
+        "total_excluding_build": 3.571514638,
+        "write": 0.005830367
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.8333333333333334,
+            0.6875,
+            0.7395833333333334,
+            0.7291666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            30.833333333333332,
+            30.833333333333332,
+            30.833333333333332,
+            30.833333333333332,
+            30.833333333333332
+          ],
+          "predicted_channel": [
+            96.83333333333333,
+            96.83333333333333,
+            96.83333333333333,
+            96.83333333333333,
+            96.83333333333333
+          ],
+          "total": [
+            314.1666666666667,
+            314.1666666666667,
+            314.1666666666667,
+            314.1666666666667,
+            314.1666666666667
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 154.16666666666666,
+          "predicted_channel": 484.1666666666667,
+          "predicted_minus_actual": 330.0,
+          "total": 1570.8333333333333
+        },
+        "n_trials": 96,
+        "q_active_v1_fC_per_trial_mean": 14556667.524950946,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 253.33333333333334,
+          "actual_margin": 94.0,
+          "actual_share": 0.4502098735097592,
+          "total_count": 564.0
+        }
+      }
+    },
+    "center_1_0": {
+      "content_hash_fnv1a64": "4bb040ffbe71542c",
+      "delta_unexpected_minus_expected": {
+        "activity_v1_trailer_count_per_trial": 52.166666666666686,
+        "actual_margin": -16.333333333333343,
+        "actual_share": -0.03765949019446618,
+        "full_decoder_actual_accuracy": 0.0,
+        "q_active_v1_fC_per_trial": -433385.83840457536
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9166666666666666,
+            0.8333333333333334,
+            0.8333333333333334,
+            0.7083333333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            94.0,
+            94.0,
+            94.0,
+            94.0,
+            94.0
+          ],
+          "predicted_channel": [
+            94.0,
+            94.0,
+            94.0,
+            94.0,
+            94.0
+          ],
+          "total": [
+            306.6666666666667,
+            306.6666666666667,
+            306.6666666666667,
+            306.6666666666667,
+            306.6666666666667
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 470.0,
+          "predicted_channel": 470.0,
+          "predicted_minus_actual": 0.0,
+          "total": 1533.3333333333333
+        },
+        "n_trials": 24,
+        "q_active_v1_fC_per_trial_mean": 17038409.75130496,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 238.0,
+          "actual_margin": 98.66666666666667,
+          "actual_share": 0.4821963956851884,
+          "total_count": 494.6666666666667
+        }
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 1.5,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 1,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": false,
+        "expected_lower_full_decoder_actual_accuracy": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center100.json",
+      "timing_seconds": {
+        "run": 3.583791334,
+        "total_excluding_build": 3.597902347,
+        "write": 0.011455981
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9270833333333334,
+            0.8229166666666666,
+            0.6458333333333334,
+            0.7395833333333334,
+            0.6770833333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_source_100ms_mean": {
+          "actual_channel": [
+            27.833333333333332,
+            27.833333333333332,
+            27.833333333333332,
+            27.833333333333332,
+            27.833333333333332
+          ],
+          "predicted_channel": [
+            88.16666666666667,
+            88.16666666666667,
+            88.16666666666667,
+            88.16666666666667,
+            88.16666666666667
+          ],
+          "total": [
+            288.5,
+            288.5,
+            288.5,
+            288.5,
+            288.5
+          ]
+        },
+        "held_replay_source_500ms_mean": {
+          "actual_channel": 139.16666666666666,
+          "predicted_channel": 440.8333333333333,
+          "predicted_minus_actual": 301.6666666666667,
+          "total": 1442.5
+        },
+        "n_trials": 96,
+        "q_active_v1_fC_per_trial_mean": 16605023.912900386,
+        "v1_actual_500ms_mean": {
+          "actual_channel_count": 242.66666666666666,
+          "actual_margin": 82.33333333333333,
+          "actual_share": 0.4445369054907222,
+          "total_count": 546.8333333333334
+        }
+      }
+    }
+  },
+  "summary_kind": "stage3_som_center_feedback_sweep"
+}

@@ -1,0 +1,243 @@
+{
+  "artifact_kind": "native_qactive_energy_measurement_summary",
+  "decoder_100ms_by_bin": [
+    {
+      "actual_minus_expected_count_mean": 58.8,
+      "argmax_histogram": {
+        "0": 20,
+        "1": 0,
+        "10": 20,
+        "11": 0,
+        "2": 20,
+        "3": 0,
+        "4": 20,
+        "5": 0,
+        "6": 20,
+        "7": 0,
+        "8": 20,
+        "9": 0
+      },
+      "bin_index": 0,
+      "expected_trial_argmax_matches_actual": 1.0,
+      "expected_trial_argmax_matches_expected": 1.0,
+      "expected_trials_actual_minus_expected_count_mean": 0.0,
+      "trial_argmax_matches_actual": 1.0,
+      "trial_argmax_matches_expected": 0.2,
+      "unexpected_trial_argmax_matches_actual": 1.0,
+      "unexpected_trial_argmax_matches_expected": 0.0,
+      "unexpected_trials_actual_minus_expected_count_mean": 73.5,
+      "window_ms": [
+        0,
+        100
+      ]
+    },
+    {
+      "actual_minus_expected_count_mean": 45.2,
+      "argmax_histogram": {
+        "0": 19,
+        "1": 3,
+        "10": 18,
+        "11": 1,
+        "2": 17,
+        "3": 4,
+        "4": 16,
+        "5": 2,
+        "6": 18,
+        "7": 1,
+        "8": 18,
+        "9": 3
+      },
+      "bin_index": 1,
+      "expected_trial_argmax_matches_actual": 0.9166666666666666,
+      "expected_trial_argmax_matches_expected": 0.9166666666666666,
+      "expected_trials_actual_minus_expected_count_mean": 0.0,
+      "trial_argmax_matches_actual": 0.8833333333333333,
+      "trial_argmax_matches_expected": 0.18333333333333332,
+      "unexpected_trial_argmax_matches_actual": 0.875,
+      "unexpected_trial_argmax_matches_expected": 0.0,
+      "unexpected_trials_actual_minus_expected_count_mean": 56.5,
+      "window_ms": [
+        100,
+        200
+      ]
+    },
+    {
+      "actual_minus_expected_count_mean": 38.53333333333333,
+      "argmax_histogram": {
+        "0": 18,
+        "1": 5,
+        "10": 14,
+        "11": 1,
+        "2": 15,
+        "3": 4,
+        "4": 16,
+        "5": 5,
+        "6": 14,
+        "7": 7,
+        "8": 15,
+        "9": 6
+      },
+      "bin_index": 2,
+      "expected_trial_argmax_matches_actual": 0.8333333333333334,
+      "expected_trial_argmax_matches_expected": 0.8333333333333334,
+      "expected_trials_actual_minus_expected_count_mean": 0.0,
+      "trial_argmax_matches_actual": 0.7666666666666667,
+      "trial_argmax_matches_expected": 0.16666666666666666,
+      "unexpected_trial_argmax_matches_actual": 0.75,
+      "unexpected_trial_argmax_matches_expected": 0.0,
+      "unexpected_trials_actual_minus_expected_count_mean": 48.166666666666664,
+      "window_ms": [
+        200,
+        300
+      ]
+    },
+    {
+      "actual_minus_expected_count_mean": 36.266666666666666,
+      "argmax_histogram": {
+        "0": 18,
+        "1": 7,
+        "10": 13,
+        "11": 0,
+        "2": 14,
+        "3": 6,
+        "4": 14,
+        "5": 3,
+        "6": 18,
+        "7": 5,
+        "8": 14,
+        "9": 8
+      },
+      "bin_index": 3,
+      "expected_trial_argmax_matches_actual": 0.8333333333333334,
+      "expected_trial_argmax_matches_expected": 0.8333333333333334,
+      "expected_trials_actual_minus_expected_count_mean": 0.0,
+      "trial_argmax_matches_actual": 0.7583333333333333,
+      "trial_argmax_matches_expected": 0.16666666666666666,
+      "unexpected_trial_argmax_matches_actual": 0.7395833333333334,
+      "unexpected_trial_argmax_matches_expected": 0.0,
+      "unexpected_trials_actual_minus_expected_count_mean": 45.333333333333336,
+      "window_ms": [
+        300,
+        400
+      ]
+    },
+    {
+      "actual_minus_expected_count_mean": 37.733333333333334,
+      "argmax_histogram": {
+        "0": 19,
+        "1": 6,
+        "10": 17,
+        "11": 0,
+        "2": 14,
+        "3": 6,
+        "4": 14,
+        "5": 7,
+        "6": 14,
+        "7": 3,
+        "8": 16,
+        "9": 4
+      },
+      "bin_index": 4,
+      "expected_trial_argmax_matches_actual": 0.75,
+      "expected_trial_argmax_matches_expected": 0.75,
+      "expected_trials_actual_minus_expected_count_mean": 0.0,
+      "trial_argmax_matches_actual": 0.7833333333333333,
+      "trial_argmax_matches_expected": 0.15,
+      "unexpected_trial_argmax_matches_actual": 0.7916666666666666,
+      "unexpected_trial_argmax_matches_expected": 0.0,
+      "unexpected_trials_actual_minus_expected_count_mean": 47.166666666666664,
+      "window_ms": [
+        400,
+        500
+      ]
+    }
+  ],
+  "decoder_full_trailer_500ms": {
+    "argmax_histogram": {
+      "0": 20,
+      "1": 0,
+      "10": 20,
+      "11": 0,
+      "2": 20,
+      "3": 0,
+      "4": 20,
+      "5": 0,
+      "6": 20,
+      "7": 0,
+      "8": 20,
+      "9": 0
+    },
+    "expected_trial_argmax_matches_actual": 1.0,
+    "expected_trial_argmax_matches_expected": 1.0,
+    "trial_argmax_matches_actual": 1.0,
+    "trial_argmax_matches_expected": 0.2,
+    "unexpected_trial_argmax_matches_actual": 1.0,
+    "unexpected_trial_argmax_matches_expected": 0.0
+  },
+  "energy_delta_unexpected_minus_expected_fC_per_trial": {
+    "v1": 54754.512504788116,
+    "v1e": 39142.86296748929,
+    "v1som": 15611.649537298828
+  },
+  "energy_fC_per_trial": {
+    "definition": "integrated active charge; V1_E=sum(abs(I_e)+abs(I_i)+abs(I_ap_e))*dt_ms, V1_SOM=sum(abs(I_e)+abs(I_i))*dt_ms; pA*ms equals fC",
+    "expected": {
+      "v1_trailer_q_active_fC_per_trial": 13483425.788430346,
+      "v1e_trailer_q_active_fC_per_trial": 12698785.534476185,
+      "v1som_trailer_q_active_fC_per_trial": 784640.253954161
+    },
+    "unexpected": {
+      "v1_trailer_q_active_fC_per_trial": 13538180.300935134,
+      "v1e_trailer_q_active_fC_per_trial": 12737928.397443675,
+      "v1som_trailer_q_active_fC_per_trial": 800251.9034914598
+    }
+  },
+  "inputs": {
+    "checkpoint": {
+      "W_ctx_pred_fnv1a64": "0d76364697641ab3",
+      "W_ctx_pred_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json.W_ctx_pred.f64.bin",
+      "content_hash_fnv1a64": "53e76e762ba1c8fc",
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_sweep_20260424_fix2/stage1_ctx_pred_seed42_n72.json"
+    },
+    "gpu_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_gpu.json",
+    "log": "/workspace/neuroips_gpu_migration_20260422/logs/native_qactive_energy_richter_gpu_reps4_rate100_20260424.log"
+  },
+  "measurement_only": true,
+  "no_feedback_architecture_changes": true,
+  "q_active_definition": "integrated active charge; V1_E=sum(abs(I_e)+abs(I_i)+abs(I_ap_e))*dt_ms, V1_SOM=sum(abs(I_e)+abs(I_i))*dt_ms; pA*ms equals fC",
+  "schedule": {
+    "baseline_rate_hz": 0,
+    "dt_ms": 0.1,
+    "expected_fraction": 0.2,
+    "expected_step": 1,
+    "expected_trials": 24,
+    "grating_rate_hz": 100,
+    "iti_ms": 1500.0,
+    "leader_ms": 500.0,
+    "orientation_channel_stride": 2,
+    "preprobe_ms": 100.0,
+    "reps_expected": 4,
+    "reps_unexpected": 4,
+    "trailer_ms": 500.0,
+    "unexpected_steps": [
+      2,
+      3,
+      4,
+      5
+    ],
+    "unexpected_trials": 96
+  },
+  "schema_version": 1,
+  "timing_seconds": {
+    "run": 3.580017851,
+    "total_excluding_build": 3.589471336,
+    "write": 0.003339207
+  },
+  "v1_activity": {
+    "expected_v1_e_trailer_population_hz": 6.152777777777778,
+    "expected_v1_trailer_count_per_trial": 590.6666666666666,
+    "unexpected_minus_expected_count_per_trial": 11.333333333333371,
+    "unexpected_v1_e_trailer_population_hz": 6.270833333333333,
+    "unexpected_v1_trailer_count_per_trial": 602
+  }
+}

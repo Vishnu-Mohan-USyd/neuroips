@@ -484,6 +484,10 @@ struct FrozenRichterSeededSourceResult {
     std::vector<std::int32_t> cpu_v1_trailer_bin_channel_counts;
     std::vector<std::int32_t> cpu_v1_som_trailer_bin_channel_counts;
     std::vector<std::int32_t> cuda_v1_som_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cpu_v1_error_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cuda_v1_error_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cpu_v1_error_neg_trailer_bin_channel_counts;
+    std::vector<std::int32_t> cuda_v1_error_neg_trailer_bin_channel_counts;
     std::vector<std::int32_t> cpu_hpred_preprobe_channel_counts;
     std::vector<std::int32_t> cpu_hpred_trailer_bin_total_counts;
     std::vector<std::int32_t> cpu_hpred_trailer_bin_channel_counts;
@@ -535,8 +539,16 @@ struct FrozenRichterSeededSourceBatchResult {
     std::vector<std::int32_t> v1_som_trailer_total_counts;
     std::vector<std::int32_t> v1_som_trailer_channel_counts;
     std::vector<std::int32_t> v1_som_trailer_bin_channel_counts;
+    std::vector<std::int32_t> v1_error_trailer_total_counts;
+    std::vector<std::int32_t> v1_error_trailer_channel_counts;
+    std::vector<std::int32_t> v1_error_trailer_bin_channel_counts;
+    std::vector<std::int32_t> v1_error_neg_trailer_total_counts;
+    std::vector<std::int32_t> v1_error_neg_trailer_channel_counts;
+    std::vector<std::int32_t> v1_error_neg_trailer_bin_channel_counts;
     std::vector<double> v1e_q_active_fC_by_phase;
     std::vector<double> v1som_q_active_fC_by_phase;
+    std::vector<double> v1error_q_active_fC_by_phase;
+    std::vector<double> v1error_neg_q_active_fC_by_phase;
     std::vector<std::int32_t> hctx_preprobe_total_counts;
     std::vector<std::int32_t> hctx_trailer_total_counts;
     std::vector<std::int32_t> hpred_preprobe_total_counts;
@@ -616,7 +628,11 @@ FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cuda(
     double v1_predicted_suppression_scale = 0.0,
     double v1_predicted_suppression_neighbor_weight = 0.0,
     std::int32_t v1_predicted_suppression_locus_id = 0,
-    double v1_stim_sigma_deg = 22.0
+    double v1_stim_sigma_deg = 22.0,
+    std::int32_t v1_error_comparator_mode_id = 0,
+    double v1_error_sensory_gain = 1.0,
+    double v1_error_prediction_gain = 1.0,
+    std::int32_t v1_error_prediction_shift = 0
 );
 
 FrozenRichterSeededSourceBatchResult run_frozen_richter_seeded_source_cuda_batched(
@@ -674,7 +690,11 @@ FrozenRichterSeededSourceBatchResult run_frozen_richter_seeded_source_cuda_batch
     double v1_predicted_suppression_scale = 0.0,
     double v1_predicted_suppression_neighbor_weight = 0.0,
     std::int32_t v1_predicted_suppression_locus_id = 0,
-    double v1_stim_sigma_deg = 22.0
+    double v1_stim_sigma_deg = 22.0,
+    std::int32_t v1_error_comparator_mode_id = 0,
+    double v1_error_sensory_gain = 1.0,
+    double v1_error_prediction_gain = 1.0,
+    std::int32_t v1_error_prediction_shift = 0
 );
 
 FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cpu(
@@ -732,7 +752,11 @@ FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_cpu(
     double v1_predicted_suppression_scale = 0.0,
     double v1_predicted_suppression_neighbor_weight = 0.0,
     std::int32_t v1_predicted_suppression_locus_id = 0,
-    double v1_stim_sigma_deg = 22.0
+    double v1_stim_sigma_deg = 22.0,
+    std::int32_t v1_error_comparator_mode_id = 0,
+    double v1_error_sensory_gain = 1.0,
+    double v1_error_prediction_gain = 1.0,
+    std::int32_t v1_error_prediction_shift = 0
 );
 
 FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_test(
@@ -775,7 +799,11 @@ FrozenRichterSeededSourceResult run_frozen_richter_seeded_source_test(
     std::int32_t trailer_start_step,
     std::int32_t trailer_end_step,
     std::int32_t iti_start_step,
-    std::int32_t iti_end_step
+    std::int32_t iti_end_step,
+    std::int32_t v1_error_comparator_mode_id = 0,
+    double v1_error_sensory_gain = 1.0,
+    double v1_error_prediction_gain = 1.0,
+    std::int32_t v1_error_prediction_shift = 0
 );
 
 FrozenRichterSeededSourceResult run_frozen_richter_controlled_source_test(
@@ -1014,6 +1042,7 @@ Stage1HGateDynamicsResult run_stage1_h_gate_dynamics_test(
 
 struct NativeStage1TrainResult {
     std::int64_t seed;
+    std::string prediction_target;
     std::int32_t n_trials;
     std::int32_t n_pre;
     std::int32_t n_post;
@@ -1032,12 +1061,17 @@ struct NativeStage1TrainResult {
     std::vector<double> gate_elig_max;
     std::vector<double> gate_row_sum_max;
     std::vector<std::int32_t> gate_n_capped;
+    std::vector<double> w_hpred_v1direct_final;
+    std::vector<double> w_hpred_v1direct_row_sums;
+    std::vector<double> w_hpred_v1som_final;
+    std::vector<double> w_hpred_v1som_row_sums;
 };
 
 NativeStage1TrainResult run_native_stage1_generated_train(
     std::int64_t seed,
     const std::vector<std::int32_t>& leader_cells,
-    const std::vector<std::int32_t>& expected_trailer_cells
+    const std::vector<std::int32_t>& expected_trailer_cells,
+    const std::string& prediction_target = "orientation_cell"
 );
 
 }  // namespace expectation_snn_cuda

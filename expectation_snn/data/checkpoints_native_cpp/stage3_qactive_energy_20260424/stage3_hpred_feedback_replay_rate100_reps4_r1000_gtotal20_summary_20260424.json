@@ -1,0 +1,993 @@
+{
+  "artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal20_hpred_replay.json",
+  "artifact_kind": "hpred_feedback_replay_summary",
+  "before_after_delta": {
+    "held_feedback_unexpected_pred_minus_actual_500ms": 360.8333333333333,
+    "live_hpred_unexpected_pred_minus_actual_500ms": [
+      1.5,
+      1.5
+    ],
+    "v1_activity_unexpected_minus_expected": [
+      10.5,
+      -23.16666666666663
+    ],
+    "v1_energy_unexpected_minus_expected": [
+      -51895.14223860204,
+      -380190.67557088286
+    ],
+    "v1_full_decoder_actual_expected": [
+      1.0,
+      1.0
+    ],
+    "v1_full_decoder_actual_unexpected": [
+      1.0,
+      1.0
+    ],
+    "v1_unexpected_pred_minus_actual_500ms": [
+      -247.0,
+      -256.5
+    ]
+  },
+  "go_no_go": {
+    "expected_lower_activity_than_unexpected": false,
+    "expected_lower_energy_than_unexpected": false,
+    "expected_lower_full_actual_decoder_than_unexpected": false,
+    "reason": "Final criteria require expected lower V1 energy/activity and lower actual-decoder accuracy than unexpected; at least one failed.",
+    "verdict": "NO-GO"
+  },
+  "parity_summary": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/stage3_hpred_feedback_replay_reps1_cpu_gpu_parity_20260424.json",
+  "previous_ctxpred_gate": {
+    "activity": {
+      "expected_v1_trailer_count_per_trial": 557.3333333333334,
+      "unexpected_minus_expected_v1_trailer_count_per_trial": 10.5,
+      "unexpected_v1_trailer_count_per_trial": 567.8333333333334
+    },
+    "decoder_live_hpred": {
+      "bins": [
+        {
+          "bin_index": 0,
+          "expected": {
+            "actual_accuracy": 0.875,
+            "expected_accuracy": 0.875
+          },
+          "unexpected": {
+            "actual_accuracy": 0.8333333333333334,
+            "expected_accuracy": 0.9270833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.04166666666666663,
+          "window_ms": [
+            0,
+            100
+          ]
+        },
+        {
+          "bin_index": 1,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            100,
+            200
+          ]
+        },
+        {
+          "bin_index": 2,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            200,
+            300
+          ]
+        },
+        {
+          "bin_index": 3,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            300,
+            400
+          ]
+        },
+        {
+          "bin_index": 4,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            400,
+            500
+          ]
+        }
+      ],
+      "full": {
+        "expected": {
+          "actual_accuracy": 0.875,
+          "expected_accuracy": 0.875
+        },
+        "unexpected": {
+          "actual_accuracy": 0.8333333333333334,
+          "expected_accuracy": 0.9270833333333334
+        },
+        "unexpected_minus_expected_actual_accuracy": -0.04166666666666663
+      }
+    },
+    "decoder_v1": {
+      "bins": [
+        {
+          "bin_index": 0,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            0,
+            100
+          ]
+        },
+        {
+          "bin_index": 1,
+          "expected": {
+            "actual_accuracy": 0.9166666666666666,
+            "expected_accuracy": 0.9166666666666666
+          },
+          "unexpected": {
+            "actual_accuracy": 0.9479166666666666,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.03125,
+          "window_ms": [
+            100,
+            200
+          ]
+        },
+        {
+          "bin_index": 2,
+          "expected": {
+            "actual_accuracy": 0.875,
+            "expected_accuracy": 0.875
+          },
+          "unexpected": {
+            "actual_accuracy": 0.875,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            200,
+            300
+          ]
+        },
+        {
+          "bin_index": 3,
+          "expected": {
+            "actual_accuracy": 0.9166666666666666,
+            "expected_accuracy": 0.9166666666666666
+          },
+          "unexpected": {
+            "actual_accuracy": 0.90625,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.01041666666666663,
+          "window_ms": [
+            300,
+            400
+          ]
+        },
+        {
+          "bin_index": 4,
+          "expected": {
+            "actual_accuracy": 0.8333333333333334,
+            "expected_accuracy": 0.8333333333333334
+          },
+          "unexpected": {
+            "actual_accuracy": 0.9270833333333334,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.09375,
+          "window_ms": [
+            400,
+            500
+          ]
+        }
+      ],
+      "full": {
+        "expected": {
+          "actual_accuracy": 1.0,
+          "expected_accuracy": 1.0
+        },
+        "unexpected": {
+          "actual_accuracy": 1.0,
+          "expected_accuracy": 0.0
+        },
+        "unexpected_minus_expected_actual_accuracy": 0.0
+      }
+    },
+    "live_hpred": {
+      "expected": {
+        "actual_channel_count_per_trial_500ms": 2.6666666666666665,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          2.6666666666666665,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.875,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.875,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.875,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.875,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 2.6666666666666665,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          2.6666666666666665,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "unexpected": {
+        "actual_channel_count_per_trial_500ms": 0.8333333333333334,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          0.8333333333333334,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.8333333333333334,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.8333333333333334,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.9270833333333334,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.9270833333333334,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 2.3333333333333335,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          2.3333333333333335,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 1.5,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          1.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "q_active_energy_fC": {
+      "expected": {
+        "v1_trailer_q_active_fC_per_trial": 10468698.591196664,
+        "v1e_trailer_q_active_fC_per_trial": 10468644.669862747,
+        "v1som_trailer_q_active_fC_per_trial": 53.92133391586814
+      },
+      "unexpected": {
+        "v1_trailer_q_active_fC_per_trial": 10416803.448958062,
+        "v1e_trailer_q_active_fC_per_trial": 10416761.344366023,
+        "v1som_trailer_q_active_fC_per_trial": 42.10459203807218
+      },
+      "unexpected_minus_expected": {
+        "v1_trailer_q_active_fC_per_trial": -51895.14223860204,
+        "v1e_trailer_q_active_fC_per_trial": -51883.325496723875,
+        "v1som_trailer_q_active_fC_per_trial": -11.816741877795963
+      }
+    },
+    "v1": {
+      "expected": {
+        "actual_channel_count_per_trial_500ms": 251.33333333333334,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          69.33333333333333,
+          49.333333333333336,
+          44.666666666666664,
+          44.666666666666664,
+          43.333333333333336
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          0.9166666666666666,
+          0.875,
+          0.9166666666666666,
+          0.8333333333333334
+        ],
+        "argmax_matches_predicted_fraction_500ms": 1.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          1.0,
+          0.9166666666666666,
+          0.875,
+          0.9166666666666666,
+          0.8333333333333334
+        ],
+        "predicted_channel_count_per_trial_500ms": 251.33333333333334,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          69.33333333333333,
+          49.333333333333336,
+          44.666666666666664,
+          44.666666666666664,
+          43.333333333333336
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "unexpected": {
+        "actual_channel_count_per_trial_500ms": 248.16666666666666,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          66.33333333333333,
+          52.333333333333336,
+          43.666666666666664,
+          42.5,
+          43.333333333333336
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          0.9479166666666666,
+          0.875,
+          0.90625,
+          0.9270833333333334
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 1.1666666666666667,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          0.5,
+          0.16666666666666666,
+          0.0,
+          0.3333333333333333,
+          0.16666666666666666
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": -247.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          -65.83333333333333,
+          -52.166666666666664,
+          -43.666666666666664,
+          -42.166666666666664,
+          -43.166666666666664
+        ]
+      }
+    }
+  },
+  "previous_ctxpred_gate_artifact": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r1000_gtotal20_ctxpred_gate.json",
+  "run": {
+    "activity": {
+      "expected_v1_trailer_count_per_trial": 622.6666666666666,
+      "unexpected_minus_expected_v1_trailer_count_per_trial": -23.16666666666663,
+      "unexpected_v1_trailer_count_per_trial": 599.5
+    },
+    "decoder_held_feedback": {
+      "bins": [
+        {
+          "bin_index": 0,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.22916666666666666,
+            "expected_accuracy": 0.9895833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.7708333333333334,
+          "window_ms": [
+            0,
+            100
+          ]
+        },
+        {
+          "bin_index": 1,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.22916666666666666,
+            "expected_accuracy": 0.9895833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.7708333333333334,
+          "window_ms": [
+            100,
+            200
+          ]
+        },
+        {
+          "bin_index": 2,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.22916666666666666,
+            "expected_accuracy": 0.9895833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.7708333333333334,
+          "window_ms": [
+            200,
+            300
+          ]
+        },
+        {
+          "bin_index": 3,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.22916666666666666,
+            "expected_accuracy": 0.9895833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.7708333333333334,
+          "window_ms": [
+            300,
+            400
+          ]
+        },
+        {
+          "bin_index": 4,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.22916666666666666,
+            "expected_accuracy": 0.9895833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.7708333333333334,
+          "window_ms": [
+            400,
+            500
+          ]
+        }
+      ],
+      "full": {
+        "expected": {
+          "actual_accuracy": 1.0,
+          "expected_accuracy": 1.0
+        },
+        "unexpected": {
+          "actual_accuracy": 0.22916666666666666,
+          "expected_accuracy": 0.9895833333333334
+        },
+        "unexpected_minus_expected_actual_accuracy": -0.7708333333333334
+      }
+    },
+    "decoder_live_hpred": {
+      "bins": [
+        {
+          "bin_index": 0,
+          "expected": {
+            "actual_accuracy": 0.875,
+            "expected_accuracy": 0.875
+          },
+          "unexpected": {
+            "actual_accuracy": 0.8333333333333334,
+            "expected_accuracy": 0.9270833333333334
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.04166666666666663,
+          "window_ms": [
+            0,
+            100
+          ]
+        },
+        {
+          "bin_index": 1,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            100,
+            200
+          ]
+        },
+        {
+          "bin_index": 2,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            200,
+            300
+          ]
+        },
+        {
+          "bin_index": 3,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            300,
+            400
+          ]
+        },
+        {
+          "bin_index": 4,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            400,
+            500
+          ]
+        }
+      ],
+      "full": {
+        "expected": {
+          "actual_accuracy": 0.875,
+          "expected_accuracy": 0.875
+        },
+        "unexpected": {
+          "actual_accuracy": 0.8333333333333334,
+          "expected_accuracy": 0.9270833333333334
+        },
+        "unexpected_minus_expected_actual_accuracy": -0.04166666666666663
+      }
+    },
+    "decoder_v1": {
+      "bins": [
+        {
+          "bin_index": 0,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.0,
+          "window_ms": [
+            0,
+            100
+          ]
+        },
+        {
+          "bin_index": 1,
+          "expected": {
+            "actual_accuracy": 0.9583333333333334,
+            "expected_accuracy": 0.9583333333333334
+          },
+          "unexpected": {
+            "actual_accuracy": 0.96875,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.01041666666666663,
+          "window_ms": [
+            100,
+            200
+          ]
+        },
+        {
+          "bin_index": 2,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.9166666666666666,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.08333333333333337,
+          "window_ms": [
+            200,
+            300
+          ]
+        },
+        {
+          "bin_index": 3,
+          "expected": {
+            "actual_accuracy": 1.0,
+            "expected_accuracy": 1.0
+          },
+          "unexpected": {
+            "actual_accuracy": 0.9270833333333334,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": -0.07291666666666663,
+          "window_ms": [
+            300,
+            400
+          ]
+        },
+        {
+          "bin_index": 4,
+          "expected": {
+            "actual_accuracy": 0.9166666666666666,
+            "expected_accuracy": 0.9166666666666666
+          },
+          "unexpected": {
+            "actual_accuracy": 0.9375,
+            "expected_accuracy": 0.0
+          },
+          "unexpected_minus_expected_actual_accuracy": 0.02083333333333337,
+          "window_ms": [
+            400,
+            500
+          ]
+        }
+      ],
+      "full": {
+        "expected": {
+          "actual_accuracy": 1.0,
+          "expected_accuracy": 1.0
+        },
+        "unexpected": {
+          "actual_accuracy": 1.0,
+          "expected_accuracy": 0.0
+        },
+        "unexpected_minus_expected_actual_accuracy": 0.0
+      }
+    },
+    "held_feedback": {
+      "expected": {
+        "actual_channel_count_per_trial_500ms": 560.0,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          112.0,
+          112.0,
+          112.0,
+          112.0,
+          112.0
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "argmax_matches_predicted_fraction_500ms": 1.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 560.0,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          112.0,
+          112.0,
+          112.0,
+          112.0,
+          112.0
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "unexpected": {
+        "actual_channel_count_per_trial_500ms": 175.0,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          35.0,
+          35.0,
+          35.0,
+          35.0,
+          35.0
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.22916666666666666,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.22916666666666666,
+          0.22916666666666666,
+          0.22916666666666666,
+          0.22916666666666666,
+          0.22916666666666666
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.9895833333333334,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.9895833333333334,
+          0.9895833333333334,
+          0.9895833333333334,
+          0.9895833333333334,
+          0.9895833333333334
+        ],
+        "predicted_channel_count_per_trial_500ms": 535.8333333333334,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          107.16666666666667,
+          107.16666666666667,
+          107.16666666666667,
+          107.16666666666667,
+          107.16666666666667
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 360.8333333333333,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          72.16666666666667,
+          72.16666666666667,
+          72.16666666666667,
+          72.16666666666667,
+          72.16666666666667
+        ]
+      }
+    },
+    "live_hpred": {
+      "expected": {
+        "actual_channel_count_per_trial_500ms": 2.6666666666666665,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          2.6666666666666665,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.875,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.875,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.875,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.875,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 2.6666666666666665,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          2.6666666666666665,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "unexpected": {
+        "actual_channel_count_per_trial_500ms": 0.8333333333333334,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          0.8333333333333334,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "argmax_matches_actual_fraction_500ms": 0.8333333333333334,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          0.8333333333333334,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.9270833333333334,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.9270833333333334,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 2.3333333333333335,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          2.3333333333333335,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 1.5,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          1.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "q_active_energy_fC": {
+      "expected": {
+        "v1_trailer_q_active_fC_per_trial": 19132998.550196372,
+        "v1e_trailer_q_active_fC_per_trial": 19130057.491255324,
+        "v1som_trailer_q_active_fC_per_trial": 2941.0589410469524
+      },
+      "unexpected": {
+        "v1_trailer_q_active_fC_per_trial": 18752807.87462549,
+        "v1e_trailer_q_active_fC_per_trial": 18749988.027805638,
+        "v1som_trailer_q_active_fC_per_trial": 2819.846819851391
+      },
+      "unexpected_minus_expected": {
+        "v1_trailer_q_active_fC_per_trial": -380190.67557088286,
+        "v1e_trailer_q_active_fC_per_trial": -380069.46344968677,
+        "v1som_trailer_q_active_fC_per_trial": -121.2121211955614
+      }
+    },
+    "v1": {
+      "expected": {
+        "actual_channel_count_per_trial_500ms": 288.0,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          76.0,
+          57.333333333333336,
+          52.666666666666664,
+          51.333333333333336,
+          50.666666666666664
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          0.9583333333333334,
+          1.0,
+          1.0,
+          0.9166666666666666
+        ],
+        "argmax_matches_predicted_fraction_500ms": 1.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          1.0,
+          0.9583333333333334,
+          1.0,
+          1.0,
+          0.9166666666666666
+        ],
+        "predicted_channel_count_per_trial_500ms": 288.0,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          76.0,
+          57.333333333333336,
+          52.666666666666664,
+          51.333333333333336,
+          50.666666666666664
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": 0.0,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "unexpected": {
+        "actual_channel_count_per_trial_500ms": 262.5,
+        "actual_channel_count_per_trial_by_100ms_bin": [
+          69.5,
+          56.0,
+          46.166666666666664,
+          46.166666666666664,
+          44.666666666666664
+        ],
+        "argmax_matches_actual_fraction_500ms": 1.0,
+        "argmax_matches_actual_fraction_by_100ms_bin": [
+          1.0,
+          0.96875,
+          0.9166666666666666,
+          0.9270833333333334,
+          0.9375
+        ],
+        "argmax_matches_predicted_fraction_500ms": 0.0,
+        "argmax_matches_predicted_fraction_by_100ms_bin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "predicted_channel_count_per_trial_500ms": 6.0,
+        "predicted_channel_count_per_trial_by_100ms_bin": [
+          0.6666666666666666,
+          1.6666666666666667,
+          1.3333333333333333,
+          1.1666666666666667,
+          1.1666666666666667
+        ],
+        "predicted_minus_actual_count_per_trial_500ms": -256.5,
+        "predicted_minus_actual_count_per_trial_by_100ms_bin": [
+          -68.83333333333333,
+          -54.333333333333336,
+          -44.833333333333336,
+          -45.0,
+          -43.5
+        ]
+      }
+    }
+  }
+}

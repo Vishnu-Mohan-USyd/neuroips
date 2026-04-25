@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "native_stage1_ctx_pred_binary_checkpoint",
+  "backend": "native_cxx_cuda_executable",
+  "passed": true,
+  "native_scientific_stage1_passed": true,
+  "provisional": false,
+  "placeholder_h_recurrent_arrays": false,
+  "seed": 45,
+  "n_trials": 144,
+  "p_bias": 0.80000000000000004,
+  "derangement": [1,2,3,4,5,0],
+  "stage1_prediction_task": {"objective": "predict_future_lower_level_v1e_trailer_template_from_context_leader", "target": "orientation_cell", "target_uses_expected_leader_derangement_only": true, "uses_q_activity_decoder_metrics": false, "uses_richter_expected_unexpected_eval_metrics": false, "uses_actual_unexpected_trailer_labels": false, "v1_template_sigma_deg": 22},
+  "h_layout": {"channels": 12, "cells_per_channel": 16, "orientation_channel_stride": 2},
+  "timing_ms": {"leader": 500.0, "trailer": 500.0, "iti": 1500.0, "dt": 0.1},
+  "ctx_pred_constants": {"drive_amp_ctx_pred_pA": 400.0, "pred_e_uniform_bias_pA": 100.0, "w_init_frac": 0.0, "tau_coinc_ms": 500.0, "tau_elig_ms": 1000.0, "eta": 0.001, "gamma": 0.0001, "w_target": 0.0075, "w_row_max": 3.0},
+  "phase_steps": {"iti_end_step": 25000, "iti_start_step": 10000, "leader_end_step": 5000, "leader_start_step": 0, "trailer_end_step": 10000, "trailer_start_step": 5000},
+  "event_counts": {"hctx_pre.iti": 0, "hctx_pre.leader": 576000, "hctx_pre.trailer": 0, "hpred_post.iti": 0, "hpred_post.leader": 0, "hpred_post.trailer": 36000},
+  "schedule": {
+    "pairs": [[1,2],[1,2],[5,0],[2,3],[1,2],[2,0],[3,4],[0,1],[5,2],[2,3],[4,5],[5,0],[2,3],[5,0],[0,4],[2,3],[4,5],[5,0],[3,4],[2,3],[0,1],[1,2],[4,5],[4,5],[3,4],[5,0],[3,4],[0,4],[0,1],[1,5],[0,1],[2,3],[5,0],[4,5],[5,0],[3,4],[0,1],[2,0],[3,4],[4,5],[1,3],[1,4],[0,1],[5,0],[1,2],[4,5],[5,0],[5,0],[2,3],[4,5],[1,2],[1,2],[0,1],[3,2],[2,5],[4,2],[4,5],[3,4],[3,4],[2,3],[1,0],[5,0],[2,4],[4,0],[3,4],[1,5],[5,0],[4,3],[1,2],[1,2],[2,3],[5,0],[3,1],[3,4],[1,2],[0,5],[0,1],[0,1],[3,0],[2,3],[5,0],[1,3],[1,3],[3,4],[3,4],[0,5],[2,3],[4,5],[4,5],[4,5],[4,5],[5,0],[2,0],[1,2],[5,0],[3,2],[0,5],[2,3],[1,0],[0,1],[4,5],[2,1],[4,5],[2,3],[5,0],[4,5],[0,1],[4,5],[2,3],[2,3],[3,5],[1,2],[1,2],[0,2],[5,1],[4,5],[5,0],[3,4],[0,3],[0,1],[4,5],[3,5],[4,5],[5,3],[5,0],[4,5],[2,3],[3,4],[5,0],[3,4],[0,1],[3,4],[0,2],[1,2],[3,4],[0,1],[1,2],[1,2],[0,1],[0,1],[2,5],[5,0],[3,4],[2,3]],
+    "expected_trailer_idx": [2,2,0,3,2,3,4,1,0,3,5,0,3,0,1,3,5,0,4,3,1,2,5,5,4,0,4,1,1,2,1,3,0,5,0,4,1,3,4,5,2,2,1,0,2,5,0,0,3,5,2,2,1,4,3,5,5,4,4,3,2,0,3,5,4,2,0,5,2,2,3,0,4,4,2,1,1,1,4,3,0,2,2,4,4,1,3,5,5,5,5,0,3,2,0,4,1,3,2,1,5,3,5,3,0,5,1,5,3,3,4,2,2,1,0,5,0,4,1,1,5,4,5,0,0,5,3,4,0,4,1,4,1,2,4,1,2,2,1,1,3,0,4,3],
+    "is_expected": [1,1,1,1,1,0,1,1,0,1,1,1,1,1,0,1,1,1,1,1,1,1,1,1,1,1,1,0,1,0,1,1,1,1,1,1,1,0,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,0,0,0,1,1,1,1,0,1,0,0,1,0,1,0,1,1,1,1,0,1,1,0,1,1,0,1,1,0,0,1,1,0,1,1,1,1,1,1,0,1,1,0,0,1,0,1,1,0,1,1,1,1,1,1,1,1,0,1,1,0,0,1,1,1,0,1,1,0,1,0,1,1,1,1,1,1,1,1,0,1,1,1,1,1,1,1,0,1,1,1],
+    "leader_cells": [32,33,162,67,36,69,102,7,168,73,138,171,76,173,14,79,128,161,98,67,4,37,134,135,104,169,106,11,12,45,14,79,160,129,162,99,4,69,102,135,40,41,10,171,44,141,174,175,64,129,34,35,4,101,70,135,136,105,106,75,44,173,78,143,96,33,162,131,36,37,70,167,104,105,42,11,12,13,110,79,160,33,34,99,100,5,70,135,136,137,138,171,76,45,174,111,0,65,34,3,132,69,134,71,168,137,10,139,76,77,110,47,32,1,162,131,164,101,6,7,136,105,138,171,172,141,78,111,160,97,2,99,4,37,102,7,40,41,10,11,76,173,110,79],
+    "trailer_cells": [64,65,2,99,68,5,134,39,72,105,170,11,108,13,142,111,160,1,130,99,36,69,166,167,136,9,138,139,44,173,46,111,0,161,2,131,36,5,134,167,104,137,42,11,76,173,14,15,96,161,66,67,36,69,166,71,168,137,138,107,12,13,142,15,128,161,2,99,68,69,102,7,40,137,74,171,44,45,14,111,0,97,98,131,132,165,102,167,168,169,170,11,12,77,14,79,160,97,2,35,164,37,166,103,8,169,42,171,108,109,174,79,64,65,34,163,4,133,102,39,168,169,170,107,12,173,110,143,0,129,34,131,68,69,134,39,72,73,42,43,172,13,142,111]
+  },
+  "checkpoint": {"W_ctx_pred_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_orientation_task_quality_sweep_20260425/stage1_ctx_pred_orientation_cell_taskquality_seed45_n144.json.W_ctx_pred.f64.bin", "dtype": "float64", "shape": [36864], "W_ctx_pred_fnv1a64": "69f1a33513d9aef3"},
+  "learned_feedback": {"hpred_to_v1direct": {"enabled": false}, "hpred_to_v1som": {"enabled": false}},
+  "metrics": {
+    "h_context_persistence_ms": 214,
+    "h_context_persistence_pass": true,
+    "forecast_probability": 0.75694444444444442,
+    "forecast_pass": true,
+    "no_runaway_population_rate_hz": 9.2708333333333339,
+    "no_runaway_pass": true,
+    "max_cell_rate_hz_diagnostic": 231.66666666666669,
+    "gate_cpu_cuda_max_abs_error": 0,
+    "thresholds_pass": true
+  },
+  "target_prediction_metrics": {"v1_template_argmax_matches_expected_channel_fraction": 1, "v1_template_cosine_mean": 0.62022151172834616, "v1_template_expected_channel_count_mean": 20, "v1_template_probability_mse_mean": 0.054026173114649696, "v1_template_target_weighted_count_mean": 5.4405002066455479, "v1_template_total_count_mean": 20},
+  "weight_stats": {"delta_abs_sum": 105.62909338658396, "row_sum_max": 1.0506589989205055},
+  "timing_seconds": {"schedule": 1.5111e-05, "train": 1.1000365089999999, "gate_eval": 11.807872493, "write": 0.00059552499999999996, "total_excluding_build": 12.908519638},
+  "content_hash_fnv1a64": "63e7b165cc984cc7"
+}

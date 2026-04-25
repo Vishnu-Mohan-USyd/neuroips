@@ -1,0 +1,390 @@
+{
+  "schema_version": 2,
+  "artifact_kind": "native_stage1_temporal_learning_analysis",
+  "baseline_context": {
+    "accepted_sensory_grating_rate_hz": 100.0,
+    "note": "Context only. The current standalone native Stage1 trainer does not consume the sensory grating-rate knob."
+  },
+  "training_mechanism": {
+    "explicit_global_loss_present": false,
+    "optimizer_present": false,
+    "implemented_update_rule": {
+      "local_pre_post_traces": true,
+      "eligibility_trace": true,
+      "delayed_gate_update": true,
+      "homeostatic_drift_term": true,
+      "row_cap": true,
+      "weight_clip": true
+    },
+    "summary": "Native Stage1 currently performs local ctx->pred plastic updates with xpre/xpost/eligibility traces, a delayed gate update, row cap, and gate metrics. It does not implement an explicit global loss or optimizer."
+  },
+  "checkpoints": [
+    {
+      "checkpoint_path": "expectation_snn/data/checkpoints_native_cpp/stage1_temporal_targetsurf_20260424/stage1_ctx_pred_seed42_n6.json",
+      "w_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_targetsurf_20260424/stage1_ctx_pred_seed42_n6.json.W_ctx_pred.f64.bin",
+      "content_hash_fnv1a64": "0772ed966b58d19c",
+      "seed": 42,
+      "n_trials": 6,
+      "passed": true,
+      "native_scientific_stage1_passed": true,
+      "ctx_pred_constants": {
+        "drive_amp_ctx_pred_pA": 400.0,
+        "pred_e_uniform_bias_pA": 100.0,
+        "w_init_frac": 0.0,
+        "tau_coinc_ms": 500.0,
+        "tau_elig_ms": 1000.0,
+        "eta": 0.001,
+        "gamma": 0.0001,
+        "w_target": 0.0075,
+        "w_row_max": 3.0
+      },
+      "metrics": {
+        "h_context_persistence_ms": 214,
+        "h_context_persistence_pass": true,
+        "forecast_probability": 0.8333333333333334,
+        "forecast_pass": true,
+        "no_runaway_population_rate_hz": 9.270833333333334,
+        "no_runaway_pass": true,
+        "max_cell_rate_hz_diagnostic": 231.66666666666669,
+        "gate_cpu_cuda_max_abs_error": 0,
+        "thresholds_pass": true
+      },
+      "weight_stats": {
+        "delta_abs_sum": 96.35385140749005,
+        "row_sum_max": 1.0021474074788175
+      },
+      "timing_seconds": {
+        "schedule": 7.29e-06,
+        "train": 0.386964675,
+        "gate_eval": 0.766527519,
+        "write": 0.000414804,
+        "total_excluding_build": 1.1539142880000002
+      },
+      "schedule_bias_fraction_expected": 0.8333333333333334,
+      "readout": {
+        "orientation_weight_matrix_mean": [
+          [
+            1.1242971093310592e-05,
+            0.06243303998274007,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05
+          ],
+          [
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            0.0624640284777901,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05
+          ],
+          [
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            0.062448532293241994,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05
+          ],
+          [
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            0.06251054028539996,
+            1.1242971093310592e-05
+          ],
+          [
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            0.062479528537353085
+          ],
+          [
+            0.062495032472899996,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05,
+            1.1242971093310592e-05
+          ]
+        ],
+        "expected_argmax_accuracy": 1.0,
+        "expected_margin_mean": 0.062460540703810886,
+        "expected_target_fraction_mean": 0.9991009648979169,
+        "row_entropy_mean_bits": 0.012481582330009858,
+        "expected_rank_mean": 1.0,
+        "trial_argmax_matches_expected": 1.0,
+        "trial_argmax_matches_actual": 0.8333333333333334,
+        "unexpected_trial_argmax_matches_expected": 1.0,
+        "unexpected_trial_argmax_matches_actual": 0.0,
+        "unexpected_expected_minus_actual_weight_mean": 0.06243728932214868,
+        "unexpected_expected_minus_actual_weight_min": 0.06243728932214868,
+        "unexpected_expected_minus_actual_weight_max": 0.06243728932214868,
+        "predicted_trailer_confusion_by_leader": [
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        ]
+      },
+      "heldout_eval": {
+        "artifact_path": "expectation_snn/data/checkpoints_native_cpp/stage1_temporal_targetsurf_20260424/stage1_ctx_pred_seed42_n6.heldout_seed4242.json",
+        "checkpoint_path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage1_temporal_targetsurf_20260424/stage1_ctx_pred_seed42_n6.json",
+        "heldout_schedule_seed": 4242,
+        "heldout_schedule_hash_fnv1a64": "9bb9789872780d50",
+        "schedule_bias_fraction_expected": 0.8333333333333334,
+        "metrics": {
+          "h_context_persistence_ms": 214.0,
+          "forecast_probability": 0.8333333333333334,
+          "no_runaway_population_rate_hz": 9.270833333333334,
+          "max_cpu_cuda_error": 0.0
+        },
+        "readout": {
+          "orientation_pretrailer_channel_counts_mean": [
+            [
+              0.0,
+              20.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              20.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              20.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              20.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              20.0
+            ],
+            [
+              20.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          ],
+          "expected_argmax_accuracy": 1.0,
+          "expected_margin_mean": 20.0,
+          "expected_target_fraction_mean": 1.0,
+          "row_entropy_mean_bits": 0.0,
+          "expected_rank_mean": 1.0,
+          "trial_argmax_matches_expected": 1.0,
+          "trial_argmax_matches_actual": 0.8333333333333334,
+          "unexpected_trial_argmax_matches_expected": 1.0,
+          "unexpected_trial_argmax_matches_actual": 0.0,
+          "unexpected_expected_minus_actual_count_mean": 20.0,
+          "unexpected_expected_minus_actual_count_min": 20.0,
+          "unexpected_expected_minus_actual_count_max": 20.0,
+          "predicted_trailer_confusion_by_leader": [
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          ]
+        }
+      }
+    }
+  ],
+  "trends": {
+    "n_trials": [
+      6
+    ],
+    "forecast_probability": [
+      {
+        "n_trials": 6,
+        "value": 0.8333333333333334
+      }
+    ],
+    "persistence_ms": [
+      {
+        "n_trials": 6,
+        "value": 214
+      }
+    ],
+    "no_runaway_population_rate_hz": [
+      {
+        "n_trials": 6,
+        "value": 9.270833333333334
+      }
+    ],
+    "expected_argmax_accuracy": [
+      {
+        "n_trials": 6,
+        "value": 1.0
+      }
+    ],
+    "expected_margin_mean": [
+      {
+        "n_trials": 6,
+        "value": 0.062460540703810886
+      }
+    ],
+    "unexpected_expected_minus_actual_weight_mean": [
+      {
+        "n_trials": 6,
+        "value": 0.06243728932214868
+      }
+    ],
+    "delta_from_first_to_last": {
+      "forecast_probability": 0.0,
+      "persistence_ms": 0,
+      "expected_argmax_accuracy": 0.0,
+      "expected_margin_mean": 0.0,
+      "unexpected_expected_minus_actual_weight_mean": 0.0,
+      "heldout_forecast_probability": 0.0,
+      "heldout_expected_argmax_accuracy": 0.0,
+      "heldout_expected_margin_mean": 0.0,
+      "heldout_trial_argmax_matches_expected": 0.0,
+      "heldout_trial_argmax_matches_actual": 0.0
+    },
+    "heldout_forecast_probability": [
+      {
+        "n_trials": 6,
+        "value": 0.8333333333333334
+      }
+    ],
+    "heldout_expected_argmax_accuracy": [
+      {
+        "n_trials": 6,
+        "value": 1.0
+      }
+    ],
+    "heldout_expected_margin_mean": [
+      {
+        "n_trials": 6,
+        "value": 20.0
+      }
+    ],
+    "heldout_trial_argmax_matches_expected": [
+      {
+        "n_trials": 6,
+        "value": 1.0
+      }
+    ],
+    "heldout_trial_argmax_matches_actual": [
+      {
+        "n_trials": 6,
+        "value": 0.8333333333333334
+      }
+    ]
+  }
+}

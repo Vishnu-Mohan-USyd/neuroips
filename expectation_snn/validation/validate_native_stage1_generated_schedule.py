@@ -48,9 +48,12 @@ def _assert_schedule_mapping(schedule: dict) -> None:
     assert np.all(leader != trailer)
     assert np.all((leader_cells >= 0) & (leader_cells < 192))
     assert np.all((trailer_cells >= 0) & (trailer_cells < 192))
-    assert np.array_equal(leader_cells // 32, leader)
-    assert np.array_equal(trailer_cells // 32, trailer)
-    assert np.array_equal(expected_cells // 32, expected)
+    assert np.array_equal((leader_cells // 16) // 2, leader)
+    assert np.array_equal((trailer_cells // 16) // 2, trailer)
+    assert np.array_equal((expected_cells // 16) // 2, expected)
+    assert np.all(((leader_cells // 16) % 2) == 0)
+    assert np.all(((trailer_cells // 16) % 2) == 0)
+    assert np.all(((expected_cells // 16) % 2) == 0)
 
 
 def _assert_native_result(result: dict, schedule: dict) -> None:
@@ -69,12 +72,12 @@ def _assert_native_result(result: dict, schedule: dict) -> None:
         np.asarray(schedule["trailer_post_cells"], dtype=np.int32),
     )
     assert result["event_counts"] == {
-        "hctx_pre.leader": 2 * n_trials,
-        "hctx_pre.trailer": 0,
+        "hctx_pre.leader": 64 * n_trials,
+        "hctx_pre.trailer": 80 * n_trials,
         "hctx_pre.iti": 0,
         "hctx_pre.outside": 0,
         "hpred_post.leader": 0,
-        "hpred_post.trailer": 2 * n_trials,
+        "hpred_post.trailer": 80 * n_trials,
         "hpred_post.iti": 0,
         "hpred_post.outside": 0,
     }
@@ -101,6 +104,8 @@ def _assert_native_result(result: dict, schedule: dict) -> None:
         np.asarray(result["cpu_gate_n_capped"], dtype=np.int32),
         np.asarray(result["cuda_gate_n_capped"], dtype=np.int32),
     )
+    initial = np.asarray(result["initial_w_ctx_pred"], dtype=np.float64)
+    assert np.allclose(initial, 0.0, atol=TOL, rtol=0.0)
     gate_dw_sum = np.asarray(result["cpu_gate_dw_sum"], dtype=np.float64)
     assert gate_dw_sum.shape == (n_trials,)
     assert np.any(np.abs(gate_dw_sum) > 0.0)

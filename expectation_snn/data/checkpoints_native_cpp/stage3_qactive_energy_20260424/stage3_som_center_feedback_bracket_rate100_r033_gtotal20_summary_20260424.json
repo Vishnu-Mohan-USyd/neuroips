@@ -1,0 +1,1602 @@
+{
+  "artifacts": {
+    "center_0_05": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center005.json",
+    "center_0_10": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010.json",
+    "center_0_15": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center015.json",
+    "center_0_25_existing": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center025.json",
+    "center_0_existing": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_preprobe_channels.json"
+  },
+  "code_edits": "none",
+  "go_no_go": {
+    "best_center_weight": null,
+    "criteria": "expected lower Q_active, lower activity, and lower full actual-decoder accuracy than unexpected",
+    "verdict": "NO-GO"
+  },
+  "logs": {
+    "bracket": "/workspace/neuroips_gpu_migration_20260422/logs/native_som_center_bracket_rate100_reps4_20260424.log",
+    "prior_center_sweep": "/workspace/neuroips_gpu_migration_20260422/logs/native_som_center_sweep_rate100_reps4_20260424.log"
+  },
+  "runs": {
+    "center_0_05": {
+      "activity_v1_trailer_count_per_trial": {
+        "delta_unexpected_minus_expected": 23.5,
+        "expected": 540.6666666666666,
+        "unexpected": 564.1666666666666
+      },
+      "actual_margin_delta_unexpected_minus_expected": -41.500000000000014,
+      "actual_share_delta_unexpected_minus_expected": -0.05627164433768622,
+      "content_hash_fnv1a64": "ae1bb0b6bfdbb9b9",
+      "decoder_actual_accuracy": {
+        "bin_gaps_unexpected_minus_expected": [
+          -0.04166666666666663,
+          -0.125,
+          -0.22916666666666663,
+          -0.21875,
+          -0.10416666666666674
+        ],
+        "delta_unexpected_minus_expected": 0.0,
+        "expected_bins_100ms": [
+          1.0,
+          0.9583333333333334,
+          0.9166666666666666,
+          0.9583333333333334,
+          0.8333333333333334
+        ],
+        "expected_full": 1.0,
+        "unexpected_bins_100ms": [
+          0.9583333333333334,
+          0.8333333333333334,
+          0.6875,
+          0.7395833333333334,
+          0.7291666666666666
+        ],
+        "unexpected_full": 1.0
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9583333333333334,
+            0.8333333333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667
+          ],
+          "predicted_channel": [
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667
+          ],
+          "total": [
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 473.3333333333333,
+          "predicted_channel": 473.3333333333333,
+          "predicted_minus_actual": 0.0,
+          "total": 1553.3333333333333
+        },
+        "n_trials": 24,
+        "v1_actual_margin": 135.33333333333334,
+        "v1_actual_share": 0.5063327083236359
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.07500000000000001,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.05,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": true,
+        "expected_lower_full_decoder": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center005.json",
+      "q_active_v1_fC_per_trial": {
+        "delta_unexpected_minus_expected": 27415.310071013868,
+        "expected": 14605529.3687624,
+        "unexpected": 14632944.678833414
+      },
+      "timing_seconds": {
+        "run": 3.631872959,
+        "total_excluding_build": 3.647331663,
+        "write": 0.011519632
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.8333333333333334,
+            0.6875,
+            0.7395833333333334,
+            0.7291666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            30.5,
+            30.5,
+            30.5,
+            30.5,
+            30.5
+          ],
+          "predicted_channel": [
+            96.16666666666667,
+            96.16666666666667,
+            96.16666666666667,
+            96.16666666666667,
+            96.16666666666667
+          ],
+          "total": [
+            312.8333333333333,
+            312.8333333333333,
+            312.8333333333333,
+            312.8333333333333,
+            312.8333333333333
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 152.5,
+          "predicted_channel": 480.8333333333333,
+          "predicted_minus_actual": 328.3333333333333,
+          "total": 1564.1666666666667
+        },
+        "n_trials": 96,
+        "v1_actual_margin": 93.83333333333333,
+        "v1_actual_share": 0.45006106398594964
+      }
+    },
+    "center_0_10": {
+      "activity_v1_trailer_count_per_trial": {
+        "delta_unexpected_minus_expected": 22.333333333333258,
+        "expected": 541.3333333333334,
+        "unexpected": 563.6666666666666
+      },
+      "actual_margin_delta_unexpected_minus_expected": -39.500000000000014,
+      "actual_share_delta_unexpected_minus_expected": -0.05307592451244253,
+      "content_hash_fnv1a64": "73d258e44f16f01f",
+      "decoder_actual_accuracy": {
+        "bin_gaps_unexpected_minus_expected": [
+          -0.04166666666666663,
+          -0.13541666666666674,
+          -0.26041666666666674,
+          -0.21875,
+          -0.09375
+        ],
+        "delta_unexpected_minus_expected": 0.0,
+        "expected_bins_100ms": [
+          1.0,
+          0.9583333333333334,
+          0.9583333333333334,
+          0.9583333333333334,
+          0.8333333333333334
+        ],
+        "expected_full": 1.0,
+        "unexpected_bins_100ms": [
+          0.9583333333333334,
+          0.8229166666666666,
+          0.6979166666666666,
+          0.7395833333333334,
+          0.7395833333333334
+        ],
+        "unexpected_full": 1.0
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.9583333333333334,
+            0.9583333333333334,
+            0.8333333333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            94.0,
+            94.0,
+            94.0,
+            94.0,
+            94.0
+          ],
+          "predicted_channel": [
+            94.0,
+            94.0,
+            94.0,
+            94.0,
+            94.0
+          ],
+          "total": [
+            308.6666666666667,
+            308.6666666666667,
+            308.6666666666667,
+            308.6666666666667,
+            308.6666666666667
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 470.0,
+          "predicted_channel": 470.0,
+          "predicted_minus_actual": 0.0,
+          "total": 1543.3333333333333
+        },
+        "n_trials": 24,
+        "v1_actual_margin": 133.33333333333334,
+        "v1_actual_share": 0.5033176038379431
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.15000000000000002,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.1,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": true,
+        "expected_lower_full_decoder": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center010.json",
+      "q_active_v1_fC_per_trial": {
+        "delta_unexpected_minus_expected": 21062.790749408305,
+        "expected": 14680172.839648793,
+        "unexpected": 14701235.6303982
+      },
+      "timing_seconds": {
+        "run": 3.603562124,
+        "total_excluding_build": 3.617784437,
+        "write": 0.011503552
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.8229166666666666,
+            0.6979166666666666,
+            0.7395833333333334,
+            0.7395833333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            30.5,
+            30.5,
+            30.5,
+            30.5,
+            30.5
+          ],
+          "predicted_channel": [
+            95.16666666666667,
+            95.16666666666667,
+            95.16666666666667,
+            95.16666666666667,
+            95.16666666666667
+          ],
+          "total": [
+            309.6666666666667,
+            309.6666666666667,
+            309.6666666666667,
+            309.6666666666667,
+            309.6666666666667
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 152.5,
+          "predicted_channel": 475.8333333333333,
+          "predicted_minus_actual": 323.3333333333333,
+          "total": 1548.3333333333333
+        },
+        "n_trials": 96,
+        "v1_actual_margin": 93.83333333333333,
+        "v1_actual_share": 0.4502416793255006
+      }
+    },
+    "center_0_15": {
+      "activity_v1_trailer_count_per_trial": {
+        "delta_unexpected_minus_expected": 22.5,
+        "expected": 540,
+        "unexpected": 562.5
+      },
+      "actual_margin_delta_unexpected_minus_expected": -38.5,
+      "actual_share_delta_unexpected_minus_expected": -0.052723777796525595,
+      "content_hash_fnv1a64": "470c65d9dfa991de",
+      "decoder_actual_accuracy": {
+        "bin_gaps_unexpected_minus_expected": [
+          -0.04166666666666663,
+          -0.13541666666666674,
+          -0.17708333333333337,
+          -0.21875,
+          -0.0625
+        ],
+        "delta_unexpected_minus_expected": 0.0,
+        "expected_bins_100ms": [
+          1.0,
+          0.9583333333333334,
+          0.875,
+          0.9583333333333334,
+          0.7916666666666666
+        ],
+        "expected_full": 1.0,
+        "unexpected_bins_100ms": [
+          0.9583333333333334,
+          0.8229166666666666,
+          0.6979166666666666,
+          0.7395833333333334,
+          0.7291666666666666
+        ],
+        "unexpected_full": 1.0
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.875,
+            0.9583333333333334,
+            0.7916666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            96.0,
+            96.0,
+            96.0,
+            96.0,
+            96.0
+          ],
+          "predicted_channel": [
+            96.0,
+            96.0,
+            96.0,
+            96.0,
+            96.0
+          ],
+          "total": [
+            313.3333333333333,
+            313.3333333333333,
+            313.3333333333333,
+            313.3333333333333,
+            313.3333333333333
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 480.0,
+          "predicted_channel": 480.0,
+          "predicted_minus_actual": 0.0,
+          "total": 1566.6666666666667
+        },
+        "n_trials": 24,
+        "v1_actual_margin": 132.0,
+        "v1_actual_share": 0.5035666599085716
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.22499999999999998,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.15,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": false,
+        "expected_lower_full_decoder": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center015.json",
+      "q_active_v1_fC_per_trial": {
+        "delta_unexpected_minus_expected": -71374.25039199553,
+        "expected": 14878452.354603602,
+        "unexpected": 14807078.104211606
+      },
+      "timing_seconds": {
+        "run": 3.601783319,
+        "total_excluding_build": 3.61569781,
+        "write": 0.011100938
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.8229166666666666,
+            0.6979166666666666,
+            0.7395833333333334,
+            0.7291666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            30.666666666666668,
+            30.666666666666668,
+            30.666666666666668,
+            30.666666666666668,
+            30.666666666666668
+          ],
+          "predicted_channel": [
+            94.83333333333333,
+            94.83333333333333,
+            94.83333333333333,
+            94.83333333333333,
+            94.83333333333333
+          ],
+          "total": [
+            308.8333333333333,
+            308.8333333333333,
+            308.8333333333333,
+            308.8333333333333,
+            308.8333333333333
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 153.33333333333334,
+          "predicted_channel": 474.1666666666667,
+          "predicted_minus_actual": 320.8333333333333,
+          "total": 1544.1666666666667
+        },
+        "n_trials": 96,
+        "v1_actual_margin": 93.5,
+        "v1_actual_share": 0.45084288211204604
+      }
+    },
+    "center_0_25_existing": {
+      "activity_v1_trailer_count_per_trial": {
+        "delta_unexpected_minus_expected": 31.83333333333337,
+        "expected": 528.6666666666666,
+        "unexpected": 560.5
+      },
+      "actual_margin_delta_unexpected_minus_expected": -30.16666666666667,
+      "actual_share_delta_unexpected_minus_expected": -0.04785841942905977,
+      "content_hash_fnv1a64": "6ca600a490937ded",
+      "decoder_actual_accuracy": {
+        "bin_gaps_unexpected_minus_expected": [
+          -0.04166666666666663,
+          -0.11458333333333337,
+          -0.20833333333333326,
+          -0.21875,
+          -0.05208333333333326
+        ],
+        "delta_unexpected_minus_expected": 0.0,
+        "expected_bins_100ms": [
+          1.0,
+          0.9583333333333334,
+          0.9166666666666666,
+          0.9583333333333334,
+          0.7916666666666666
+        ],
+        "expected_full": 1.0,
+        "unexpected_bins_100ms": [
+          0.9583333333333334,
+          0.84375,
+          0.7083333333333334,
+          0.7395833333333334,
+          0.7395833333333334
+        ],
+        "unexpected_full": 1.0
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3840,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9583333333333334,
+            0.7916666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            96.0,
+            96.0,
+            96.0,
+            96.0,
+            96.0
+          ],
+          "predicted_channel": [
+            96.0,
+            96.0,
+            96.0,
+            96.0,
+            96.0
+          ],
+          "total": [
+            312.6666666666667,
+            312.6666666666667,
+            312.6666666666667,
+            312.6666666666667,
+            312.6666666666667
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 480.0,
+          "predicted_channel": 480.0,
+          "predicted_minus_actual": 0.0,
+          "total": 1563.3333333333333
+        },
+        "n_trials": 24,
+        "v1_actual_margin": 122.66666666666667,
+        "v1_actual_share": 0.4991887737499691
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.375,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.25,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "fallback_used_trial_count": 0,
+        "fallback_zero_template_trial_count": 0,
+        "leader_template_channel_counts": [
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        ],
+        "leader_template_total_counts": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "mode": "raw",
+        "normalized_target_per_100ms_bin": 314.1666666666667,
+        "normalized_zero_total_bin_count_after_fallback": 600,
+        "normalized_zero_total_bin_count_before_fallback": 0,
+        "preprobe_zero_trial_count": 0,
+        "target_source": "cli_or_default_rate100_observed_preprobe_total_per_trial_bin"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": false,
+        "expected_lower_full_decoder": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_som_center025.json",
+      "q_active_v1_fC_per_trial": {
+        "delta_unexpected_minus_expected": -90574.06470428407,
+        "expected": 15149715.87392386,
+        "unexpected": 15059141.809219576
+      },
+      "timing_seconds": {
+        "run": 3.637670685,
+        "total_excluding_build": 3.651659156,
+        "write": 0.011335051
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.84375,
+            0.7083333333333334,
+            0.7395833333333334,
+            0.7395833333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            29.5,
+            29.5,
+            29.5,
+            29.5,
+            29.5
+          ],
+          "predicted_channel": [
+            94.5,
+            94.5,
+            94.5,
+            94.5,
+            94.5
+          ],
+          "total": [
+            306.5,
+            306.5,
+            306.5,
+            306.5,
+            306.5
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 147.5,
+          "predicted_channel": 472.5,
+          "predicted_minus_actual": 325.0,
+          "total": 1532.5
+        },
+        "n_trials": 96,
+        "v1_actual_margin": 92.5,
+        "v1_actual_share": 0.45133035432090934
+      }
+    },
+    "center_0_existing": {
+      "activity_v1_trailer_count_per_trial": {
+        "delta_unexpected_minus_expected": 22.66666666666663,
+        "expected": 541.3333333333334,
+        "unexpected": 564
+      },
+      "actual_margin_delta_unexpected_minus_expected": -42.0,
+      "actual_share_delta_unexpected_minus_expected": -0.05666886976011315,
+      "content_hash_fnv1a64": "4d0b7698708bac82",
+      "decoder_actual_accuracy": {
+        "bin_gaps_unexpected_minus_expected": [
+          -0.04166666666666663,
+          -0.125,
+          -0.22916666666666663,
+          -0.21875,
+          -0.10416666666666674
+        ],
+        "delta_unexpected_minus_expected": 0.0,
+        "expected_bins_100ms": [
+          1.0,
+          0.9583333333333334,
+          0.9166666666666666,
+          0.9583333333333334,
+          0.8333333333333334
+        ],
+        "expected_full": 1.0,
+        "unexpected_bins_100ms": [
+          0.9583333333333334,
+          0.8333333333333334,
+          0.6875,
+          0.7395833333333334,
+          0.7291666666666666
+        ],
+        "unexpected_full": 1.0
+      },
+      "edge_counts": {
+        "ctx_to_pred": 36864,
+        "fb_pred_to_v1e_apical": 3072,
+        "fb_pred_to_v1som": 3072,
+        "v1_stim_to_e": 3840,
+        "v1_to_h_ctx": 21504
+      },
+      "expected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            1.0,
+            0.9583333333333334,
+            0.9166666666666666,
+            0.9583333333333334,
+            0.8333333333333334
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667
+          ],
+          "predicted_channel": [
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667,
+            94.66666666666667
+          ],
+          "total": [
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667,
+            310.6666666666667
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 473.3333333333333,
+          "predicted_channel": 473.3333333333333,
+          "predicted_minus_actual": 0.0,
+          "total": 1553.3333333333333
+        },
+        "n_trials": 24,
+        "v1_actual_margin": 136.0,
+        "v1_actual_share": 0.5068787432698724
+      },
+      "feedback": {
+        "g_total": 2,
+        "r": 0.3333333333333333,
+        "resolved_g_direct": 0.5,
+        "resolved_g_som": 1.5,
+        "resolved_som_center_weight": 0.0,
+        "resolved_som_surround_d1_weight": 0.6000000000000001,
+        "resolved_som_surround_d2_weight": 0.15000000000000002,
+        "som_kernel_center_weight": 0.0,
+        "som_kernel_surround_d1_weight": 0.4,
+        "som_kernel_surround_d2_weight": 0.1
+      },
+      "feedback_replay": {
+        "fallback_mode": "none",
+        "mode": "raw",
+        "schema_note": "inferred for older center=0 baseline artifact"
+      },
+      "go_checks": {
+        "expected_lower_activity": true,
+        "expected_lower_energy": true,
+        "expected_lower_full_decoder": false
+      },
+      "path": "/workspace/neuroips_gpu_migration_20260422/neuroips/expectation_snn/data/checkpoints_native_cpp/stage3_qactive_energy_20260424/richter_dampening_fix2_n72_seed4242_reps4_qactive_rate100_feedback_r03333333333333333_gtotal20_hpred_replay_preprobe_channels.json",
+      "q_active_v1_fC_per_trial": {
+        "delta_unexpected_minus_expected": 48326.924046929926,
+        "expected": 14508340.600904033,
+        "unexpected": 14556667.524950963
+      },
+      "timing_seconds": {
+        "run": 3.563100769,
+        "total_excluding_build": 3.571514638,
+        "write": 0.005830367
+      },
+      "unexpected": {
+        "decoder_actual_accuracy": {
+          "bins_100ms": [
+            0.9583333333333334,
+            0.8333333333333334,
+            0.6875,
+            0.7395833333333334,
+            0.7291666666666666
+          ],
+          "full_500ms": 1.0
+        },
+        "held_replay_100ms": {
+          "actual_channel": [
+            30.833333333333332,
+            30.833333333333332,
+            30.833333333333332,
+            30.833333333333332,
+            30.833333333333332
+          ],
+          "predicted_channel": [
+            96.83333333333333,
+            96.83333333333333,
+            96.83333333333333,
+            96.83333333333333,
+            96.83333333333333
+          ],
+          "total": [
+            314.1666666666667,
+            314.1666666666667,
+            314.1666666666667,
+            314.1666666666667,
+            314.1666666666667
+          ]
+        },
+        "held_replay_500ms": {
+          "actual_channel": 154.16666666666666,
+          "predicted_channel": 484.1666666666667,
+          "predicted_minus_actual": 330.0,
+          "total": 1570.8333333333333
+        },
+        "n_trials": 96,
+        "v1_actual_margin": 94.0,
+        "v1_actual_share": 0.4502098735097592
+      }
+    }
+  },
+  "summary_kind": "stage3_som_center_feedback_narrow_bracket"
+}
