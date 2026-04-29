@@ -1184,7 +1184,9 @@ __global__ void v1_l23_stdp_phase_kernel(
     const uint32_t* __restrict__ l4_spike_record,  // [n_steps][N_L4_BITMASK_INTS]
     long long phase_step_offset,
     int  n_steps,
-    int  plasticity_active                       // 0 or 1
+    int  plasticity_active,                     // 0 or 1
+    double a_minus_in,                          // task #16 C2: runtime A_minus override
+    int  stdp_additive                          // task #17: 0 = multiplicative (legacy), 1 = additive
 ) {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N_L23) return;
@@ -1211,7 +1213,7 @@ __global__ void v1_l23_stdp_phase_kernel(
     const double w_max        = STDP_W_MAX_NS;
     const double w_min        = STDP_W_MIN_NS;
     const double A_plus       = STDP_A_PLUS;
-    const double A_minus      = STDP_A_MINUS;
+    const double A_minus      = a_minus_in;     // task #16 C2: runtime override (default = STDP_A_MINUS = 0.003)
 
     for (int step = 0; step < n_steps; ++step) {
         // ---- Stage 1: post-trace decay ----
@@ -1237,7 +1239,14 @@ __global__ void v1_l23_stdp_phase_kernel(
                 // history just up to but not including the current step.
                 if (plasticity_active) {
                     double w = l23_w_nS[p];
-                    w = w - A_minus * w * y_post;
+                    // task #17: additive vs multiplicative LTD branch.
+                    // multiplicative: Δw = -A_minus · w · y_post   (drift toward 0)
+                    // additive:       Δw = -A_minus · y_post       (uniform, clip-bounded)
+                    if (stdp_additive) {
+                        w = w - A_minus * y_post;
+                    } else {
+                        w = w - A_minus * w * y_post;
+                    }
                     if (w < w_min) w = w_min;
                     l23_w_nS[p] = w;
                 }
@@ -1286,7 +1295,14 @@ __global__ void v1_l23_stdp_phase_kernel(
                     const double xp = x_pre_synapse[p];
                     if (xp > 0.0) {
                         double w = l23_w_nS[p];
-                        w = w + A_plus * (w_max - w) * xp;
+                        // task #17: additive vs multiplicative LTP branch.
+                        // multiplicative: Δw = A_plus · (w_max - w) · xp   (drift toward w_max)
+                        // additive:       Δw = A_plus · xp                (uniform, clip-bounded)
+                        if (stdp_additive) {
+                            w = w + A_plus * xp;
+                        } else {
+                            w = w + A_plus * (w_max - w) * xp;
+                        }
                         if (w > w_max) w = w_max;
                         if (w < w_min) w = w_min;
                         l23_w_nS[p] = w;
@@ -1915,6 +1931,10 @@ struct Args {
     // at low p) and produces a unimodal OSI distribution.  All five modes
     // remain selectable via --l4-l23-grading for ablation work.
     std::string l4_l23_grading = "sharp";
+    bool validate_only_v2 = false;          // task #14: skip V1/V3/V4/V5 inside the train_stdp validation suite
+    bool dump_conn_csr = false;             // task #16 C1: dump L4→L2/3 CSR (row_ptr.bin/col_idx.bin/csr_meta.json) and exit
+    double stdp_a_minus = 0.003;            // task #16 C2: runtime override of STDP_A_MINUS (default = legacy 0.003)
+    std::string stdp_form = "multiplicative";  // task #17: pair-STDP weight-update form {multiplicative, additive}
 };
 
 Args parse_args(int argc, char** argv) {
@@ -1977,7 +1997,10 @@ Args parse_args(int argc, char** argv) {
         else if (k == "--train-stdp") a.train_stdp = true;
         else if (k == "--n-train-trials") {
             a.n_train_trials = std::stoi(need(k));
-            if (a.n_train_trials <= 0) die("--n-train-trials must be > 0");
+            // task #14: 0 is allowed (skips the training loop entirely; the
+            // for-loop `for (int trial = 0; trial < N_TRAIN; ++trial)` is a
+            // no-op when N_TRAIN==0).  Negative is still rejected.
+            if (a.n_train_trials < 0) die("--n-train-trials must be >= 0");
         }
         else if (k == "--train-stim-ms") {
             a.train_stim_ms = std::stoi(need(k));
@@ -1987,6 +2010,19 @@ Args parse_args(int argc, char** argv) {
         else if (k == "--save-trained-weights") a.save_trained_weights = need(k);
         else if (k == "--load-trained-weights") a.load_trained_weights = need(k);
         else if (k == "--measure-l4-osi") a.measure_l4_osi = true;
+        else if (k == "--validate-only-v2") a.validate_only_v2 = true;
+        else if (k == "--dump-conn-csr") a.dump_conn_csr = true;
+        else if (k == "--stdp-a-minus") {
+            a.stdp_a_minus = std::stod(need(k));
+            if (a.stdp_a_minus < 0.0)
+                die("--stdp-a-minus must be ≥ 0");
+        }
+        else if (k == "--stdp-form") {
+            a.stdp_form = need(k);
+            if (a.stdp_form != "multiplicative" && a.stdp_form != "additive") {
+                die("--stdp-form must be one of {multiplicative, additive}");
+            }
+        }
         else if (k == "--l4-l23-grading") {
             a.l4_l23_grading = need(k);
             if (a.l4_l23_grading != "random" && a.l4_l23_grading != "am"
@@ -3038,6 +3074,152 @@ static int run_single(const Args& args) {
 //   and computes per-cell OSI = |Σ_θ R(θ)·exp(2iθ)| / Σ_θ R(θ).
 //   Writes /tmp/l4_osi.json with metrics + full per-cell arrays.
 // =====================================================================
+// =====================================================================
+// run_dump_conn_csr (task #16 C1): build L4→L2/3 connectivity for the
+// requested grading variant and dump the raw CSR (row_ptr, col_idx) +
+// metadata to disk so the debugger / Python tooling can re-examine
+// per-cell partner sets without re-running the C++ binary.
+// =====================================================================
+static int run_dump_conn_csr(const Args& args) {
+    cudaDeviceProp prop{};
+    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
+    std::cout << "device-info:\n  device=" << prop.name << "\n";
+
+    // Resolve grading mode (mirrors run_train_stdp's resolution).
+    L4L23Grading grading_mode = L4L23Grading::random;
+    if      (args.l4_l23_grading == "random") grading_mode = L4L23Grading::random;
+    else if (args.l4_l23_grading == "am")     grading_mode = L4L23Grading::am;
+    else if (args.l4_l23_grading == "sharp")  grading_mode = L4L23Grading::sharp;
+    else if (args.l4_l23_grading == "strict") grading_mode = L4L23Grading::strict;
+    else if (args.l4_l23_grading == "gentle") grading_mode = L4L23Grading::gentle;
+    else die("internal: unknown l4_l23_grading: " + args.l4_l23_grading);
+    const GradingParams gp = compute_grading_params(grading_mode);
+
+    auto t0 = std::chrono::steady_clock::now();
+    L23Connectivity conn = build_l23_connectivity(args.seed, grading_mode);
+    auto t1 = std::chrono::steady_clock::now();
+    const double build_wall_s = std::chrono::duration<double>(t1 - t0).count();
+    std::cout << "l23_connectivity_built  total_synapses=" << conn.total_synapses
+              << "  build_wall_s=" << build_wall_s
+              << "  grading=" << grading_to_str(grading_mode)
+              << "  scaling=" << gp.scaling
+              << "  expected_fanin_interior=" << gp.expected_fanin_interior << "\n";
+
+    std::filesystem::create_directories(args.out_dir);
+
+    // Write row_ptr.bin (int32, length N_L23 + 1).
+    {
+        const std::string path = args.out_dir + "/row_ptr.bin";
+        std::ofstream f(path, std::ios::binary);
+        if (!f) die("could not open " + path);
+        std::vector<int32_t> rp32(conn.row_ptr.size());
+        for (size_t i = 0; i < conn.row_ptr.size(); ++i)
+            rp32[i] = static_cast<int32_t>(conn.row_ptr[i]);
+        f.write(reinterpret_cast<const char*>(rp32.data()),
+                static_cast<std::streamsize>(rp32.size() * sizeof(int32_t)));
+        if (!f) die("write failed: " + path);
+        std::cout << "wrote " << path
+                  << " (" << rp32.size() << " int32 entries)\n";
+    }
+
+    // Write col_idx.bin (int32, length total_synapses).
+    {
+        const std::string path = args.out_dir + "/col_idx.bin";
+        std::ofstream f(path, std::ios::binary);
+        if (!f) die("could not open " + path);
+        std::vector<int32_t> ci32(conn.col_idx.size());
+        for (size_t i = 0; i < conn.col_idx.size(); ++i)
+            ci32[i] = static_cast<int32_t>(conn.col_idx[i]);
+        f.write(reinterpret_cast<const char*>(ci32.data()),
+                static_cast<std::streamsize>(ci32.size() * sizeof(int32_t)));
+        if (!f) die("write failed: " + path);
+        std::cout << "wrote " << path
+                  << " (" << ci32.size() << " int32 entries)\n";
+    }
+
+    // Write w_init.bin (double, length total_synapses) — initial lognormal
+    // weights as drawn by build_l23_connectivity.  Optional for the debugger.
+    {
+        const std::string path = args.out_dir + "/w_init_nS.bin";
+        std::ofstream f(path, std::ios::binary);
+        if (!f) die("could not open " + path);
+        f.write(reinterpret_cast<const char*>(conn.w_nS.data()),
+                static_cast<std::streamsize>(conn.w_nS.size() * sizeof(double)));
+        if (!f) die("write failed: " + path);
+        std::cout << "wrote " << path
+                  << " (" << conn.w_nS.size() << " double entries)\n";
+    }
+
+    // Per-L2/3 target ori (for Δθ computation in Python).
+    {
+        const std::string path = args.out_dir + "/target_ori_per_l23.bin";
+        std::ofstream f(path, std::ios::binary);
+        if (!f) die("could not open " + path);
+        std::vector<int32_t> tori(N_L23);
+        for (int i = 0; i < N_L23; ++i) tori[i] = l23_clone(i) % N_ORIENT;
+        f.write(reinterpret_cast<const char*>(tori.data()),
+                static_cast<std::streamsize>(tori.size() * sizeof(int32_t)));
+        if (!f) die("write failed: " + path);
+        std::cout << "wrote " << path
+                  << " (" << tori.size() << " int32 entries)\n";
+    }
+
+    // Metadata JSON.
+    {
+        const std::string path = args.out_dir + "/csr_meta.json";
+        std::ofstream f(path);
+        if (!f) die("could not open " + path);
+        f << std::setprecision(8);
+        f << "{\n";
+        f << "  \"task\": \"task16_C1_csr_dump\",\n";
+        f << "  \"seed\": " << args.seed << ",\n";
+        f << "  \"grading\": \"" << grading_to_str(grading_mode) << "\",\n";
+        f << "  \"l4_l23_grading_w_curve\": [";
+        for (int b = 0; b < 5; ++b) {
+            if (b) f << ", ";
+            f << gp.w_curve[b];
+        }
+        f << "],\n";
+        f << "  \"p_connect_per_bin\": [";
+        for (int b = 0; b < 5; ++b) {
+            if (b) f << ", ";
+            f << gp.p_connect_per_bin[b];
+        }
+        f << "],\n";
+        f << "  \"scaling\": " << gp.scaling << ",\n";
+        f << "  \"expected_fanin_interior\": " << gp.expected_fanin_interior << ",\n";
+        f << "  \"N_L23\": " << N_L23 << ",\n";
+        f << "  \"N_L4\": "  << N_L4  << ",\n";
+        f << "  \"GRID\": "  << GRID  << ",\n";
+        f << "  \"N_ORIENT\": " << N_ORIENT << ",\n";
+        f << "  \"N_CELLS_PER_ORIENT\": " << N_CELLS_PER_ORIENT << ",\n";
+        f << "  \"N_L23_CLONES\": " << N_L23_CLONES << ",\n";
+        f << "  \"L23_PATCH_R\": " << L23_PATCH_R << ",\n";
+        f << "  \"L23_TARGET_FANIN\": " << L23_TARGET_FANIN << ",\n";
+        f << "  \"total_synapses\": " << conn.total_synapses << ",\n";
+        f << "  \"l4_cell_id_encoding\": "
+             "\"l4_id = ((gy*GRID + gx) * N_ORIENT + ori_idx) * N_CELLS_PER_ORIENT + clone_idx\",\n";
+        f << "  \"l23_cell_id_encoding\": "
+             "\"l23_id = (gy*GRID + gx) * N_L23_CLONES + l23_clone_idx\",\n";
+        f << "  \"target_ori_l23_encoding\": "
+             "\"target_ori = (l23_id % N_L23_CLONES) % N_ORIENT  ==>  8 buckets × 2 cells per hypercolumn\",\n";
+        f << "  \"delta_theta_bin_encoding\": "
+             "\"d_raw = abs(ori_l4 - target_ori_l23); d_bin = min(d_raw, N_ORIENT - d_raw); ∈ {0..4} ↔ Δθ {0,22.5,45,67.5,90}°\",\n";
+        f << "  \"row_ptr_bin\":  {\"path\": \"row_ptr.bin\",  \"dtype\": \"int32\", \"length\": "
+          << conn.row_ptr.size() << "},\n";
+        f << "  \"col_idx_bin\":  {\"path\": \"col_idx.bin\",  \"dtype\": \"int32\", \"length\": "
+          << conn.col_idx.size() << "},\n";
+        f << "  \"w_init_nS_bin\":{\"path\": \"w_init_nS.bin\",\"dtype\": \"float64\",\"length\": "
+          << conn.w_nS.size() << "},\n";
+        f << "  \"target_ori_per_l23_bin\":{\"path\": \"target_ori_per_l23.bin\",\"dtype\": \"int32\",\"length\": "
+          << N_L23 << "}\n";
+        f << "}\n";
+        std::cout << "wrote " << path << "\n";
+    }
+
+    return 0;
+}
+
 static int run_measure_l4_osi(const Args& args) {
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
@@ -6161,7 +6343,9 @@ static int run_train_stdp(const Args& args) {
             d_l4_spike_record,
             /*phase_step_offset=*/0,
             n_steps,
-            /*plasticity_active=*/plasticity_on ? 1 : 0
+            /*plasticity_active=*/plasticity_on ? 1 : 0,
+            /*a_minus_in=*/args.stdp_a_minus,            // task #16 C2 runtime override
+            /*stdp_additive=*/args.stdp_form == "additive" ? 1 : 0   // task #17
         );
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -6217,7 +6401,9 @@ static int run_train_stdp(const Args& args) {
     snap_f << "],\n";
     snap_f << "  \"stdp\": {"
         << "\"A_plus\":"  << STDP_A_PLUS  << ","
-        << "\"A_minus\":" << STDP_A_MINUS << ","
+        << "\"A_minus\":" << args.stdp_a_minus << ","   // task #16 C2: actual runtime A_minus
+        << "\"A_minus_default\":" << STDP_A_MINUS << ","
+        << "\"form\":\"" << args.stdp_form << "\","      // task #17
         << "\"tau_plus_ms\":"  << STDP_TAU_PLUS_MS  << ","
         << "\"tau_minus_ms\":" << STDP_TAU_MINUS_MS << ","
         << "\"w_min_nS\":" << STDP_W_MIN_NS << ","
@@ -6447,7 +6633,9 @@ static int run_train_stdp(const Args& args) {
            << ",\"frac_at_zero\":" << wstats_save.frac_at_zero
            << ",\"frac_at_cap\":"  << wstats_save.frac_at_cap << "},\n";
         mf << "  \"stdp\": {\"A_plus\":" << STDP_A_PLUS
-           << ",\"A_minus\":" << STDP_A_MINUS
+           << ",\"A_minus\":" << args.stdp_a_minus      // task #16 C2: actual runtime A_minus
+           << ",\"A_minus_default\":" << STDP_A_MINUS
+           << ",\"form\":\"" << args.stdp_form << "\""  // task #17
            << ",\"tau_plus_ms\":"  << STDP_TAU_PLUS_MS
            << ",\"tau_minus_ms\":" << STDP_TAU_MINUS_MS
            << ",\"w_min_nS\":" << STDP_W_MIN_NS
@@ -6574,6 +6762,65 @@ static int run_train_stdp(const Args& args) {
         pref_theta_idx_l23[i] = argmax;
     }
 
+    // task #14: pull post-train weight stats up so the top-level summary
+    // (which always runs) has them even if V5 is skipped via --validate-only-v2.
+    CUDA_CHECK(cudaMemcpy(w_host.data(), d_l23_w_nS,
+                          static_cast<size_t>(total_syn) * sizeof(double),
+                          cudaMemcpyDeviceToHost));
+    const auto wstats_post = compute_weight_stats(w_host);
+
+    // task #14: V5 firing diagnostics are always cheap; compute them
+    // even under --validate-only-v2 so the top-level summary has them.
+    long long v5_n_silent = 0;
+    double v5_mean_r = 0.0, v5_median_r = 0.0, v5_p95_r = 0.0, v5_max_r = 0.0;
+    std::vector<double> l23_rates_at_theta0(N_L23);
+    {
+        std::vector<double> rs(N_L23);
+        for (int i = 0; i < N_L23; ++i) {
+            const double r = l23_rate_per_theta[i];   // ti=0 row
+            rs[i] = r;
+            l23_rates_at_theta0[i] = r;
+            v5_mean_r += r;
+            if (r > v5_max_r) v5_max_r = r;
+            if (r < 0.1) ++v5_n_silent;
+        }
+        v5_mean_r /= N_L23;
+        std::nth_element(rs.begin(), rs.begin() + N_L23/2, rs.end());
+        v5_median_r = rs[N_L23/2];
+        std::nth_element(rs.begin(),
+                         rs.begin() + (size_t)(N_L23 * 0.95), rs.end());
+        v5_p95_r = rs[(size_t)(N_L23 * 0.95)];
+    }
+
+    // V2 JSON write — moved up so it always runs even with --validate-only-v2.
+    {
+        const std::string v2_path = args.out_dir + "/v1_v2_phaseA_v2_osi"
+            + label_suffix + ".json";
+        std::ofstream g(v2_path);
+        if (!g) die("could not open " + v2_path);
+        g << std::setprecision(8);
+        g << "{\n";
+        g << "  \"thetas_deg\": [";
+        for (int ti = 0; ti < N_THETA; ++ti) { if (ti) g << ","; g << thetas_deg[ti]; }
+        g << "],\n";
+        // OSI distribution stats.
+        std::vector<double> osi_sorted = osi_l23;
+        std::sort(osi_sorted.begin(), osi_sorted.end());
+        const double osi_median = osi_sorted[N_L23/2];
+        long long n_gt_0p2 = 0, n_gt_0p5 = 0;
+        for (double v : osi_l23) { if (v > 0.2) ++n_gt_0p2; if (v > 0.5) ++n_gt_0p5; }
+        g << "  \"osi_median\": " << osi_median << ",\n";
+        g << "  \"frac_osi_gt_0p2\": " << (static_cast<double>(n_gt_0p2)/N_L23) << ",\n";
+        g << "  \"frac_osi_gt_0p5\": " << (static_cast<double>(n_gt_0p5)/N_L23) << ",\n";
+        g << "  \"osi_per_cell\": [";
+        for (int i = 0; i < N_L23; ++i) { if (i) g << ","; g << osi_l23[i]; }
+        g << "],\n";
+        g << "  \"pref_theta_idx_per_cell\": [";
+        for (int i = 0; i < N_L23; ++i) { if (i) g << ","; g << pref_theta_idx_l23[i]; }
+        g << "]\n}\n";
+    }
+
+    if (!args.validate_only_v2) {
     // ---- V3: phase invariance for 16 sample L2/3 cells ----
     constexpr int N_V3_CELLS = 16;
     constexpr int N_PHI = 8;
@@ -6684,49 +6931,30 @@ static int run_train_stdp(const Args& args) {
             ? (v3_l23_pi[s] / v3_l4_partner_pi_mean[s]) : 1.0;
     }
 
-    // ---- V5: weight + firing diagnostics (computed before V1/V4 since cheap) ----
-    CUDA_CHECK(cudaMemcpy(w_host.data(), d_l23_w_nS,
-                          static_cast<size_t>(total_syn) * sizeof(double),
-                          cudaMemcpyDeviceToHost));
-    const auto wstats_post = compute_weight_stats(w_host);
-    // L2/3 firing rate stats already collected from the θ=0 run during V2.
-    std::vector<double> l23_rates_at_theta0(N_L23);
+    // ---- V5: weight + firing diagnostics ----
+    // Stats already computed above (wstats_post, v5_*) so the top-level
+    // summary can include them even when --validate-only-v2 (#14) skips
+    // the V5 JSON write.
+    std::cout << "V5 diag: l23_mean_rate=" << v5_mean_r
+              << "  median=" << v5_median_r
+              << "  p95=" << v5_p95_r
+              << "  max=" << v5_max_r
+              << "  frac_silent="
+              << (static_cast<double>(v5_n_silent)/N_L23) << "\n";
+
     {
-        long long n_silent = 0;
-        double sum_r = 0, max_r = 0;
-        std::vector<double> rs(N_L23);
-        for (int i = 0; i < N_L23; ++i) {
-            const double r = l23_rate_per_theta[i];   // ti=0 row
-            rs[i] = r;
-            l23_rates_at_theta0[i] = r;
-            sum_r += r;
-            if (r > max_r) max_r = r;
-            if (r < 0.1) ++n_silent;
-        }
-        const double mean_r = sum_r / N_L23;
-        std::nth_element(rs.begin(), rs.begin() + N_L23/2, rs.end());
-        const double median_r = rs[N_L23/2];
-        std::nth_element(rs.begin(),
-                         rs.begin() + (size_t)(N_L23 * 0.95), rs.end());
-        const double p95_r = rs[(size_t)(N_L23 * 0.95)];
-
-        std::cout << "V5 diag: l23_mean_rate=" << mean_r
-                  << "  median=" << median_r
-                  << "  p95=" << p95_r
-                  << "  max=" << max_r
-                  << "  frac_silent=" << (static_cast<double>(n_silent)/N_L23) << "\n";
-
         const std::string v5_path = args.out_dir + "/v1_v2_phaseA_v5_diag"
             + label_suffix + ".json";
         std::ofstream g(v5_path);
         if (!g) die("could not open " + v5_path);
         g << std::setprecision(8);
         g << "{\n";
-        g << "  \"l23\": {\"mean_rate_hz\":" << mean_r
-            << ",\"median_rate_hz\":" << median_r
-            << ",\"p95_rate_hz\":" << p95_r
-            << ",\"max_rate_hz\":" << max_r
-            << ",\"frac_silent\":" << (static_cast<double>(n_silent)/N_L23) << "},\n";
+        g << "  \"l23\": {\"mean_rate_hz\":" << v5_mean_r
+            << ",\"median_rate_hz\":" << v5_median_r
+            << ",\"p95_rate_hz\":" << v5_p95_r
+            << ",\"max_rate_hz\":" << v5_max_r
+            << ",\"frac_silent\":"
+            << (static_cast<double>(v5_n_silent)/N_L23) << "},\n";
         g << "  \"weights_nS\": {\"mean\":" << wstats_post.mean
             << ",\"median\":" << wstats_post.median
             << ",\"std\":"    << wstats_post.std_
@@ -6740,34 +6968,6 @@ static int run_train_stdp(const Args& args) {
         g << "],\n";
         g << "  \"l23_w_nS\": [";
         for (int i = 0; i < total_syn; ++i) { if (i) g << ","; g << w_host[i]; }
-        g << "]\n}\n";
-    }
-
-    // Write V2 + V3 artifacts.
-    {
-        const std::string v2_path = args.out_dir + "/v1_v2_phaseA_v2_osi"
-            + label_suffix + ".json";
-        std::ofstream g(v2_path);
-        if (!g) die("could not open " + v2_path);
-        g << std::setprecision(8);
-        g << "{\n";
-        g << "  \"thetas_deg\": [";
-        for (int ti = 0; ti < N_THETA; ++ti) { if (ti) g << ","; g << thetas_deg[ti]; }
-        g << "],\n";
-        // OSI distribution stats.
-        std::vector<double> osi_sorted = osi_l23;
-        std::sort(osi_sorted.begin(), osi_sorted.end());
-        const double osi_median = osi_sorted[N_L23/2];
-        long long n_gt_0p2 = 0, n_gt_0p5 = 0;
-        for (double v : osi_l23) { if (v > 0.2) ++n_gt_0p2; if (v > 0.5) ++n_gt_0p5; }
-        g << "  \"osi_median\": " << osi_median << ",\n";
-        g << "  \"frac_osi_gt_0p2\": " << (static_cast<double>(n_gt_0p2)/N_L23) << ",\n";
-        g << "  \"frac_osi_gt_0p5\": " << (static_cast<double>(n_gt_0p5)/N_L23) << ",\n";
-        g << "  \"osi_per_cell\": [";
-        for (int i = 0; i < N_L23; ++i) { if (i) g << ","; g << osi_l23[i]; }
-        g << "],\n";
-        g << "  \"pref_theta_idx_per_cell\": [";
-        for (int i = 0; i < N_L23; ++i) { if (i) g << ","; g << pref_theta_idx_l23[i]; }
         g << "]\n}\n";
     }
 
@@ -7054,7 +7254,9 @@ static int run_train_stdp(const Args& args) {
                 d_l4_spike_record,
                 /*phase_step_offset=*/0,
                 N_V1_STA_STEPS,
-                /*plasticity_active=*/0
+                /*plasticity_active=*/0,
+                /*a_minus_in=*/0.0,                       // unused when plasticity_active==0
+                /*stdp_additive=*/0                       // unused when plasticity_active==0
             );
             CUDA_CHECK(cudaGetLastError());
             CUDA_CHECK(cudaDeviceSynchronize());
@@ -7209,6 +7411,8 @@ static int run_train_stdp(const Args& args) {
         g << "]\n";
         g << "}\n";
     }
+
+    }  // end if (!args.validate_only_v2) — V3/V5/V4/V1 skipped under #14 fast-path
 
     auto t_v1 = std::chrono::steady_clock::now();
     const double valid_wall_s =
@@ -9128,6 +9332,7 @@ int main(int argc, char** argv) {
     try {
         const Args args = parse_args(argc, argv);
         if (args.measure_epsp) { measure_epsp_run(W_IN_NS); return 0; }
+        if (args.dump_conn_csr) return run_dump_conn_csr(args);
         if (args.measure_l4_osi) return run_measure_l4_osi(args);
         if (args.train_stdp) return run_train_stdp(args);
         if (args.stim_protocol_check) return run_stim_protocol_check(args);
