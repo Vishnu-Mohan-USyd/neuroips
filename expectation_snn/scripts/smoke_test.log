@@ -1,5 +1,0 @@
-smoke_test: neuron spikes = 82
-smoke_test: poisson input spikes = 1977
-smoke_test: synapses w changed = 60 / 100
-smoke_test: w mean before -> after = 5.000000 -> 5.025691
-smoke_test: PASS

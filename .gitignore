@@ -1,0 +1,38 @@
+# Build artifacts
+build/
+*.o
+*.obj
+*.cubin
+*.fatbin
+*.ptx
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Trained weights / large binary outputs (generated, not source)
+*.bin
+*.f32
+*.f64
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# Run-time artefacts produced by v1_test (stay in /tmp; do not commit)
+*.log
