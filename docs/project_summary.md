@@ -537,18 +537,33 @@ change the 13-row dampening-vs-sharpening pattern. Sources:
 `results/cross_decoder_comprehensive_decAprime.{json,md}`,
 `results/cross_decoder_comprehensive_decAprime_diff.{json,md}`.
 
-**Dec D (2026-04-24, FB-ON paired-fork neutral, per-ckpt).** Two variants:
-D-raw on raw `r_l23` and D-shape on `r_l23 / (r_l23.sum(1) + 1e-8)`.
-Paired-fork training with normal feedback (`feedback_scale = 1.0`), balanced
-per (target_ch × branch) at 900 train + 100 val per cell (72 k total) per
-ckpt. Adam lr=1e-3 wd=1e-4 seed=42. Headline signature: **row 12 (HMS-T
-native on R1+R2)** gives Δ_D-shape = +0.166 while Δ_A = −0.303 — a Kok-
-framework "amplitude dampens, orientation shape sharpens under expectation"
-co-occurrence; only row in the 17-row matrix with this divergence at
-material magnitude. Artefacts:
+**Dec D (2026-04-24, FB-ON paired-fork neutral, per-ckpt; 5k variant).** Two variants:
+D-raw on raw `r_l23` and D-shape on `r_l23 / (r_l23.sum(1) + 1e-8)`. Paired-fork
+training with normal feedback (`feedback_scale = 1.0`), balanced per (target_ch × branch)
+at 900 train + 100 val per cell (72 k total) per ckpt. Adam lr=1e-3 wd=1e-4 seed=42,
+early-stop patience 3 max 30 epochs. Headline signature: **row 12 (HMS-T native on R1+R2)**
+gives Δ_D-shape = +0.166 while Δ_A = −0.303 — a Kok-framework "amplitude dampens,
+orientation shape sharpens" co-occurrence; only row in the 17-row matrix with this
+divergence at material magnitude. Artefacts:
 `checkpoints/decoder_d_fbON_neutral_{raw,shape}_{r1r2,a1,b1,c1,e1}.pt`,
 `results/cross_decoder_comprehensive_withD_fbON.{json,md}`,
-`results/decoder_d_fbON_all_eval.json`, and per-net training JSONs.
+`results/decoder_d_fbON_all_eval.json`.
+
+**Dec D 20k variant (2026-04-27, Task #8).** Same paired-fork balanced training
+data but 20 000 Adam steps lr=1e-3 wd=0 (no early stopping, no regularization)
+— matches Dec A′ 20k regime exactly. Per legacy net (a1 / b1 / c1 / e1). Used as
+the disambiguation control for the 20k Dec A′ Δ on a1 / b1 (which read +0.21 / +0.18,
+opposite to Dec A): Dec D 20k (balanced ex+unex training, no natural-HMM prior bias
+to exploit) reads Δ_ex_unex = −0.024 / −0.046 (raw) / −0.052 / −0.044 (shape) on
+a1 / b1, agreeing with Dec A's small-dampening direction. The 20k Dec A′ positive Δ
+was prior-bias overfitting at large ||W||. On c1 / e1 Dec D 20k reads positive
+Δ (raw +0.069 / +0.040; shape +0.084 / +0.067), agreeing with Dec A's small
+sharpening. Final classification reconfirms Section 5. Artefacts:
+`checkpoints/decoder_d_20k_{raw,shape}_{a1,b1,c1,e1}.pt`,
+`results/decoder_d_20k_training_{net}.json`,
+`results/decoder_d_20k_raw_stratified_eval_{net}.json`,
+`results/task8_decD_20k_legacy/{net}_C1.json`. Training script:
+`scripts/train_decoder_d_20k_adam.py`.
 
 **Dec E (2026-04-24, Dec-A-spec post-Stage-2 retrain, per-ckpt; 2026-04-25 retraction).**
 Same arch as Dec A (`Linear(36, 36)+bias`), same lr=1e-3 no-weight-decay,
@@ -648,24 +663,29 @@ Dec A amplifies the sharpening-vs-dampening gap (−0.03 → +0.21 across the fo
 - HMS on R1+R2 (C-outlier; A and B negative, C positive at +0.053).
 - HMS-T modified on R1+R2 (C-outlier; A and B negative, C positive at +0.051).
 
-**Dec A vs 5k-retrain top-1 gap on dampening legacy rows (retraction 2026-04-25).**
-The earlier "Dec A vs Dec E dissociation" finding has been re-interpreted.
-Debugger Task #5 (`/tmp/debug_dec_a_advantage_report.md`) and Coder Task #6
-Part A jointly show the gap is an Adam @ 5 000-step optimisation-insufficiency
-artefact on frozen-dampened L2/3, not a representational dissociation. On a1
-unpenalised LBFGS reaches 0.70; Adam stalls at 0.36 at step 5 000 and reaches
-0.66 by step 20 000. Retraining Dec A′ for 20 000 steps gives a1 = 0.6709
-(+30.5 pp vs 5k 0.3659; +8.0 pp ABOVE Dec A original 0.591), b1 = 0.6625
-(+30.6 pp vs 5k 0.3562; +7.9 pp ABOVE Dec A 0.583), r1r2 = 0.5729 (stable,
-+2.4 pp vs 5k 0.5486 — already saturated at 5k because r1r2's r_l23 has
-sharper per-orientation signal). Dec A's 0.59 with ||W||=82.5 is a small-norm
-solution from Stage-1 co-training of L2/3 + decoder
-(`src/training/stage1_sensory.py:120-129`); the co-training is real (H1
-confirmed) but does not block retrains. The Δ_E sign flags on a1 / b1 HMM
-C1 are under-trained-Adam artefacts, not decoder disagreements. Sources:
-`results/decoder_a_prime_20k_stratified_eval_{r1r2,a1,b1}.json`,
+**Dec A vs retrain-decoder closure on dampening legacy rows (Tasks #5–#8,
+2026-04-25 → 2026-05-03).** Three findings, each refining the previous:
+(i) Task #5 — 5k retrains were Adam-undertrained (sklearn LBFGS reaches 0.70
+on a1; Adam at 5k stalls at 0.36 with ||W||=143 vs 0.66 at 20k with ||W||=488).
+(ii) Tasks #6–#7 — 20k Dec A′ exceeds Dec A on every net (a1: 0.36 → 0.67;
++8 pp above Dec A); but on the 17-row matrix at 20k, rows 5–6 (a1 / b1 HMM C1)
+read Δ_A′(20k) = +0.21 / +0.18 — opposite to Dec A's −0.03. (iii) Task #8 —
+disambiguation: trained Linear(36,36)+bias at 20 000 Adam lr=1e-3 (matching
+Dec A′ regime) on Dec D's PAIRED-FORK BALANCED ex+unex data, no natural-HMM
+prior asymmetry to exploit. On a1 / b1 HMM C1, Δ_D-raw(20k) = −0.024 / −0.046;
+Δ_D-shape(20k) = −0.052 / −0.044 — agreeing with Dec A's small-dampening
+direction. The 20k Dec A′ positive Δ on a1 / b1 was natural-HMM prior-bias
+overfitting at large ||W||, not a hidden sharpening signal. **Section 5's
+25-run-sweep regime labels (a1 / b1 dampening, c1 transitional, e1 best
+sharpener) are reconfirmed.** Dec A's 0.59 with ||W||=82.5 is the small-norm
+solution from Stage-1 co-training of L2/3 + decoder (`src/training/stage1_sensory.py:120-129`),
+which Task #5 confirmed as the H1 mechanism. Sources:
+`results/cross_decoder_comprehensive_20k_final.{json,md}`,
+`results/task8_decD_20k_legacy/{net}_C1.json`,
 `checkpoints/decoder_a_prime_20k_{net}.pt`,
-`/tmp/debug_dec_a_advantage_report.md`.
+`checkpoints/decoder_d_20k_{raw,shape}_{net}.pt`,
+`/tmp/debug_dec_a_advantage_report.md`. Full account:
+`docs/R1R2_full_report.md` § 9.6, `docs/research_log.md` 2026-05-03 entry.
 
 **Dec D Kok-style signature on row 12 (2026-04-24).** HMS-T native on R1+R2
 gives Δ_D-shape = +0.166 while Δ_A = −0.303. Amplitude-sensitive decoders

@@ -561,7 +561,7 @@ Dec A moving-target concern:
 The "moving target during Stage 1" concern for Dec A does not change the
 13-row R1+R2 sign pattern.
 
-### Dec A → retrain comparison (Dec E / Dec A′ / Dec A_cotrained sign flags on a1 / b1 are optimisation-insufficiency artefacts, 2026-04-25 retraction)
+### Dec A → retrain comparison: Tasks #5–#8 closure (Section-5 classifications stand)
 
 Dec E is Dec-A-spec (same arch, same LR, 5000 gradient steps) trained
 **post-Stage-2** on the natural HMM stream with the HMM's own stochastic
@@ -597,18 +597,44 @@ retrains on r1r2, a1, b1 (same script, same config, only `--n-steps
 | b1 | 0.5830 | 0.3562 | **0.6625** | +0.3063 |
 
 a1 / b1 retrains gain +30 pp going 5k → 20k and exceed Dec A original by
-+7.9 / +8.0 pp; r1r2 is stable (+2.4 pp). Sign flags on a1 / b1 HMM C1 are
-artefacts of the same under-training and should not be read as decoder
-disagreements. Whether the signs reproduce under 20 000-step retrain
-decoders is a separate open question (could re-run the 17-row matrix under
-20k retrains; not in Task #6 scope). Sources:
-`/tmp/debug_dec_a_advantage_report.md` (full evidence chain),
-`checkpoints/decoder_a_prime_20k_{r1r2,a1,b1}.pt`,
++7.9 / +8.0 pp; r1r2 is stable (+2.4 pp). Task #7 then re-built the 17-row
+matrix using 20k Dec A′ for all 5 nets — output
+`results/cross_decoder_comprehensive_20k_final.{json,md}`. On rows 5–6
+(a1 / b1 HMM C1) of that matrix, Δ_A′(20k) = +0.21 / +0.18 — opposite
+to Dec A's −0.03.
+
+**Task #8 (2026-04-27): the 20k Dec A′ positive Δ on a1 / b1 was
+natural-HMM prior-bias overfitting.** Trained Linear(36,36)+bias at 20 000
+Adam lr=1e-3 (matching Dec A′ regime exactly) on Dec D's PAIRED-FORK
+BALANCED ex+unex data — by construction zero natural-HMM prior asymmetry to
+exploit. Per-net Δ_ex_unex on HMM C1 row:
+
+| net | Δ_A | Δ_A′(20k) | Δ_D-raw(20k) | Δ_D-shape(20k) | verdict |
+|---|---:|---:|---:|---:|---|
+| a1 | −0.031 | +0.210 | −0.024 | −0.052 | PRIOR-BIAS (a1 = dampening) |
+| b1 | −0.033 | +0.180 | −0.046 | −0.044 | PRIOR-BIAS (b1 = dampening) |
+| c1 | +0.177 | +0.249 | +0.069 | +0.084 | sharpening genuine (small) |
+| e1 | +0.199 | +0.258 | +0.040 | +0.067 | sharpening genuine (small) |
+
+20k Dec D (balanced ex+unex training, no prior bias to exploit) recovers
+Dec A's small-dampening direction on a1 / b1 and small-sharpening direction
+on c1 / e1. The 20k Dec A′ positive Δ on a1 / b1 was natural-HMM prior-bias
+overfitting at large ||W||, not a hidden sharpening signal. **Section 5's
+25-run-sweep regime labels (a1 / b1 dampening, c1 transitional, e1 best
+sharpener) are reconfirmed.**
+
+Sources: `/tmp/debug_dec_a_advantage_report.md`,
+`checkpoints/decoder_a_prime_20k_{net}.pt`,
+`checkpoints/decoder_d_20k_{raw,shape}_{net}.pt`,
 `results/decoder_a_prime_training_20k_{net}.json`,
-`results/decoder_a_prime_20k_stratified_eval_{net}.json`. Full per-net 5k
-Dec E stratified: `results/decoder_e_stratified_eval_{r1r2,a1,b1,c1,e1}.json`
-(a1 / b1 / c1 are step-4000-recovered, see `docs/research_log.md`
-2026-04-24 entry; orthogonal to this retraction).
+`results/decoder_a_prime_20k_stratified_eval_{net}.json`,
+`results/decoder_d_20k_training_{net}.json`,
+`results/decoder_d_20k_raw_stratified_eval_{net}.json`,
+`results/cross_decoder_comprehensive_20k_final.{json,md}`,
+`results/task8_decD_20k_legacy/{net}_C1.json`. Full per-net 5k Dec E
+stratified (orthogonal): `results/decoder_e_stratified_eval_{net}.json`.
+See `docs/R1R2_full_report.md` § 9.6 + `docs/research_log.md` 2026-05-03
+entry for the long-form narrative.
 
 ### Kok-style shape-sharpening-under-amplitude-dampening (row 12, HMS-T native on R1+R2)
 
@@ -885,11 +911,13 @@ eliminating the "moving target during Stage 1" concern for Dec A). Zero
 
 ### Dec E sanity check (2026-04-24) and Dec D Kok-signature flag
 
-**Retraction (2026-04-25).** The earlier "Dec A vs Dec E dissociation on
-dampening legacy configs" framing has been retracted. See § 11
-"Dec A → retrain comparison" above for the optimisation-insufficiency
-correction and Task #6 Part A 20k-retrain evidence
-(`results/decoder_a_prime_20k_stratified_eval_{r1r2,a1,b1}.json`).
+**Retraction (2026-04-25 → updated 2026-05-03).** The earlier "Dec A vs Dec E
+dissociation on dampening legacy configs" framing has been retracted. Task #6
+showed the 5k-retrain Δ on a1 / b1 was Adam under-training; Task #8 showed
+that the 20k Dec A′ Δ on a1 / b1 was natural-HMM prior-bias overfitting; Dec D
+20k (balanced ex+unex training) confirms Dec A's small-dampening sign on a1 / b1.
+See § 11 "Dec A → retrain comparison" above for the full Tasks #5–#8 closure
+narrative.
 
 Dec E preserves Dec A's sign on **all 13 R1+R2 rows** and on the e1 / c1
 legacy rows. On a1 / b1 HMM C1 Dec E shows a nominal sign flag

@@ -18,6 +18,36 @@
 
 ---
 
+## 2026-05-03 — Tasks #5–#8 closure: decoder methodology audit complete; Section-5 classifications stand
+
+**Context.** The 2026-04-23 / 2026-04-24 entries below reported a Dec A advantage over post-Stage-2 retrains that grew with closer inspection: 22 pp top-1 gap on a1 / b1 between Dec A (Stage-1 co-trained) and Dec A′ / Dec E (5 000 Adam steps post-Stage-2), plus a Dec E sign flip vs Dec A on the rows 5–6 of the 17-row matrix. Initial reading: a representational "moving-target L2/3" advantage that 5k post-Stage-2 retrains cannot reproduce. Tasks #5–#8 walked back through that interpretation chain and ended at a clean account.
+
+**Debugger Task #5 (2026-04-25).** Adam-on-features trajectory on a1's frozen final L2/3: lr=1e-3 reaches 0.36 at step 5 000 (||W||=143), 0.51 at 10k, 0.63 at 15k, 0.66 at 20k; sklearn LBFGS unconstrained ceiling 0.70. The 5 000-step retrain weight norms (Dec A′ 144.9, Dec E 119.2, Dec A_cotrained 150.1) all sit on the Adam-at-5000 trajectory point. Dec A's ||W||=82.5 / 0.59 is a small-norm solution shaped by Stage-1 co-training of decoder + L2/3 + PV (`src/training/stage1_sensory.py:120-129`). On r1r2, Adam at 5k saturates at 0.545 ≈ Dec A 0.547. H1 (Stage-1 co-training) confirmed as upstream mechanism; H2/H3/H4/H5 falsified. Full evidence chain in `/tmp/debug_dec_a_advantage_report.md`.
+
+**Coder Task #6 (2026-04-25, commit `1bc896d`).** Re-trained Dec A′ at 20 000 Adam steps on r1r2 / a1 / b1 (`scripts/train_decoder_a_prime.py --n-steps 20000`, no other changes). 10k HMM stratified top-1: r1r2 0.5729 (+2.4 pp vs 5k 0.5486), a1 0.6709 (+30.5 pp), b1 0.6625 (+30.6 pp). At 20k, Dec A′ EXCEEDS Dec A on every net (a1 by +8.0 pp, b1 by +7.9 pp, r1r2 by +3.2 pp). The "retrains cannot recover Dec A" reading was wrong; what looked like an irreducible Dec A advantage was Adam under-training at 5k on dampening-net loss landscapes. Doc retractions across 6 files in this same commit.
+
+**Coder Task #7 (2026-04-25, commit `72cbad8`).** Completed the 5-net 20k Dec A′ suite (added c1 + e1: gain +5.9 / +5.4 pp; both also exceed Dec A). Re-built the 17-row cross-decoder matrix using 20k Dec A′ for all per-net entries. Result: rows 5 / 6 (a1 / b1 HMM C1) `Δ_A′(20k) = +0.21 / +0.18` — same direction as 5k Dec E (+0.04 / +0.02), 5x amplified. I initially read this as the sign flips PERSISTING under proper optimisation — i.e. real ex>unex signal that Dec A's small-||W|| basin missed. Output: `results/cross_decoder_comprehensive_20k_final.{json,md}`.
+
+**Coder Task #8 (2026-04-27, commit `22fc5e5`).** Disambiguation control. Trained Linear(36,36)+bias at 20 000 Adam steps lr=1e-3 (matching Dec A′ regime exactly) on Dec D's PAIRED-FORK BALANCED ex+unex training set (FB-ON, focused, cue at expected-next in BOTH branches — by construction zero natural-HMM prior asymmetry). Both Dec D-raw and Dec D-shape variants per legacy net. Per-net Δ_ex_unex on HMM C1 row:
+
+```
+net   Δ_A      Δ_A′_20k   Δ_D-raw_20k   Δ_D-shape_20k   verdict
+a1    -0.031   +0.210     -0.024        -0.052          PRIOR-BIAS (a1 = dampening; Dec A right)
+b1    -0.033   +0.180     -0.046        -0.044          PRIOR-BIAS (b1 = dampening; Dec A right)
+c1    +0.177   +0.249     +0.069        +0.084          sharpening genuine (small)
+e1    +0.199   +0.258     +0.040        +0.067          sharpening genuine (small)
+```
+
+20k Dec A′'s positive Δ on a1 / b1 was natural-HMM prior-bias overfitting, not a hidden sharpening signal. With balanced ex+unex training at the same 20k Adam budget, Dec D agrees with Dec A's small-dampening direction. c1 / e1 sharpening is genuine across both Dec A and Dec D 20k.
+
+**Final legacy-net classification.** Section 5 (25-run sweep, 2026-03 / 2026-04 timeframe) labelled a1 / b1 = dampening, c1 = transitional, e1 = best sharpener. Tasks #5–#8 reconfirm this without modification: Dec A, Dec C (synthetic-bump-trained, network-agnostic) and Dec D 20k (balanced-training control) all agree on the sign of Δ on a1 / b1 (small dampening) and on c1 / e1 (small sharpening). The Task #6 doc retractions ("rows 5 / 6 sign flags artefactual") stand as written — Task #8 corroborates the conclusion via a different mechanism than Task #6 framed (prior-bias overfitting at 20k, not optimisation-insufficiency at 5k; both 5k retrains and 20k Dec D give the Dec-A direction on a1 / b1).
+
+**Decision / next step.** No further architecture or training changes. The 17-row cross-decoder matrix with 20k Dec A′ + 20k Dec D is the final published artefact for the legacy-net classification. Section 5 wording does not need to change. Open scientific questions around a1 / b1 small-dampening magnitude (~0.03) vs c1 / e1 small-sharpening magnitude (~0.07–0.18) are best framed against the 25-run sweep's M7 / M10 / FWHM diagnostics, which already encode the same regime separation more directly.
+
+**Pointers.** `/tmp/debug_dec_a_advantage_report.md` (Task #5 root-cause analysis) · `checkpoints/decoder_a_prime_20k_{net}.pt` + `checkpoints/decoder_d_20k_{raw,shape}_{net}.pt` (Tasks #6–#8 ckpts) · `results/cross_decoder_comprehensive_20k_final.{json,md}` (Task #7 8-column matrix) · `results/task8_decD_20k_legacy/{net}_C1.json` (Task #8 paradigm_readout C1 with Dec D 20k) · `scripts/train_decoder_a_prime.py` + `scripts/train_decoder_d_20k_adam.py` (training scripts) · `scripts/run_task7_partB_matrix.sh` + `scripts/merge_decAprime_20k_matrix.py` (matrix orchestrator + aggregator) · commits `1bc896d` `72cbad8` `22fc5e5` on `r1r2-decoderC-sharpening-eval`.
+
+---
+
 ## 2026-04-25 — Retraction: Dec A vs retrain "dissociation" on a1 / b1 is an Adam @ 5k optimisation-insufficiency artefact (Debugger Task #5 + Coder Task #6)
 
 **Context:** The 2026-04-24 entry below reported a "Dec A vs Dec E dissociation on dampening legacy networks" — Dec A top-1 ≈ 0.59 vs Dec E ≈ 0.35 on a1 / b1, with Dec E flipping Δ sign on rows 5 / 6 of the 17-row matrix (Δ_A = −0.031 / −0.033 → Δ_E = +0.040 / +0.024). The reading that "Dec A captures a representational structure that 5000 steps of post-Stage-2 natural-HMM training cannot reproduce" was checked by Debugger (Task #5) and Coder (Task #6).
