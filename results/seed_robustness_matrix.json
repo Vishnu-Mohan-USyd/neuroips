@@ -1,0 +1,464 @@
+{
+  "task": "Task #21 \u2014 seed-robustness paradigm matrix (3 seeds \u00d7 5 nets)",
+  "seeds": [
+    42,
+    43,
+    44
+  ],
+  "rows": [
+    {
+      "row": 1,
+      "paradigm": "HMM C1 (focused + HMM cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": 0.315,
+        "seed43": 0.344,
+        "seed44": 0.3469999999999999
+      },
+      "delta_decC": {
+        "seed42": 0.06599999999999995,
+        "seed43": 0.05400000000000005,
+        "seed44": 0.020000000000000018
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "+++",
+      "signs_decC": "+++"
+    },
+    {
+      "row": 2,
+      "paradigm": "HMM C2 (routine + HMM cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": 0.16200000000000003,
+        "seed43": 0.189,
+        "seed44": 0.172
+      },
+      "delta_decC": {
+        "seed42": 0.02899999999999997,
+        "seed43": -0.06800000000000006,
+        "seed44": -0.09699999999999998
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "+++",
+      "signs_decC": "+\u2212\u2212"
+    },
+    {
+      "row": 3,
+      "paradigm": "HMM C3 (focused + zero cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": 0.312,
+        "seed43": 0.309,
+        "seed44": 0.299
+      },
+      "delta_decC": {
+        "seed42": 0.041000000000000036,
+        "seed43": 0.026000000000000023,
+        "seed44": 0.015000000000000013
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "+++",
+      "signs_decC": "+++"
+    },
+    {
+      "row": 4,
+      "paradigm": "HMM C4 (routine + zero cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": 0.16999999999999998,
+        "seed43": 0.16399999999999998,
+        "seed44": 0.15199999999999997
+      },
+      "delta_decC": {
+        "seed42": 0.03600000000000003,
+        "seed43": -0.07300000000000001,
+        "seed44": -0.14099999999999996
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "+++",
+      "signs_decC": "+\u2212\u2212"
+    },
+    {
+      "row": 5,
+      "paradigm": "HMM C1 (focused + HMM cue)",
+      "net": "a1",
+      "delta_decA": {
+        "seed42": -0.031000000000000028,
+        "seed43": -0.0039999999999998925,
+        "seed44": 0.026999999999999913
+      },
+      "delta_decC": {
+        "seed42": -0.010000000000000009,
+        "seed43": -0.013000000000000012,
+        "seed44": 0.016000000000000014
+      },
+      "sign_stable_decA": false,
+      "sign_stable_decC": false,
+      "signs_decA": "\u2212\u2212+",
+      "signs_decC": "\u2212\u2212+"
+    },
+    {
+      "row": 6,
+      "paradigm": "HMM C1 (focused + HMM cue)",
+      "net": "b1",
+      "delta_decA": {
+        "seed42": -0.03300000000000003,
+        "seed43": 0.007000000000000006,
+        "seed44": 0.0010000000000000009
+      },
+      "delta_decC": {
+        "seed42": -0.028000000000000025,
+        "seed43": -0.03200000000000003,
+        "seed44": -0.0040000000000000036
+      },
+      "sign_stable_decA": false,
+      "sign_stable_decC": true,
+      "signs_decA": "\u2212++",
+      "signs_decC": "\u2212\u2212\u2212"
+    },
+    {
+      "row": 7,
+      "paradigm": "HMM C1 (focused + HMM cue)",
+      "net": "c1",
+      "delta_decA": {
+        "seed42": 0.177,
+        "seed43": 0.174,
+        "seed44": 0.20899999999999996
+      },
+      "delta_decC": {
+        "seed42": -0.009000000000000008,
+        "seed43": -0.015000000000000013,
+        "seed44": -0.019000000000000017
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "+++",
+      "signs_decC": "\u2212\u2212\u2212"
+    },
+    {
+      "row": 8,
+      "paradigm": "HMM C1 (focused + HMM cue)",
+      "net": "e1",
+      "delta_decA": {
+        "seed42": 0.19899999999999995,
+        "seed43": 0.181,
+        "seed44": 0.22700000000000004
+      },
+      "delta_decC": {
+        "seed42": -0.0020000000000000018,
+        "seed43": -0.01100000000000001,
+        "seed44": -0.031000000000000028
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "+++",
+      "signs_decC": "\u2212\u2212\u2212"
+    },
+    {
+      "row": 9,
+      "paradigm": "NEW (paired march)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": 0.38708333333333333,
+        "seed43": 0.44708333333333333,
+        "seed44": 0.4304166666666666
+      },
+      "delta_decC": {
+        "seed42": 0.12541666666666662,
+        "seed43": 0.14791666666666659,
+        "seed44": 0.0854166666666667
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "+++",
+      "signs_decC": "+++"
+    },
+    {
+      "row": 10,
+      "paradigm": "M3R (matched_3row_ring)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.15479536813577555,
+        "seed43": -0.0819077988762319,
+        "seed44": -0.0645574761954073
+      },
+      "delta_decC": {
+        "seed42": -0.0273706667263941,
+        "seed43": 0.0003930860795202662,
+        "seed44": -0.06827517172344755
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "\u2212+\u2212"
+    },
+    {
+      "row": 11,
+      "paradigm": "HMS",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.1864934521239714,
+        "seed43": -0.020416264349318758,
+        "seed44": -0.06307814957474189
+      },
+      "delta_decC": {
+        "seed42": 0.052518195812673585,
+        "seed43": 0.10578907842506169,
+        "seed44": -0.04611765113669353
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "++\u2212"
+    },
+    {
+      "row": 12,
+      "paradigm": "HMS-T (tight-expected)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.30332911925832273,
+        "seed43": -0.10360231415915866,
+        "seed44": -0.12883631713554977
+      },
+      "delta_decC": {
+        "seed42": -0.07787610619469032,
+        "seed43": 0.0668559978304758,
+        "seed44": -0.14124040920716108
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "\u2212+\u2212"
+    },
+    {
+      "row": 13,
+      "paradigm": "P3P (matched_probe_3pass)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": 0.3846153846153846,
+        "seed43": 0.4571428571428571,
+        "seed44": 0.35000000000000003
+      },
+      "delta_decC": {
+        "seed42": 0.05128205128205121,
+        "seed43": -0.05714285714285716,
+        "seed44": -0.125
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "+++",
+      "signs_decC": "+\u2212\u2212"
+    },
+    {
+      "row": 14,
+      "paradigm": "VCD-test3",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.16664578373637395,
+        "seed43": -0.17715212605723551,
+        "seed44": -0.10958388250800233
+      },
+      "delta_decC": {
+        "seed42": -0.07079313369251972,
+        "seed43": -0.056656239137991005,
+        "seed44": -0.0809640369045378
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "\u2212\u2212\u2212"
+    },
+    {
+      "row": 15,
+      "paradigm": "M3R (modified: focused+march cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.13618155806506593,
+        "seed43": -0.0805441109841234,
+        "seed44": -0.07083028340956099
+      },
+      "delta_decC": {
+        "seed42": -0.019653229540761652,
+        "seed43": -0.048671959389016695,
+        "seed44": -0.08419754663312984
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": true,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "\u2212\u2212\u2212"
+    },
+    {
+      "row": 16,
+      "paradigm": "HMS-T (modified: focused+march cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.2937031519708685,
+        "seed43": -0.1161971830985915,
+        "seed44": -0.15450450450450448
+      },
+      "delta_decC": {
+        "seed42": 0.051003759665176895,
+        "seed43": 0.006961493733040447,
+        "seed44": -0.16821821821821814
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "++\u2212"
+    },
+    {
+      "row": 17,
+      "paradigm": "VCD (modified: focused+march cue)",
+      "net": "r1r2",
+      "delta_decA": {
+        "seed42": -0.08360773085182538,
+        "seed43": -0.07223760382582434,
+        "seed44": -0.036520120958362434
+      },
+      "delta_decC": {
+        "seed42": -0.010307802433786706,
+        "seed43": 0.006292474200855769,
+        "seed44": -0.04396371249127706
+      },
+      "sign_stable_decA": true,
+      "sign_stable_decC": false,
+      "signs_decA": "\u2212\u2212\u2212",
+      "signs_decC": "\u2212+\u2212"
+    }
+  ],
+  "summary": {
+    "n_rows_total": 17,
+    "n_sign_stable_decA": 15,
+    "n_sign_stable_decC": 8,
+    "n_sign_stable_both": 7,
+    "rows_unstable_decC": [
+      {
+        "row": 2,
+        "paradigm": "HMM C2 (routine + HMM cue)",
+        "net": "r1r2",
+        "signs_decC": "+\u2212\u2212"
+      },
+      {
+        "row": 4,
+        "paradigm": "HMM C4 (routine + zero cue)",
+        "net": "r1r2",
+        "signs_decC": "+\u2212\u2212"
+      },
+      {
+        "row": 5,
+        "paradigm": "HMM C1 (focused + HMM cue)",
+        "net": "a1",
+        "signs_decC": "\u2212\u2212+"
+      },
+      {
+        "row": 10,
+        "paradigm": "M3R (matched_3row_ring)",
+        "net": "r1r2",
+        "signs_decC": "\u2212+\u2212"
+      },
+      {
+        "row": 11,
+        "paradigm": "HMS",
+        "net": "r1r2",
+        "signs_decC": "++\u2212"
+      },
+      {
+        "row": 12,
+        "paradigm": "HMS-T (tight-expected)",
+        "net": "r1r2",
+        "signs_decC": "\u2212+\u2212"
+      },
+      {
+        "row": 13,
+        "paradigm": "P3P (matched_probe_3pass)",
+        "net": "r1r2",
+        "signs_decC": "+\u2212\u2212"
+      },
+      {
+        "row": 16,
+        "paradigm": "HMS-T (modified: focused+march cue)",
+        "net": "r1r2",
+        "signs_decC": "++\u2212"
+      },
+      {
+        "row": 17,
+        "paradigm": "VCD (modified: focused+march cue)",
+        "net": "r1r2",
+        "signs_decC": "\u2212+\u2212"
+      }
+    ],
+    "rows_unstable_decA": [
+      {
+        "row": 5,
+        "paradigm": "HMM C1 (focused + HMM cue)",
+        "net": "a1",
+        "signs_decA": "\u2212\u2212+"
+      },
+      {
+        "row": 6,
+        "paradigm": "HMM C1 (focused + HMM cue)",
+        "net": "b1",
+        "signs_decA": "\u2212++"
+      }
+    ]
+  },
+  "headline_paradigms": {
+    "M3R native": {
+      "row": 10,
+      "mech_decC": "Mech 1"
+    },
+    "M3R modified": {
+      "row": 15,
+      "mech_decC": "Mech 2 (weak)"
+    },
+    "HMS native": {
+      "row": 11,
+      "mech_decC": "Mech 2"
+    },
+    "HMS-T native": {
+      "row": 12,
+      "mech_decC": "Mech 2"
+    },
+    "HMS-T modified": {
+      "row": 16,
+      "mech_decC": "Mech 2"
+    },
+    "VCD-test3 native": {
+      "row": 14,
+      "mech_decC": "Mech 1"
+    },
+    "VCD-test3 modified": {
+      "row": 17,
+      "mech_decC": "Mech 1"
+    },
+    "HMM C1 (R1+R2)": {
+      "row": 1,
+      "mech_decC": "Mech 1 (paired-fork V2-pred stratum)"
+    },
+    "HMM C1 (a1)": {
+      "row": 5,
+      "mech_decC": "n/a (legacy)"
+    },
+    "HMM C1 (b1)": {
+      "row": 6,
+      "mech_decC": "n/a (legacy)"
+    },
+    "HMM C1 (c1)": {
+      "row": 7,
+      "mech_decC": "n/a (legacy)"
+    },
+    "HMM C1 (e1)": {
+      "row": 8,
+      "mech_decC": "n/a (legacy)"
+    }
+  },
+  "sources": {
+    "seed42": "results/cross_decoder_comprehensive_20k_final.json",
+    "seed43": "/tmp/paradigm_matrix_seed43",
+    "seed44": "/tmp/paradigm_matrix_seed44"
+  }
+}
