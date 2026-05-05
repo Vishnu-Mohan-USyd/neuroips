@@ -18,6 +18,18 @@
 
 ---
 
+## 2026-05-05 — Phase 4-7 closure: paradigm-sign two-mechanism account on R1+R2
+
+**Context.** Why does R1+R2 give different ex/unex signs across paradigms (paired-fork sharpening, M3R / VCD / HMS-family dampening)? Phase 4-7 debugger investigation (2026-05-04 → 2026-05-05) on the R1+R2 ckpt isolated the mechanism via V2-feedback / W_rec ablation under Dec C + Dec A.
+
+**Findings.** R1+R2's dampening paradigms separate into two independent mechanisms once V2 feedback is ablated. **Mech 1** (V2-feedback channel-resolved gain modulation, pi-modulated polarity; `src/model/network.py:307-318`) drives M3R + VCD-test3 (native + modified) + HMM C1 paired-fork V2-predictable strata. **Mech 2** (W_rec-amplified non-V2 stim-statistics bias; amplifier at `src/model/populations.py:206-238` + `:274`) drives HMS / HMS-T family. Channel-level mechanisms (Δr_stimch flip with pi-matching, ~57% |ΔL23_stimch| reduction under W_rec ablation) are decoder-robust under both Dec C and Dec A. Phase 7 caveat: per-paradigm Mech 1 vs Mech 2 verdicts disagree Dec C vs Dec A on 3/8 paradigms (M3R native, HMS-T native, VCD-test3 modified).
+
+**Decision/next step.** Findings propagated across primary docs in this same commit. Canonical doc: `docs/paradigm_sign_mechanism.md` (commit `9dd1035`). Open: ~43% W_rec residual on HMS / HMS-T; origin of the +0.004 L4 bias unexplored.
+
+**Pointers.** `docs/paradigm_sign_mechanism.md`; /tmp/phase{4,5,6,7}*.md; `scripts/_h11* _h14* _h15* _h16* _h17*` (committed `f15f2ca`, `9dd1035`).
+
+---
+
 ## 2026-05-03 — Tasks #5–#8 closure: decoder methodology audit complete; Section-5 classifications stand
 
 **Context.** The 2026-04-23 / 2026-04-24 entries below reported a Dec A advantage over post-Stage-2 retrains that grew with closer inspection: 22 pp top-1 gap on a1 / b1 between Dec A (Stage-1 co-trained) and Dec A′ / Dec E (5 000 Adam steps post-Stage-2), plus a Dec E sign flip vs Dec A on the rows 5–6 of the 17-row matrix. Initial reading: a representational "moving-target L2/3" advantage that 5k post-Stage-2 retrains cannot reproduce. Tasks #5–#8 walked back through that interpretation chain and ended at a clean account.

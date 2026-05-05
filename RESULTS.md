@@ -899,6 +899,47 @@ and, for several assays, the specific decoder. Previous single-paradigm
 framings of R1+R2 as purely sharpening or purely dampening are not supported
 by the cross-decoder matrix.
 
+### Paradigm-sign two-mechanism account (Phase 4-7, 2026-05-04 → 2026-05-05)
+
+Phase 4-7 debugger investigation isolates WHY R1+R2 produces dampening on
+some paradigms and sharpening on others, via V2-feedback ablation
+(`feedback_scale = 0`) and L2/3 W_rec ablation under both Dec C and Dec A
+readouts. Headline: the dampening paradigms separate cleanly into TWO
+independent neural mechanisms.
+
+**Mech 1 — V2-feedback channel-resolved gain modulation.** Polarity gated by
+V2 confidence `pi` (`precision_gate` block at `src/model/network.py:307-318`).
+Drives M3R native + modified, VCD-test3 native + modified, and the HMM C1
+paired-fork V2-predictable strata. V2 ablation flips Δ_decC sign or drives
+it to ~0 on these paradigms (e.g., M3R native: Δ_decC −0.033 → +0.069;
+VCD-test3 native: −0.066 → +0.032).
+
+**Mech 2 — non-V2 stim-statistics bias amplified by L2/3 W_rec.** Originates
+as a small ~+0.004 L4 bias toward 3-march stims; amplified ~25× by the L2/3
+recurrent kernel (`src/model/populations.py:206-238` constructs `W_rec`;
+`:274` applies it as the recurrence step). Drives HMS / HMS-T native +
+modified. V2 ablation INCREASES |Δ| there (V2 was opposing the underlying
+dampening). W_rec ablation reduces |ΔL23_stimch| by ~57% across HMS / HMS-T
+/ M3R and FLIPS Δ_decC sign on HMS / HMS-T. PV ablation (Phase 5 H_PV) and
+Decoder C distribution (Phase 5 H_DecC) were both falsified as the
+amplifier; SOM is structurally inactive in this network when V2 is ablated.
+
+**Phase 7 decoder-robustness caveat.** Channel-level findings (Δr_stimch
+flip with pi-matching, |ΔL23_stimch| 57% reduction, W_rec-ablation Δr_stimch
+sign-flip) reproduce under both Dec C and Dec A — those are properties of
+`r_l23` itself. But the per-paradigm Mech 1 vs Mech 2 VERDICT is decoder-
+dependent on 3/8 paradigms: M3R native (Dec C: Mech 1; Dec A: Mech 2),
+HMS-T native (Dec C: Mech 2; Dec A: Mech 1), VCD-test3 modified (Dec C:
+Mech 1; Dec A: Mech 2). 5/8 paradigms agree. Pi-Δ flip and W_rec-ablation
+Δ_decoder sign-flip on HMS / HMS-T are Dec-C-specific (Dec A saturates near
++0.40 on V2-predictable subsets and stays negative under W_rec ablation).
+Channel-level mechanisms are decoder-independent; only the decoder-level Δ
+verdicts vary. **The decoder-robust dampening / sharpening categories above
+under ABC sign-agreement are NOT broken by Phase 7 — Phase 7 adds a
+mechanistic axis on top of the sign-agreement axis.** Full account,
+per-paradigm verdict table (8 rows with Dec C and Dec A verdicts), and
+circuit-level file:line refs in `docs/paradigm_sign_mechanism.md`.
+
 ### Stable-target Dec A′ sanity check (2026-04-23)
 
 The decoder-robust sharpening and dampening categories above hold under the

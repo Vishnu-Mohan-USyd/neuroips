@@ -3,7 +3,7 @@
 **Last updated:** 2026-04-24
 **Branch:** `dampening-analysis` (active for analysis); `single-network-dual-regime` (training baselines).
 **Default checkpoint for ex-vs-unex / dampening-vs-sharpening analysis (set 2026-04-17):** R1+R2 simple_dual emergent_seed42 (`results/simple_dual/emergent_seed42/checkpoint.pt` on the remote). Network_mm / Network_both remain valid for the per-regime feedback question but are no longer the default model for ex-vs-unex analysis.
-**R1+R2 regime characterisation (2026-04-22, Tasks #15–#26):** **hybrid, not single-regime.** On the paired-fork paradigm (constructive probe, bit-identical pre-probe state), R1+R2 shows **decoder-robust sharpening** in the decoding sign (Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125 on the NEW eval; all signs positive). FWHM behaviour on the paired-fork is paradigm-internally split: the NEW eval has ex FWHM **narrower** than unex (Δ = −1.33°), but the 4-condition `paradigm_readout` paired HMM fork has ex FWHM **wider** than unex (+0.9° to +2.0°) — same paradigm family, different cue/task-state combinations. On observational paradigms (matched_3row_ring, matched_hmm_ring_sequence with --tight-expected, v2_confidence_dissection, plus M3R and VCD with focused+march cue), R1+R2 shows **decoder-robust dampening** in the decoding sign — Δdec_C ∈ {−0.029, −0.063, −0.070, −0.018, −0.013} on those 5 rows. The sign difference between paired-fork (sharpening on decoding) and observational (dampening on decoding) is real, not a decoder artefact. See RESULTS.md §11–§14 for the full evidence.
+**R1+R2 regime characterisation (2026-04-22, Tasks #15–#26):** **hybrid, not single-regime.** On the paired-fork paradigm (constructive probe, bit-identical pre-probe state), R1+R2 shows **decoder-robust sharpening** in the decoding sign (Δdec_A=+0.387, Δdec_B=+0.085, Δdec_C=+0.125 on the NEW eval; all signs positive). FWHM behaviour on the paired-fork is paradigm-internally split: the NEW eval has ex FWHM **narrower** than unex (Δ = −1.33°), but the 4-condition `paradigm_readout` paired HMM fork has ex FWHM **wider** than unex (+0.9° to +2.0°) — same paradigm family, different cue/task-state combinations. On observational paradigms (matched_3row_ring, matched_hmm_ring_sequence with --tight-expected, v2_confidence_dissection, plus M3R and VCD with focused+march cue), R1+R2 shows **decoder-robust dampening** in the decoding sign — Δdec_C ∈ {−0.029, −0.063, −0.070, −0.018, −0.013} on those 5 rows. The sign difference between paired-fork (sharpening on decoding) and observational (dampening on decoding) is real, not a decoder artefact. See RESULTS.md §11–§14 for the full evidence. The two-mechanism account of WHY M3R / VCD vs HMS / HMS-T produce dampening via different neural mechanisms (Phase 4-7, 2026-05-04 → 2026-05-05) is in `docs/paradigm_sign_mechanism.md`.
 **Repository:** `/mnt/c/Users/User/codingproj/freshstart`
 **Remote GPU:** `vishnu@100.123.25.88` (reuben-ml, Tailscale)
 
@@ -701,3 +701,20 @@ observational paradigms (rows 10, 12, 14, 15, 17; plus row 16 / 11 flipping
 under Dec C). The paradigm choice, not the decoder choice, drives the sign
 on R1+R2. This remains the load-bearing finding. See RESULTS.md §14 and
 ARCHITECTURE.md § "Decoders" for cross-references.
+
+**Paradigm-sign two-mechanism account (Phase 4-7, 2026-05-04 → 2026-05-05).**
+The dampening side of the hybrid finding separates into two independent
+neural mechanisms once V2 feedback is ablated. **Mech 1** (V2-feedback
+channel-resolved gain modulation, polarity gated by V2 confidence `pi` at
+`src/model/network.py:307-318`) drives M3R native + modified, VCD-test3
+native + modified, and the HMM C1 paired-fork V2-predictable strata. **Mech 2**
+(non-V2 stim-statistics bias amplified ~25× by the L2/3 recurrent kernel
+`W_rec` at `src/model/populations.py:206-238` + `:274`) drives HMS / HMS-T
+native + modified. Channel-level findings (Δr_stimch flip with pi-matching,
+~57% |ΔL23_stimch| reduction under W_rec ablation) decoder-robust under
+both Dec C and Dec A. **Phase 7 caveat**: the per-paradigm Mech 1 vs Mech 2
+verdict is decoder-dependent on 3/8 paradigms (M3R native, HMS-T native,
+VCD-test3 modified disagree Dec C vs Dec A; 5/8 agree). The decoder-robust
+sharpening / dampening categories above under ABC sign-agreement remain
+intact — Phase 7 adds a mechanistic axis on top, not a sign retraction.
+Full account: `docs/paradigm_sign_mechanism.md`.

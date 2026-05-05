@@ -184,6 +184,8 @@ whenever a cross-decoder evaluation is performed.
 | **D-raw** | Standalone `Linear(36, 36)` with bias, trained **per-checkpoint** on frozen-network `r_l23` under **normal feedback (`feedback_scale=1.0`)**. | Paired-fork design, natural feedback on: N_pre ∈ U{4..10} march at 5°/step with random direction, probe at target_ch; unex branch sets `march_end_ch = target_ch − D_signed_ch` with `|D_signed_ch|∈{5..18}` (25°–90° rotation). Cue at march expected-next (same for ex and unex). Focused task_state, contrast U[0.4, 1.0]. Balanced 900 train + 100 val per (target_ch × branch) cell = 72 000 samples. Adam lr=1e-3, wd=1e-4, CE, early-stop patience 3 on balanced val, max 30 epochs, seed 42. Training script: `scripts/train_decoder_d_fbON_neutral.py`. | 64 800 train readouts per net. | **Yes** — mix of ex and unex paired-fork trials, all with FB on. | **0.3634** (on R1+R2) | Trained on paired-fork + focused; the 10k HMM stream is OOD (50/50 focused/routine + ambiguous). Per-net val balanced-acc: r1r2 0.187, a1 0.947, b1 0.922, c1 0.618, e1 0.556. |
 | **D-shape** | Same architecture/protocol as D-raw, but trained on `r_l23 / (r_l23.sum(1) + 1e-8)` (row-normalised shape). | Same paired-fork pipeline; input is per-row-normalised r_l23. | Same as D-raw. | **Yes**. | **0.3726** (on R1+R2) | Per-net val balanced-acc: r1r2 0.215, a1 0.946, b1 0.916, c1 0.655, e1 0.559. |
 | **E** | Standalone `Linear(36, 36)` with bias, trained **per-checkpoint post-Stage-2** with the HMM's **own stochastic task_state** (NOT 50/50 pinned). | Natural HMM stream through each frozen fully-trained network. `task_p_switch = 0.2` (Markov per-presentation) for R1+R2 where the yaml sets it; Bernoulli-per-batch for legacy ckpts whose yamls leave `task_p_switch` unset. Cue as HMM produces (75% valid). Readout `r_l23[9:11].mean`. Adam lr=1e-3, **no weight decay**, CE, 5000 gradient steps, seed 42; val pool seed 1234. Training script: `scripts/train_decoder_e.py`. | r1r2 + e1: full 5000 steps. a1 / b1 / c1: **recovered at step 4000** — a post-training Dec A comparison bug (legacy ckpts lack `loss_heads`) prevented the final save; crash-safety snapshot at step 4000 was promoted to final, fix landed in the trainer for future runs. | **Yes**. | **0.5467** (on R1+R2) | `frac_same_pred(A, E) = 0.8201`; `frac_same_pred(A′, E) = 0.9722` on R1+R2 — Dec E effectively isomorphic to Dec A′ on R1+R2. Per-net 10k HMM top-1: r1r2 0.547, a1 0.354, b1 0.351, c1 0.426, e1 0.478. The a1 / b1 cap is not a representational dissociation — see "Dec A vs retrained-decoder closure on dampening legacy networks (Tasks #5–#8)" below; Tasks #6–#8 add 20k-step variants of Dec A′ and Dec D that resolve the disagreement. |
+| **A′ (20k, Task #6)** | Same architecture / data / protocol as Dec A′ above, only `--n-steps 5000 → 20000`. Per-net for all 5 nets (R1+R2 + a1 / b1 / c1 / e1). | Same 50/50 pinned natural-HMM `r_l23` stream through each frozen network. | 20 000 steps × 800 readouts = 16 M readouts. | Yes (same as 5k). | r1r2 0.5729, a1 0.6709, b1 0.6625, c1 0.5078, e1 0.5319 | Optimisation-converged Dec A′; exceeds Dec A on stratified top-1 every net by +3 to +8 pp. Reads Δ_ex_unex = +0.21 / +0.18 on a1 / b1 HMM C1 — **natural-HMM prior-bias overfitting at large ||W||**, NOT genuine sharpening (Task #8 disambiguation). Use Dec D 20k for clean Δ on those nets. Source: `results/decoder_a_prime_20k_stratified_eval_{net}.json`. |
+| **D-raw / D-shape (20k, Task #8)** | Same paired-fork balanced ex+unex training data as Dec D 5k variants, but 20 000 Adam steps lr=1e-3 (no early stop, no weight decay) — matches Dec A′ 20k training regime. Per-net for a1 / b1 / c1 / e1. Training script: `scripts/train_decoder_d_20k_adam.py`. | 20 000 steps. | Yes. | (paired-fork in-distribution; 10k HMM stratified top-1 not directly comparable). | **The clean Δ_ex_unex test on dampening legacy nets.** Balanced ex+unex training removes natural-HMM prior asymmetry. On a1 / b1 HMM C1: Δ_D-raw(20k) = −0.024 / −0.046; Δ_D-shape(20k) = −0.052 / −0.044 — agreeing with Dec A's small-dampening direction and refuting the 20k Dec A′ positive flag. On c1 / e1: +0.069 / +0.040 (raw) / +0.084 / +0.067 (shape) — confirming Dec A's small sharpening. Source: `results/task8_decD_20k_legacy/{net}_C1.json`. |
 
 Agreement on the 10k natural HMM stream (same seed=42, Task #25 design):
 
@@ -270,6 +272,37 @@ c1 / e1 sharpening (both small). Sources:
 `results/task8_decD_20k_legacy/{net}_C1.json`,
 `results/cross_decoder_comprehensive_20k_final.{json,md}`. Long-form narrative:
 `docs/R1R2_full_report.md` § 9.6, `docs/research_log.md` 2026-05-03 entry.
+
+### Paradigm-sign two-mechanism account on R1+R2 (Phase 4-7, 2026-05-04 → 2026-05-05)
+
+Phase 4-7 debugger investigation (separate from the Tasks #5-#8 legacy-net
+audit above) addressed why R1+R2 produces different ex/unex sign signs
+across paradigms (paired-fork sharpening; M3R / VCD / HMS-family dampening).
+Once V2 feedback is ablated (`feedback_scale = 0`), R1+R2's dampening
+paradigms separate into two independent neural mechanisms:
+
+- **Mech 1 — V2-feedback channel-resolved gain modulation.** Polarity gated
+  by V2 confidence `pi` via the `precision_gate` block at
+  `src/model/network.py:307-318`. Drives M3R native + modified, VCD-test3
+  native + modified, and the HMM C1 paired-fork V2-predictable strata. V2
+  ablation flips Δ_decC sign or drives it to ~0 on these paradigms.
+- **Mech 2 — non-V2 stim-statistics bias.** Originates as a small ~+0.004
+  L4 bias toward 3-march stims; amplified ~25× by the L2/3 recurrent kernel
+  `W_rec` (kernel constructed at `src/model/populations.py:206-238`,
+  recurrence step at `:274`). Drives HMS / HMS-T native + modified. V2
+  ablation INCREASES |Δ| there — V2 was opposing the underlying dampening.
+
+Channel-level findings (Δr_stimch flip with pi-matching, |ΔL23_stimch|
+reduction by ~57% under W_rec ablation, W_rec-ablation Δ_decoder sign-flip
+on HMS / HMS-T) reproduce under both Dec C and Dec A. **Phase 7
+decoder-robustness caveat**: the per-paradigm Mech 1 vs Mech 2 verdict
+disagrees between Dec C and Dec A on 3/8 paradigms (M3R native, HMS-T
+native, VCD-test3 modified); pi-Δ flip and W_rec-ablation Δ_decoder
+sign-flip on HMS / HMS-T are Dec-C-specific (Dec A saturates near +0.40 on
+V2-predictable subsets and stays negative under W_rec ablation). Channel-
+level mechanisms are decoder-independent; only the decoder-level Δ verdicts
+vary. Full account, per-paradigm verdict table (8 rows × Dec C / Dec A
+verdicts), and Phase 7 caveat are in `docs/paradigm_sign_mechanism.md`.
 
 ### Stable-target decoder sanity check (Dec A′ vs Dec A, 2026-04-23)
 
