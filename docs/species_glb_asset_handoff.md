@@ -89,6 +89,31 @@ biological labels are preserved when `structureId` or `meshName` differs.
 | marmoset | 332 frontend rows / 309 mesh keys | `assets/brain_marmoset.glb` | Generated and committed; 23 source labels absent from referenced volume |
 | macaque | 368 frontend rows / 365 mesh keys | `assets/brain_macaque.glb` | Generated and committed; 3 D99 labels absent from available atlas volumes |
 
+## Runtime GLB Generator Defaults
+
+Use `scripts/generate_species_glbs.py` for committed runtime GLBs. It preserves
+mesh node names from `frontend_data/species_catalogs/*.json`, recenters and
+scales the final scene, and applies species-specific per-mesh face targets for
+web runtime size:
+
+| Species | Default per-mesh face target |
+| --- | ---: |
+| mouse | 250 |
+| zebrafish | 500 |
+| rat | 1500 |
+| marmoset | 1500 |
+| macaque | 1500 |
+
+`--max-faces` overrides the default target for all requested species. When the
+raw atlas workspace is separate from this repo, point the generator at it and
+write outputs outside the repo until the final GLBs are ready:
+
+```bash
+python scripts/generate_species_glbs.py mouse zebrafish \
+  --atlas-root /path/to/raw_atlas_workspace/external/atlases \
+  --asset-root /path/to/generated_glbs
+```
+
 ## License And Citation Caveats
 
 These staged files come from third-party atlas projects. Before committing,

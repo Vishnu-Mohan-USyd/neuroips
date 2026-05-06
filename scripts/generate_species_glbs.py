@@ -30,6 +30,15 @@ ATLAS_ROOT = ROOT / "external" / "atlases"
 CATALOG_ROOT = ROOT / "frontend_data" / "species_catalogs"
 ASSET_ROOT = ROOT / "assets"
 
+DEFAULT_MAX_FACES_BY_SPECIES: dict[str, int] = {
+    "mouse": 250,
+    "rat": 1500,
+    "marmoset": 1500,
+    "macaque": 1500,
+    "zebrafish": 500,
+}
+SIMPLIFICATION_AGGRESSION = 10
+
 
 def load_catalog(species: str) -> dict:
     return json.loads((CATALOG_ROOT / f"{species}.json").read_text())
@@ -64,7 +73,7 @@ def simplify_mesh(mesh: trimesh.Trimesh, max_faces: int | None) -> trimesh.Trime
     if max_faces is None or len(mesh.faces) <= max_faces:
         return mesh
     try:
-        return mesh.simplify_quadric_decimation(face_count=max_faces, aggression=5)
+        return mesh.simplify_quadric_decimation(face_count=max_faces, aggression=SIMPLIFICATION_AGGRESSION)
     except Exception:
         return mesh
 
@@ -284,25 +293,50 @@ def generate_zebrafish(max_faces: int | None, download: bool) -> Path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("species", nargs="+", choices=["mouse", "rat", "marmoset", "macaque", "zebrafish"])
-    parser.add_argument("--max-faces", type=int, default=1500)
+    parser.add_argument(
+        "--max-faces",
+        type=int,
+        default=None,
+        help="Override the default per-mesh face target for all requested species.",
+    )
+    parser.add_argument(
+        "--atlas-root",
+        type=Path,
+        default=ATLAS_ROOT,
+        help="Root containing staged atlas source files.",
+    )
+    parser.add_argument(
+        "--asset-root",
+        type=Path,
+        default=ASSET_ROOT,
+        help="Directory where generated GLB files are written.",
+    )
     parser.add_argument("--download-zebrafish", action="store_true")
     return parser.parse_args()
 
 
+def max_faces_for_species(species: str, override: int | None) -> int | None:
+    return override if override is not None else DEFAULT_MAX_FACES_BY_SPECIES[species]
+
+
 def main() -> int:
+    global ATLAS_ROOT, ASSET_ROOT
     args = parse_args()
+    ATLAS_ROOT = args.atlas_root
+    ASSET_ROOT = args.asset_root
     for species in args.species:
+        max_faces = max_faces_for_species(species, args.max_faces)
         if species == "mouse":
-            output = generate_mouse(args.max_faces)
+            output = generate_mouse(max_faces)
         elif species == "rat":
-            output = generate_rat(args.max_faces)
+            output = generate_rat(max_faces)
         elif species == "marmoset":
-            output = generate_marmoset(args.max_faces)
+            output = generate_marmoset(max_faces)
         elif species == "macaque":
-            output = generate_macaque(args.max_faces)
+            output = generate_macaque(max_faces)
         elif species == "zebrafish":
-            output = generate_zebrafish(args.max_faces, args.download_zebrafish)
-        print(f"wrote {output} {output.stat().st_size} bytes")
+            output = generate_zebrafish(max_faces, args.download_zebrafish)
+        print(f"wrote {output} {output.stat().st_size} bytes max_faces={max_faces}")
     return 0
 
 
