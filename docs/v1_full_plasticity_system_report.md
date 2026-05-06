@@ -811,3 +811,455 @@ Results:
 5. Add VIP top-down/disinhibitory gating once feedback inputs exist.
 6. Add recurrent E co-tuning enrichment analysis using explicit edge identity
    and site-level preferred orientations.
+
+## 14. What Was Tried, Rejected, Or Corrected
+
+This section records the important failed attempts and course corrections. These
+are not just implementation trivia; they define what the final branch does and
+does not prove.
+
+### 14.1 Non-GeNN Prototype Direction
+
+An earlier PyTorch/LIF prototype direction was rejected. The final accepted
+implementation is GeNN/C++ only for the validated SNN path.
+
+Reason:
+
+- The target was an H200-scale spiking simulator path, not a generic PyTorch
+  prototype.
+- Project memory now records that GeNN/C++ is the default stack for this V1 SNN
+  project.
+
+Final status:
+
+- The validated implementation is in `genn/`.
+- Python remains only for configuration, tests, and validation tooling.
+
+### 14.2 Static-Subtype Baseline Was Not Enough
+
+Before this branch, a static subtype model with feedforward STDP had been
+validated. It showed strong OSI emergence, but recurrent and inhibitory
+plasticity were static or absent.
+
+Observed issue:
+
+- It could show L2/3 OSI improvement.
+- It could not support claims about recurrent plasticity, inhibitory plasticity,
+  learned E/I balance, or SOM causal broad suppression.
+
+Final correction:
+
+- Added plastic `L23E -> L23E`.
+- Added plastic `L23PV -> L23E`.
+- Added plastic `L23SOM -> L23E`.
+- Added a validator that explicitly fails if those weight families do not move.
+
+### 14.3 Plasticity Defaults Were Initially Off
+
+During full-plasticity integration, new mechanisms existed in code but defaulted
+to disabled:
+
+- `V1_L23EE_STDP_ENABLE`
+- `V1_L23PV_HOMEO_ENABLE`
+- `V1_L23SOM_HOMEO_ENABLE`
+
+Observed issue:
+
+- A default run did not exercise the new recurrent/inhibitory plasticity.
+
+Final correction:
+
+- Defaults were changed so full-plasticity mechanisms are on unless explicitly
+  disabled by validation/control environment variables.
+- The no-learning control now explicitly disables feedforward STDP, recurrent
+  STDP, and inhibitory homeostasis.
+
+### 14.4 Dense Local Recurrent E Was Rejected
+
+The first recurrent `L23E -> L23E` implementation used deterministic dense
+local patch connectivity.
+
+Observed issue:
+
+- Dense all-to-all local recurrence inside a radius-2 patch was too strong and
+  too biologically blunt.
+- Research supported sparse local recurrence with distance dependence rather
+  than dense local recurrence.
+
+Final correction:
+
+- Added `SparseDistancePatch`.
+- Used a deterministic sparse distance rule with peak probability `0.12` and
+  `distanceSigmaSq = 3.0`.
+- Mean recurrent E indegree is approximately `24.8`, not the full local
+  candidate pool.
+- Recurrent connectivity is not orientation-hardcoded.
+
+### 14.5 GeNN Parser Bug In Sparse Connectivity Snippet
+
+The first `SparseDistancePatch` row-build snippet used:
+
+```cpp
+hash ^= (hash >> 16);
+```
+
+Observed issue:
+
+- The installed GeNN scanner mis-tokenized `>>` inside snippet code and failed
+  to parse the model.
+
+Final correction:
+
+```cpp
+hash ^= (hash / 65536u);
+```
+
+This preserves the intended high-bit mixing for unsigned integer hashing while
+avoiding the GeNN parser bug.
+
+### 14.6 Center Aperture Was Too Large
+
+The first center-only validation aperture was `5` sites.
+
+Observed issue:
+
+- A radius-5 center aperture already covered the entire central SOM input
+  footprint.
+- Therefore center-only stimulation was not actually local relative to SOM
+  recruitment.
+- Broad-field stimulation then added PV drive without providing a meaningful
+  center-vs-broad SOM assay.
+
+Final correction:
+
+- `kDefaultCenterStimulusRadiusSites = 2.0`.
+
+### 14.7 SOM Collapse After Feedforward STDP
+
+Full STDP training initially collapsed L2/3 SOM firing because SOM was recruited
+only indirectly through L2/3 E, and feedforward STDP changed the L2/3 drive.
+
+Tested options:
+
+- Disable PV homeostasis: did not rescue SOM.
+- Disable SOM homeostasis: did not rescue SOM.
+- Disable recurrent E STDP: did not rescue SOM.
+- Disable feedforward STDP: rescued SOM but removed OSI emergence.
+- Add tonic SOM current: rescued SOM, but some values damaged OSI.
+- Add weak `L4E -> L23SOM`: rescued SOM activity, but the correct
+  SOM-specific geometry did not pass causal broad-suppression validation.
+
+Final correction:
+
+- Default `V1_L23SOM_GATE_NA = 0.18`.
+- This is documented as a small anti-silencing baseline current standing in for
+  omitted background/lateral/deeper-layer drive.
+- No direct `L4E -> L23SOM` projection is included in the final branch.
+
+### 14.8 Wrong-Patch `L4E -> L23SOM` Probe Was Invalid
+
+A temporary probe adding `L4E -> L23SOM` initially appeared to pass a causal SOM
+suppression check.
+
+Observed issue:
+
+- The probe reused the PV feedforward patch object, whose post-neuron count was
+  `kL23PVPerSite`, not `kL23SOMPerSite`.
+- That meant the connectivity geometry was wrong for SOM.
+
+Final correction:
+
+- Re-tested with a correct SOM-specific feedforward patch.
+- Correct-patch `L4E -> L23SOM` preserved OSI and SOM activity, but did not pass
+  the causal broad-suppression gate.
+- The final model does not include `L4E -> L23SOM`.
+
+### 14.9 SOM Output Ablation Initially Changed Training
+
+The original `V1_L23SOM_OUTPUT_SCALE` was applied before baseline, training, and
+post sweeps.
+
+Observed issue:
+
+- A `somoff` run using this variable changed the training trajectory.
+- That is not a same-trained-network causal ablation.
+
+Final correction:
+
+- Added `V1_L23SOM_CONTEXT_OUTPUT_SCALE`.
+- It is applied only after the post-training sweep and only before
+  center/broad context validation.
+- Weight snapshots are taken before context-only SOM scaling, so the exported
+  before/after weights represent trained weights, not ablated validation
+  weights.
+
+### 14.10 Preferred-Orientation SOM BSI Was Saturated
+
+The first SOM validator used preferred-orientation BSI as the decisive causal
+metric.
+
+Observed issue:
+
+- Broad-field L2/3 E at the preferred orientation could already be `0 Hz`.
+- In that case BSI is pinned at `1.0`, and SOM ablation cannot reduce the
+  preferred-orientation metric even if SOM affects other driven orientations.
+
+Final correction:
+
+- Preferred-orientation BSI is reported as `INFO` only.
+- The decisive SOM gate uses mean BSI over driven center-response orientations.
+
+### 14.11 All-Site L2/3 E Rate Gate Was Too Strict
+
+The first validator required all-site, orientation-averaged L2/3 E median rate
+to exceed `1 Hz`.
+
+Observed issue:
+
+- For a tuned V1 sheet, averaging across preferred and nonpreferred orientations
+  across all sites is not the same as measuring visual responsiveness.
+- The model had sparse L2/3 E activity but passed OSI and driven context
+  response checks.
+
+Final correction:
+
+- L2/3 E now uses a p99 anti-runaway rate check, not a hard median-rate lower
+  bound.
+- PV and SOM retain lower-rate sanity checks because they should remain broadly
+  active stabilizing populations in this branch.
+
+### 14.12 Recurrent E And SOM Plasticity Were Initially Too Weak
+
+After the final architecture was in place, the validator still failed:
+
+- `L23E -> L23E` changed fraction was too low.
+- `L23SOM -> L23E` p95 change was slightly below threshold.
+
+Final correction:
+
+- Recurrent `L23E -> L23E` STDP default changed to:
+  - `Aplus = 0.000100`
+  - `Aminus = 0.000110`
+- SOM homeostatic eta changed to:
+  - `0.000020`
+
+Final result:
+
+- Recurrent E changed fraction: `0.109119`.
+- SOM inhibitory changed fraction: `0.177072`.
+
+## 15. Hardcoded, Learned, Emergent, And Excluded Components
+
+### 15.1 Hardcoded By Design
+
+These are explicit design assumptions, not emergent results:
+
+- The 32 x 32 sheet size.
+- Per-site population counts.
+- The LIF neuron parameters.
+- E/I subtype identities: E, PV, SOM, VIP.
+- The L4 Gabor-like drive generation.
+- The L4 orientation map / preferred orientation field.
+- Orientation-biased `L4E -> L23E` feedforward connectivity.
+- Local radii and sparse patch geometry.
+- Synaptic time constants.
+- Initial synaptic weights and weight bounds.
+- Default learning rates and target rates.
+- The small default SOM baseline current.
+- The center aperture radius and broad-field stimulus definition.
+
+### 15.2 Learned Or Plastic During Validation
+
+These are changed by training in the validated run:
+
+- `L4E -> L23E` feedforward excitatory weights.
+- `L23E -> L23E` recurrent excitatory weights.
+- `L23PV -> L23E` inhibitory weights.
+- `L23SOM -> L23E` inhibitory weights.
+
+The validator requires the plastic weight families to move measurably and
+requires the no-learning control to leave them unchanged.
+
+### 15.3 Emergent In The Limited Sense Used Here
+
+These outcomes are measured after training rather than directly hardcoded:
+
+- Post-training L2/3 OSI increase.
+- Recurrent E weight changes under local STDP.
+- PV and SOM inhibitory weight adaptation.
+- Bounded E/I behavior without rate runaway.
+- Causal contribution of SOM output to broad-field central L2/3 E suppression.
+
+Important limitation:
+
+- L2/3 OSI emergence depends on hardcoded L4 orientation-tuned input and
+  orientation-biased feedforward connectivity. It is not fully self-organized
+  from untuned noise.
+
+### 15.4 Explicitly Excluded
+
+These are not implemented:
+
+- VIP learning.
+- Top-down feedback.
+- Behavioral-state modulation.
+- LGN spiking input.
+- Long-range horizontal L2/3 axons.
+- Multi-hypercolumn patchy iso-orientation projections.
+- Dendritic compartments.
+- Conductance-based E/I current decomposition.
+- Neuromodulated three-factor plasticity.
+- Full developmental training timescale.
+
+## 16. Engineering Approximations And "Cheat" Ledger
+
+This section states where the implementation is using a shortcut or explicit
+approximation. These are not hidden biological claims.
+
+### 16.1 Orientation Tuning Is Hardcoded In L4
+
+The L4 drive uses Gabor-like orientation selectivity and an orientation map.
+This is allowed by the project constraint, but it means the model does not
+develop orientation tuning from unoriented retinal/LGN statistics.
+
+Consequence:
+
+- OSI emergence in L2/3 is a validation of feedforward/recurrent/inhibitory
+  plasticity on top of oriented L4 input, not a complete V1 developmental model.
+
+### 16.2 Feedforward Connectivity Is Orientation-Biased
+
+`L4E -> L23E` connectivity is orientation-biased by construction.
+
+Reason:
+
+- The biological abstraction requested local retinotopic convergence biased
+  toward similar orientation domains.
+
+Consequence:
+
+- L2/3 OSI is not rescued from totally random feedforward wiring.
+- The validator only claims that plasticity sharpens/emerges from this
+  biologically biased substrate.
+
+### 16.3 The Sheet Is Scaled Down
+
+The model has 40,960 neurons, not hundreds of thousands to millions.
+
+Consequence:
+
+- It preserves subtype ratios and topographic structure, not biological density.
+- Each site is a computational unit, not a literal anatomical microcolumn.
+
+### 16.4 SOM Baseline Current Is An Approximation
+
+`V1_L23SOM_GATE_NA = 0.18` is an explicit anti-silencing baseline.
+
+Reason:
+
+- The model omits deeper-layer, lateral, background, and neuromodulatory inputs
+  that would normally help recruit SOM interneurons.
+
+Consequence:
+
+- It is a biological approximation, not a learned property.
+- It should be replaced by explicit lateral/deep/background drive in a later
+  branch if those circuits are added.
+
+### 16.5 SOM Broad Suppression Is Center-Vs-Full-Field, Not True Surround
+
+The validation compares a center aperture against a broad/full-field aperture.
+It is not an annular surround stimulus.
+
+Consequence:
+
+- The model supports the claim "SOM output contributes to broad-field
+  suppression of central L2/3 E."
+- It does not prove full biological surround suppression or contour-context
+  integration.
+
+### 16.6 The SOM Causal Effect Is Narrow
+
+The final SOM ablation gate passes by the absolute BSI delta:
+
+- Full mean BSI: `1.000000`
+- Somoff mean BSI: `0.949126`
+- Delta: `0.050874`
+
+Consequence:
+
+- This is a pass, but a narrow one.
+- It should not be overstated as a large SOM-dominated suppression regime.
+
+### 16.7 Training Is Short
+
+Default training is one epoch across 12 orientations at 250 ms each.
+
+Consequence:
+
+- This validates mechanism engagement in a computational test.
+- It is not a biological developmental timeline.
+
+### 16.8 Current-Based Point Neurons Are Simplified
+
+The model uses current-based LIF neurons and exponential current synapses.
+
+Consequence:
+
+- There is no dendritic targeting, conductance reversal, NMDA, shunting, or
+  compartmental integration.
+- PV/SOM/VIP roles are implemented through timing, connectivity, signs, radii,
+  and plasticity, not through detailed morphology.
+
+### 16.9 Recurrent Weights Are Not Yet Lognormal At Initialization
+
+The model validates bounded recurrent plasticity, but recurrent initial weights
+are not explicitly sampled from a lognormal distribution.
+
+Consequence:
+
+- It only partially captures the biology of heavy-tailed recurrent E/E weights.
+- A later branch should add lognormal initialization and validate heavy-tail
+  persistence.
+
+### 16.10 No Learned VIP Function
+
+VIP is structurally present but silent/inactive in the final validation.
+
+Consequence:
+
+- This branch should not be described as a top-down, behavioral-state, or
+  disinhibitory learning model.
+
+## 17. Final Claims That Are Supported
+
+The final H200 validation supports these claims:
+
+- The GeNN/C++ model builds and runs on the H200 pod.
+- The model implements two overlaid L4 and L2/3 sheets with E/PV/SOM/VIP
+  subtype structure.
+- L2/3 OSI emerges after plasticity and does not emerge in the no-learning
+  control.
+- Feedforward, recurrent E, PV inhibitory, and SOM inhibitory weights change in
+  the full run.
+- The no-learning control leaves those weight families unchanged.
+- Recurrent E and inhibitory plasticity remain bounded and do not pile up at
+  limits.
+- PV and SOM populations remain active and bounded.
+- SOM output contributes causally, but modestly, to broad-field suppression of
+  central L2/3 E.
+- VIP learning/top-down effects are not implemented and not claimed.
+
+## 18. Claims That Are Not Supported
+
+The final H200 validation does not support these stronger claims:
+
+- Fully self-organizing V1 from untuned input.
+- Anatomically full-density cat/macaque V1.
+- Multi-hypercolumn horizontal contour integration.
+- True annular surround suppression.
+- Strong SOM-dominated suppression.
+- Learned VIP disinhibition.
+- Biological developmental timescale.
+- Dendritic compartment-specific inhibition.
+- Conductance-resolved E/I cancellation.

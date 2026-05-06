@@ -9,3 +9,7 @@
   propose PyTorch LIF prototypes unless the user explicitly asks for one.
 - For SOM validation, require causal evidence that reducing SOM output changes
   broad-field L23E suppression; do not claim success from SOM firing alone.
+- For project reports, explicitly document failed attempts, rejected probes,
+  hardcoded assumptions, learned/plastic mechanisms, limited-emergent claims,
+  engineering approximations, and unsupported claims. Do not treat architecture
+  plus metrics as sufficient documentation.
