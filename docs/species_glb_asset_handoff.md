@@ -1,8 +1,7 @@
 # Species GLB Asset Handoff
 
 This branch includes ready-to-use frontend species catalogs, CSV provenance
-catalogs, and helper scripts. It does not include raw atlas source downloads or
-generated species GLBs.
+catalogs, helper scripts, and the generated species GLBs.
 
 Target runtime assets should be written under `assets/` as:
 
@@ -12,8 +11,7 @@ Target runtime assets should be written under `assets/` as:
 - `assets/brain_macaque.glb`
 - `assets/brain_zebrafish.glb`
 
-The JSON catalogs already point at these paths through `catalog.asset.path`.
-The GLB files still need to be generated separately.
+The JSON catalogs point at these paths through `catalog.asset.path`.
 
 ## Frontend-Ready Catalogs
 
@@ -85,11 +83,11 @@ biological labels are preserved when `structureId` or `meshName` differs.
 
 | Species | Committed catalog status | GLB path | Conversion status |
 | --- | --- | --- | --- |
-| mouse | 840 frontend rows / 840 mesh keys | `assets/brain_mouse.glb` | Mesh-source-ready from Allen OBJ data; GLB not committed |
-| zebrafish | 265 frontend rows / 259 mesh keys | `assets/brain_zebrafish.glb` | Mesh-source-ready after mapZebrain STL download; GLB not committed |
-| rat | 225 frontend rows / 224 mesh keys | `assets/brain_rat.glb` | Volume-to-mesh required; GLB not committed |
-| marmoset | 332 frontend rows / 332 mesh keys | `assets/brain_marmoset.glb` | Volume-to-mesh across five parcellation blocks; GLB not committed |
-| macaque | 368 frontend rows / 368 mesh keys | `assets/brain_macaque.glb` | 365 right-surface rows plus 3 volume-extraction rows; GLB not committed |
+| mouse | 840 frontend rows / 840 mesh keys | `assets/brain_mouse.glb` | Generated and committed |
+| zebrafish | 265 frontend rows / 259 mesh keys | `assets/brain_zebrafish.glb` | Generated and committed |
+| rat | 225 frontend rows / 224 mesh keys | `assets/brain_rat.glb` | Generated and committed |
+| marmoset | 332 frontend rows / 309 mesh keys | `assets/brain_marmoset.glb` | Generated and committed; 23 source labels absent from referenced volume |
+| macaque | 368 frontend rows / 365 mesh keys | `assets/brain_macaque.glb` | Generated and committed; 3 D99 labels absent from available atlas volumes |
 
 ## License And Citation Caveats
 
@@ -168,12 +166,14 @@ preserve all 225 rows and expose 224 non-background `meshName` values.
 
 Marmoset note: this is a merged NIH Marmoset Atlas v1.1 label-workbook catalog
 across five parcellation blocks. For marmoset, `group` means parcellation block,
-not anatomical hierarchy. vL, vM, and vH source volumes are referenced as
-members inside `source/NIH_Marmoset_Atlas_V1_master.zip`.
+not anatomical hierarchy. The generated GLB contains the 309 labels present in
+the referenced source volumes; 23 catalog rows remain as `label-no-volume`
+metadata rows with empty `meshName`.
 
-Macaque note: 365 catalog rows reference right-hemisphere GIFTI surfaces inside
-the D99 archive. Three rows have no right-surface member and reference
-`D99_atlas_v2.0_right.nii.gz` for volume extraction.
+Macaque note: the generated GLB contains the 365 right-hemisphere GIFTI surface
+rows available in the D99 archive. Three D99 labels were absent from the
+available atlas volumes and remain as `label-no-volume` metadata rows with empty
+`meshName`.
 
 1. Load the label volume and label table for the species.
 2. Extract a surface per nonzero label with a reproducible marching-cubes

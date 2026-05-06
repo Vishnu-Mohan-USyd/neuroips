@@ -31,7 +31,7 @@
   "duplicateLabelPolicy": "Duplicate biological labels from source atlases are preserved. Use structureId or meshName, not label alone, as region identity.",
   "counts": {
     "regions": 368,
-    "regionsWithMeshName": 368,
+    "regionsWithMeshName": 365,
     "groups": 25,
     "sourceGroups": {
       "": 183,
@@ -61,12 +61,12 @@
       "Thalamus / Other thalamic region": 3
     },
     "catalogStatus": {
-      "archive_label_surface_right_available": 365,
-      "archive_label_volume_available": 3
+      "archive_label_absent_from_volume": 3,
+      "archive_label_surface_right_available": 365
     },
     "status": {
       "archive-surface": 365,
-      "volume-backed": 3
+      "label-no-volume": 3
     }
   },
   "groups": [
@@ -1664,7 +1664,7 @@
     },
     {
       "species": "macaque_prototype",
-      "meshName": "107_Re",
+      "meshName": "",
       "catalogMeshName": "107_Re",
       "structureId": "107",
       "acronym": "Re",
@@ -1677,10 +1677,10 @@
       "hemisphere": "",
       "sourceAsset": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_v2.0_labels_semicolon.txt",
       "sourceMeshFile": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_atlas_v2.0_right.nii.gz",
-      "catalogStatus": "archive_label_volume_available",
-      "catalogStatusKind": "volume-backed",
-      "status": "volume-backed",
-      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction."
+      "catalogStatus": "archive_label_absent_from_volume",
+      "catalogStatusKind": "label-no-volume",
+      "status": "label-no-volume",
+      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction. Label id absent in referenced source volume; no GLB mesh generated."
     },
     {
       "species": "macaque_prototype",
@@ -2784,7 +2784,7 @@
     },
     {
       "species": "macaque_prototype",
-      "meshName": "171_H2",
+      "meshName": "",
       "catalogMeshName": "171_H2",
       "structureId": "171",
       "acronym": "H2",
@@ -2797,10 +2797,10 @@
       "hemisphere": "",
       "sourceAsset": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_v2.0_labels_semicolon.txt",
       "sourceMeshFile": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_atlas_v2.0_right.nii.gz",
-      "catalogStatus": "archive_label_volume_available",
-      "catalogStatusKind": "volume-backed",
-      "status": "volume-backed",
-      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction."
+      "catalogStatus": "archive_label_absent_from_volume",
+      "catalogStatusKind": "label-no-volume",
+      "status": "label-no-volume",
+      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction. Label id absent in referenced source volume; no GLB mesh generated."
     },
     {
       "species": "macaque_prototype",
@@ -4004,7 +4004,7 @@
     },
     {
       "species": "macaque_prototype",
-      "meshName": "304_v23a",
+      "meshName": "",
       "catalogMeshName": "304_v23a",
       "structureId": "304",
       "acronym": "v23a",
@@ -4017,10 +4017,10 @@
       "hemisphere": "",
       "sourceAsset": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_v2.0_labels_semicolon.txt",
       "sourceMeshFile": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_atlas_v2.0_right.nii.gz",
-      "catalogStatus": "archive_label_volume_available",
-      "catalogStatusKind": "volume-backed",
-      "status": "volume-backed",
-      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction."
+      "catalogStatus": "archive_label_absent_from_volume",
+      "catalogStatusKind": "label-no-volume",
+      "status": "label-no-volume",
+      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction. Label id absent in referenced source volume; no GLB mesh generated."
     },
     {
       "species": "macaque_prototype",
@@ -9024,26 +9024,6 @@
       "status": "archive-surface",
       "notes": "Right-hemisphere GIFTI surface available in D99 tgz; GLB still needs conversion."
     },
-    "107_Re": {
-      "species": "macaque_prototype",
-      "meshName": "107_Re",
-      "catalogMeshName": "107_Re",
-      "structureId": "107",
-      "acronym": "Re",
-      "label": "reunions nucleus",
-      "sourceGroup": "Thalamus / Dorsal thalamus_intralaminar group",
-      "group": "Thalamus / Dorsal thalamus_intralaminar group",
-      "groupId": "Thalamus_Dorsal_thalamus_intralaminar_group",
-      "groupColor": "#9A35B6",
-      "parentId": "",
-      "hemisphere": "",
-      "sourceAsset": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_v2.0_labels_semicolon.txt",
-      "sourceMeshFile": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_atlas_v2.0_right.nii.gz",
-      "catalogStatus": "archive_label_volume_available",
-      "catalogStatusKind": "volume-backed",
-      "status": "volume-backed",
-      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction."
-    },
     "D99_v2.I.k108": {
       "species": "macaque_prototype",
       "meshName": "D99_v2.I.k108",
@@ -10143,26 +10123,6 @@
       "catalogStatusKind": "archive-surface",
       "status": "archive-surface",
       "notes": "Right-hemisphere GIFTI surface available in D99 tgz; GLB still needs conversion."
-    },
-    "171_H2": {
-      "species": "macaque_prototype",
-      "meshName": "171_H2",
-      "catalogMeshName": "171_H2",
-      "structureId": "171",
-      "acronym": "H2",
-      "label": "H2 field of Forel",
-      "sourceGroup": "Fiber bundle",
-      "group": "Fiber bundle",
-      "groupId": "Fiber_bundle",
-      "groupColor": "#A7B635",
-      "parentId": "",
-      "hemisphere": "",
-      "sourceAsset": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_v2.0_labels_semicolon.txt",
-      "sourceMeshFile": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_atlas_v2.0_right.nii.gz",
-      "catalogStatus": "archive_label_volume_available",
-      "catalogStatusKind": "volume-backed",
-      "status": "volume-backed",
-      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction."
     },
     "D99_v2.iml.k175": {
       "species": "macaque_prototype",
@@ -11363,26 +11323,6 @@
       "catalogStatusKind": "archive-surface",
       "status": "archive-surface",
       "notes": "Right-hemisphere GIFTI surface available in D99 tgz; GLB still needs conversion."
-    },
-    "304_v23a": {
-      "species": "macaque_prototype",
-      "meshName": "304_v23a",
-      "catalogMeshName": "304_v23a",
-      "structureId": "304",
-      "acronym": "v23a",
-      "label": "subregion of posterior cingulate cortex",
-      "sourceGroup": "",
-      "group": "Ungrouped",
-      "groupId": "Ungrouped",
-      "groupColor": "#6035B6",
-      "parentId": "",
-      "hemisphere": "",
-      "sourceAsset": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_v2.0_labels_semicolon.txt",
-      "sourceMeshFile": "source/D99_v2.0_dist.tgz:D99_v2.0_dist/D99_atlas_v2.0_right.nii.gz",
-      "catalogStatus": "archive_label_volume_available",
-      "catalogStatusKind": "volume-backed",
-      "status": "volume-backed",
-      "notes": "No right-hemisphere GIFTI surface in D99 tgz; use right atlas volume member for extraction."
     },
     "D99_v2.Ia.k305": {
       "species": "macaque_prototype",

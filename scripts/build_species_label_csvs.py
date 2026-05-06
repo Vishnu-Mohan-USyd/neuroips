@@ -73,7 +73,12 @@ def write_csv(path: Path, rows: Iterable[dict[str, str]]) -> int:
     records = list(rows)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="ascii") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=CSV_FIELDS,
+            extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(records)
     return len(records)
