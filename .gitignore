@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+
+# GeNN generated/build artifacts and experiment outputs
+genn/*_CODE/
+genn/v1_*_*.csv
+genn/v1_*_*.txt
+genn/v1GenerateL4Drive
+genn/v1TwoLayerSimulation

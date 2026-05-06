@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "v1-snn-l4-l23"
+version = "0.1.0"
+description = "Scaled-down two-layer V1 spiking network with L4 Gabor drive and emergent L2/3 tuning."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Codex" }
+]
+dependencies = [
+  "numpy>=1.26",
+  "torch>=2.4"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
