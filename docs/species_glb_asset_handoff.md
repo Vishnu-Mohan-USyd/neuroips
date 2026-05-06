@@ -98,19 +98,30 @@ web runtime size:
 
 | Species | Default per-mesh face target |
 | --- | ---: |
-| mouse | 250 |
-| zebrafish | 500 |
+| mouse | 800 |
+| zebrafish | 1200 |
 | rat | 1500 |
 | marmoset | 1500 |
 | macaque | 1500 |
 
-`--max-faces` overrides the default target for all requested species. When the
-raw atlas workspace is separate from this repo, point the generator at it and
-write outputs outside the repo until the final GLBs are ready:
+The current mouse and rat runtime GLBs are generated from BrainGlobe Atlas API
+mesh packages. Mouse uses `allen_mouse_25um_v1.2`; rat uses
+`whs_sd_rat_39um_v1.2`. The mouse package has no mesh for Allen structure
+`341`, so the generator falls back to the original Allen source OBJ for that
+one catalog key. BrainGlobe's published zebrafish packages do not match this
+handoff's mapZebrain catalog keys, so zebrafish remains generated from the
+mapZebrain STL source with a higher face target.
+
+`--max-faces` overrides the default target for all requested species. Use
+`--brainglobe-root` when BrainGlobe atlas packages are cached separately from
+the repo. When the raw atlas workspace is also separate from this repo, point
+the generator at it and write outputs outside the repo until the final GLBs are
+ready:
 
 ```bash
-python scripts/generate_species_glbs.py mouse zebrafish \
+python scripts/generate_species_glbs.py mouse rat zebrafish \
   --atlas-root /path/to/raw_atlas_workspace/external/atlases \
+  --brainglobe-root /path/to/brainglobe_cache \
   --asset-root /path/to/generated_glbs
 ```
 

@@ -22,6 +22,12 @@ Runtime GLBs are committed under:
 - `assets/brain_macaque.glb`
 - `assets/brain_zebrafish.glb`
 
+The current mouse and rat GLBs are generated from BrainGlobe Atlas API mesh
+packages (`allen_mouse_25um_v1.2` and `whs_sd_rat_39um_v1.2`) with node names
+rewritten to the existing frontend catalog keys. Zebrafish remains generated
+from mapZebrain STL source because the BrainGlobe zebrafish packages available
+in the live registry do not match these mapZebrain mesh keys.
+
 ## Frontend Data Contract
 
 Each species JSON includes species metadata, expected GLB asset path, license

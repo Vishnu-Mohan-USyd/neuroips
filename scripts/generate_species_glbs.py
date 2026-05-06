@@ -29,13 +29,18 @@ ROOT = Path(__file__).resolve().parents[1]
 ATLAS_ROOT = ROOT / "external" / "atlases"
 CATALOG_ROOT = ROOT / "frontend_data" / "species_catalogs"
 ASSET_ROOT = ROOT / "assets"
+BRAINGLOBE_ROOT: Path | None = None
 
 DEFAULT_MAX_FACES_BY_SPECIES: dict[str, int] = {
-    "mouse": 250,
+    "mouse": 800,
     "rat": 1500,
     "marmoset": 1500,
     "macaque": 1500,
-    "zebrafish": 500,
+    "zebrafish": 1200,
+}
+BRAINGLOBE_ATLAS_DIR_BY_SPECIES: dict[str, str] = {
+    "mouse": "allen_mouse_25um_v1.2",
+    "rat": "whs_sd_rat_39um_v1.2",
 }
 SIMPLIFICATION_AGGRESSION = 10
 
@@ -86,6 +91,13 @@ def add_named_mesh(scene: trimesh.Scene, mesh: trimesh.Trimesh, name: str, max_f
     scene.add_geometry(mesh, node_name=name, geom_name=name)
 
 
+def brainglobe_mesh_dir(species: str) -> Path | None:
+    if BRAINGLOBE_ROOT is None:
+        return None
+    atlas_dir = BRAINGLOBE_ROOT / BRAINGLOBE_ATLAS_DIR_BY_SPECIES[species] / "meshes"
+    return atlas_dir if atlas_dir.is_dir() else None
+
+
 def export_scene(scene: trimesh.Scene, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     recenter_and_scale(scene)
@@ -94,10 +106,13 @@ def export_scene(scene: trimesh.Scene, output: Path) -> None:
 
 def generate_mouse(max_faces: int | None) -> Path:
     scene = trimesh.Scene()
-    mesh_dir = ATLAS_ROOT / "mouse" / "source" / "structure_meshes"
+    mesh_dir = brainglobe_mesh_dir("mouse")
+    fallback_mesh_dir = ATLAS_ROOT / "mouse" / "source" / "structure_meshes"
     expected = catalog_mesh_names("mouse")
     for name in sorted(expected, key=lambda value: int(value) if value.isdigit() else value):
-        path = mesh_dir / f"{name}.obj"
+        path = mesh_dir / f"{name}.obj" if mesh_dir is not None else fallback_mesh_dir / f"{name}.obj"
+        if not path.exists():
+            path = fallback_mesh_dir / f"{name}.obj"
         mesh = trimesh.load_mesh(path, file_type="obj", process=False)
         add_named_mesh(scene, mesh, name, max_faces)
     output = ASSET_ROOT / "brain_mouse.glb"
@@ -157,6 +172,22 @@ def generate_rat(max_faces: int | None) -> Path:
     species = "rat"
     catalog = load_catalog(species)
     by_id = {int(r["structureId"]): r for r in catalog["regions"] if r.get("meshName")}
+    mesh_dir = brainglobe_mesh_dir("rat")
+    if mesh_dir is not None:
+        missing: list[int] = []
+        for label_id in sorted(by_id):
+            path = mesh_dir / f"{label_id}.obj"
+            if not path.exists():
+                missing.append(label_id)
+                continue
+            mesh = trimesh.load_mesh(path, file_type="obj", process=False)
+            add_named_mesh(scene, mesh, by_id[label_id]["meshName"], max_faces)
+        if missing:
+            raise FileNotFoundError(f"Missing BrainGlobe rat meshes for label ids: {missing[:20]}")
+        output = ASSET_ROOT / "brain_rat.glb"
+        export_scene(scene, output)
+        return output
+
     volume_path = ATLAS_ROOT / "rat" / "source" / "WHS_SD_rat_atlas_v4.01.nii.gz"
     data, spacing = load_nifti_array(volume_path)
     for label_id in sorted(by_id):
@@ -311,6 +342,12 @@ def parse_args() -> argparse.Namespace:
         default=ASSET_ROOT,
         help="Directory where generated GLB files are written.",
     )
+    parser.add_argument(
+        "--brainglobe-root",
+        type=Path,
+        default=None,
+        help="Optional BrainGlobe atlas cache containing versioned atlas directories.",
+    )
     parser.add_argument("--download-zebrafish", action="store_true")
     return parser.parse_args()
 
@@ -320,10 +357,11 @@ def max_faces_for_species(species: str, override: int | None) -> int | None:
 
 
 def main() -> int:
-    global ATLAS_ROOT, ASSET_ROOT
+    global ATLAS_ROOT, ASSET_ROOT, BRAINGLOBE_ROOT
     args = parse_args()
     ATLAS_ROOT = args.atlas_root
     ASSET_ROOT = args.asset_root
+    BRAINGLOBE_ROOT = args.brainglobe_root
     for species in args.species:
         max_faces = max_faces_for_species(species, args.max_faces)
         if species == "mouse":
