@@ -5,6 +5,10 @@ The primary path is a generated-code workflow for NVIDIA GPUs on the H200 pod,
 with fixed L4 orientation-tuned drive, explicit E/I populations in `L4` and
 `L2/3`, local L4 to L2/3 convergence, and local recurrent structure.
 
+Latest detailed report:
+
+- `docs/v1_soft_prior_som_recurrence_report.md`
+
 ## Model summary
 
 - Two retinotopic sheets: `L4` and `L2/3`.
@@ -12,12 +16,14 @@ with fixed L4 orientation-tuned drive, explicit E/I populations in `L4` and
   sheets: `L4PV/L4SOM` and `L23PV/L23SOM/L23VIP`.
 - Fixed L4 excitatory drive generated analytically in C++ from deterministic
   simple-cell-like orientation tuning.
-- Local L4 to L2/3 convergence with many presynaptic L4 cells pooling onto each
-  local L2/3 target neighborhood.
-- Local recurrent E and I structure within both sheets.
-- Orientation-sweep measurement, OSI export, and gated feedforward STDP on
-  `L4E -> L23E`.
-- Subtype rate export for PV/SOM/VIP validation experiments.
+- Local L4 to L2/3 convergence with a soft probabilistic orientation prior
+  rather than a hard same-orientation mask.
+- Local sparse plastic `L23E -> L23E` recurrence with cell-level response
+  correlation and strong-synapse enrichment diagnostics.
+- PV and SOM inhibitory pathways with homeostatic plasticity; SOM has broad
+  output geometry and size-tuning/SOM-output-ablation validation.
+- Orientation-sweep, cell-tuning, OSI, context, size-tuning, recurrent
+  specificity, recurrence-ablation, and subtype-rate exports.
 
 ## Layout
 
@@ -125,6 +131,13 @@ above. It produced `baseline_l23_median_osi=0.141110`,
 `post_l23_median_osi=0.826583`, and a matched zero-training control with
 `post_l23_median_osi=0.148311` and unchanged mean plastic weight
 `0.005743 -> 0.005743`.
+
+The newer soft-prior/SOM/recurrence audit is documented in
+`docs/v1_soft_prior_som_recurrence_report.md`. Its current validated run uses
+`V1_FF_ORIENTATION_BIAS_STRENGTH=0.3`, passes L2/3 OSI
+(`full_post=0.745356`, `control_post=0.000000`), passes SOM size tuning and
+SOM-output-ablation gates, and passes recurrent specificity, strong-synapse
+enrichment, and recurrence-output-ablation gates.
 
 Zero-training subtype perturbation checks used `V1_L23*_GATE_NA=0.2` one at a
 time. Relative to the no-gate control, PV and SOM gates suppressed mean L2/3E

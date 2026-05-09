@@ -15,6 +15,8 @@ constexpr double kTwoPi = 2.0 * kPi;
 
 constexpr double kOrientationSimilarityThreshold = 0.72;
 constexpr double kOrientationDistancePenalty = 0.08;
+constexpr double kOrientationSoftProbabilityFloor = 0.15;
+constexpr double kOrientationSoftBiasStrength = 0.3;
 
 constexpr double kDefaultStimulusPhaseDeg = 0.0;
 constexpr double kDefaultStimulusContrast = 1.0;
