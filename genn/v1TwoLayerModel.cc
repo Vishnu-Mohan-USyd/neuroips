@@ -158,6 +158,60 @@ public:
 };
 IMPLEMENT_SNIPPET(LocalPatch);
 
+class LocalIntersitePatch : public GeNN::InitSparseConnectivitySnippet::Base {
+public:
+    DECLARE_SNIPPET(LocalIntersitePatch);
+
+    SET_ROW_BUILD_CODE(
+        "const unsigned int preSite = id_pre / preNeuronsPerSite;\n"
+        "const unsigned int preX = preSite % preSide;\n"
+        "const unsigned int preY = preSite / preSide;\n"
+        "for(int dy = -(int)radius; dy <= (int)radius; dy++) {\n"
+        "    const int postY = (int)preY + dy;\n"
+        "    if(postY < 0 || postY >= (int)postSide) {\n"
+        "        continue;\n"
+        "    }\n"
+        "    for(int dx = -(int)radius; dx <= (int)radius; dx++) {\n"
+        "        const int postX = (int)preX + dx;\n"
+        "        if(postX < 0 || postX >= (int)postSide) {\n"
+        "            continue;\n"
+        "        }\n"
+        "        const unsigned int postSite = ((unsigned int)postY * postSide) + (unsigned int)postX;\n"
+        "        if(postSite == preSite) {\n"
+        "            continue;\n"
+        "        }\n"
+        "        for(unsigned int postCell = 0; postCell < postNeuronsPerSite; postCell++) {\n"
+        "            addSynapse((postSite * postNeuronsPerSite) + postCell);\n"
+        "        }\n"
+        "    }\n"
+        "}\n");
+
+    SET_PARAMS({
+        {"preSide", "unsigned int"},
+        {"preNeuronsPerSite", "unsigned int"},
+        {"postSide", "unsigned int"},
+        {"postNeuronsPerSite", "unsigned int"},
+        {"radius", "unsigned int"}
+    });
+
+    SET_CALC_MAX_ROW_LENGTH_FUNC(
+        [](unsigned int, unsigned int, const GeNN::ParamValues &pars) {
+            const unsigned int radius = pars.at("radius").cast<unsigned int>();
+            const unsigned int postNeuronsPerSite = pars.at("postNeuronsPerSite").cast<unsigned int>();
+            const unsigned int patchWidth = (2u * radius) + 1u;
+            return patchWidth * patchWidth * postNeuronsPerSite;
+        });
+
+    SET_CALC_MAX_COL_LENGTH_FUNC(
+        [](unsigned int, unsigned int, const GeNN::ParamValues &pars) {
+            const unsigned int radius = pars.at("radius").cast<unsigned int>();
+            const unsigned int preNeuronsPerSite = pars.at("preNeuronsPerSite").cast<unsigned int>();
+            const unsigned int patchWidth = (2u * radius) + 1u;
+            return patchWidth * patchWidth * preNeuronsPerSite;
+        });
+};
+IMPLEMENT_SNIPPET(LocalIntersitePatch);
+
 class SparseDistancePatch : public GeNN::InitSparseConnectivitySnippet::Base {
 public:
     DECLARE_SNIPPET(SparseDistancePatch);
@@ -421,11 +475,60 @@ struct NamedWeightStats {
     WeightStats after;
 };
 
+struct L4IntersiteConfig {
+    bool enabled = false;
+    unsigned int radius = v1_genn::kL4IntersiteRadius;
+    double weight_scale = v1_genn::kL4IntersiteWeightScale;
+    double l4ee_scale = v1_genn::kL4IntersiteWeightScale;
+    double l4e_to_l4pv_scale = v1_genn::kL4IntersiteWeightScale;
+    double l4pv_to_l4e_scale = v1_genn::kL4IntersiteWeightScale;
+};
+
+struct ConnectivityStats {
+    std::size_t edge_count = 0;
+    double mean_distance_sites = 0.0;
+    double max_distance_sites = 0.0;
+    double same_site_fraction = 0.0;
+    double beyond_radius_fraction = 0.0;
+};
+
 struct ContextValidationSummary {
     std::string condition;
     double l23e_mean_rate_hz = 0.0;
     double l23pv_mean_rate_hz = 0.0;
     double l23som_mean_rate_hz = 0.0;
+};
+
+struct RetinotopicContextMetrics {
+    unsigned int validation_site_id = 0;
+    PopulationSiteMetrics center_l23e;
+    PopulationSiteMetrics center_l23pv;
+    PopulationSiteMetrics center_l23som;
+    PopulationSiteMetrics broad_l23e;
+    PopulationSiteMetrics broad_l23pv;
+    PopulationSiteMetrics broad_l23som;
+};
+
+struct RetinotopicSizeMetrics {
+    unsigned int validation_site_id = 0;
+    PopulationSiteMetrics l4e;
+    PopulationSiteMetrics l23e;
+    PopulationSiteMetrics l23pv;
+    PopulationSiteMetrics l23som;
+};
+
+struct ValidationSiteConfig {
+    std::vector<unsigned int> site_ids;
+    std::vector<unsigned int> aperture_center_sites;
+    bool include_validation_site_id = false;
+};
+
+struct ValidationTrialSet {
+    unsigned int site_id = 0;
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max();
+    std::vector<TrialWindow> center_trials;
+    std::vector<TrialWindow> broad_trials;
+    std::vector<TrialWindow> size_trials;
 };
 
 double getOrientationSoftBiasStrength();
@@ -465,6 +568,20 @@ GeNN::ParamValues makePatchParameters(
         {"postNeuronsPerSite", post_neurons_per_site},
         {"radius", radius},
         {"excludeSelf", exclude_self ? 1u : 0u},
+    };
+}
+
+GeNN::ParamValues makeIntersitePatchParameters(
+    unsigned int pre_neurons_per_site,
+    unsigned int post_neurons_per_site,
+    unsigned int radius)
+{
+    return {
+        {"preSide", v1_genn::kSheetSide},
+        {"preNeuronsPerSite", pre_neurons_per_site},
+        {"postSide", v1_genn::kSheetSide},
+        {"postNeuronsPerSite", post_neurons_per_site},
+        {"radius", radius},
     };
 }
 
@@ -534,6 +651,25 @@ void addLocalProjection(
         GeNN::initWeightUpdate<GeNN::WeightUpdateModels::StaticPulse>({}, {{"g", weight}}),
         GeNN::initPostsynaptic<GeNN::PostsynapticModels::ExpCurr>({{"tau", tau_ms}}),
         GeNN::initConnectivity<LocalPatch>(patch_params));
+}
+
+void addLocalIntersiteProjection(
+    GeNN::ModelSpec &model,
+    const std::string &name,
+    GeNN::NeuronGroup *source,
+    GeNN::NeuronGroup *target,
+    double weight,
+    double tau_ms,
+    const GeNN::ParamValues &patch_params)
+{
+    model.addSynapsePopulation(
+        name,
+        GeNN::SynapseMatrixType::SPARSE,
+        source,
+        target,
+        GeNN::initWeightUpdate<GeNN::WeightUpdateModels::StaticPulse>({}, {{"g", weight}}),
+        GeNN::initPostsynaptic<GeNN::PostsynapticModels::ExpCurr>({{"tau", tau_ms}}),
+        GeNN::initConnectivity<LocalIntersitePatch>(patch_params));
 }
 
 GeNN::SynapseGroup *addPlasticLocalProjection(
@@ -740,6 +876,36 @@ std::vector<double> getEnvDoubleListOrDefault(const char *name, const char *defa
     return values;
 }
 
+std::vector<unsigned int> getEnvUnsignedListOrEmpty(const char *name)
+{
+    const char *env_value = std::getenv(name);
+    if(env_value == nullptr || env_value[0] == '\0') {
+        return {};
+    }
+
+    std::vector<unsigned int> values;
+    std::stringstream stream(env_value);
+    std::string token;
+    while(std::getline(stream, token, ',')) {
+        const std::string trimmed = trimWhitespace(token);
+        if(trimmed.empty()) {
+            throw std::runtime_error(std::string("Invalid comma-separated unsigned integer list for ") + name + ": " + env_value);
+        }
+
+        char *end = nullptr;
+        const unsigned long parsed = std::strtoul(trimmed.c_str(), &end, 10);
+        if(end == trimmed.c_str() || *end != '\0' || parsed > std::numeric_limits<unsigned int>::max()) {
+            throw std::runtime_error(std::string("Invalid comma-separated unsigned integer list for ") + name + ": " + env_value);
+        }
+        values.push_back(static_cast<unsigned int>(parsed));
+    }
+
+    if(values.empty()) {
+        throw std::runtime_error(std::string("At least one value is required for ") + name + ".");
+    }
+    return values;
+}
+
 double getOrientationSoftBiasStrength()
 {
     const double strength = getEnvDoubleOrDefault(
@@ -749,6 +915,48 @@ double getOrientationSoftBiasStrength()
         throw std::runtime_error("V1_FF_ORIENTATION_BIAS_STRENGTH must be in [0, 1].");
     }
     return strength;
+}
+
+L4IntersiteConfig getL4IntersiteConfig()
+{
+    L4IntersiteConfig config;
+    config.enabled = getEnvUnsignedOrDefault(
+        "V1_L4_INTERSITE_ENABLE",
+        v1_genn::kL4IntersiteEnableDefault) != 0u;
+    config.radius = getEnvUnsignedOrDefault(
+        "V1_L4_INTERSITE_RADIUS",
+        v1_genn::kL4IntersiteRadius);
+    config.weight_scale = getEnvDoubleOrDefault(
+        "V1_L4_INTERSITE_WEIGHT_SCALE",
+        v1_genn::kL4IntersiteWeightScale);
+    config.l4ee_scale = getEnvDoubleOrDefault(
+        "V1_L4_INTERSITE_EE_SCALE",
+        config.weight_scale);
+    config.l4e_to_l4pv_scale = getEnvDoubleOrDefault(
+        "V1_L4_INTERSITE_E_PV_SCALE",
+        config.weight_scale);
+    config.l4pv_to_l4e_scale = getEnvDoubleOrDefault(
+        "V1_L4_INTERSITE_PV_E_SCALE",
+        config.weight_scale);
+
+    if(config.radius == 0u || config.radius >= v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_L4_INTERSITE_RADIUS must be in [1, V1_SHEET_SIDE).");
+    }
+    if(config.weight_scale < 0.0 || config.weight_scale > 1.0) {
+        throw std::runtime_error("V1_L4_INTERSITE_WEIGHT_SCALE must be in [0, 1].");
+    }
+    if(config.l4ee_scale < 0.0 || config.l4ee_scale > 1.0
+       || config.l4e_to_l4pv_scale < 0.0 || config.l4e_to_l4pv_scale > 1.0
+       || config.l4pv_to_l4e_scale < 0.0 || config.l4pv_to_l4e_scale > 1.0) {
+        throw std::runtime_error("L4 intersite per-projection scales must be in [0, 1].");
+    }
+    if(config.enabled
+       && config.l4ee_scale == 0.0
+       && config.l4e_to_l4pv_scale == 0.0
+       && config.l4pv_to_l4e_scale == 0.0) {
+        throw std::runtime_error("At least one L4 intersite projection scale must be positive when V1_L4_INTERSITE_ENABLE=1.");
+    }
+    return config;
 }
 
 GeNN::NeuronGroup &requireNeuronGroup(GeNN::ModelSpec &model, const std::string &name)
@@ -838,11 +1046,24 @@ unsigned int durationToSteps(double duration_ms)
     return static_cast<unsigned int>(rounded_steps);
 }
 
-void fillL4EDrive(std::vector<float> &drive, double orientation_rad, double phase_rad, double aperture_radius_sites = -1.0)
+void fillL4EDrive(
+    std::vector<float> &drive,
+    double orientation_rad,
+    double phase_rad,
+    double aperture_radius_sites = -1.0,
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max())
 {
     drive.resize(v1_genn::kNumL4E);
-    const double center_x = (static_cast<double>(v1_genn::kSheetSide) - 1.0) * 0.5;
-    const double center_y = center_x;
+    double center_x = (static_cast<double>(v1_genn::kSheetSide) - 1.0) * 0.5;
+    double center_y = center_x;
+    if(aperture_radius_sites > 0.0 && aperture_center_site != std::numeric_limits<unsigned int>::max()) {
+        if(aperture_center_site >= v1_genn::kSiteCount) {
+            throw std::runtime_error("Validation aperture center site is outside the sheet.");
+        }
+        const auto center_xy = v1_genn::siteIndexToXY(aperture_center_site);
+        center_x = static_cast<double>(center_xy.first);
+        center_y = static_cast<double>(center_xy.second);
+    }
     for(unsigned int site = 0; site < v1_genn::kSiteCount; site++) {
         const auto xy = v1_genn::siteIndexToXY(site);
         double aperture = 1.0;
@@ -970,6 +1191,92 @@ std::vector<std::pair<unsigned int, unsigned int>> buildLocalPatchConnectivity(
     }
 
     return edges;
+}
+
+std::vector<std::pair<unsigned int, unsigned int>> buildLocalIntersiteConnectivity(
+    unsigned int pre_neurons_per_site,
+    unsigned int post_neurons_per_site,
+    unsigned int radius)
+{
+    std::vector<std::pair<unsigned int, unsigned int>> edges;
+    edges.reserve(
+        static_cast<std::size_t>(v1_genn::kSiteCount)
+        * static_cast<std::size_t>(pre_neurons_per_site)
+        * static_cast<std::size_t>(((2u * radius) + 1u) * ((2u * radius) + 1u))
+        * static_cast<std::size_t>(post_neurons_per_site));
+
+    for(unsigned int pre_id = 0; pre_id < (v1_genn::kSiteCount * pre_neurons_per_site); pre_id++) {
+        const unsigned int pre_site = pre_id / pre_neurons_per_site;
+        const unsigned int pre_x = pre_site % v1_genn::kSheetSide;
+        const unsigned int pre_y = pre_site / v1_genn::kSheetSide;
+
+        for(int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); dy++) {
+            const int post_y = static_cast<int>(pre_y) + dy;
+            if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
+                continue;
+            }
+
+            for(int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); dx++) {
+                const int post_x = static_cast<int>(pre_x) + dx;
+                if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
+                    continue;
+                }
+
+                const unsigned int post_site =
+                    (static_cast<unsigned int>(post_y) * v1_genn::kSheetSide)
+                    + static_cast<unsigned int>(post_x);
+                if(post_site == pre_site) {
+                    continue;
+                }
+                for(unsigned int post_cell = 0; post_cell < post_neurons_per_site; post_cell++) {
+                    const unsigned int post_id = (post_site * post_neurons_per_site) + post_cell;
+                    edges.emplace_back(pre_id, post_id);
+                }
+            }
+        }
+    }
+
+    return edges;
+}
+
+ConnectivityStats summarizeConnectivity(
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    unsigned int pre_neurons_per_site,
+    unsigned int post_neurons_per_site,
+    unsigned int radius)
+{
+    ConnectivityStats stats;
+    stats.edge_count = edges.size();
+    if(edges.empty()) {
+        return stats;
+    }
+
+    double distance_sum = 0.0;
+    std::size_t same_site_count = 0;
+    std::size_t beyond_radius_count = 0;
+    for(const auto &edge : edges) {
+        const unsigned int pre_site = edge.first / pre_neurons_per_site;
+        const unsigned int post_site = edge.second / post_neurons_per_site;
+        const auto pre_xy = v1_genn::siteIndexToXY(pre_site);
+        const auto post_xy = v1_genn::siteIndexToXY(post_site);
+        const double dx = static_cast<double>(pre_xy.first) - static_cast<double>(post_xy.first);
+        const double dy = static_cast<double>(pre_xy.second) - static_cast<double>(post_xy.second);
+        const double distance = std::sqrt((dx * dx) + (dy * dy));
+        const double chebyshev_distance = std::max(std::fabs(dx), std::fabs(dy));
+        distance_sum += distance;
+        stats.max_distance_sites = std::max(stats.max_distance_sites, distance);
+        if(pre_site == post_site) {
+            same_site_count++;
+        }
+        if(chebyshev_distance > static_cast<double>(radius) + 1.0e-9) {
+            beyond_radius_count++;
+        }
+    }
+
+    stats.mean_distance_sites = distance_sum / static_cast<double>(edges.size());
+    stats.same_site_fraction = static_cast<double>(same_site_count) / static_cast<double>(edges.size());
+    stats.beyond_radius_fraction = static_cast<double>(beyond_radius_count) / static_cast<double>(edges.size());
+    return stats;
 }
 
 double deterministicSparseSample(unsigned int pre_id, unsigned int post_id)
@@ -1531,15 +1838,73 @@ unsigned int getCenterSiteId()
     return (center * v1_genn::kSheetSide) + center;
 }
 
+ValidationSiteConfig getValidationSiteConfig(
+    const std::vector<double> &size_tuning_radii_sites,
+    double broad_stimulus_radius_sites)
+{
+    ValidationSiteConfig config;
+    const unsigned int center_site_id = getCenterSiteId();
+    const char *explicit_site_env = std::getenv("V1_VALIDATION_SITE_IDS");
+    if(explicit_site_env != nullptr && explicit_site_env[0] != '\0') {
+        config.include_validation_site_id = true;
+        const std::vector<unsigned int> explicit_site_ids = getEnvUnsignedListOrEmpty("V1_VALIDATION_SITE_IDS");
+        for(unsigned int site_id : explicit_site_ids) {
+            if(site_id >= v1_genn::kSiteCount) {
+                throw std::runtime_error("V1_VALIDATION_SITE_IDS contains a site outside the sheet.");
+            }
+            if(std::find(config.site_ids.begin(), config.site_ids.end(), site_id) == config.site_ids.end()) {
+                config.site_ids.push_back(site_id);
+                config.aperture_center_sites.push_back(site_id);
+            }
+        }
+        return config;
+    }
+
+    const unsigned int grid_side = getEnvUnsignedOrDefault("V1_VALIDATION_GRID_SIDE", 1u);
+    if(grid_side <= 1u) {
+        config.site_ids.push_back(center_site_id);
+        // Preserve the legacy continuous sheet-center aperture by default.
+        config.aperture_center_sites.push_back(std::numeric_limits<unsigned int>::max());
+        return config;
+    }
+    if(grid_side > v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_VALIDATION_GRID_SIDE cannot exceed V1_SHEET_SIDE.");
+    }
+    config.include_validation_site_id = true;
+
+    double max_radius_sites = std::max(kDefaultCenterStimulusRadiusSites, broad_stimulus_radius_sites);
+    for(double radius_sites : size_tuning_radii_sites) {
+        max_radius_sites = std::max(max_radius_sites, radius_sites);
+    }
+    const unsigned int requested_margin = static_cast<unsigned int>(std::ceil(max_radius_sites));
+    const unsigned int max_margin = (v1_genn::kSheetSide - 1u) / 2u;
+    const unsigned int margin = std::min(requested_margin, max_margin);
+    const unsigned int low = margin;
+    const unsigned int high = v1_genn::kSheetSide - 1u - margin;
+
+    for(unsigned int grid_y = 0; grid_y < grid_side; grid_y++) {
+        const double fy = static_cast<double>(grid_y) / static_cast<double>(grid_side - 1u);
+        const unsigned int y = static_cast<unsigned int>(std::lround(
+            static_cast<double>(low) + (fy * static_cast<double>(high - low))));
+        for(unsigned int grid_x = 0; grid_x < grid_side; grid_x++) {
+            const double fx = static_cast<double>(grid_x) / static_cast<double>(grid_side - 1u);
+            const unsigned int x = static_cast<unsigned int>(std::lround(
+                static_cast<double>(low) + (fx * static_cast<double>(high - low))));
+            const unsigned int site_id = (y * v1_genn::kSheetSide) + x;
+            if(std::find(config.site_ids.begin(), config.site_ids.end(), site_id) == config.site_ids.end()) {
+                config.site_ids.push_back(site_id);
+                config.aperture_center_sites.push_back(site_id);
+            }
+        }
+    }
+    return config;
+}
+
 void writeContextValidationCsv(
     const std::string &path,
     const std::vector<double> &orientations_rad,
-    const PopulationSiteMetrics &center_l23e,
-    const PopulationSiteMetrics &center_l23pv,
-    const PopulationSiteMetrics &center_l23som,
-    const PopulationSiteMetrics &broad_l23e,
-    const PopulationSiteMetrics &broad_l23pv,
-    const PopulationSiteMetrics &broad_l23som,
+    const std::vector<RetinotopicContextMetrics> &validation_metrics,
+    bool include_validation_site_id,
     double som_output_scale)
 {
     std::ofstream output(path.c_str());
@@ -1548,16 +1913,27 @@ void writeContextValidationCsv(
     }
 
     output << std::fixed << std::setprecision(6);
-    output << "condition,population,site_id,som_output_scale,mean_rate_hz";
+    output << "condition,population,site_id";
+    if(include_validation_site_id) {
+        output << ",validation_site_id";
+    }
+    output << ",som_output_scale,mean_rate_hz";
     for(double orientation_rad : orientations_rad) {
         output << ",rate_" << static_cast<int>(std::lround(radiansToDegrees(orientation_rad))) << "deg_hz";
     }
     output << "\n";
 
-    auto writeRow = [&](const std::string &condition, const std::string &population, const PopulationSiteMetrics &metrics) {
+    auto writeRow = [&](const std::string &condition,
+                        const std::string &population,
+                        unsigned int validation_site_id,
+                        const PopulationSiteMetrics &metrics) {
         output << condition << ","
                << population << ","
-               << metrics.site_id << ","
+               << metrics.site_id;
+        if(include_validation_site_id) {
+            output << "," << validation_site_id;
+        }
+        output << ","
                << som_output_scale << ","
                << metrics.mean_rate_hz;
         for(double rate_hz : metrics.rates_hz) {
@@ -1566,30 +1942,32 @@ void writeContextValidationCsv(
         output << "\n";
     };
 
-    writeRow("center_only", "l23e", center_l23e);
-    writeRow("center_only", "l23pv", center_l23pv);
-    writeRow("center_only", "l23som", center_l23som);
-    writeRow("broad_field", "l23e", broad_l23e);
-    writeRow("broad_field", "l23pv", broad_l23pv);
-    writeRow("broad_field", "l23som", broad_l23som);
+    for(const RetinotopicContextMetrics &metrics : validation_metrics) {
+        writeRow("center_only", "l23e", metrics.validation_site_id, metrics.center_l23e);
+        writeRow("center_only", "l23pv", metrics.validation_site_id, metrics.center_l23pv);
+        writeRow("center_only", "l23som", metrics.validation_site_id, metrics.center_l23som);
+        writeRow("broad_field", "l23e", metrics.validation_site_id, metrics.broad_l23e);
+        writeRow("broad_field", "l23pv", metrics.validation_site_id, metrics.broad_l23pv);
+        writeRow("broad_field", "l23som", metrics.validation_site_id, metrics.broad_l23som);
+    }
 }
 
 void writeSizeTuningCsv(
     const std::string &path,
     const std::vector<double> &radii_sites,
     const std::vector<double> &orientations_rad,
-    const PopulationSiteMetrics &center_l4e,
-    const PopulationSiteMetrics &center_l23e,
-    const PopulationSiteMetrics &center_l23pv,
-    const PopulationSiteMetrics &center_l23som,
+    const std::vector<RetinotopicSizeMetrics> &validation_metrics,
+    bool include_validation_site_id,
     double som_output_scale)
 {
     const std::size_t expected_count = radii_sites.size() * orientations_rad.size();
-    if(center_l4e.rates_hz.size() != expected_count
-       || center_l23e.rates_hz.size() != expected_count
-       || center_l23pv.rates_hz.size() != expected_count
-       || center_l23som.rates_hz.size() != expected_count) {
-        throw std::runtime_error("Size tuning rate vectors do not match radii/orientation grid.");
+    for(const RetinotopicSizeMetrics &metrics : validation_metrics) {
+        if(metrics.l4e.rates_hz.size() != expected_count
+           || metrics.l23e.rates_hz.size() != expected_count
+           || metrics.l23pv.rates_hz.size() != expected_count
+           || metrics.l23som.rates_hz.size() != expected_count) {
+            throw std::runtime_error("Size tuning rate vectors do not match radii/orientation grid.");
+        }
     }
 
     std::ofstream output(path.c_str());
@@ -1598,15 +1976,25 @@ void writeSizeTuningCsv(
     }
 
     output << std::fixed << std::setprecision(6);
-    output << "radius_sites,population,site_id,som_output_scale,orientation_deg,rate_hz\n";
+    output << "radius_sites,population,site_id";
+    if(include_validation_site_id) {
+        output << ",validation_site_id";
+    }
+    output << ",som_output_scale,orientation_deg,rate_hz\n";
 
-    auto writeRows = [&](const std::string &population, const PopulationSiteMetrics &metrics) {
+    auto writeRows = [&](const std::string &population,
+                         unsigned int validation_site_id,
+                         const PopulationSiteMetrics &metrics) {
         for(std::size_t radius_index = 0; radius_index < radii_sites.size(); radius_index++) {
             for(std::size_t orientation_index = 0; orientation_index < orientations_rad.size(); orientation_index++) {
                 const std::size_t trial_index = (radius_index * orientations_rad.size()) + orientation_index;
                 output << radii_sites[radius_index] << ","
                        << population << ","
-                       << metrics.site_id << ","
+                       << metrics.site_id;
+                if(include_validation_site_id) {
+                    output << "," << validation_site_id;
+                }
+                output << ","
                        << som_output_scale << ","
                        << positiveModuloDegrees(radiansToDegrees(orientations_rad[orientation_index])) << ","
                        << metrics.rates_hz[trial_index] << "\n";
@@ -1614,10 +2002,136 @@ void writeSizeTuningCsv(
         }
     };
 
-    writeRows("l4e", center_l4e);
-    writeRows("l23e", center_l23e);
-    writeRows("l23pv", center_l23pv);
-    writeRows("l23som", center_l23som);
+    for(const RetinotopicSizeMetrics &metrics : validation_metrics) {
+        writeRows("l4e", metrics.validation_site_id, metrics.l4e);
+        writeRows("l23e", metrics.validation_site_id, metrics.l23e);
+        writeRows("l23pv", metrics.validation_site_id, metrics.l23pv);
+        writeRows("l23som", metrics.validation_site_id, metrics.l23som);
+    }
+}
+
+void writeMetricRow(std::ofstream &output, const std::string &metric, double value)
+{
+    output << metric << "," << value << "\n";
+}
+
+void writeL4IntersiteDiagnosticsCsv(
+    const std::string &path,
+    const L4IntersiteConfig &config,
+    const std::vector<double> &radii_sites,
+    const std::vector<RetinotopicSizeMetrics> &size_validation_metrics,
+    const SweepResult &baseline,
+    const SweepResult &post)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "metric,value\n";
+
+    writeMetricRow(output, "enabled", config.enabled ? 1.0 : 0.0);
+    writeMetricRow(output, "radius_sites", static_cast<double>(config.radius));
+    writeMetricRow(output, "weight_scale", config.weight_scale);
+    writeMetricRow(output, "l4ee_scale", config.l4ee_scale);
+    writeMetricRow(output, "l4e_to_l4pv_scale", config.l4e_to_l4pv_scale);
+    writeMetricRow(output, "l4pv_to_l4e_scale", config.l4pv_to_l4e_scale);
+    writeMetricRow(output, "l4ee_base_weight", v1_genn::kL4EEWeight);
+    writeMetricRow(output, "l4e_to_l4pv_base_weight", v1_genn::kL4EToPVWeight);
+    writeMetricRow(output, "l4pv_to_l4e_base_weight", v1_genn::kL4PVToEWeight);
+    writeMetricRow(output, "l4ee_effective_weight", config.enabled ? (v1_genn::kL4EEWeight * config.l4ee_scale) : 0.0);
+    writeMetricRow(output, "l4e_to_l4pv_effective_weight", config.enabled ? (v1_genn::kL4EToPVWeight * config.l4e_to_l4pv_scale) : 0.0);
+    writeMetricRow(output, "l4pv_to_l4e_effective_weight", config.enabled ? (v1_genn::kL4PVToEWeight * config.l4pv_to_l4e_scale) : 0.0);
+
+    const auto l4ee_edges = config.enabled ? buildLocalIntersiteConnectivity(
+        v1_genn::kL4EPerSite,
+        v1_genn::kL4EPerSite,
+        config.radius) : std::vector<std::pair<unsigned int, unsigned int>>{};
+    const auto l4e_pv_edges = config.enabled ? buildLocalIntersiteConnectivity(
+        v1_genn::kL4EPerSite,
+        v1_genn::kL4PVPerSite,
+        config.radius) : std::vector<std::pair<unsigned int, unsigned int>>{};
+    const auto l4pv_e_edges = config.enabled ? buildLocalIntersiteConnectivity(
+        v1_genn::kL4PVPerSite,
+        v1_genn::kL4EPerSite,
+        config.radius) : std::vector<std::pair<unsigned int, unsigned int>>{};
+
+    const ConnectivityStats l4ee_stats = summarizeConnectivity(
+        l4ee_edges,
+        v1_genn::kL4EPerSite,
+        v1_genn::kL4EPerSite,
+        config.radius);
+    const ConnectivityStats l4e_pv_stats = summarizeConnectivity(
+        l4e_pv_edges,
+        v1_genn::kL4EPerSite,
+        v1_genn::kL4PVPerSite,
+        config.radius);
+    const ConnectivityStats l4pv_e_stats = summarizeConnectivity(
+        l4pv_e_edges,
+        v1_genn::kL4PVPerSite,
+        v1_genn::kL4EPerSite,
+        config.radius);
+
+    auto writeStats = [&](const std::string &prefix, const ConnectivityStats &stats) {
+        writeMetricRow(output, prefix + "_edge_count", static_cast<double>(stats.edge_count));
+        writeMetricRow(output, prefix + "_mean_distance_sites", stats.mean_distance_sites);
+        writeMetricRow(output, prefix + "_max_distance_sites", stats.max_distance_sites);
+        writeMetricRow(output, prefix + "_same_site_fraction", stats.same_site_fraction);
+        writeMetricRow(output, prefix + "_beyond_radius_fraction", stats.beyond_radius_fraction);
+    };
+    writeStats("l4ee", l4ee_stats);
+    writeStats("l4e_to_l4pv", l4e_pv_stats);
+    writeStats("l4pv_to_l4e", l4pv_e_stats);
+    writeMetricRow(
+        output,
+        "max_projection_distance_sites",
+        std::max(l4ee_stats.max_distance_sites, std::max(l4e_pv_stats.max_distance_sites, l4pv_e_stats.max_distance_sites)));
+    writeMetricRow(
+        output,
+        "max_same_site_fraction",
+        std::max(l4ee_stats.same_site_fraction, std::max(l4e_pv_stats.same_site_fraction, l4pv_e_stats.same_site_fraction)));
+    writeMetricRow(
+        output,
+        "max_beyond_radius_fraction",
+        std::max(l4ee_stats.beyond_radius_fraction, std::max(l4e_pv_stats.beyond_radius_fraction, l4pv_e_stats.beyond_radius_fraction)));
+
+    writeMetricRow(output, "validation_site_count", static_cast<double>(size_validation_metrics.size()));
+    if(!size_validation_metrics.empty() && !radii_sites.empty()) {
+        std::vector<double> l4_rates_by_radius(radii_sites.size(), 0.0);
+        for(const RetinotopicSizeMetrics &metrics : size_validation_metrics) {
+            if(metrics.l4e.rates_hz.size() % radii_sites.size() != 0u) {
+                throw std::runtime_error("L4 intersite diagnostics expected size tuning rates on radii/orientation grid.");
+            }
+            const std::size_t orientation_count = metrics.l4e.rates_hz.size() / radii_sites.size();
+            if(orientation_count == 0u) {
+                throw std::runtime_error("L4 intersite diagnostics requires at least one orientation.");
+            }
+            for(std::size_t radius_index = 0; radius_index < radii_sites.size(); radius_index++) {
+                double site_radius_sum = 0.0;
+                for(std::size_t orientation_index = 0; orientation_index < orientation_count; orientation_index++) {
+                    site_radius_sum += metrics.l4e.rates_hz[(radius_index * orientation_count) + orientation_index];
+                }
+                l4_rates_by_radius[radius_index] += site_radius_sum
+                    / (static_cast<double>(orientation_count) * static_cast<double>(size_validation_metrics.size()));
+            }
+        }
+
+        const auto peak_iter = std::max_element(l4_rates_by_radius.begin(), l4_rates_by_radius.end());
+        const std::size_t peak_index = static_cast<std::size_t>(peak_iter - l4_rates_by_radius.begin());
+        const double peak_rate = *peak_iter;
+        const double small_rate = l4_rates_by_radius.front();
+        const double large_rate = l4_rates_by_radius.back();
+        writeMetricRow(output, "l4_size_peak_radius_sites", radii_sites[peak_index]);
+        writeMetricRow(output, "l4_size_peak_rate_hz", peak_rate);
+        writeMetricRow(output, "l4_size_small_rate_hz", small_rate);
+        writeMetricRow(output, "l4_size_large_rate_hz", large_rate);
+        writeMetricRow(output, "l4_size_small_peak_ratio", peak_rate > 0.0 ? (small_rate / peak_rate) : 0.0);
+        writeMetricRow(output, "l4_size_large_peak_ratio", peak_rate > 0.0 ? (large_rate / peak_rate) : 0.0);
+    }
+    writeMetricRow(output, "baseline_l4_median_osi", baseline.l4_median_osi);
+    writeMetricRow(output, "post_l4_median_osi", post.l4_median_osi);
+    writeMetricRow(output, "baseline_l4_map_error_deg_median", baseline.l4_median_map_error_deg);
+    writeMetricRow(output, "post_l4_map_error_deg_median", post.l4_median_map_error_deg);
 }
 
 void writeL23EESpecificityCsv(
@@ -1889,6 +2403,19 @@ void modelDefinition(GeNN::ModelSpec &model)
         v1_genn::kL4PVPerSite,
         v1_genn::kL4LocalRadius,
         false);
+    const L4IntersiteConfig l4_intersite_config = getL4IntersiteConfig();
+    const auto l4_ee_intersite_patch = makeIntersitePatchParameters(
+        v1_genn::kL4EPerSite,
+        v1_genn::kL4EPerSite,
+        l4_intersite_config.radius);
+    const auto l4_e_pv_intersite_patch = makeIntersitePatchParameters(
+        v1_genn::kL4EPerSite,
+        v1_genn::kL4PVPerSite,
+        l4_intersite_config.radius);
+    const auto l4_pv_e_intersite_patch = makeIntersitePatchParameters(
+        v1_genn::kL4PVPerSite,
+        v1_genn::kL4EPerSite,
+        l4_intersite_config.radius);
 
     const auto ff_e_patch = makeOrientationBiasedPatchParameters(
         v1_genn::kL4EPerSite,
@@ -2009,6 +2536,32 @@ void modelDefinition(GeNN::ModelSpec &model)
         v1_genn::kL4SOMToPVWeight,
         v1_genn::kSOMInhTauSynMs,
         l4_som_pv_patch);
+    if(l4_intersite_config.enabled) {
+        addLocalIntersiteProjection(
+            model,
+            "L4E_to_L4E_intersite",
+            l4e,
+            l4e,
+            v1_genn::kL4EEWeight * l4_intersite_config.l4ee_scale,
+            v1_genn::kExcTauSynMs,
+            l4_ee_intersite_patch);
+        addLocalIntersiteProjection(
+            model,
+            "L4E_to_L4PV_intersite",
+            l4e,
+            l4pv,
+            v1_genn::kL4EToPVWeight * l4_intersite_config.l4e_to_l4pv_scale,
+            v1_genn::kExcTauSynMs,
+            l4_e_pv_intersite_patch);
+        addLocalIntersiteProjection(
+            model,
+            "L4PV_to_L4E_intersite",
+            l4pv,
+            l4e,
+            v1_genn::kL4PVToEWeight * l4_intersite_config.l4pv_to_l4e_scale,
+            v1_genn::kPVInhTauSynMs,
+            l4_pv_e_intersite_patch);
+    }
 
     // Plastic feedforward excitation is gated in simulate() by setting Aplus/Aminus.
     addPlasticOrientationBiasedProjection(
@@ -2198,6 +2751,14 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             throw std::runtime_error("V1_SIZE_TUNING_RADII_SITES values must be positive.");
         }
     }
+    const L4IntersiteConfig l4_intersite_config = getL4IntersiteConfig();
+    const ValidationSiteConfig validation_site_config = getValidationSiteConfig(
+        size_tuning_radii_sites,
+        broad_stimulus_radius_sites);
+    if(validation_site_config.site_ids.empty()
+       || validation_site_config.site_ids.size() != validation_site_config.aperture_center_sites.size()) {
+        throw std::runtime_error("Validation site configuration is empty or malformed.");
+    }
 
     GeNN::NeuronGroup &l4e = requireNeuronGroup(model, "L4E");
     GeNN::NeuronGroup &l4pv = requireNeuronGroup(model, "L4PV");
@@ -2224,9 +2785,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         static_cast<std::size_t>(training_epochs)
         + static_cast<std::size_t>(recurrent_consolidation_epochs)
         + static_cast<std::size_t>(recurrent_only_consolidation_epochs)
-        + 4u
+        + 2u
+        + (2u * validation_site_config.site_ids.size())
         + 1u
-        + size_tuning_radii_sites.size();
+        + (size_tuning_radii_sites.size() * validation_site_config.site_ids.size());
     const std::size_t total_trial_count = static_cast<std::size_t>(orientation_count) * sweep_count;
     const std::size_t total_recording_steps = total_trial_count * static_cast<std::size_t>(trial_steps);
 
@@ -2280,17 +2842,22 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
 
     std::vector<TrialWindow> baseline_trials;
     std::vector<TrialWindow> post_trials;
-    std::vector<TrialWindow> center_validation_trials;
-    std::vector<TrialWindow> broad_validation_trials;
-    std::vector<TrialWindow> size_tuning_trials;
     std::vector<TrialWindow> recurrence_context_trials;
     baseline_trials.reserve(orientation_count);
     post_trials.reserve(orientation_count);
-    center_validation_trials.reserve(orientation_count);
-    broad_validation_trials.reserve(orientation_count);
-    size_tuning_trials.reserve(
-        static_cast<std::size_t>(orientation_count) * size_tuning_radii_sites.size());
     recurrence_context_trials.reserve(orientation_count);
+    std::vector<ValidationTrialSet> validation_trials;
+    validation_trials.reserve(validation_site_config.site_ids.size());
+    for(std::size_t i = 0; i < validation_site_config.site_ids.size(); i++) {
+        ValidationTrialSet trial_set;
+        trial_set.site_id = validation_site_config.site_ids[i];
+        trial_set.aperture_center_site = validation_site_config.aperture_center_sites[i];
+        trial_set.center_trials.reserve(orientation_count);
+        trial_set.broad_trials.reserve(orientation_count);
+        trial_set.size_trials.reserve(
+            static_cast<std::size_t>(orientation_count) * size_tuning_radii_sites.size());
+        validation_trials.push_back(trial_set);
+    }
 
     std::vector<float> l4e_drive;
     auto runSweep = [&](const std::string &label,
@@ -2299,7 +2866,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                         bool recurrent_learning,
                         bool inhibitory_learning,
                         unsigned int phase_cycle_offset,
-                        double aperture_radius_sites) {
+                        double aperture_radius_sites,
+                        unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max()) {
         (void)label;
         runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", feedforward_learning ? stdp_aplus : 0.0);
         runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", feedforward_learning ? stdp_aminus : 0.0);
@@ -2334,7 +2902,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             const unsigned int phase_slot = plastic_exposure ? ((phase_cycle_offset + orientation_index) % 4u) : 0u;
             const double phase_rad = 0.5 * v1_genn::kPi * static_cast<double>(phase_slot);
 
-            fillL4EDrive(l4e_drive, orientation_rad, phase_rad, aperture_radius_sites);
+            fillL4EDrive(l4e_drive, orientation_rad, phase_rad, aperture_radius_sites, aperture_center_site);
             std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
             l4e_i_ext.pushToDevice();
 
@@ -2390,10 +2958,36 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         scaleSomToL23EOutput(l23som_context_output_scale);
     }
 
-    runSweep("center_validation", &center_validation_trials, false, false, false, 0u, kDefaultCenterStimulusRadiusSites);
-    runSweep("broad_validation", &broad_validation_trials, false, false, false, 0u, broad_stimulus_radius_sites);
-    for(double radius_sites : size_tuning_radii_sites) {
-        runSweep("size_tuning", &size_tuning_trials, false, false, false, 0u, radius_sites);
+    for(ValidationTrialSet &trial_set : validation_trials) {
+        runSweep(
+            "center_validation",
+            &trial_set.center_trials,
+            false,
+            false,
+            false,
+            0u,
+            kDefaultCenterStimulusRadiusSites,
+            trial_set.aperture_center_site);
+        runSweep(
+            "broad_validation",
+            &trial_set.broad_trials,
+            false,
+            false,
+            false,
+            0u,
+            broad_stimulus_radius_sites,
+            trial_set.aperture_center_site);
+        for(double radius_sites : size_tuning_radii_sites) {
+            runSweep(
+                "size_tuning",
+                &trial_set.size_trials,
+                false,
+                false,
+                false,
+                0u,
+                radius_sites,
+                trial_set.aperture_center_site);
+        }
     }
     if(l23ee_context_output_scale != 1.0) {
         scaleSynapseWeights(runtime, l23e_to_l23e, l23ee_context_output_scale);
@@ -2436,26 +3030,6 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         countSiteSpikesForTrials(l23som_recordings.at(0), post_trials, v1_genn::kL23SOMPerSite);
     const std::vector<double> post_l23vip_site_counts =
         countSiteSpikesForTrials(l23vip_recordings.at(0), post_trials, v1_genn::kL23VIPPerSite);
-    const std::vector<double> center_l23e_site_counts =
-        countSiteSpikesForTrials(l23e_recordings.at(0), center_validation_trials, v1_genn::kL23EPerSite);
-    const std::vector<double> center_l23pv_site_counts =
-        countSiteSpikesForTrials(l23pv_recordings.at(0), center_validation_trials, v1_genn::kL23PVPerSite);
-    const std::vector<double> center_l23som_site_counts =
-        countSiteSpikesForTrials(l23som_recordings.at(0), center_validation_trials, v1_genn::kL23SOMPerSite);
-    const std::vector<double> broad_l23e_site_counts =
-        countSiteSpikesForTrials(l23e_recordings.at(0), broad_validation_trials, v1_genn::kL23EPerSite);
-    const std::vector<double> broad_l23pv_site_counts =
-        countSiteSpikesForTrials(l23pv_recordings.at(0), broad_validation_trials, v1_genn::kL23PVPerSite);
-    const std::vector<double> broad_l23som_site_counts =
-        countSiteSpikesForTrials(l23som_recordings.at(0), broad_validation_trials, v1_genn::kL23SOMPerSite);
-    const std::vector<double> size_l4e_site_counts =
-        countSiteSpikesForTrials(l4e_recordings.at(0), size_tuning_trials, v1_genn::kL4EPerSite);
-    const std::vector<double> size_l23e_site_counts =
-        countSiteSpikesForTrials(l23e_recordings.at(0), size_tuning_trials, v1_genn::kL23EPerSite);
-    const std::vector<double> size_l23pv_site_counts =
-        countSiteSpikesForTrials(l23pv_recordings.at(0), size_tuning_trials, v1_genn::kL23PVPerSite);
-    const std::vector<double> size_l23som_site_counts =
-        countSiteSpikesForTrials(l23som_recordings.at(0), size_tuning_trials, v1_genn::kL23SOMPerSite);
     const std::vector<double> recurrence_l23_cell_counts =
         countNeuronSpikesForTrials(l23e_recordings.at(0), recurrence_context_trials, v1_genn::kNumL23E);
 
@@ -2517,38 +3091,72 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             v1_genn::kNumL23E,
             v1_genn::kL23EPerSite);
 
-    const std::vector<PopulationSiteMetrics> center_l23e_sites =
-        computeSiteMetrics(center_validation_trials, center_l23e_site_counts, v1_genn::kL23EPerSite);
-    const std::vector<PopulationSiteMetrics> center_l23pv_sites =
-        computeSiteMetrics(center_validation_trials, center_l23pv_site_counts, v1_genn::kL23PVPerSite);
-    const std::vector<PopulationSiteMetrics> center_l23som_sites =
-        computeSiteMetrics(center_validation_trials, center_l23som_site_counts, v1_genn::kL23SOMPerSite);
-    const std::vector<PopulationSiteMetrics> broad_l23e_sites =
-        computeSiteMetrics(broad_validation_trials, broad_l23e_site_counts, v1_genn::kL23EPerSite);
-    const std::vector<PopulationSiteMetrics> broad_l23pv_sites =
-        computeSiteMetrics(broad_validation_trials, broad_l23pv_site_counts, v1_genn::kL23PVPerSite);
-    const std::vector<PopulationSiteMetrics> broad_l23som_sites =
-        computeSiteMetrics(broad_validation_trials, broad_l23som_site_counts, v1_genn::kL23SOMPerSite);
-    const std::vector<PopulationSiteMetrics> size_l4e_sites =
-        computeSiteMetrics(size_tuning_trials, size_l4e_site_counts, v1_genn::kL4EPerSite);
-    const std::vector<PopulationSiteMetrics> size_l23e_sites =
-        computeSiteMetrics(size_tuning_trials, size_l23e_site_counts, v1_genn::kL23EPerSite);
-    const std::vector<PopulationSiteMetrics> size_l23pv_sites =
-        computeSiteMetrics(size_tuning_trials, size_l23pv_site_counts, v1_genn::kL23PVPerSite);
-    const std::vector<PopulationSiteMetrics> size_l23som_sites =
-        computeSiteMetrics(size_tuning_trials, size_l23som_site_counts, v1_genn::kL23SOMPerSite);
+    std::vector<RetinotopicContextMetrics> context_validation_metrics;
+    std::vector<RetinotopicSizeMetrics> size_validation_metrics;
+    context_validation_metrics.reserve(validation_trials.size());
+    size_validation_metrics.reserve(validation_trials.size());
+    for(const ValidationTrialSet &trial_set : validation_trials) {
+        const std::vector<double> center_l23e_site_counts =
+            countSiteSpikesForTrials(l23e_recordings.at(0), trial_set.center_trials, v1_genn::kL23EPerSite);
+        const std::vector<double> center_l23pv_site_counts =
+            countSiteSpikesForTrials(l23pv_recordings.at(0), trial_set.center_trials, v1_genn::kL23PVPerSite);
+        const std::vector<double> center_l23som_site_counts =
+            countSiteSpikesForTrials(l23som_recordings.at(0), trial_set.center_trials, v1_genn::kL23SOMPerSite);
+        const std::vector<double> broad_l23e_site_counts =
+            countSiteSpikesForTrials(l23e_recordings.at(0), trial_set.broad_trials, v1_genn::kL23EPerSite);
+        const std::vector<double> broad_l23pv_site_counts =
+            countSiteSpikesForTrials(l23pv_recordings.at(0), trial_set.broad_trials, v1_genn::kL23PVPerSite);
+        const std::vector<double> broad_l23som_site_counts =
+            countSiteSpikesForTrials(l23som_recordings.at(0), trial_set.broad_trials, v1_genn::kL23SOMPerSite);
+        const std::vector<PopulationSiteMetrics> center_l23e_sites =
+            computeSiteMetrics(trial_set.center_trials, center_l23e_site_counts, v1_genn::kL23EPerSite);
+        const std::vector<PopulationSiteMetrics> center_l23pv_sites =
+            computeSiteMetrics(trial_set.center_trials, center_l23pv_site_counts, v1_genn::kL23PVPerSite);
+        const std::vector<PopulationSiteMetrics> center_l23som_sites =
+            computeSiteMetrics(trial_set.center_trials, center_l23som_site_counts, v1_genn::kL23SOMPerSite);
+        const std::vector<PopulationSiteMetrics> broad_l23e_sites =
+            computeSiteMetrics(trial_set.broad_trials, broad_l23e_site_counts, v1_genn::kL23EPerSite);
+        const std::vector<PopulationSiteMetrics> broad_l23pv_sites =
+            computeSiteMetrics(trial_set.broad_trials, broad_l23pv_site_counts, v1_genn::kL23PVPerSite);
+        const std::vector<PopulationSiteMetrics> broad_l23som_sites =
+            computeSiteMetrics(trial_set.broad_trials, broad_l23som_site_counts, v1_genn::kL23SOMPerSite);
 
-    const unsigned int center_site_id = getCenterSiteId();
-    const PopulationSiteMetrics &center_only_l23e = center_l23e_sites.at(center_site_id);
-    const PopulationSiteMetrics &center_only_l23pv = center_l23pv_sites.at(center_site_id);
-    const PopulationSiteMetrics &center_only_l23som = center_l23som_sites.at(center_site_id);
-    const PopulationSiteMetrics &broad_field_l23e = broad_l23e_sites.at(center_site_id);
-    const PopulationSiteMetrics &broad_field_l23pv = broad_l23pv_sites.at(center_site_id);
-    const PopulationSiteMetrics &broad_field_l23som = broad_l23som_sites.at(center_site_id);
-    const PopulationSiteMetrics &size_center_l4e = size_l4e_sites.at(center_site_id);
-    const PopulationSiteMetrics &size_center_l23e = size_l23e_sites.at(center_site_id);
-    const PopulationSiteMetrics &size_center_l23pv = size_l23pv_sites.at(center_site_id);
-    const PopulationSiteMetrics &size_center_l23som = size_l23som_sites.at(center_site_id);
+        context_validation_metrics.push_back({
+            trial_set.site_id,
+            center_l23e_sites.at(trial_set.site_id),
+            center_l23pv_sites.at(trial_set.site_id),
+            center_l23som_sites.at(trial_set.site_id),
+            broad_l23e_sites.at(trial_set.site_id),
+            broad_l23pv_sites.at(trial_set.site_id),
+            broad_l23som_sites.at(trial_set.site_id),
+        });
+
+        const std::vector<double> size_l4e_site_counts =
+            countSiteSpikesForTrials(l4e_recordings.at(0), trial_set.size_trials, v1_genn::kL4EPerSite);
+        const std::vector<double> size_l23e_site_counts =
+            countSiteSpikesForTrials(l23e_recordings.at(0), trial_set.size_trials, v1_genn::kL23EPerSite);
+        const std::vector<double> size_l23pv_site_counts =
+            countSiteSpikesForTrials(l23pv_recordings.at(0), trial_set.size_trials, v1_genn::kL23PVPerSite);
+        const std::vector<double> size_l23som_site_counts =
+            countSiteSpikesForTrials(l23som_recordings.at(0), trial_set.size_trials, v1_genn::kL23SOMPerSite);
+        const std::vector<PopulationSiteMetrics> size_l4e_sites =
+            computeSiteMetrics(trial_set.size_trials, size_l4e_site_counts, v1_genn::kL4EPerSite);
+        const std::vector<PopulationSiteMetrics> size_l23e_sites =
+            computeSiteMetrics(trial_set.size_trials, size_l23e_site_counts, v1_genn::kL23EPerSite);
+        const std::vector<PopulationSiteMetrics> size_l23pv_sites =
+            computeSiteMetrics(trial_set.size_trials, size_l23pv_site_counts, v1_genn::kL23PVPerSite);
+        const std::vector<PopulationSiteMetrics> size_l23som_sites =
+            computeSiteMetrics(trial_set.size_trials, size_l23som_site_counts, v1_genn::kL23SOMPerSite);
+
+        size_validation_metrics.push_back({
+            trial_set.site_id,
+            size_l4e_sites.at(trial_set.site_id),
+            size_l23e_sites.at(trial_set.site_id),
+            size_l23pv_sites.at(trial_set.site_id),
+            size_l23som_sites.at(trial_set.site_id),
+        });
+    }
+    const RetinotopicContextMetrics &primary_context_validation = context_validation_metrics.front();
 
     const std::vector<NamedWeightStats> additional_weight_stats{
         {"l23e_to_l23e", summarizeWeights(l23ee_weights_before), summarizeWeights(l23ee_weights_after)},
@@ -2556,8 +3164,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         {"l23som_to_l23e", summarizeWeights(l23som_weights_before), summarizeWeights(l23som_weights_after)},
     };
     const std::vector<ContextValidationSummary> context_validation{
-        {"center_only", center_only_l23e.mean_rate_hz, center_only_l23pv.mean_rate_hz, center_only_l23som.mean_rate_hz},
-        {"broad_field", broad_field_l23e.mean_rate_hz, broad_field_l23pv.mean_rate_hz, broad_field_l23som.mean_rate_hz},
+        {
+            "center_only",
+            primary_context_validation.center_l23e.mean_rate_hz,
+            primary_context_validation.center_l23pv.mean_rate_hz,
+            primary_context_validation.center_l23som.mean_rate_hz,
+        },
+        {
+            "broad_field",
+            primary_context_validation.broad_l23e.mean_rate_hz,
+            primary_context_validation.broad_l23pv.mean_rate_hz,
+            primary_context_validation.broad_l23som.mean_rate_hz,
+        },
     };
 
     writePopulationSiteMetricsCsv(output_prefix + "_baseline_l4_sites.csv", baseline, baseline.l4_sites);
@@ -2586,22 +3204,23 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     writeContextValidationCsv(
         output_prefix + "_som_context_validation.csv",
         orientations_rad,
-        center_only_l23e,
-        center_only_l23pv,
-        center_only_l23som,
-        broad_field_l23e,
-        broad_field_l23pv,
-        broad_field_l23som,
+        context_validation_metrics,
+        validation_site_config.include_validation_site_id,
         l23som_output_scale * l23som_context_output_scale);
     writeSizeTuningCsv(
         output_prefix + "_size_tuning.csv",
         size_tuning_radii_sites,
         orientations_rad,
-        size_center_l4e,
-        size_center_l23e,
-        size_center_l23pv,
-        size_center_l23som,
+        size_validation_metrics,
+        validation_site_config.include_validation_site_id,
         l23som_output_scale * l23som_context_output_scale);
+    writeL4IntersiteDiagnosticsCsv(
+        output_prefix + "_l4_intersite_diagnostics.csv",
+        l4_intersite_config,
+        size_tuning_radii_sites,
+        size_validation_metrics,
+        baseline,
+        post);
 
     writeWeightCsv(output_prefix + "_weights_before.csv", weights_before, ff_edges);
     writeWeightCsv(output_prefix + "_weights_after.csv", weights_after, ff_edges);

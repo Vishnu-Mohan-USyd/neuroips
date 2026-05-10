@@ -4,7 +4,12 @@ namespace v1_genn {
 
 constexpr char kModelName[] = "v1TwoLayerGenn";
 
-constexpr unsigned int kSheetSide = 32;
+#ifndef V1_SHEET_SIDE
+#define V1_SHEET_SIDE 32
+#endif
+
+constexpr unsigned int kSheetSide = V1_SHEET_SIDE;
+static_assert(kSheetSide >= 16, "V1 sheet must be large enough for distributed retinotopic audits.");
 constexpr unsigned int kSiteCount = kSheetSide * kSheetSide;
 
 constexpr unsigned int kL4EPerSite = 16;
@@ -33,6 +38,20 @@ constexpr unsigned int kL23LocalRadius = 2;
 constexpr unsigned int kL23SOMInputRadius = 3;
 constexpr unsigned int kL23SOMOutputRadius = 6;
 constexpr unsigned int kFeedforwardRadius = 1;
+
+#ifndef V1_L4_INTERSITE_ENABLE_DEFAULT
+#define V1_L4_INTERSITE_ENABLE_DEFAULT 0
+#endif
+#ifndef V1_L4_INTERSITE_RADIUS
+#define V1_L4_INTERSITE_RADIUS 2
+#endif
+#ifndef V1_L4_INTERSITE_WEIGHT_SCALE
+#define V1_L4_INTERSITE_WEIGHT_SCALE 0.12
+#endif
+
+constexpr unsigned int kL4IntersiteEnableDefault = V1_L4_INTERSITE_ENABLE_DEFAULT;
+constexpr unsigned int kL4IntersiteRadius = V1_L4_INTERSITE_RADIUS;
+constexpr double kL4IntersiteWeightScale = V1_L4_INTERSITE_WEIGHT_SCALE;
 
 constexpr double kDtMs = 0.1;
 constexpr float kDefaultDurationMs = 250.0f;

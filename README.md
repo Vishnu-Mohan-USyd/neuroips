@@ -8,6 +8,7 @@ with fixed L4 orientation-tuned drive, explicit E/I populations in `L4` and
 Latest detailed report:
 
 - `docs/v1_soft_prior_som_recurrence_report.md`
+- `docs/v1_l4_intersite_scaling_report.md`
 
 ## Model summary
 
@@ -138,6 +139,13 @@ The newer soft-prior/SOM/recurrence audit is documented in
 (`full_post=0.745356`, `control_post=0.000000`), passes SOM size tuning and
 SOM-output-ablation gates, and passes recurrent specificity, strong-synapse
 enrichment, and recurrence-output-ablation gates.
+
+The latest scaling/L4 inter-site audit is documented in
+`docs/v1_l4_intersite_scaling_report.md`. It adds opt-in sheet scaling,
+distributed validation sites, and weak local L4 inter-site E/I spread. The
+validated `32x32` L4 inter-site run passes all strict gates; the `40x40`
+L4 inter-site run passes L4/SOM/PV/recurrent gates and responsive-site OSI, but
+still has a strict all-site L2/3 OSI near-miss due sparse responsive coverage.
 
 Zero-training subtype perturbation checks used `V1_L23*_GATE_NA=0.2` one at a
 time. Relative to the no-gate control, PV and SOM gates suppressed mean L2/3E

@@ -13,3 +13,6 @@
   hardcoded assumptions, learned/plastic mechanisms, limited-emergent claims,
   engineering approximations, and unsupported claims. Do not treat architecture
   plus metrics as sufficient documentation.
+- For multi-agent tasks in this repo, the lead must not start implementing while
+  agents are pending. Task the fixed researcher/debugger/coder/validator team
+  with concrete ownership first, wait for their outputs, then coordinate.

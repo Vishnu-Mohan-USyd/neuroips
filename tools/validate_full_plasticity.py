@@ -68,6 +68,7 @@ class ContextRow:
     condition: str
     population: str
     site_id: int
+    validation_site_id: int
     som_output_scale: float
     mean_rate_hz: float
     rates_by_deg: dict[float, float]
@@ -80,6 +81,7 @@ class SizeTuningRow:
     radius_sites: float
     population: str
     site_id: int
+    validation_site_id: int
     som_output_scale: float
     orientation_deg: float
     rate_hz: float
@@ -130,6 +132,33 @@ class RateMetrics:
     p99_hz: float
 
 
+@dataclass(frozen=True)
+class OsiSiteMetrics:
+    """L23E site OSI summaries split by response threshold."""
+
+    total_count: int
+    osi_count: int
+    active_count: int
+    responsive_count: int
+    active_fraction: float
+    responsive_fraction: float
+    all_median_osi: float | None
+    active_median_osi: float | None
+    responsive_median_osi: float | None
+    responsive_threshold_hz: float
+
+
+@dataclass(frozen=True)
+class PostSiteMetric:
+    """One post-sweep site row with optional spatial and tuning diagnostics."""
+
+    site_id: int
+    x: float | None
+    y: float | None
+    mean_rate_hz: float
+    osi: float | None
+
+
 @dataclass
 class RunData:
     """All parsed artifacts for one experiment prefix."""
@@ -137,7 +166,9 @@ class RunData:
     prefix: str
     summary: dict[str, float]
     context_rows: dict[tuple[str, str], ContextRow]
+    context_rows_by_site: dict[int, dict[tuple[str, str], ContextRow]]
     post_site_rates: dict[str, list[float]]
+    l23e_post_sites: list[PostSiteMetric]
     weights: dict[str, tuple[WeightSeries, WeightSeries]]
     vip_weight_files: list[Path]
     size_tuning_rows: list[SizeTuningRow] | None = None
@@ -207,6 +238,31 @@ def parse_args() -> argparse.Namespace:
         "--recoff",
         help="Optional prefix for recurrence-context ablation run, e.g. v1_fp_recoff.",
     )
+    parser.add_argument(
+        "--min-validation-sites",
+        type=int,
+        default=1,
+        help="Minimum required retinotopic validation sites in full and somoff context/size artifacts.",
+    )
+    parser.add_argument(
+        "--require-l4-intersite",
+        action="store_true",
+        help="Require opt-in L4 inter-site diagnostics and enforce local/bounded spread gates.",
+    )
+    parser.add_argument(
+        "--allow-responsive-osi",
+        action="store_true",
+        help=(
+            "Allow responsive-site L23E OSI to rescue a failed all-site OSI gate "
+            "only when all other validator gates pass."
+        ),
+    )
+    parser.add_argument(
+        "--responsive-rate-threshold-hz",
+        type=float,
+        default=1.0,
+        help="Mean-rate threshold for responsive-site L23E OSI reporting and optional rescue.",
+    )
     return parser.parse_args()
 
 
@@ -274,6 +330,42 @@ def parse_site_rates_csv(path: Path) -> list[float]:
     return rates
 
 
+def parse_post_site_metrics_csv(path: Path) -> list[PostSiteMetric]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or "mean_rate_hz" not in reader.fieldnames:
+            raise ValidationError(f"Missing mean_rate_hz column in {path}")
+
+        rows: list[PostSiteMetric] = []
+        for row_number, row in enumerate(reader, start=2):
+            for column in reader.fieldnames:
+                raw = row.get(column)
+                if raw is None:
+                    raise ValidationError(f"Missing value in {path} row {row_number} column {column}")
+                if column == "site_id":
+                    parse_int(raw, path, row_number, column)
+                else:
+                    parse_float(raw, path, row_number, column)
+
+            site_id = (
+                parse_int(row["site_id"], path, row_number, "site_id")
+                if "site_id" in reader.fieldnames
+                else row_number - 2
+            )
+            rows.append(
+                PostSiteMetric(
+                    site_id=site_id,
+                    x=parse_float(row["x"], path, row_number, "x") if "x" in reader.fieldnames else None,
+                    y=parse_float(row["y"], path, row_number, "y") if "y" in reader.fieldnames else None,
+                    mean_rate_hz=parse_float(row["mean_rate_hz"], path, row_number, "mean_rate_hz"),
+                    osi=parse_float(row["osi"], path, row_number, "osi") if "osi" in reader.fieldnames else None,
+                )
+            )
+    if not rows:
+        raise ValidationError(f"Post site file is empty: {path}")
+    return rows
+
+
 def parse_rate_column_name(column: str, path: Path) -> float:
     prefix = "rate_"
     suffix = "deg_hz"
@@ -282,7 +374,9 @@ def parse_rate_column_name(column: str, path: Path) -> float:
     return float(column[len(prefix) : -len(suffix)])
 
 
-def parse_context_csv(path: Path) -> dict[tuple[str, str], ContextRow]:
+def parse_context_csv(
+    path: Path,
+) -> tuple[dict[tuple[str, str], ContextRow], dict[int, dict[tuple[str, str], ContextRow]]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
@@ -297,7 +391,8 @@ def parse_context_csv(path: Path) -> dict[tuple[str, str], ContextRow]:
         if not rate_columns:
             raise ValidationError(f"No orientation rate columns found in {path}")
 
-        rows: dict[tuple[str, str], ContextRow] = {}
+        rows_by_site: dict[int, dict[tuple[str, str], ContextRow]] = {}
+        site_order: list[int] = []
         for row_number, row in enumerate(reader, start=2):
             condition = (row.get("condition") or "").strip()
             population = (row.get("population") or "").strip()
@@ -305,6 +400,11 @@ def parse_context_csv(path: Path) -> dict[tuple[str, str], ContextRow]:
                 raise ValidationError(f"Missing condition/population in {path} row {row_number}")
 
             site_id = parse_int(row["site_id"], path, row_number, "site_id")
+            validation_site_id = (
+                parse_int(row["validation_site_id"], path, row_number, "validation_site_id")
+                if "validation_site_id" in reader.fieldnames
+                else site_id
+            )
             som_output_scale = parse_float(row["som_output_scale"], path, row_number, "som_output_scale")
             mean_rate_hz = parse_float(row["mean_rate_hz"], path, row_number, "mean_rate_hz")
 
@@ -315,10 +415,19 @@ def parse_context_csv(path: Path) -> dict[tuple[str, str], ContextRow]:
                 )
 
             key = (condition, population)
-            rows[key] = ContextRow(
+            if validation_site_id not in rows_by_site:
+                rows_by_site[validation_site_id] = {}
+                site_order.append(validation_site_id)
+            if key in rows_by_site[validation_site_id]:
+                raise ValidationError(
+                    f"Duplicate context row for site={validation_site_id} "
+                    f"condition={condition} population={population} in {path}"
+                )
+            rows_by_site[validation_site_id][key] = ContextRow(
                 condition=condition,
                 population=population,
                 site_id=site_id,
+                validation_site_id=validation_site_id,
                 som_output_scale=som_output_scale,
                 mean_rate_hz=mean_rate_hz,
                 rates_by_deg=rates_by_deg,
@@ -332,10 +441,16 @@ def parse_context_csv(path: Path) -> dict[tuple[str, str], ContextRow]:
         ("broad_field", "l23pv"),
         ("broad_field", "l23som"),
     }
-    missing_keys = expected_keys.difference(rows)
-    if missing_keys:
-        raise ValidationError(f"Missing context rows in {path}: {sorted(missing_keys)}")
-    return rows
+    if not rows_by_site:
+        raise ValidationError(f"Context file is empty: {path}")
+    for validation_site_id, rows in rows_by_site.items():
+        missing_keys = expected_keys.difference(rows)
+        if missing_keys:
+            raise ValidationError(
+                f"Missing context rows for validation_site_id={validation_site_id} "
+                f"in {path}: {sorted(missing_keys)}"
+            )
+    return rows_by_site[site_order[0]], rows_by_site
 
 
 def parse_size_tuning_csv(path: Path) -> list[SizeTuningRow]:
@@ -361,11 +476,18 @@ def parse_size_tuning_csv(path: Path) -> list[SizeTuningRow]:
             population = (row.get("population") or "").strip()
             if not population:
                 raise ValidationError(f"Missing population in {path} row {row_number}")
+            site_id = parse_int(row["site_id"], path, row_number, "site_id")
+            validation_site_id = (
+                parse_int(row["validation_site_id"], path, row_number, "validation_site_id")
+                if "validation_site_id" in reader.fieldnames
+                else site_id
+            )
             rows.append(
                 SizeTuningRow(
                     radius_sites=parse_float(row["radius_sites"], path, row_number, "radius_sites"),
                     population=population,
-                    site_id=parse_int(row["site_id"], path, row_number, "site_id"),
+                    site_id=site_id,
+                    validation_site_id=validation_site_id,
                     som_output_scale=parse_float(row["som_output_scale"], path, row_number, "som_output_scale"),
                     orientation_deg=parse_float(row["orientation_deg"], path, row_number, "orientation_deg"),
                     rate_hz=parse_float(row["rate_hz"], path, row_number, "rate_hz"),
@@ -585,12 +707,17 @@ def load_run(
     require_specificity: bool = False,
 ) -> RunData:
     summary = parse_summary_csv(require_file(genn_dir / f"{prefix}_summary.csv"))
-    context_rows = parse_context_csv(require_file(genn_dir / f"{prefix}_som_context_validation.csv"))
+    context_rows, context_rows_by_site = parse_context_csv(
+        require_file(genn_dir / f"{prefix}_som_context_validation.csv")
+    )
 
     post_site_rates = {
         population: parse_site_rates_csv(require_file(genn_dir / f"{prefix}{suffix}"))
         for population, suffix in POST_SITE_SUFFIXES.items()
     }
+    l23e_post_sites = parse_post_site_metrics_csv(
+        require_file(genn_dir / f"{prefix}_post_l23_sites.csv")
+    )
 
     weights: dict[str, tuple[WeightSeries, WeightSeries]] = {}
     for spec in WEIGHT_SPECS:
@@ -614,7 +741,9 @@ def load_run(
         prefix=prefix,
         summary=summary,
         context_rows=context_rows,
+        context_rows_by_site=context_rows_by_site,
         post_site_rates=post_site_rates,
+        l23e_post_sites=l23e_post_sites,
         weights=weights,
         vip_weight_files=vip_weight_files,
         size_tuning_rows=size_tuning_rows,
@@ -631,6 +760,22 @@ def require_summary_metric(run: RunData, metric: str) -> float:
     return value
 
 
+def require_metric(metrics: dict[str, float], metric: str, source: str) -> float:
+    if metric not in metrics:
+        raise ValidationError(f"Missing metric {metric!r} in {source}")
+    value = metrics[metric]
+    if not math.isfinite(value):
+        raise ValidationError(f"Non-finite metric {metric!r} in {source}")
+    return value
+
+
+def optional_metric(metrics: dict[str, float], metric: str, fallback: float) -> float:
+    value = metrics.get(metric, fallback)
+    if not math.isfinite(value):
+        raise ValidationError(f"Non-finite metric {metric!r}")
+    return value
+
+
 def compute_rate_metrics(rates: list[float]) -> RateMetrics:
     if not rates:
         raise ValidationError("Rate sanity requested for an empty rate vector.")
@@ -639,6 +784,104 @@ def compute_rate_metrics(rates: list[float]) -> RateMetrics:
         frac_below_1hz=sum(rate < 1.0 for rate in rates) / len(rates),
         p99_hz=percentile(rates, 99.0),
     )
+
+
+def optional_median(values: Iterable[float]) -> float | None:
+    values_list = list(values)
+    if not values_list:
+        return None
+    return median(values_list)
+
+
+def format_optional_float(value: float | None) -> str:
+    if value is None:
+        return "nan"
+    return f"{value:.6f}"
+
+
+def compute_l23e_osi_site_metrics(
+    rows: list[PostSiteMetric],
+    responsive_threshold_hz: float,
+) -> OsiSiteMetrics:
+    total_count = len(rows)
+    osi_rows = [row for row in rows if row.osi is not None]
+    active_rows = [row for row in osi_rows if row.mean_rate_hz > 0.0]
+    responsive_rows = [row for row in osi_rows if row.mean_rate_hz >= responsive_threshold_hz]
+    denominator = total_count if total_count > 0 else 1
+    return OsiSiteMetrics(
+        total_count=total_count,
+        osi_count=len(osi_rows),
+        active_count=len(active_rows),
+        responsive_count=len(responsive_rows),
+        active_fraction=len(active_rows) / denominator,
+        responsive_fraction=len(responsive_rows) / denominator,
+        all_median_osi=optional_median(row.osi for row in osi_rows if row.osi is not None),
+        active_median_osi=optional_median(row.osi for row in active_rows if row.osi is not None),
+        responsive_median_osi=optional_median(
+            row.osi for row in responsive_rows if row.osi is not None
+        ),
+        responsive_threshold_hz=responsive_threshold_hz,
+    )
+
+
+def print_l23e_osi_site_info(run_label: str, metrics: OsiSiteMetrics) -> None:
+    print(
+        f"INFO l23e_osi_sites[{run_label}] "
+        f"total_count={metrics.total_count} "
+        f"osi_count={metrics.osi_count} "
+        f"active_count={metrics.active_count} "
+        f"active_fraction={metrics.active_fraction:.6f} "
+        f"responsive_threshold_hz={metrics.responsive_threshold_hz:.6f} "
+        f"responsive_count={metrics.responsive_count} "
+        f"responsive_fraction={metrics.responsive_fraction:.6f} "
+        f"all_median_osi={format_optional_float(metrics.all_median_osi)} "
+        f"active_median_osi={format_optional_float(metrics.active_median_osi)} "
+        f"responsive_median_osi={format_optional_float(metrics.responsive_median_osi)}"
+    )
+
+
+def format_l23e_osi_quadrants(
+    rows: list[PostSiteMetric],
+    responsive_threshold_hz: float,
+) -> str:
+    usable_rows = [row for row in rows if row.x is not None and row.y is not None and row.osi is not None]
+    if not usable_rows:
+        return "unavailable=1 reason=missing_x_y_or_osi"
+
+    min_x = min(row.x for row in usable_rows if row.x is not None)
+    max_x = max(row.x for row in usable_rows if row.x is not None)
+    min_y = min(row.y for row in usable_rows if row.y is not None)
+    max_y = max(row.y for row in usable_rows if row.y is not None)
+    mid_x = 0.5 * (min_x + max_x)
+    mid_y = 0.5 * (min_y + max_y)
+    quadrants: dict[str, list[PostSiteMetric]] = {
+        "left_lower": [],
+        "left_upper": [],
+        "right_lower": [],
+        "right_upper": [],
+    }
+    for row in usable_rows:
+        horizontal = "left" if row.x is not None and row.x <= mid_x else "right"
+        vertical = "lower" if row.y is not None and row.y <= mid_y else "upper"
+        quadrants[f"{horizontal}_{vertical}"].append(row)
+
+    parts = [f"x_mid={mid_x:.6f}", f"y_mid={mid_y:.6f}"]
+    for label in sorted(quadrants):
+        quadrant_rows = quadrants[label]
+        active_rows = [row for row in quadrant_rows if row.mean_rate_hz > 0.0]
+        responsive_rows = [
+            row for row in quadrant_rows if row.mean_rate_hz >= responsive_threshold_hz
+        ]
+        parts.extend(
+            [
+                f"{label}_count={len(quadrant_rows)}",
+                f"{label}_active={len(active_rows)}",
+                f"{label}_responsive={len(responsive_rows)}",
+                f"{label}_median_osi={format_optional_float(optional_median(row.osi for row in quadrant_rows if row.osi is not None))}",
+                f"{label}_responsive_median_osi={format_optional_float(optional_median(row.osi for row in responsive_rows if row.osi is not None))}",
+            ]
+        )
+    return " ".join(parts)
 
 
 def sign_passes(metrics: WeightMetrics, sign: str) -> bool:
@@ -651,74 +894,127 @@ def sign_passes(metrics: WeightMetrics, sign: str) -> bool:
     raise ValidationError(f"Unsupported sign gate: {sign}")
 
 
-def compute_context_metrics(run: RunData, orientation_deg: float) -> dict[str, float]:
+def preferred_center_orientations(run: RunData) -> tuple[dict[int, float], dict[int, float]]:
+    preferred_by_site: dict[int, float] = {}
+    rates_by_site: dict[int, float] = {}
+    for validation_site_id, rows in run.context_rows_by_site.items():
+        center_l23e = rows[("center_only", "l23e")]
+        pref_deg, pref_rate = max(center_l23e.rates_by_deg.items(), key=lambda item: item[1])
+        preferred_by_site[validation_site_id] = pref_deg
+        rates_by_site[validation_site_id] = pref_rate
+    return preferred_by_site, rates_by_site
+
+
+def preferred_center_orientation_deg(run: RunData) -> tuple[float, float]:
     center_l23e = run.context_rows[("center_only", "l23e")]
-    broad_l23e = run.context_rows[("broad_field", "l23e")]
-    center_l23som = run.context_rows[("center_only", "l23som")]
-    broad_l23som = run.context_rows[("broad_field", "l23som")]
+    pref_deg, pref_rate = max(center_l23e.rates_by_deg.items(), key=lambda item: item[1])
+    return pref_deg, pref_rate
 
-    if orientation_deg not in center_l23e.rates_by_deg:
-        raise ValidationError(
-            f"Orientation {orientation_deg} not present in center-only L23E context row for {run.prefix}"
-        )
-    if orientation_deg not in broad_l23e.rates_by_deg:
-        raise ValidationError(
-            f"Orientation {orientation_deg} not present in broad-field L23E context row for {run.prefix}"
-        )
-    if orientation_deg not in center_l23som.rates_by_deg or orientation_deg not in broad_l23som.rates_by_deg:
-        raise ValidationError(
-            f"Orientation {orientation_deg} not present in SOM context rows for {run.prefix}"
-        )
 
-    center_pref_l23e = center_l23e.rates_by_deg[orientation_deg]
-    broad_pref_l23e = broad_l23e.rates_by_deg[orientation_deg]
-    center_pref_l23som = center_l23som.rates_by_deg[orientation_deg]
-    broad_pref_l23som = broad_l23som.rates_by_deg[orientation_deg]
+def compute_context_metrics(run: RunData, orientation_deg: float | dict[int, float]) -> dict[str, float]:
+    if isinstance(orientation_deg, dict):
+        preferred_by_site = orientation_deg
+    else:
+        primary_site_id = next(iter(run.context_rows_by_site))
+        preferred_by_site = {primary_site_id: orientation_deg}
 
-    if center_pref_l23e <= 0.0:
-        raise ValidationError(
-            f"Center-only preferred L23E rate must be positive for suppression computation in {run.prefix}"
-        )
-    if center_pref_l23som <= 0.0:
-        raise ValidationError(
-            f"Center-only preferred L23SOM rate must be positive for context validation in {run.prefix}"
-        )
-
-    driven_center_threshold_hz = max(10.0, 0.25 * center_pref_l23e)
-    relevant_orientations: list[float] = []
-    bsi_values: list[float] = []
-    min_center_som_hz = math.inf
-    min_broad_som_hz = math.inf
-
-    for current_orientation_deg, center_rate in center_l23e.rates_by_deg.items():
-        if current_orientation_deg not in broad_l23e.rates_by_deg:
+    site_metrics: list[dict[str, float]] = []
+    for validation_site_id, preferred_deg in preferred_by_site.items():
+        if validation_site_id not in run.context_rows_by_site:
             raise ValidationError(
-                f"Orientation {current_orientation_deg} not present in broad-field L23E context row for {run.prefix}"
+                f"Context rows for validation_site_id={validation_site_id} are missing in prefix {run.prefix}"
             )
-        if current_orientation_deg not in center_l23som.rates_by_deg:
+        rows = run.context_rows_by_site[validation_site_id]
+        center_l23e = rows[("center_only", "l23e")]
+        broad_l23e = rows[("broad_field", "l23e")]
+        center_l23som = rows[("center_only", "l23som")]
+        broad_l23som = rows[("broad_field", "l23som")]
+
+        if preferred_deg not in center_l23e.rates_by_deg:
             raise ValidationError(
-                f"Orientation {current_orientation_deg} not present in center-only L23SOM context row for {run.prefix}"
+                f"Orientation {preferred_deg} not present in center-only L23E context row "
+                f"for {run.prefix} site {validation_site_id}"
             )
-        if current_orientation_deg not in broad_l23som.rates_by_deg:
+        if preferred_deg not in broad_l23e.rates_by_deg:
             raise ValidationError(
-                f"Orientation {current_orientation_deg} not present in broad-field L23SOM context row for {run.prefix}"
+                f"Orientation {preferred_deg} not present in broad-field L23E context row "
+                f"for {run.prefix} site {validation_site_id}"
+            )
+        if preferred_deg not in center_l23som.rates_by_deg or preferred_deg not in broad_l23som.rates_by_deg:
+            raise ValidationError(
+                f"Orientation {preferred_deg} not present in SOM context rows "
+                f"for {run.prefix} site {validation_site_id}"
             )
 
-        if center_rate < driven_center_threshold_hz:
-            continue
+        center_pref_l23e = center_l23e.rates_by_deg[preferred_deg]
+        broad_pref_l23e = broad_l23e.rates_by_deg[preferred_deg]
+        center_pref_l23som = center_l23som.rates_by_deg[preferred_deg]
+        broad_pref_l23som = broad_l23som.rates_by_deg[preferred_deg]
 
-        relevant_orientations.append(current_orientation_deg)
-        broad_rate = broad_l23e.rates_by_deg[current_orientation_deg]
-        center_som_rate = center_l23som.rates_by_deg[current_orientation_deg]
-        broad_som_rate = broad_l23som.rates_by_deg[current_orientation_deg]
-        bsi_values.append((center_rate - broad_rate) / center_rate)
-        min_center_som_hz = min(min_center_som_hz, center_som_rate)
-        min_broad_som_hz = min(min_broad_som_hz, broad_som_rate)
+        if center_pref_l23e <= 0.0:
+            raise ValidationError(
+                f"Center-only preferred L23E rate must be positive for suppression computation "
+                f"in {run.prefix} site {validation_site_id}"
+            )
+        if center_pref_l23som <= 0.0:
+            raise ValidationError(
+                f"Center-only preferred L23SOM rate must be positive for context validation "
+                f"in {run.prefix} site {validation_site_id}"
+            )
 
-    if not relevant_orientations:
-        raise ValidationError(
-            f"No orientations met the driven center threshold {driven_center_threshold_hz:.6f} Hz "
-            f"for context validation in {run.prefix}"
+        driven_center_threshold_hz = max(10.0, 0.25 * center_pref_l23e)
+        relevant_orientations: list[float] = []
+        bsi_values: list[float] = []
+        min_center_som_hz = math.inf
+        min_broad_som_hz = math.inf
+
+        for current_orientation_deg, center_rate in center_l23e.rates_by_deg.items():
+            if current_orientation_deg not in broad_l23e.rates_by_deg:
+                raise ValidationError(
+                    f"Orientation {current_orientation_deg} not present in broad-field L23E context row "
+                    f"for {run.prefix} site {validation_site_id}"
+                )
+            if current_orientation_deg not in center_l23som.rates_by_deg:
+                raise ValidationError(
+                    f"Orientation {current_orientation_deg} not present in center-only L23SOM context row "
+                    f"for {run.prefix} site {validation_site_id}"
+                )
+            if current_orientation_deg not in broad_l23som.rates_by_deg:
+                raise ValidationError(
+                    f"Orientation {current_orientation_deg} not present in broad-field L23SOM context row "
+                    f"for {run.prefix} site {validation_site_id}"
+                )
+
+            if center_rate < driven_center_threshold_hz:
+                continue
+
+            relevant_orientations.append(current_orientation_deg)
+            broad_rate = broad_l23e.rates_by_deg[current_orientation_deg]
+            center_som_rate = center_l23som.rates_by_deg[current_orientation_deg]
+            broad_som_rate = broad_l23som.rates_by_deg[current_orientation_deg]
+            bsi_values.append((center_rate - broad_rate) / center_rate)
+            min_center_som_hz = min(min_center_som_hz, center_som_rate)
+            min_broad_som_hz = min(min_broad_som_hz, broad_som_rate)
+
+        if not relevant_orientations:
+            raise ValidationError(
+                f"No orientations met the driven center threshold {driven_center_threshold_hz:.6f} Hz "
+                f"for context validation in {run.prefix} site {validation_site_id}"
+            )
+
+        site_metrics.append(
+            {
+                "center_pref_l23e_hz": center_pref_l23e,
+                "broad_pref_l23e_hz": broad_pref_l23e,
+                "center_pref_l23som_hz": center_pref_l23som,
+                "broad_pref_l23som_hz": broad_pref_l23som,
+                "preferred_bsi": (center_pref_l23e - broad_pref_l23e) / center_pref_l23e,
+                "mean_bsi": sum(bsi_values) / len(bsi_values),
+                "driven_center_threshold_hz": driven_center_threshold_hz,
+                "relevant_orientation_count": float(len(relevant_orientations)),
+                "min_center_som_hz": min_center_som_hz,
+                "min_broad_som_hz": min_broad_som_hz,
+            }
         )
 
     summary_mean_bsi = None
@@ -731,24 +1027,20 @@ def compute_context_metrics(run: RunData, orientation_deg: float) -> dict[str, f
             summary_mean_bsi = (center_mean - broad_mean) / center_mean
 
     return {
-        "center_pref_l23e_hz": center_pref_l23e,
-        "broad_pref_l23e_hz": broad_pref_l23e,
-        "center_pref_l23som_hz": center_pref_l23som,
-        "broad_pref_l23som_hz": broad_pref_l23som,
-        "preferred_bsi": (center_pref_l23e - broad_pref_l23e) / center_pref_l23e,
-        "mean_bsi": sum(bsi_values) / len(bsi_values),
-        "driven_center_threshold_hz": driven_center_threshold_hz,
-        "relevant_orientation_count": float(len(relevant_orientations)),
-        "min_center_som_hz": min_center_som_hz,
-        "min_broad_som_hz": min_broad_som_hz,
+        "validation_site_count": float(len(site_metrics)),
+        "center_pref_l23e_hz": mean([site["center_pref_l23e_hz"] for site in site_metrics]),
+        "min_center_pref_l23e_hz": min(site["center_pref_l23e_hz"] for site in site_metrics),
+        "broad_pref_l23e_hz": mean([site["broad_pref_l23e_hz"] for site in site_metrics]),
+        "center_pref_l23som_hz": mean([site["center_pref_l23som_hz"] for site in site_metrics]),
+        "broad_pref_l23som_hz": mean([site["broad_pref_l23som_hz"] for site in site_metrics]),
+        "preferred_bsi": mean([site["preferred_bsi"] for site in site_metrics]),
+        "mean_bsi": mean([site["mean_bsi"] for site in site_metrics]),
+        "driven_center_threshold_hz": mean([site["driven_center_threshold_hz"] for site in site_metrics]),
+        "relevant_orientation_count": sum(site["relevant_orientation_count"] for site in site_metrics),
+        "min_center_som_hz": min(site["min_center_som_hz"] for site in site_metrics),
+        "min_broad_som_hz": min(site["min_broad_som_hz"] for site in site_metrics),
         "summary_mean_bsi": summary_mean_bsi,
     }
-
-
-def preferred_center_orientation_deg(run: RunData) -> tuple[float, float]:
-    center_l23e = run.context_rows[("center_only", "l23e")]
-    pref_deg, pref_rate = max(center_l23e.rates_by_deg.items(), key=lambda item: item[1])
-    return pref_deg, pref_rate
 
 
 def circular_orientation_delta_deg(first_deg: float, second_deg: float) -> float:
@@ -762,6 +1054,10 @@ def require_size_rows(run: RunData) -> list[SizeTuningRow]:
     return run.size_tuning_rows
 
 
+def size_validation_site_count(run: RunData) -> int:
+    return len({row.validation_site_id for row in require_size_rows(run)})
+
+
 def require_specificity_rows(run: RunData) -> list[SpecificityRow]:
     if run.specificity_rows is None:
         raise ValidationError(f"L23E specificity rows were not loaded for prefix {run.prefix}")
@@ -770,48 +1066,59 @@ def require_specificity_rows(run: RunData) -> list[SpecificityRow]:
 
 def build_size_tuning_grid(
     run: RunData,
-) -> tuple[dict[str, dict[float, dict[float, float]]], list[float], list[float]]:
+) -> tuple[dict[int, dict[str, dict[float, dict[float, float]]]], list[float], list[float], list[int]]:
     rows = require_size_rows(run)
     required_populations = {"l4e", "l23e", "l23pv", "l23som"}
     radii = sorted({row.radius_sites for row in rows})
     orientations = sorted({row.orientation_deg for row in rows})
+    validation_site_ids: list[int] = []
+    for row in rows:
+        if row.population in required_populations and row.validation_site_id not in validation_site_ids:
+            validation_site_ids.append(row.validation_site_id)
     if len(radii) < 3:
         raise ValidationError(f"Size tuning requires at least 3 radii for prefix {run.prefix}")
     if not orientations:
         raise ValidationError(f"Size tuning requires at least one orientation for prefix {run.prefix}")
+    if not validation_site_ids:
+        raise ValidationError(f"Size tuning requires at least one validation site for prefix {run.prefix}")
 
-    grid: dict[str, dict[float, dict[float, float]]] = {
-        population: {radius: {} for radius in radii}
-        for population in required_populations
+    grid: dict[int, dict[str, dict[float, dict[float, float]]]] = {
+        validation_site_id: {
+            population: {radius: {} for radius in radii}
+            for population in required_populations
+        }
+        for validation_site_id in validation_site_ids
     }
-    seen: set[tuple[str, float, float]] = set()
+    seen: set[tuple[int, str, float, float]] = set()
     for row in rows:
         if row.population not in required_populations:
             continue
-        key = (row.population, row.radius_sites, row.orientation_deg)
+        key = (row.validation_site_id, row.population, row.radius_sites, row.orientation_deg)
         if key in seen:
             raise ValidationError(
-                f"Duplicate size tuning row for {row.population} radius={row.radius_sites} "
+                f"Duplicate size tuning row for site={row.validation_site_id} "
+                f"{row.population} radius={row.radius_sites} "
                 f"orientation={row.orientation_deg} in prefix {run.prefix}"
             )
         seen.add(key)
-        grid[row.population][row.radius_sites][row.orientation_deg] = row.rate_hz
+        grid[row.validation_site_id][row.population][row.radius_sites][row.orientation_deg] = row.rate_hz
 
     expected = {(radius, orientation) for radius in radii for orientation in orientations}
-    for population in required_populations:
-        observed = {
-            (radius, orientation)
-            for radius, rates_by_orientation in grid[population].items()
-            for orientation in rates_by_orientation
-        }
-        missing = expected.difference(observed)
-        if missing:
-            raise ValidationError(
-                f"Missing size tuning rows for {population} in prefix {run.prefix}: "
-                f"{sorted(missing)[:5]}"
-            )
+    for validation_site_id in validation_site_ids:
+        for population in required_populations:
+            observed = {
+                (radius, orientation)
+                for radius, rates_by_orientation in grid[validation_site_id][population].items()
+                for orientation in rates_by_orientation
+            }
+            missing = expected.difference(observed)
+            if missing:
+                raise ValidationError(
+                    f"Missing size tuning rows for site={validation_site_id} {population} "
+                    f"in prefix {run.prefix}: {sorted(missing)[:5]}"
+                )
 
-    return grid, radii, orientations
+    return grid, radii, orientations, validation_site_ids
 
 
 def summarize_size_curve(radii: list[float], rates: list[float]) -> dict[str, float]:
@@ -835,43 +1142,77 @@ def summarize_size_curve(radii: list[float], rates: list[float]) -> dict[str, fl
 def compute_size_tuning_metrics(
     run: RunData,
     *,
-    selected_orientations: list[float] | None = None,
+    selected_orientations: list[float] | dict[int, list[float]] | None = None,
 ) -> dict[str, object]:
-    grid, radii, orientations = build_size_tuning_grid(run)
+    grids, radii, orientations, validation_site_ids = build_size_tuning_grid(run)
     reference_radius = min(radii, key=lambda radius: abs(radius - 2.0))
-    reference_rates = grid["l23e"][reference_radius]
-    preferred_deg, preferred_rate = max(reference_rates.items(), key=lambda item: item[1])
+    selected_by_site: dict[int, list[float]] = {}
+    preferred_by_site: dict[int, float] = {}
+    preferred_rate_by_site: dict[int, float] = {}
 
-    if selected_orientations is None:
-        driven_threshold_hz = max(1.0, 0.25 * preferred_rate)
-        selected_orientations = [
-            orientation
-            for orientation in orientations
-            if circular_orientation_delta_deg(orientation, preferred_deg) <= 22.5
-            and reference_rates[orientation] >= driven_threshold_hz
-        ]
-        if not selected_orientations:
-            selected_orientations = [preferred_deg]
+    for validation_site_id in validation_site_ids:
+        grid = grids[validation_site_id]
+        reference_rates = grid["l23e"][reference_radius]
+        preferred_deg, preferred_rate = max(reference_rates.items(), key=lambda item: item[1])
+        preferred_by_site[validation_site_id] = preferred_deg
+        preferred_rate_by_site[validation_site_id] = preferred_rate
 
-    missing_orientations = set(selected_orientations).difference(orientations)
-    if missing_orientations:
-        raise ValidationError(
-            f"Size tuning orientations missing for prefix {run.prefix}: {sorted(missing_orientations)}"
-        )
+        if selected_orientations is None:
+            driven_threshold_hz = max(1.0, 0.25 * preferred_rate)
+            site_selected_orientations = [
+                orientation
+                for orientation in orientations
+                if circular_orientation_delta_deg(orientation, preferred_deg) <= 22.5
+                and reference_rates[orientation] >= driven_threshold_hz
+            ]
+            if not site_selected_orientations:
+                site_selected_orientations = [preferred_deg]
+        elif isinstance(selected_orientations, dict):
+            if validation_site_id not in selected_orientations:
+                raise ValidationError(
+                    f"Size tuning selected orientations missing for prefix {run.prefix} "
+                    f"site {validation_site_id}"
+                )
+            site_selected_orientations = selected_orientations[validation_site_id]
+        else:
+            site_selected_orientations = selected_orientations
 
-    mean_rates: dict[str, list[float]] = {}
-    for population in ("l4e", "l23e", "l23pv", "l23som"):
-        mean_rates[population] = [
-            sum(grid[population][radius][orientation] for orientation in selected_orientations)
-            / len(selected_orientations)
-            for radius in radii
-        ]
+        missing_orientations = set(site_selected_orientations).difference(orientations)
+        if missing_orientations:
+            raise ValidationError(
+                f"Size tuning orientations missing for prefix {run.prefix} "
+                f"site {validation_site_id}: {sorted(missing_orientations)}"
+            )
+        selected_by_site[validation_site_id] = list(site_selected_orientations)
+
+    mean_rates: dict[str, list[float]] = {
+        population: [0.0 for _ in radii]
+        for population in ("l4e", "l23e", "l23pv", "l23som")
+    }
+    for validation_site_id in validation_site_ids:
+        grid = grids[validation_site_id]
+        site_selected_orientations = selected_by_site[validation_site_id]
+        for population in ("l4e", "l23e", "l23pv", "l23som"):
+            site_rates = [
+                sum(grid[population][radius][orientation] for orientation in site_selected_orientations)
+                / len(site_selected_orientations)
+                for radius in radii
+            ]
+            for index, rate in enumerate(site_rates):
+                mean_rates[population][index] += rate / len(validation_site_ids)
+
+    primary_site_id = validation_site_ids[0]
 
     return {
+        "validation_site_count": float(len(validation_site_ids)),
+        "primary_validation_site_id": float(primary_site_id),
         "radii": radii,
-        "selected_orientations": selected_orientations,
-        "preferred_deg": preferred_deg,
-        "preferred_rate": preferred_rate,
+        "selected_orientations": selected_by_site[primary_site_id],
+        "selected_orientations_by_site": selected_by_site,
+        "preferred_deg": preferred_by_site[primary_site_id],
+        "preferred_rate": preferred_rate_by_site[primary_site_id],
+        "mean_preferred_rate": mean(list(preferred_rate_by_site.values())),
+        "min_preferred_rate": min(preferred_rate_by_site.values()),
         "reference_radius": reference_radius,
         "mean_rates": mean_rates,
         "l23e": summarize_size_curve(radii, mean_rates["l23e"]),
@@ -882,6 +1223,10 @@ def compute_size_tuning_metrics(
 
 def format_float_list(values: Iterable[float]) -> str:
     return "[" + ",".join(f"{value:.6f}" for value in values) + "]"
+
+
+def load_l4_intersite_metrics(genn_dir: Path, prefix: str) -> dict[str, float]:
+    return parse_summary_csv(require_file(genn_dir / f"{prefix}_l4_intersite_diagnostics.csv"))
 
 
 def mean(values: list[float]) -> float:
@@ -1213,6 +1558,10 @@ def print_result(passed: bool, label: str, details: str) -> bool:
 def main() -> int:
     args = parse_args()
     try:
+        if args.min_validation_sites < 1:
+            raise ValidationError("--min-validation-sites must be at least 1.")
+        if args.responsive_rate_threshold_hz < 0.0:
+            raise ValidationError("--responsive-rate-threshold-hz must be non-negative.")
         full = load_run(
             args.genn_dir,
             args.full,
@@ -1223,15 +1572,147 @@ def main() -> int:
         somoff = load_run(args.genn_dir, args.somoff, require_size_tuning=True)
 
         overall_ok = True
+        l23e_osi_metrics_by_label = {
+            run_label: compute_l23e_osi_site_metrics(
+                run.l23e_post_sites,
+                args.responsive_rate_threshold_hz,
+            )
+            for run_label, run in (("full", full), ("control", control), ("somoff", somoff))
+        }
+        for run_label, run in (("full", full), ("control", control), ("somoff", somoff)):
+            print_l23e_osi_site_info(run_label, l23e_osi_metrics_by_label[run_label])
+            print(
+                f"INFO l23e_osi_quadrants[{run_label}] "
+                f"{format_l23e_osi_quadrants(run.l23e_post_sites, args.responsive_rate_threshold_hz)}"
+            )
+
+        full_context_site_count = len(full.context_rows_by_site)
+        somoff_context_site_count = len(somoff.context_rows_by_site)
+        full_size_site_count = size_validation_site_count(full)
+        somoff_size_site_count = size_validation_site_count(somoff)
+        min_observed_validation_sites = min(
+            full_context_site_count,
+            somoff_context_site_count,
+            full_size_site_count,
+            somoff_size_site_count,
+        )
+        overall_ok &= print_result(
+            min_observed_validation_sites >= args.min_validation_sites,
+            "validation_sites",
+            (
+                f"required={args.min_validation_sites} "
+                f"full_context={full_context_site_count} "
+                f"somoff_context={somoff_context_site_count} "
+                f"full_size={full_size_site_count} "
+                f"somoff_size={somoff_size_site_count}"
+            ),
+        )
+
+        if args.require_l4_intersite:
+            full_l4_intersite = load_l4_intersite_metrics(args.genn_dir, args.full)
+            control_l4_intersite = load_l4_intersite_metrics(args.genn_dir, args.control)
+            somoff_l4_intersite = load_l4_intersite_metrics(args.genn_dir, args.somoff)
+            enabled_values = {
+                "full": require_metric(full_l4_intersite, "enabled", args.full),
+                "control": require_metric(control_l4_intersite, "enabled", args.control),
+                "somoff": require_metric(somoff_l4_intersite, "enabled", args.somoff),
+            }
+            overall_ok &= print_result(
+                all(value == 1.0 for value in enabled_values.values()),
+                "l4_intersite_enabled",
+                " ".join(f"{label}={value:.0f}" for label, value in enabled_values.items()),
+            )
+
+            radius_sites = require_metric(full_l4_intersite, "radius_sites", args.full)
+            weight_scale = require_metric(full_l4_intersite, "weight_scale", args.full)
+            l4ee_scale = optional_metric(full_l4_intersite, "l4ee_scale", weight_scale)
+            l4e_to_l4pv_scale = optional_metric(full_l4_intersite, "l4e_to_l4pv_scale", weight_scale)
+            l4pv_to_l4e_scale = optional_metric(full_l4_intersite, "l4pv_to_l4e_scale", weight_scale)
+            max_projection_scale = max(l4ee_scale, l4e_to_l4pv_scale, l4pv_to_l4e_scale)
+            edge_counts = {
+                "l4ee": require_metric(full_l4_intersite, "l4ee_edge_count", args.full),
+                "l4e_to_l4pv": require_metric(full_l4_intersite, "l4e_to_l4pv_edge_count", args.full),
+                "l4pv_to_l4e": require_metric(full_l4_intersite, "l4pv_to_l4e_edge_count", args.full),
+            }
+            max_distance_sites = require_metric(full_l4_intersite, "max_projection_distance_sites", args.full)
+            max_same_site_fraction = require_metric(full_l4_intersite, "max_same_site_fraction", args.full)
+            max_beyond_radius_fraction = require_metric(full_l4_intersite, "max_beyond_radius_fraction", args.full)
+            overall_ok &= print_result(
+                radius_sites >= 2.0
+                and radius_sites <= 3.0
+                and 0.0 < max_projection_scale <= 0.20
+                and all(count > 0.0 for count in edge_counts.values())
+                and max_distance_sites <= ((2.0 ** 0.5) * radius_sites + 1.0e-6)
+                and max_same_site_fraction <= 1.0e-9
+                and max_beyond_radius_fraction <= 1.0e-9,
+                "l4_intersite_connectivity",
+                (
+                    f"radius_sites={radius_sites:.6f} weight_scale={weight_scale:.6f} "
+                    f"l4ee_scale={l4ee_scale:.6f} "
+                    f"l4e_to_l4pv_scale={l4e_to_l4pv_scale:.6f} "
+                    f"l4pv_to_l4e_scale={l4pv_to_l4e_scale:.6f} "
+                    f"l4ee_edges={int(edge_counts['l4ee'])} "
+                    f"l4e_to_l4pv_edges={int(edge_counts['l4e_to_l4pv'])} "
+                    f"l4pv_to_l4e_edges={int(edge_counts['l4pv_to_l4e'])} "
+                    f"max_distance_sites={max_distance_sites:.6f} "
+                    f"max_same_site_fraction={max_same_site_fraction:.6f} "
+                    f"max_beyond_radius_fraction={max_beyond_radius_fraction:.6f}"
+                ),
+            )
+
+            post_l4_osi = require_summary_metric(full, "post_l4_median_osi")
+            control_post_l4_osi = require_summary_metric(control, "post_l4_median_osi")
+            post_l4_map_error_deg = require_summary_metric(full, "post_l4_map_error_deg_median")
+            control_post_l4_map_error_deg = require_summary_metric(control, "post_l4_map_error_deg_median")
+            allowed_osi_drop = max(0.02, 0.05 * control_post_l4_osi)
+            osi_drop = control_post_l4_osi - post_l4_osi
+            map_error_delta = post_l4_map_error_deg - control_post_l4_map_error_deg
+            overall_ok &= print_result(
+                osi_drop <= allowed_osi_drop
+                and post_l4_map_error_deg <= 45.0
+                and map_error_delta <= 5.0,
+                "l4_intersite_map_preservation",
+                (
+                    f"full_post_l4_median_osi={post_l4_osi:.6f} "
+                    f"control_post_l4_median_osi={control_post_l4_osi:.6f} "
+                    f"osi_drop={osi_drop:.6f} allowed_osi_drop={allowed_osi_drop:.6f} "
+                    f"full_post_l4_map_error_deg={post_l4_map_error_deg:.6f} "
+                    f"control_post_l4_map_error_deg={control_post_l4_map_error_deg:.6f} "
+                    f"map_error_delta={map_error_delta:.6f}"
+                ),
+            )
+
+            l4_peak_rate = require_metric(full_l4_intersite, "l4_size_peak_rate_hz", args.full)
+            l4_small_peak_ratio = require_metric(full_l4_intersite, "l4_size_small_peak_ratio", args.full)
+            l4_large_peak_ratio = require_metric(full_l4_intersite, "l4_size_large_peak_ratio", args.full)
+            overall_ok &= print_result(
+                l4_peak_rate > 0.0
+                and 0.0 <= l4_small_peak_ratio <= 1.05
+                and 0.0 <= l4_large_peak_ratio <= 1.20,
+                "l4_intersite_spread_bounded",
+                (
+                    f"l4_peak_rate_hz={l4_peak_rate:.6f} "
+                    f"small_peak_ratio={l4_small_peak_ratio:.6f} "
+                    f"large_peak_ratio={l4_large_peak_ratio:.6f}"
+                ),
+            )
 
         full_post_osi = require_summary_metric(full, "post_l23_median_osi")
         control_post_osi = require_summary_metric(control, "post_l23_median_osi")
         osi_delta = full_post_osi - control_post_osi
-        overall_ok &= print_result(
-            full_post_osi >= 0.70 and osi_delta >= 0.10,
+        strict_osi_ok = full_post_osi >= 0.70 and osi_delta >= 0.10
+        printed_strict_osi_ok = print_result(
+            strict_osi_ok,
             "osi",
             f"full_post={full_post_osi:.6f} control_post={control_post_osi:.6f} delta={osi_delta:.6f}",
         )
+        if strict_osi_ok or not args.allow_responsive_osi:
+            overall_ok &= printed_strict_osi_ok
+        else:
+            print(
+                "INFO osi_responsive_rescue pending "
+                "strict_all_site_pass=0 strict_all_site_gate_deferred=1"
+            )
 
         for spec in WEIGHT_SPECS:
             full_before, full_after = full.weights[spec.name]
@@ -1285,20 +1766,31 @@ def main() -> int:
                     ),
                 )
 
-        pref_deg, full_center_pref_rate = preferred_center_orientation_deg(full)
-        full_context = compute_context_metrics(full, pref_deg)
-        somoff_context = compute_context_metrics(somoff, pref_deg)
+        preferred_by_site, preferred_rates_by_site = preferred_center_orientations(full)
+        primary_validation_site_id = next(iter(preferred_by_site))
+        pref_deg = preferred_by_site[primary_validation_site_id]
+        full_center_pref_rate = mean(list(preferred_rates_by_site.values()))
+        full_min_center_pref_rate = min(preferred_rates_by_site.values())
+        full_context = compute_context_metrics(full, preferred_by_site)
+        somoff_context = compute_context_metrics(somoff, preferred_by_site)
 
         overall_ok &= print_result(
             full_center_pref_rate >= 5.0,
             "som_center_pref",
-            f"preferred_deg={pref_deg:.1f} center_pref_l23e_hz={full_center_pref_rate:.6f}",
+            (
+                f"validation_sites={int(full_context['validation_site_count'])} "
+                f"primary_site={primary_validation_site_id} "
+                f"preferred_deg={pref_deg:.1f} "
+                f"mean_center_pref_l23e_hz={full_center_pref_rate:.6f} "
+                f"min_center_pref_l23e_hz={full_min_center_pref_rate:.6f}"
+            ),
         )
         overall_ok &= print_result(
             full_context["min_center_som_hz"] > 0.0 and full_context["min_broad_som_hz"] > 0.0,
             "som_sanity",
             (
                 f"driven_center_threshold_hz={full_context['driven_center_threshold_hz']:.6f} "
+                f"validation_sites={int(full_context['validation_site_count'])} "
                 f"relevant_orientations={int(full_context['relevant_orientation_count'])} "
                 f"min_center_som_hz={full_context['min_center_som_hz']:.6f} "
                 f"min_broad_som_hz={full_context['min_broad_som_hz']:.6f}"
@@ -1310,6 +1802,7 @@ def main() -> int:
             (
                 f"mean_bsi={full_context['mean_bsi']:.6f} "
                 f"driven_center_threshold_hz={full_context['driven_center_threshold_hz']:.6f} "
+                f"validation_sites={int(full_context['validation_site_count'])} "
                 f"relevant_orientations={int(full_context['relevant_orientation_count'])}"
             ),
         )
@@ -1334,6 +1827,7 @@ def main() -> int:
         print(
             "INFO som_preferred_bsi "
             f"preferred_deg={pref_deg:.1f} "
+            f"primary_site={primary_validation_site_id} "
             f"full_preferred_bsi={full_context['preferred_bsi']:.6f} "
             f"somoff_preferred_bsi={somoff_context['preferred_bsi']:.6f}"
         )
@@ -1346,7 +1840,7 @@ def main() -> int:
         full_size = compute_size_tuning_metrics(full)
         somoff_size = compute_size_tuning_metrics(
             somoff,
-            selected_orientations=full_size["selected_orientations"],
+            selected_orientations=full_size["selected_orientations_by_site"],
         )
         full_l23e_size = full_size["l23e"]
         full_l4e_size = full_size["l4e"]
@@ -1361,6 +1855,7 @@ def main() -> int:
             "som_size_interior_optimum",
             (
                 f"preferred_deg={full_size['preferred_deg']:.1f} "
+                f"validation_sites={int(full_size['validation_site_count'])} "
                 f"selected_orientations={format_float_list(full_size['selected_orientations'])} "
                 f"radii={format_float_list(radii)} "
                 f"peak_radius={full_l23e_size['peak_radius']:.6f} "
@@ -1616,6 +2111,45 @@ def main() -> int:
             if vip_metrics:
                 formatted = " ".join(f"{key}={value:.6f}" for key, value in sorted(vip_metrics.items()))
                 print(f"INFO vip_rates[{run_label}] {formatted}")
+
+        if args.allow_responsive_osi:
+            if strict_osi_ok:
+                print("INFO osi_responsive_rescue not_needed strict_all_site_pass=1")
+            else:
+                full_l23e_osi = l23e_osi_metrics_by_label["full"]
+                control_l23e_osi = l23e_osi_metrics_by_label["control"]
+                full_responsive_osi = full_l23e_osi.responsive_median_osi
+                control_responsive_osi = control_l23e_osi.responsive_median_osi
+                responsive_delta = (
+                    full_responsive_osi - control_responsive_osi
+                    if full_responsive_osi is not None and control_responsive_osi is not None
+                    else None
+                )
+                responsive_osi_ok = (
+                    full_l23e_osi.responsive_count > 0
+                    and control_l23e_osi.responsive_count > 0
+                    and full_responsive_osi is not None
+                    and control_responsive_osi is not None
+                    and responsive_delta is not None
+                    and full_responsive_osi >= 0.70
+                    and responsive_delta >= 0.10
+                )
+                downstream_gates_ok = overall_ok
+                overall_ok &= print_result(
+                    downstream_gates_ok and responsive_osi_ok,
+                    "osi_responsive_rescue",
+                    (
+                        f"strict_all_site_pass=0 "
+                        f"downstream_gates_pass={int(downstream_gates_ok)} "
+                        f"responsive_gate_pass={int(responsive_osi_ok)} "
+                        f"threshold_hz={args.responsive_rate_threshold_hz:.6f} "
+                        f"full_responsive_count={full_l23e_osi.responsive_count} "
+                        f"control_responsive_count={control_l23e_osi.responsive_count} "
+                        f"full_responsive_median_osi={format_optional_float(full_responsive_osi)} "
+                        f"control_responsive_median_osi={format_optional_float(control_responsive_osi)} "
+                        f"responsive_delta={format_optional_float(responsive_delta)}"
+                    ),
+                )
 
         return 0 if overall_ok else 1
     except ValidationError as exc:
