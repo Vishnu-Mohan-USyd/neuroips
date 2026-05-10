@@ -419,6 +419,7 @@ constexpr double kL23SOMToL23EWeightMax = -0.0010;
 
 struct TrialWindow {
     double orientation_rad;
+    double phase_rad;
     double start_ms;
     double measure_start_ms;
     double end_ms;
@@ -444,6 +445,18 @@ struct CellTuningMetrics {
     double peak_rate_hz = 0.0;
     double osi = 0.0;
     std::vector<double> rates_hz;
+};
+
+struct MultiPhaseCellTuningMetrics {
+    unsigned int cell_id = 0;
+    unsigned int site_id = 0;
+    double site_pref_rad = 0.0;
+    double best_orientation_rad = 0.0;
+    double best_phase_rad = 0.0;
+    double peak_rate_any_phase_hz = 0.0;
+    double mean_rate_hz = 0.0;
+    double phase_pooled_osi = 0.0;
+    std::vector<double> phase_mean_rates_hz;
 };
 
 struct SweepResult {
@@ -1658,6 +1671,78 @@ std::vector<CellTuningMetrics> computeCellTuningMetrics(
     return metrics;
 }
 
+std::vector<MultiPhaseCellTuningMetrics> computeMultiPhaseCellTuningMetrics(
+    const std::vector<TrialWindow> &trials,
+    const std::vector<double> &cell_spike_counts,
+    const std::vector<double> &orientations_rad,
+    unsigned int phase_count,
+    unsigned int neuron_count,
+    unsigned int neurons_per_site)
+{
+    if(trials.empty()) {
+        return {};
+    }
+    if(phase_count <= 1u) {
+        throw std::runtime_error("Multiphase cell tuning requires phase_count > 1.");
+    }
+    if(trials.size() != (static_cast<std::size_t>(orientations_rad.size()) * static_cast<std::size_t>(phase_count))) {
+        throw std::runtime_error("Multiphase cell tuning trials must be orientation x phase_count.");
+    }
+
+    const double measurement_duration_ms = trials.front().end_ms - trials.front().measure_start_ms;
+    if(measurement_duration_ms <= 0.0) {
+        throw std::runtime_error("Measurement window must be positive.");
+    }
+    const double measurement_duration_s = measurement_duration_ms / 1000.0;
+
+    std::vector<MultiPhaseCellTuningMetrics> metrics(neuron_count);
+    for(unsigned int cell_id = 0; cell_id < neuron_count; cell_id++) {
+        MultiPhaseCellTuningMetrics metric;
+        metric.cell_id = cell_id;
+        metric.site_id = cell_id / neurons_per_site;
+        metric.site_pref_rad = v1_genn::sitePreferredOrientationFromIndex(metric.site_id);
+        metric.best_orientation_rad = metric.site_pref_rad;
+        metric.phase_mean_rates_hz.resize(orientations_rad.size(), 0.0);
+
+        double total_rate = 0.0;
+        double vector_x = 0.0;
+        double vector_y = 0.0;
+        for(std::size_t orientation_index = 0; orientation_index < orientations_rad.size(); orientation_index++) {
+            double orientation_rate_sum = 0.0;
+            for(unsigned int phase_index = 0; phase_index < phase_count; phase_index++) {
+                const std::size_t trial_index =
+                    (orientation_index * static_cast<std::size_t>(phase_count)) + phase_index;
+                const double spikes = cell_spike_counts[(trial_index * neuron_count) + cell_id];
+                const double rate_hz = spikes / measurement_duration_s;
+                orientation_rate_sum += rate_hz;
+                total_rate += rate_hz;
+                if(rate_hz > metric.peak_rate_any_phase_hz) {
+                    metric.peak_rate_any_phase_hz = rate_hz;
+                    metric.best_orientation_rad = trials[trial_index].orientation_rad;
+                    metric.best_phase_rad = trials[trial_index].phase_rad;
+                }
+            }
+
+            const double phase_mean_rate = orientation_rate_sum / static_cast<double>(phase_count);
+            metric.phase_mean_rates_hz[orientation_index] = phase_mean_rate;
+            vector_x += phase_mean_rate * std::cos(2.0 * orientations_rad[orientation_index]);
+            vector_y += phase_mean_rate * std::sin(2.0 * orientations_rad[orientation_index]);
+        }
+
+        metric.mean_rate_hz = total_rate / static_cast<double>(trials.size());
+        const double pooled_total_rate = std::accumulate(
+            metric.phase_mean_rates_hz.begin(),
+            metric.phase_mean_rates_hz.end(),
+            0.0);
+        if(pooled_total_rate > 0.0) {
+            metric.phase_pooled_osi = std::hypot(vector_x, vector_y) / pooled_total_rate;
+        }
+        metrics[cell_id] = metric;
+    }
+
+    return metrics;
+}
+
 double responseCorrelation(const std::vector<double> &pre_rates, const std::vector<double> &post_rates)
 {
     if(pre_rates.size() != post_rates.size()) {
@@ -1793,6 +1878,42 @@ void writeL23ECellTuningCsv(
                << metric.osi;
         if(recurrent_output_scale >= 0.0) {
             output << "," << recurrent_output_scale;
+        }
+        output << "\n";
+    }
+}
+
+void writeL23ECellTuningMultiPhaseCsv(
+    const std::string &path,
+    const std::vector<double> &orientations_rad,
+    const std::vector<MultiPhaseCellTuningMetrics> &metrics,
+    unsigned int phase_count)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+
+    output << std::fixed << std::setprecision(6);
+    output << "cell_id,site_id,site_pref_deg,best_orientation_deg,best_phase_deg,phase_count,"
+           << "peak_rate_any_phase_hz,mean_rate_hz,phase_pooled_osi";
+    for(double orientation_rad : orientations_rad) {
+        output << ",rate_" << static_cast<int>(std::lround(radiansToDegrees(orientation_rad))) << "deg_hz";
+    }
+    output << "\n";
+
+    for(const MultiPhaseCellTuningMetrics &metric : metrics) {
+        output << metric.cell_id << ","
+               << metric.site_id << ","
+               << positiveModuloDegrees(radiansToDegrees(metric.site_pref_rad)) << ","
+               << positiveModuloDegrees(radiansToDegrees(metric.best_orientation_rad)) << ","
+               << radiansToDegrees(metric.best_phase_rad) << ","
+               << phase_count << ","
+               << metric.peak_rate_any_phase_hz << ","
+               << metric.mean_rate_hz << ","
+               << metric.phase_pooled_osi;
+        for(double rate_hz : metric.phase_mean_rates_hz) {
+            output << "," << rate_hz;
         }
         output << "\n";
     }
@@ -2708,6 +2829,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const double l23ee_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23EE_CONTEXT_OUTPUT_SCALE",
         kDefaultL23EEContextOutputScale);
+    const unsigned int cell_coverage_phase_count = getEnvUnsignedOrDefault(
+        "V1_CELL_COVERAGE_PHASE_COUNT",
+        1u);
     const double broad_stimulus_radius_sites = getEnvDoubleOrDefault(
         "V1_BROAD_STIMULUS_RADIUS_SITES",
         kDefaultBroadStimulusRadiusSites);
@@ -2746,6 +2870,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     if(l23ee_context_output_scale < 0.0) {
         throw std::runtime_error("V1_L23EE_CONTEXT_OUTPUT_SCALE must be non-negative.");
     }
+    const bool multiphase_cell_coverage_enabled = (cell_coverage_phase_count > 1u);
     for(double radius_sites : size_tuning_radii_sites) {
         if(radius_sites <= 0.0) {
             throw std::runtime_error("V1_SIZE_TUNING_RADII_SITES values must be positive.");
@@ -2789,7 +2914,12 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         + (2u * validation_site_config.site_ids.size())
         + 1u
         + (size_tuning_radii_sites.size() * validation_site_config.site_ids.size());
-    const std::size_t total_trial_count = static_cast<std::size_t>(orientation_count) * sweep_count;
+    const std::size_t multiphase_trial_count =
+        multiphase_cell_coverage_enabled
+            ? (static_cast<std::size_t>(orientation_count) * static_cast<std::size_t>(cell_coverage_phase_count))
+            : 0u;
+    const std::size_t total_trial_count =
+        (static_cast<std::size_t>(orientation_count) * sweep_count) + multiphase_trial_count;
     const std::size_t total_recording_steps = total_trial_count * static_cast<std::size_t>(trial_steps);
 
     runtime.allocate(total_recording_steps);
@@ -2842,9 +2972,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
 
     std::vector<TrialWindow> baseline_trials;
     std::vector<TrialWindow> post_trials;
+    std::vector<TrialWindow> multiphase_cell_coverage_trials;
     std::vector<TrialWindow> recurrence_context_trials;
     baseline_trials.reserve(orientation_count);
     post_trials.reserve(orientation_count);
+    multiphase_cell_coverage_trials.reserve(multiphase_trial_count);
     recurrence_context_trials.reserve(orientation_count);
     std::vector<ValidationTrialSet> validation_trials;
     validation_trials.reserve(validation_site_config.site_ids.size());
@@ -2910,6 +3042,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             if(measurement_trials != nullptr) {
                 measurement_trials->push_back({
                     orientation_rad,
+                    phase_rad,
                     trial_start_ms,
                     trial_start_ms + (static_cast<double>(effective_settle_steps) * v1_genn::kDtMs),
                     trial_start_ms + (static_cast<double>(trial_steps) * v1_genn::kDtMs),
@@ -2918,6 +3051,41 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
 
             for(unsigned int step = 0; step < trial_steps; step++) {
                 runtime.stepTime();
+            }
+        }
+    };
+
+    auto runMultiPhaseCellCoverageSweep = [&]() {
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        for(unsigned int orientation_index = 0; orientation_index < orientation_count; orientation_index++) {
+            const double orientation_rad = orientations_rad[orientation_index];
+            for(unsigned int phase_index = 0; phase_index < cell_coverage_phase_count; phase_index++) {
+                const double phase_rad =
+                    (2.0 * v1_genn::kPi * static_cast<double>(phase_index))
+                    / static_cast<double>(cell_coverage_phase_count);
+
+                fillL4EDrive(l4e_drive, orientation_rad, phase_rad, -1.0);
+                std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
+                l4e_i_ext.pushToDevice();
+
+                const double trial_start_ms = runtime.getTime();
+                multiphase_cell_coverage_trials.push_back({
+                    orientation_rad,
+                    phase_rad,
+                    trial_start_ms,
+                    trial_start_ms + (static_cast<double>(effective_settle_steps) * v1_genn::kDtMs),
+                    trial_start_ms + (static_cast<double>(trial_steps) * v1_genn::kDtMs),
+                });
+
+                for(unsigned int step = 0; step < trial_steps; step++) {
+                    runtime.stepTime();
+                }
             }
         }
     };
@@ -2953,6 +3121,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const std::vector<float> l23ee_weights_after = copyWeights(runtime, l23e_to_l23e);
     const std::vector<float> l23pv_weights_after = copyWeights(runtime, l23pv_to_l23e);
     const std::vector<float> l23som_weights_after = copyWeights(runtime, l23som_to_l23e);
+
+    if(multiphase_cell_coverage_enabled) {
+        runMultiPhaseCellCoverageSweep();
+    }
 
     if(l23som_context_output_scale != 1.0) {
         scaleSomToL23EOutput(l23som_context_output_scale);
@@ -3024,6 +3196,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         countSiteSpikesForTrials(l23e_recordings.at(0), post_trials, v1_genn::kL23EPerSite);
     const std::vector<double> post_l23_cell_counts =
         countNeuronSpikesForTrials(l23e_recordings.at(0), post_trials, v1_genn::kNumL23E);
+    const std::vector<double> multiphase_l23_cell_counts =
+        multiphase_cell_coverage_enabled
+            ? countNeuronSpikesForTrials(l23e_recordings.at(0), multiphase_cell_coverage_trials, v1_genn::kNumL23E)
+            : std::vector<double>();
     const std::vector<double> post_l23pv_site_counts =
         countSiteSpikesForTrials(l23pv_recordings.at(0), post_trials, v1_genn::kL23PVPerSite);
     const std::vector<double> post_l23som_site_counts =
@@ -3084,6 +3260,16 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         computeSiteMetrics(post_trials, post_l23vip_site_counts, v1_genn::kL23VIPPerSite);
     const std::vector<CellTuningMetrics> post_l23e_cell_tuning =
         computeCellTuningMetrics(post_trials, post_l23_cell_counts, v1_genn::kNumL23E, v1_genn::kL23EPerSite);
+    const std::vector<MultiPhaseCellTuningMetrics> multiphase_l23e_cell_tuning =
+        multiphase_cell_coverage_enabled
+            ? computeMultiPhaseCellTuningMetrics(
+                multiphase_cell_coverage_trials,
+                multiphase_l23_cell_counts,
+                orientations_rad,
+                cell_coverage_phase_count,
+                v1_genn::kNumL23E,
+                v1_genn::kL23EPerSite)
+            : std::vector<MultiPhaseCellTuningMetrics>();
     const std::vector<CellTuningMetrics> recurrence_l23e_cell_tuning =
         computeCellTuningMetrics(
             recurrence_context_trials,
@@ -3189,6 +3375,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     writePopulationSiteMetricsCsv(output_prefix + "_post_l23som_sites.csv", post, post_l23som_sites);
     writePopulationSiteMetricsCsv(output_prefix + "_post_l23vip_sites.csv", post, post_l23vip_sites);
     writeL23ECellTuningCsv(output_prefix + "_l23e_cell_tuning.csv", orientations_rad, post_l23e_cell_tuning);
+    if(multiphase_cell_coverage_enabled) {
+        writeL23ECellTuningMultiPhaseCsv(
+            output_prefix + "_l23e_cell_tuning_multiphase.csv",
+            orientations_rad,
+            multiphase_l23e_cell_tuning,
+            cell_coverage_phase_count);
+    }
     writeL23ECellTuningCsv(
         output_prefix + "_l23e_recurrence_context_tuning.csv",
         orientations_rad,

@@ -9,6 +9,7 @@ Latest detailed report:
 
 - `docs/v1_soft_prior_som_recurrence_report.md`
 - `docs/v1_l4_intersite_scaling_report.md`
+- `docs/v1_cell_responsive_coverage_report.md`
 
 ## Model summary
 
@@ -146,6 +147,12 @@ distributed validation sites, and weak local L4 inter-site E/I spread. The
 validated `32x32` L4 inter-site run passes all strict gates; the `40x40`
 L4 inter-site run passes L4/SOM/PV/recurrent gates and responsive-site OSI, but
 still has a strict all-site L2/3 OSI near-miss due sparse responsive coverage.
+
+The cell-level coverage follow-up is documented in
+`docs/v1_cell_responsive_coverage_report.md`. With multi-phase held-out
+coverage measurement and `V1_TRAINING_EPOCHS=2`, the `40x40` L4 inter-site
+model passes strict OSI and raises L23E peak-responsive cell coverage to
+`32.2%`, while preserving L4/SOM/PV/recurrent gates.
 
 Zero-training subtype perturbation checks used `V1_L23*_GATE_NA=0.2` one at a
 time. Relative to the no-gate control, PV and SOM gates suppressed mean L2/3E

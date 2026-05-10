@@ -103,6 +103,22 @@ class CellTuningRow:
 
 
 @dataclass(frozen=True)
+class MultiPhaseCellTuningRow:
+    """One L23E cell response vector pooled across phase slots."""
+
+    cell_id: int
+    site_id: int
+    site_pref_deg: float
+    best_orientation_deg: float
+    best_phase_deg: float
+    phase_count: int
+    peak_rate_any_phase_hz: float
+    mean_rate_hz: float
+    phase_pooled_osi: float
+    phase_mean_rates_by_deg: dict[float, float]
+
+
+@dataclass(frozen=True)
 class SpecificityRow:
     """One active L23E->L23E synapse annotated by orientation preference."""
 
@@ -149,6 +165,45 @@ class OsiSiteMetrics:
 
 
 @dataclass(frozen=True)
+class CellResponsiveMetrics:
+    """L23E cell peak-response coverage from held-out tuning curves."""
+
+    total_cells: int
+    active_cells: int
+    responsive_cells: int
+    active_fraction: float
+    responsive_fraction: float
+    active_median_osi: float | None
+    responsive_median_osi: float | None
+    total_sites: int
+    active_sites: int
+    responsive_sites: int
+    active_site_fraction: float
+    responsive_site_fraction: float
+    threshold_hz: float
+
+
+@dataclass(frozen=True)
+class MultiPhaseCellResponsiveMetrics:
+    """L23E cell peak-response coverage across held-out phases."""
+
+    total_cells: int
+    active_cells: int
+    responsive_cells: int
+    active_fraction: float
+    responsive_fraction: float
+    responsive_median_phase_pooled_osi: float | None
+    total_sites: int
+    active_sites_ge1: int
+    responsive_sites_ge1: int
+    responsive_sites_ge2: int
+    active_site_fraction_ge1: float
+    responsive_site_fraction_ge1: float
+    responsive_site_fraction_ge2: float
+    threshold_hz: float
+
+
+@dataclass(frozen=True)
 class PostSiteMetric:
     """One post-sweep site row with optional spatial and tuning diagnostics."""
 
@@ -173,6 +228,8 @@ class RunData:
     vip_weight_files: list[Path]
     size_tuning_rows: list[SizeTuningRow] | None = None
     specificity_rows: list[SpecificityRow] | None = None
+    l23e_cell_tuning: dict[int, CellTuningRow] | None = None
+    l23e_cell_tuning_multiphase: dict[int, MultiPhaseCellTuningRow] | None = None
 
 
 WEIGHT_SPECS = (
@@ -262,6 +319,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Mean-rate threshold for responsive-site L23E OSI reporting and optional rescue.",
+    )
+    parser.add_argument(
+        "--cell-responsive-threshold-hz",
+        type=float,
+        default=1.0,
+        help="Peak-rate threshold for reporting responsive L23E cell coverage.",
     )
     return parser.parse_args()
 
@@ -550,6 +613,64 @@ def parse_cell_tuning_csv(path: Path) -> dict[int, CellTuningRow]:
     return rows
 
 
+def parse_multiphase_cell_tuning_csv(path: Path) -> dict[int, MultiPhaseCellTuningRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {
+            "cell_id",
+            "site_id",
+            "site_pref_deg",
+            "best_orientation_deg",
+            "best_phase_deg",
+            "phase_count",
+            "peak_rate_any_phase_hz",
+            "mean_rate_hz",
+            "phase_pooled_osi",
+        }
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing multiphase cell tuning columns in {path}: {sorted(missing)}")
+
+        rate_columns = [column for column in reader.fieldnames if column.startswith("rate_")]
+        if not rate_columns:
+            raise ValidationError(f"No phase-mean orientation rate columns found in {path}")
+
+        rows: dict[int, MultiPhaseCellTuningRow] = {}
+        for row_number, row in enumerate(reader, start=2):
+            cell_id = parse_int(row["cell_id"], path, row_number, "cell_id")
+            if cell_id in rows:
+                raise ValidationError(f"Duplicate cell_id {cell_id} in {path}")
+
+            phase_mean_rates_by_deg = {
+                parse_rate_column_name(column, path): parse_float(row[column], path, row_number, column)
+                for column in rate_columns
+            }
+            rows[cell_id] = MultiPhaseCellTuningRow(
+                cell_id=cell_id,
+                site_id=parse_int(row["site_id"], path, row_number, "site_id"),
+                site_pref_deg=parse_float(row["site_pref_deg"], path, row_number, "site_pref_deg"),
+                best_orientation_deg=parse_float(row["best_orientation_deg"], path, row_number, "best_orientation_deg"),
+                best_phase_deg=parse_float(row["best_phase_deg"], path, row_number, "best_phase_deg"),
+                phase_count=parse_int(row["phase_count"], path, row_number, "phase_count"),
+                peak_rate_any_phase_hz=parse_float(
+                    row["peak_rate_any_phase_hz"],
+                    path,
+                    row_number,
+                    "peak_rate_any_phase_hz",
+                ),
+                mean_rate_hz=parse_float(row["mean_rate_hz"], path, row_number, "mean_rate_hz"),
+                phase_pooled_osi=parse_float(row["phase_pooled_osi"], path, row_number, "phase_pooled_osi"),
+                phase_mean_rates_by_deg=phase_mean_rates_by_deg,
+            )
+
+    if not rows:
+        raise ValidationError(f"Multiphase cell tuning file is empty: {path}")
+    return rows
+
+
 def parse_specificity_csv(path: Path) -> list[SpecificityRow]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -736,6 +857,14 @@ def load_run(
         if require_specificity
         else None
     )
+    cell_tuning_path = genn_dir / f"{prefix}_l23e_cell_tuning.csv"
+    l23e_cell_tuning = parse_cell_tuning_csv(cell_tuning_path) if cell_tuning_path.is_file() else None
+    multiphase_cell_tuning_path = genn_dir / f"{prefix}_l23e_cell_tuning_multiphase.csv"
+    l23e_cell_tuning_multiphase = (
+        parse_multiphase_cell_tuning_csv(multiphase_cell_tuning_path)
+        if multiphase_cell_tuning_path.is_file()
+        else None
+    )
 
     return RunData(
         prefix=prefix,
@@ -748,6 +877,8 @@ def load_run(
         vip_weight_files=vip_weight_files,
         size_tuning_rows=size_tuning_rows,
         specificity_rows=specificity_rows,
+        l23e_cell_tuning=l23e_cell_tuning,
+        l23e_cell_tuning_multiphase=l23e_cell_tuning_multiphase,
     )
 
 
@@ -882,6 +1013,130 @@ def format_l23e_osi_quadrants(
             ]
         )
     return " ".join(parts)
+
+
+def compute_cell_responsive_metrics(
+    rows_by_cell: dict[int, CellTuningRow],
+    threshold_hz: float,
+) -> CellResponsiveMetrics:
+    rows = list(rows_by_cell.values())
+    total_cells = len(rows)
+    denominator = total_cells if total_cells > 0 else 1
+    active_rows = [row for row in rows if row.peak_rate_hz > 0.0]
+    responsive_rows = [row for row in rows if row.peak_rate_hz >= threshold_hz]
+    all_sites = {row.site_id for row in rows}
+    active_sites = {row.site_id for row in active_rows}
+    responsive_sites = {row.site_id for row in responsive_rows}
+    site_denominator = len(all_sites) if all_sites else 1
+    return CellResponsiveMetrics(
+        total_cells=total_cells,
+        active_cells=len(active_rows),
+        responsive_cells=len(responsive_rows),
+        active_fraction=len(active_rows) / denominator,
+        responsive_fraction=len(responsive_rows) / denominator,
+        active_median_osi=optional_median(row.osi for row in active_rows),
+        responsive_median_osi=optional_median(row.osi for row in responsive_rows),
+        total_sites=len(all_sites),
+        active_sites=len(active_sites),
+        responsive_sites=len(responsive_sites),
+        active_site_fraction=len(active_sites) / site_denominator,
+        responsive_site_fraction=len(responsive_sites) / site_denominator,
+        threshold_hz=threshold_hz,
+    )
+
+
+def print_l23e_cell_coverage_info(
+    run_label: str,
+    cell_tuning: dict[int, CellTuningRow] | None,
+    threshold_hz: float,
+) -> None:
+    if cell_tuning is None:
+        print(f"INFO l23e_cell_responsive_coverage[{run_label}] available=0")
+        return
+    metrics = compute_cell_responsive_metrics(cell_tuning, threshold_hz)
+    print(
+        f"INFO l23e_cell_responsive_coverage[{run_label}] "
+        f"available=1 "
+        f"threshold_hz={metrics.threshold_hz:.6f} "
+        f"total_cells={metrics.total_cells} "
+        f"active_cells={metrics.active_cells} "
+        f"active_fraction={metrics.active_fraction:.6f} "
+        f"responsive_cells={metrics.responsive_cells} "
+        f"responsive_fraction={metrics.responsive_fraction:.6f} "
+        f"active_median_osi={format_optional_float(metrics.active_median_osi)} "
+        f"responsive_median_osi={format_optional_float(metrics.responsive_median_osi)} "
+        f"total_sites={metrics.total_sites} "
+        f"active_sites={metrics.active_sites} "
+        f"active_site_fraction={metrics.active_site_fraction:.6f} "
+        f"responsive_sites={metrics.responsive_sites} "
+        f"responsive_site_fraction={metrics.responsive_site_fraction:.6f}"
+    )
+
+
+def compute_multiphase_cell_responsive_metrics(
+    rows_by_cell: dict[int, MultiPhaseCellTuningRow],
+    threshold_hz: float,
+) -> MultiPhaseCellResponsiveMetrics:
+    rows = list(rows_by_cell.values())
+    total_cells = len(rows)
+    denominator = total_cells if total_cells > 0 else 1
+    active_rows = [row for row in rows if row.peak_rate_any_phase_hz > 0.0]
+    responsive_rows = [row for row in rows if row.peak_rate_any_phase_hz >= threshold_hz]
+    all_sites = {row.site_id for row in rows}
+    site_denominator = len(all_sites) if all_sites else 1
+    active_sites = {row.site_id for row in active_rows}
+    responsive_count_by_site: dict[int, int] = {}
+    for row in responsive_rows:
+        responsive_count_by_site[row.site_id] = responsive_count_by_site.get(row.site_id, 0) + 1
+    responsive_sites_ge1 = sum(count >= 1 for count in responsive_count_by_site.values())
+    responsive_sites_ge2 = sum(count >= 2 for count in responsive_count_by_site.values())
+    return MultiPhaseCellResponsiveMetrics(
+        total_cells=total_cells,
+        active_cells=len(active_rows),
+        responsive_cells=len(responsive_rows),
+        active_fraction=len(active_rows) / denominator,
+        responsive_fraction=len(responsive_rows) / denominator,
+        responsive_median_phase_pooled_osi=optional_median(
+            row.phase_pooled_osi for row in responsive_rows
+        ),
+        total_sites=len(all_sites),
+        active_sites_ge1=len(active_sites),
+        responsive_sites_ge1=responsive_sites_ge1,
+        responsive_sites_ge2=responsive_sites_ge2,
+        active_site_fraction_ge1=len(active_sites) / site_denominator,
+        responsive_site_fraction_ge1=responsive_sites_ge1 / site_denominator,
+        responsive_site_fraction_ge2=responsive_sites_ge2 / site_denominator,
+        threshold_hz=threshold_hz,
+    )
+
+
+def print_l23e_cell_multiphase_coverage_info(
+    run_label: str,
+    cell_tuning: dict[int, MultiPhaseCellTuningRow] | None,
+    threshold_hz: float,
+) -> None:
+    if cell_tuning is None:
+        print(f"INFO l23e_cell_multiphase_coverage[{run_label}] available=0")
+        return
+    metrics = compute_multiphase_cell_responsive_metrics(cell_tuning, threshold_hz)
+    print(
+        f"INFO l23e_cell_multiphase_coverage[{run_label}] "
+        f"available=1 "
+        f"threshold_hz={metrics.threshold_hz:.6f} "
+        f"total_cells={metrics.total_cells} "
+        f"active_cells={metrics.active_cells} "
+        f"active_fraction={metrics.active_fraction:.6f} "
+        f"responsive_cells={metrics.responsive_cells} "
+        f"responsive_fraction={metrics.responsive_fraction:.6f} "
+        f"responsive_median_phase_pooled_osi={format_optional_float(metrics.responsive_median_phase_pooled_osi)} "
+        f"total_sites={metrics.total_sites} "
+        f"active_sites_ge1={metrics.active_sites_ge1} "
+        f"active_site_fraction_ge1={metrics.active_site_fraction_ge1:.6f} "
+        f"responsive_sites_ge1={metrics.responsive_sites_ge1} "
+        f"responsive_site_fraction_ge1={metrics.responsive_site_fraction_ge1:.6f} "
+        f"responsive_sites_ge2={metrics.responsive_sites_ge2} "
+        f"responsive_site_fraction_ge2={metrics.responsive_site_fraction_ge2:.6f}"
+    )
 
 
 def sign_passes(metrics: WeightMetrics, sign: str) -> bool:
@@ -1562,6 +1817,8 @@ def main() -> int:
             raise ValidationError("--min-validation-sites must be at least 1.")
         if args.responsive_rate_threshold_hz < 0.0:
             raise ValidationError("--responsive-rate-threshold-hz must be non-negative.")
+        if args.cell_responsive_threshold_hz < 0.0:
+            raise ValidationError("--cell-responsive-threshold-hz must be non-negative.")
         full = load_run(
             args.genn_dir,
             args.full,
@@ -1584,6 +1841,16 @@ def main() -> int:
             print(
                 f"INFO l23e_osi_quadrants[{run_label}] "
                 f"{format_l23e_osi_quadrants(run.l23e_post_sites, args.responsive_rate_threshold_hz)}"
+            )
+            print_l23e_cell_coverage_info(
+                run_label,
+                run.l23e_cell_tuning,
+                args.cell_responsive_threshold_hz,
+            )
+            print_l23e_cell_multiphase_coverage_info(
+                run_label,
+                run.l23e_cell_tuning_multiphase,
+                args.cell_responsive_threshold_hz,
             )
 
         full_context_site_count = len(full.context_rows_by_site)
