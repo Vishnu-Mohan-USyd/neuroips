@@ -400,6 +400,8 @@ constexpr double kDefaultCenterStimulusRadiusSites = 2.0;
 constexpr double kDefaultBroadStimulusRadiusSites = 3.0;
 constexpr char kDefaultSizeTuningRadiiSites[] = "0.5,1,2,3,4,6";
 constexpr unsigned int kDefaultRecurrentOnlyConsolidationEpochs = 18;
+constexpr char kTrainingGratingModeLegacy[] = "legacy";
+constexpr char kTrainingGratingModePhaseDrift[] = "phase_drift";
 constexpr double kL23ERecurrentPeakProbability = 0.12;
 constexpr double kL23ERecurrentDistanceSigmaSq = 3.0;
 
@@ -495,6 +497,13 @@ struct L4IntersiteConfig {
     double l4ee_scale = v1_genn::kL4IntersiteWeightScale;
     double l4e_to_l4pv_scale = v1_genn::kL4IntersiteWeightScale;
     double l4pv_to_l4e_scale = v1_genn::kL4IntersiteWeightScale;
+};
+
+struct TrainingGratingConfig {
+    bool phase_drift_enabled = false;
+    std::string mode = kTrainingGratingModeLegacy;
+    unsigned int phase_count = 1;
+    bool counterbalance_direction = false;
 };
 
 struct ConnectivityStats {
@@ -969,6 +978,33 @@ L4IntersiteConfig getL4IntersiteConfig()
        && config.l4pv_to_l4e_scale == 0.0) {
         throw std::runtime_error("At least one L4 intersite projection scale must be positive when V1_L4_INTERSITE_ENABLE=1.");
     }
+    return config;
+}
+
+TrainingGratingConfig getTrainingGratingConfig()
+{
+    TrainingGratingConfig config;
+    config.mode = getEnvOrDefault("V1_TRAINING_GRATING_MODE", kTrainingGratingModeLegacy);
+    const char *phase_count_env = std::getenv("V1_TRAINING_DRIFT_PHASE_COUNT");
+    const bool explicit_phase_count = (phase_count_env != nullptr && std::string(phase_count_env).size() > 0u);
+    config.phase_count = getEnvUnsignedOrDefault(
+        "V1_TRAINING_DRIFT_PHASE_COUNT",
+        config.mode == kTrainingGratingModePhaseDrift ? 4u : 1u);
+
+    if(config.mode != kTrainingGratingModeLegacy && config.mode != kTrainingGratingModePhaseDrift) {
+        throw std::runtime_error("V1_TRAINING_GRATING_MODE must be 'legacy' or 'phase_drift'.");
+    }
+    if(config.mode == kTrainingGratingModeLegacy && explicit_phase_count && config.phase_count > 1u) {
+        config.mode = kTrainingGratingModePhaseDrift;
+    }
+    config.phase_drift_enabled = (config.mode == kTrainingGratingModePhaseDrift || config.phase_count > 1u);
+    if(config.phase_drift_enabled && config.phase_count < 2u) {
+        throw std::runtime_error("V1_TRAINING_DRIFT_PHASE_COUNT must be at least 2 when phase-drift training is enabled.");
+    }
+    if(!config.phase_drift_enabled) {
+        config.phase_count = 1u;
+    }
+    config.counterbalance_direction = config.phase_drift_enabled;
     return config;
 }
 
@@ -2344,7 +2380,9 @@ void writeSummaryFiles(
     const WeightStats &weights_after,
     const std::vector<NamedWeightStats> &additional_weight_stats,
     const std::vector<PopulationRateSummary> &subtype_rates,
-    const std::vector<ContextValidationSummary> &context_validation)
+    const std::vector<ContextValidationSummary> &context_validation,
+    const TrainingGratingConfig &training_grating_config,
+    double training_grating_phase_slot_ms)
 {
     const double l23_osi_delta = post.l23_median_osi - baseline.l23_median_osi;
 
@@ -2369,6 +2407,10 @@ void writeSummaryFiles(
     csv << "weights_after_min," << weights_after.min << "\n";
     csv << "weights_after_mean," << weights_after.mean << "\n";
     csv << "weights_after_max," << weights_after.max << "\n";
+    csv << "training_grating_mode_code," << (training_grating_config.phase_drift_enabled ? 1.0 : 0.0) << "\n";
+    csv << "training_grating_phase_count," << training_grating_config.phase_count << "\n";
+    csv << "training_grating_phase_slot_ms," << training_grating_phase_slot_ms << "\n";
+    csv << "training_grating_counterbalance_enabled," << (training_grating_config.counterbalance_direction ? 1.0 : 0.0) << "\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         csv << summary.name << "_weights_before_count," << summary.before.count << "\n";
         csv << summary.name << "_weights_before_min," << summary.before.min << "\n";
@@ -2410,6 +2452,17 @@ void writeSummaryFiles(
          << ",min:" << weights_after.min
          << ",mean:" << weights_after.mean
          << ",max:" << weights_after.max << "\n";
+    text << "training_grating_mode=" << training_grating_config.mode << "\n";
+    text << "training_grating_phase_count=" << training_grating_config.phase_count << "\n";
+    text << "training_grating_phase_slot_ms=" << training_grating_phase_slot_ms << "\n";
+    text << "training_grating_phase_order="
+         << (training_grating_config.phase_drift_enabled
+             ? "orientation_epoch_offset_bidirectional_counterbalanced"
+             : "legacy_single_static_phase_per_trial")
+         << "\n";
+    text << "training_grating_counterbalance_enabled="
+         << (training_grating_config.counterbalance_direction ? 1 : 0)
+         << "\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         text << summary.name << "_weights_before=count:" << summary.before.count
              << ",min:" << summary.before.min
@@ -2829,6 +2882,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const double l23ee_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23EE_CONTEXT_OUTPUT_SCALE",
         kDefaultL23EEContextOutputScale);
+    const TrainingGratingConfig training_grating_config = getTrainingGratingConfig();
     const unsigned int cell_coverage_phase_count = getEnvUnsignedOrDefault(
         "V1_CELL_COVERAGE_PHASE_COUNT",
         1u);
@@ -2905,6 +2959,15 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     if(effective_settle_steps >= trial_steps) {
         throw std::runtime_error("V1_SETTLE_MS must leave a positive measurement window.");
     }
+    if(training_grating_config.phase_drift_enabled
+       && (training_grating_config.phase_count > trial_steps || (trial_steps % training_grating_config.phase_count) != 0u)) {
+        throw std::runtime_error(
+            "V1_TRAINING_DRIFT_PHASE_COUNT must evenly divide the trial step count for within-trial phase stepping.");
+    }
+    const double training_grating_phase_slot_ms =
+        training_grating_config.phase_drift_enabled
+            ? (trial_ms / static_cast<double>(training_grating_config.phase_count))
+            : trial_ms;
 
     const std::size_t sweep_count =
         static_cast<std::size_t>(training_epochs)
@@ -3028,15 +3091,33 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             "Eta",
             (inhibitory_learning && l23som_homeostatic_enabled) ? l23som_homeostatic_eta : 0.0);
 
+        const auto pushDrivePhase = [&](double orientation_rad, double phase_rad, double aperture_radius, unsigned int aperture_center) {
+            fillL4EDrive(l4e_drive, orientation_rad, phase_rad, aperture_radius, aperture_center);
+            std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
+            l4e_i_ext.pushToDevice();
+        };
+        const auto driftPhaseForSubslot = [&](unsigned int orientation_index, unsigned int subslot_index) {
+            const unsigned int start_slot = (phase_cycle_offset + orientation_index) % training_grating_config.phase_count;
+            const bool reverse_order = training_grating_config.counterbalance_direction && ((phase_cycle_offset % 2u) != 0u);
+            const unsigned int phase_slot = reverse_order
+                ? ((start_slot + training_grating_config.phase_count - (subslot_index % training_grating_config.phase_count))
+                   % training_grating_config.phase_count)
+                : ((start_slot + subslot_index) % training_grating_config.phase_count);
+            return (2.0 * v1_genn::kPi * static_cast<double>(phase_slot))
+                / static_cast<double>(training_grating_config.phase_count);
+        };
+
         for(unsigned int orientation_index = 0; orientation_index < orientation_count; orientation_index++) {
             const double orientation_rad = orientations_rad[orientation_index];
             const bool plastic_exposure = feedforward_learning || recurrent_learning || inhibitory_learning;
+            const bool phase_drift_trial = training_grating_config.phase_drift_enabled && plastic_exposure;
             const unsigned int phase_slot = plastic_exposure ? ((phase_cycle_offset + orientation_index) % 4u) : 0u;
-            const double phase_rad = 0.5 * v1_genn::kPi * static_cast<double>(phase_slot);
-
-            fillL4EDrive(l4e_drive, orientation_rad, phase_rad, aperture_radius_sites, aperture_center_site);
-            std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
-            l4e_i_ext.pushToDevice();
+            const double phase_rad = phase_drift_trial
+                ? driftPhaseForSubslot(orientation_index, 0u)
+                : (0.5 * v1_genn::kPi * static_cast<double>(phase_slot));
+            if(!phase_drift_trial) {
+                pushDrivePhase(orientation_rad, phase_rad, aperture_radius_sites, aperture_center_site);
+            }
 
             const double trial_start_ms = runtime.getTime();
             if(measurement_trials != nullptr) {
@@ -3049,8 +3130,28 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 });
             }
 
-            for(unsigned int step = 0; step < trial_steps; step++) {
-                runtime.stepTime();
+            if(phase_drift_trial) {
+                const unsigned int phase_slot_steps = trial_steps / training_grating_config.phase_count;
+                unsigned int active_subslot = std::numeric_limits<unsigned int>::max();
+                for(unsigned int step = 0; step < trial_steps; step++) {
+                    const unsigned int subslot = std::min(
+                        step / phase_slot_steps,
+                        training_grating_config.phase_count - 1u);
+                    if(subslot != active_subslot) {
+                        active_subslot = subslot;
+                        pushDrivePhase(
+                            orientation_rad,
+                            driftPhaseForSubslot(orientation_index, active_subslot),
+                            aperture_radius_sites,
+                            aperture_center_site);
+                    }
+                    runtime.stepTime();
+                }
+            }
+            else {
+                for(unsigned int step = 0; step < trial_steps; step++) {
+                    runtime.stepTime();
+                }
             }
         }
     };
@@ -3437,5 +3538,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         summarizeWeights(weights_after),
         additional_weight_stats,
         subtype_summaries,
-        context_validation);
+        context_validation,
+        training_grating_config,
+        training_grating_phase_slot_ms);
 }
