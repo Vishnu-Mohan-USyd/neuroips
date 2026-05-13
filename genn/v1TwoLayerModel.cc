@@ -2,10 +2,12 @@
 #include "runtime/runtime.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <numeric>
@@ -286,13 +288,17 @@ public:
         "const unsigned int preSite = id_pre / preNeuronsPerSite;\n"
         "const unsigned int preX = preSite % preSide;\n"
         "const unsigned int preY = preSite / preSide;\n"
-        "const double preNormX = (((double)preX) + 0.5) / ((double)preSide);\n"
-        "const double preNormY = (((double)preY) + 0.5) / ((double)preSide);\n"
-        "const double preFieldX = sin(6.283185307179586 * preNormX) + (0.60 * cos(6.283185307179586 * preNormY)) + (0.35 * sin(6.283185307179586 * (preNormX + preNormY)));\n"
-        "const double preFieldY = cos(6.283185307179586 * preNormX) - (0.60 * sin(6.283185307179586 * preNormY)) + (0.35 * cos(6.283185307179586 * (preNormX - preNormY)));\n"
-        "double preOri = 0.5 * atan2(preFieldY, preFieldX);\n"
-        "if(preOri < 0.0) {\n"
-        "    preOri += 3.14159265358979323846;\n"
+        "const unsigned int neutralDensityMatch = (biasStrength == 0.0 && neutralDensityScale > 0.0) ? 1u : 0u;\n"
+        "double preOri = 0.0;\n"
+        "if(!neutralDensityMatch) {\n"
+        "    const double preNormX = (((double)preX) + 0.5) / ((double)preSide);\n"
+        "    const double preNormY = (((double)preY) + 0.5) / ((double)preSide);\n"
+        "    const double preFieldX = sin(6.283185307179586 * preNormX) + (0.60 * cos(6.283185307179586 * preNormY)) + (0.35 * sin(6.283185307179586 * (preNormX + preNormY)));\n"
+        "    const double preFieldY = cos(6.283185307179586 * preNormX) - (0.60 * sin(6.283185307179586 * preNormY)) + (0.35 * cos(6.283185307179586 * (preNormX - preNormY)));\n"
+        "    preOri = 0.5 * atan2(preFieldY, preFieldX);\n"
+        "    if(preOri < 0.0) {\n"
+        "        preOri += 3.14159265358979323846;\n"
+        "    }\n"
         "}\n"
         "for(int dy = -(int)radius; dy <= (int)radius; dy++) {\n"
         "    const int postY = (int)preY + dy;\n"
@@ -304,21 +310,33 @@ public:
         "        if(postX < 0 || postX >= (int)postSide) {\n"
         "            continue;\n"
         "        }\n"
-        "        const double postNormX = (((double)postX) + 0.5) / ((double)postSide);\n"
-        "        const double postNormY = (((double)postY) + 0.5) / ((double)postSide);\n"
-        "        const double postFieldX = sin(6.283185307179586 * postNormX) + (0.60 * cos(6.283185307179586 * postNormY)) + (0.35 * sin(6.283185307179586 * (postNormX + postNormY)));\n"
-        "        const double postFieldY = cos(6.283185307179586 * postNormX) - (0.60 * sin(6.283185307179586 * postNormY)) + (0.35 * cos(6.283185307179586 * (postNormX - postNormY)));\n"
-        "        double postOri = 0.5 * atan2(postFieldY, postFieldX);\n"
-        "        if(postOri < 0.0) {\n"
-        "            postOri += 3.14159265358979323846;\n"
-        "        }\n"
-        "        double delta = fabs(preOri - postOri);\n"
-        "        delta = fmin(delta, 3.14159265358979323846 - delta);\n"
         "        const unsigned int postSite = ((unsigned int)postY * postSide) + (unsigned int)postX;\n"
-        "        const double similarity = 0.5 * (1.0 + cos(2.0 * delta));\n"
-        "        const double biasedSimilarity = ((1.0 - biasStrength) * 0.5) + (biasStrength * similarity);\n"
-        "        double connectionProbability = minProbability + ((1.0 - minProbability) * biasedSimilarity);\n"
-        "        connectionProbability -= distancePenalty * ((double)(((dx < 0) ? -dx : dx) + ((dy < 0) ? -dy : dy)));\n"
+        "        const double manhattanDistance = (double)(((dx < 0) ? -dx : dx) + ((dy < 0) ? -dy : dy));\n"
+        "        double connectionProbability = 0.0;\n"
+        "        if(neutralDensityMatch) {\n"
+        "            connectionProbability = minProbability + ((1.0 - minProbability) * 0.5);\n"
+        "            connectionProbability -= distancePenalty * manhattanDistance;\n"
+        "            if(connectionProbability < minProbability) {\n"
+        "                connectionProbability = minProbability;\n"
+        "            }\n"
+        "            connectionProbability *= neutralDensityScale;\n"
+        "        }\n"
+        "        else {\n"
+        "            const double postNormX = (((double)postX) + 0.5) / ((double)postSide);\n"
+        "            const double postNormY = (((double)postY) + 0.5) / ((double)postSide);\n"
+        "            const double postFieldX = sin(6.283185307179586 * postNormX) + (0.60 * cos(6.283185307179586 * postNormY)) + (0.35 * sin(6.283185307179586 * (postNormX + postNormY)));\n"
+        "            const double postFieldY = cos(6.283185307179586 * postNormX) - (0.60 * sin(6.283185307179586 * postNormY)) + (0.35 * cos(6.283185307179586 * (postNormX - postNormY)));\n"
+        "            double postOri = 0.5 * atan2(postFieldY, postFieldX);\n"
+        "            if(postOri < 0.0) {\n"
+        "                postOri += 3.14159265358979323846;\n"
+        "            }\n"
+        "            double delta = fabs(preOri - postOri);\n"
+        "            delta = fmin(delta, 3.14159265358979323846 - delta);\n"
+        "            const double similarity = 0.5 * (1.0 + cos(2.0 * delta));\n"
+        "            const double biasedSimilarity = ((1.0 - biasStrength) * 0.5) + (biasStrength * similarity);\n"
+        "            connectionProbability = minProbability + ((1.0 - minProbability) * biasedSimilarity);\n"
+        "            connectionProbability -= distancePenalty * manhattanDistance;\n"
+        "        }\n"
         "        if(connectionProbability < minProbability) {\n"
         "            connectionProbability = minProbability;\n"
         "        }\n"
@@ -350,6 +368,7 @@ public:
         {"radius", "unsigned int"},
         {"minProbability", "scalar"},
         {"biasStrength", "scalar"},
+        {"neutralDensityScale", "scalar"},
         {"distancePenalty", "scalar"}
     });
 
@@ -395,13 +414,23 @@ constexpr double kDefaultL23SOMGate = 0.18;
 constexpr double kDefaultL23VIPGate = 0.0;
 constexpr double kDefaultL23SOMOutputScale = 1.0;
 constexpr double kDefaultL23SOMContextOutputScale = 1.0;
+constexpr double kDefaultL23PVContextOutputScale = 1.0;
 constexpr double kDefaultL23EEContextOutputScale = 1.0;
 constexpr double kDefaultCenterStimulusRadiusSites = 2.0;
 constexpr double kDefaultBroadStimulusRadiusSites = 3.0;
 constexpr char kDefaultSizeTuningRadiiSites[] = "0.5,1,2,3,4,6";
+constexpr unsigned int kDefaultBlankRepeatCount = 4;
+constexpr char kDefaultContrastSweepValues[] = "0.5,1.0";
 constexpr unsigned int kDefaultRecurrentOnlyConsolidationEpochs = 18;
 constexpr char kTrainingGratingModeLegacy[] = "legacy";
 constexpr char kTrainingGratingModePhaseDrift[] = "phase_drift";
+constexpr double kDefaultL4L23OrientationNeutralProbabilityScale = 1.27;
+constexpr unsigned int kOrientationContextConditionCount = 5;
+constexpr unsigned int kOrientationContextCenterOnly = 0;
+constexpr unsigned int kOrientationContextSameSurround = 1;
+constexpr unsigned int kOrientationContextOrthSurround = 2;
+constexpr unsigned int kOrientationContextSurroundSameOnly = 3;
+constexpr unsigned int kOrientationContextSurroundOrthOnly = 4;
 constexpr double kL23ERecurrentPeakProbability = 0.12;
 constexpr double kL23ERecurrentDistanceSigmaSq = 3.0;
 
@@ -506,6 +535,31 @@ struct TrainingGratingConfig {
     bool counterbalance_direction = false;
 };
 
+struct L4L23OrientationConfig {
+    double bias_strength = v1_genn::kOrientationSoftBiasStrength;
+    bool neutral_density_match_enabled = false;
+    double neutral_probability_scale = kDefaultL4L23OrientationNeutralProbabilityScale;
+};
+
+struct L23EELognormalInitConfig {
+    bool enabled = false;
+    double sigma = 0.37;
+};
+
+struct OrientationContextAssayConfig {
+    bool enabled = false;
+    double center_radius_sites = kDefaultCenterStimulusRadiusSites;
+    double broad_radius_sites = kDefaultBroadStimulusRadiusSites;
+    double surround_inner_radius_sites = kDefaultCenterStimulusRadiusSites;
+};
+
+struct SensoryAssayConfig {
+    bool enabled = false;
+    unsigned int blank_repeat_count = 0;
+    double contrast_radius_sites = kDefaultCenterStimulusRadiusSites;
+    std::vector<double> contrasts;
+};
+
 struct ConnectivityStats {
     std::size_t edge_count = 0;
     double mean_distance_sites = 0.0;
@@ -553,6 +607,41 @@ struct ValidationTrialSet {
     std::vector<TrialWindow> size_trials;
 };
 
+struct OrientationContextTrialSet {
+    unsigned int validation_site_id = 0;
+    unsigned int site_id = 0;
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max();
+    double preferred_orientation_rad = 0.0;
+    double orthogonal_orientation_rad = 0.0;
+    std::array<TrialWindow, kOrientationContextConditionCount> trials{};
+};
+
+struct OrientationContextSiteMetrics {
+    unsigned int validation_site_id = 0;
+    unsigned int site_id = 0;
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max();
+    double preferred_orientation_rad = 0.0;
+    double orthogonal_orientation_rad = 0.0;
+    std::array<double, kOrientationContextConditionCount> aperture_radius_sites{};
+    std::array<double, kOrientationContextConditionCount> inner_radius_sites{};
+    std::array<double, kOrientationContextConditionCount> l4e_rates_hz{};
+    std::array<double, kOrientationContextConditionCount> l23e_rates_hz{};
+    std::array<double, kOrientationContextConditionCount> l23pv_rates_hz{};
+    std::array<double, kOrientationContextConditionCount> l23som_rates_hz{};
+};
+
+struct ContrastTrialRecord {
+    unsigned int validation_site_id = 0;
+    unsigned int site_id = 0;
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max();
+    double contrast = 1.0;
+    double orientation_rad = 0.0;
+    double aperture_radius_sites = kDefaultCenterStimulusRadiusSites;
+    TrialWindow trial{};
+};
+
+L4L23OrientationConfig getL4L23OrientationConfig();
+L23EELognormalInitConfig getL23EELognormalInitConfig();
 double getOrientationSoftBiasStrength();
 
 GeNN::ParamValues makeLIFParameters(const v1_genn::LIFParameters &params)
@@ -612,6 +701,7 @@ GeNN::ParamValues makeOrientationBiasedPatchParameters(
     unsigned int post_neurons_per_site,
     unsigned int radius)
 {
+    const L4L23OrientationConfig config = getL4L23OrientationConfig();
     return {
         {"preSide", v1_genn::kSheetSide},
         {"preNeuronsPerSite", pre_neurons_per_site},
@@ -619,7 +709,9 @@ GeNN::ParamValues makeOrientationBiasedPatchParameters(
         {"postNeuronsPerSite", post_neurons_per_site},
         {"radius", radius},
         {"minProbability", v1_genn::kOrientationSoftProbabilityFloor},
-        {"biasStrength", getOrientationSoftBiasStrength()},
+        {"biasStrength", config.bias_strength},
+        {"neutralDensityScale", (config.neutral_density_match_enabled && config.bias_strength == 0.0)
+            ? config.neutral_probability_scale : 0.0},
         {"distancePenalty", v1_genn::kOrientationDistancePenalty},
     };
 }
@@ -930,13 +1022,42 @@ std::vector<unsigned int> getEnvUnsignedListOrEmpty(const char *name)
 
 double getOrientationSoftBiasStrength()
 {
-    const double strength = getEnvDoubleOrDefault(
-        "V1_FF_ORIENTATION_BIAS_STRENGTH",
-        v1_genn::kOrientationSoftBiasStrength);
+    const char *strict_env = std::getenv("V1_L4_L23_ORIENTATION_BIAS_STRENGTH");
+    const double strength = (strict_env != nullptr && strict_env[0] != '\0')
+        ? getEnvDoubleOrDefault("V1_L4_L23_ORIENTATION_BIAS_STRENGTH", v1_genn::kOrientationSoftBiasStrength)
+        : getEnvDoubleOrDefault("V1_FF_ORIENTATION_BIAS_STRENGTH", v1_genn::kOrientationSoftBiasStrength);
     if(strength < 0.0 || strength > 1.0) {
-        throw std::runtime_error("V1_FF_ORIENTATION_BIAS_STRENGTH must be in [0, 1].");
+        throw std::runtime_error("V1_L4_L23_ORIENTATION_BIAS_STRENGTH must be in [0, 1].");
     }
     return strength;
+}
+
+L4L23OrientationConfig getL4L23OrientationConfig()
+{
+    L4L23OrientationConfig config;
+    config.bias_strength = getOrientationSoftBiasStrength();
+    config.neutral_density_match_enabled = getEnvUnsignedOrDefault(
+        "V1_L4_L23_ORIENTATION_NEUTRAL_DENSITY_MATCH",
+        0u) != 0u;
+    config.neutral_probability_scale = getEnvDoubleOrDefault(
+        "V1_L4_L23_ORIENTATION_NEUTRAL_PROBABILITY_SCALE",
+        kDefaultL4L23OrientationNeutralProbabilityScale);
+
+    if(config.neutral_probability_scale <= 0.0) {
+        throw std::runtime_error("V1_L4_L23_ORIENTATION_NEUTRAL_PROBABILITY_SCALE must be positive.");
+    }
+    return config;
+}
+
+L23EELognormalInitConfig getL23EELognormalInitConfig()
+{
+    L23EELognormalInitConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_L23EE_LOGNORMAL_INIT", 0u) != 0u;
+    config.sigma = getEnvDoubleOrDefault("V1_L23EE_LOGNORMAL_SIGMA", config.sigma);
+    if(config.sigma < 0.0) {
+        throw std::runtime_error("V1_L23EE_LOGNORMAL_SIGMA must be non-negative.");
+    }
+    return config;
 }
 
 L4IntersiteConfig getL4IntersiteConfig()
@@ -1005,6 +1126,60 @@ TrainingGratingConfig getTrainingGratingConfig()
         config.phase_count = 1u;
     }
     config.counterbalance_direction = config.phase_drift_enabled;
+    return config;
+}
+
+OrientationContextAssayConfig getOrientationContextAssayConfig(double default_broad_radius_sites)
+{
+    OrientationContextAssayConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_ORIENTATION_CONTEXT_ASSAY_ENABLE", 0u) != 0u;
+    config.center_radius_sites = getEnvDoubleOrDefault(
+        "V1_ORIENTATION_CONTEXT_CENTER_RADIUS_SITES",
+        kDefaultCenterStimulusRadiusSites);
+    config.broad_radius_sites = getEnvDoubleOrDefault(
+        "V1_ORIENTATION_CONTEXT_BROAD_RADIUS_SITES",
+        default_broad_radius_sites);
+    config.surround_inner_radius_sites = getEnvDoubleOrDefault(
+        "V1_ORIENTATION_CONTEXT_SURROUND_INNER_RADIUS_SITES",
+        config.center_radius_sites);
+
+    if(config.center_radius_sites <= 0.0) {
+        throw std::runtime_error("V1_ORIENTATION_CONTEXT_CENTER_RADIUS_SITES must be positive.");
+    }
+    if(config.broad_radius_sites <= config.center_radius_sites) {
+        throw std::runtime_error("V1_ORIENTATION_CONTEXT_BROAD_RADIUS_SITES must exceed the center radius.");
+    }
+    if(config.surround_inner_radius_sites < 0.0 || config.surround_inner_radius_sites >= config.broad_radius_sites) {
+        throw std::runtime_error("V1_ORIENTATION_CONTEXT_SURROUND_INNER_RADIUS_SITES must be in [0, broad_radius).");
+    }
+    return config;
+}
+
+SensoryAssayConfig getSensoryAssayConfig()
+{
+    SensoryAssayConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_SENSORY_ASSAY_ENABLE", 0u) != 0u;
+    config.blank_repeat_count = config.enabled
+        ? getEnvUnsignedOrDefault("V1_BLANK_REPEAT_COUNT", kDefaultBlankRepeatCount)
+        : 0u;
+    config.contrast_radius_sites = getEnvDoubleOrDefault(
+        "V1_CONTRAST_SWEEP_RADIUS_SITES",
+        kDefaultCenterStimulusRadiusSites);
+    config.contrasts = config.enabled
+        ? getEnvDoubleListOrDefault("V1_CONTRAST_SWEEP_VALUES", kDefaultContrastSweepValues)
+        : std::vector<double>();
+
+    if(config.enabled && config.blank_repeat_count < kDefaultBlankRepeatCount) {
+        throw std::runtime_error("V1_BLANK_REPEAT_COUNT must be at least 4 when V1_SENSORY_ASSAY_ENABLE=1.");
+    }
+    if(config.contrast_radius_sites <= 0.0) {
+        throw std::runtime_error("V1_CONTRAST_SWEEP_RADIUS_SITES must be positive.");
+    }
+    for(double contrast : config.contrasts) {
+        if(contrast <= 0.0 || !std::isfinite(contrast)) {
+            throw std::runtime_error("V1_CONTRAST_SWEEP_VALUES entries must be finite and positive.");
+        }
+    }
     return config;
 }
 
@@ -1100,7 +1275,9 @@ void fillL4EDrive(
     double orientation_rad,
     double phase_rad,
     double aperture_radius_sites = -1.0,
-    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max())
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max(),
+    double aperture_inner_radius_sites = -1.0,
+    double contrast = 1.0)
 {
     drive.resize(v1_genn::kNumL4E);
     double center_x = (static_cast<double>(v1_genn::kSheetSide) - 1.0) * 0.5;
@@ -1121,6 +1298,9 @@ void fillL4EDrive(
             const double dy = static_cast<double>(xy.second) - center_y;
             const double radius = std::sqrt((dx * dx) + (dy * dy));
             aperture = (radius <= aperture_radius_sites) ? 1.0 : 0.0;
+            if(aperture_inner_radius_sites >= 0.0 && radius <= aperture_inner_radius_sites) {
+                aperture = 0.0;
+            }
         }
         for(unsigned int neuron = 0; neuron < v1_genn::kL4EPerSite; neuron++) {
             const unsigned int index = (site * v1_genn::kL4EPerSite) + neuron;
@@ -1130,7 +1310,59 @@ void fillL4EDrive(
                     xy.second,
                     neuron,
                     orientation_rad,
-                    phase_rad) * aperture);
+                    phase_rad) * aperture * contrast);
+        }
+    }
+}
+
+void fillL4ECenterSurroundDrive(
+    std::vector<float> &drive,
+    double center_orientation_rad,
+    double surround_orientation_rad,
+    double phase_rad,
+    double center_radius_sites,
+    double surround_outer_radius_sites,
+    unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max(),
+    double contrast = 1.0)
+{
+    if(center_radius_sites <= 0.0 || surround_outer_radius_sites <= center_radius_sites) {
+        throw std::runtime_error("Center-surround validation drive requires outer radius greater than center radius.");
+    }
+
+    drive.resize(v1_genn::kNumL4E);
+    double center_x = (static_cast<double>(v1_genn::kSheetSide) - 1.0) * 0.5;
+    double center_y = center_x;
+    if(aperture_center_site != std::numeric_limits<unsigned int>::max()) {
+        if(aperture_center_site >= v1_genn::kSiteCount) {
+            throw std::runtime_error("Validation aperture center site is outside the sheet.");
+        }
+        const auto center_xy = v1_genn::siteIndexToXY(aperture_center_site);
+        center_x = static_cast<double>(center_xy.first);
+        center_y = static_cast<double>(center_xy.second);
+    }
+
+    for(unsigned int site = 0; site < v1_genn::kSiteCount; site++) {
+        const auto xy = v1_genn::siteIndexToXY(site);
+        const double dx = static_cast<double>(xy.first) - center_x;
+        const double dy = static_cast<double>(xy.second) - center_y;
+        const double radius = std::sqrt((dx * dx) + (dy * dy));
+        const bool in_center = (radius <= center_radius_sites);
+        const bool in_surround = (!in_center && radius <= surround_outer_radius_sites);
+
+        for(unsigned int neuron = 0; neuron < v1_genn::kL4EPerSite; neuron++) {
+            const unsigned int index = (site * v1_genn::kL4EPerSite) + neuron;
+            if(!in_center && !in_surround) {
+                drive[index] = 0.0f;
+                continue;
+            }
+            const double orientation_rad = in_center ? center_orientation_rad : surround_orientation_rad;
+            drive[index] = static_cast<float>(
+                v1_genn::l4SimpleCellDrive(
+                    xy.first,
+                    xy.second,
+                    neuron,
+                    orientation_rad,
+                    phase_rad) * contrast);
         }
     }
 }
@@ -1144,6 +1376,7 @@ void setConstantExternalCurrent(GeNN::Runtime::Runtime &runtime, const GeNN::Neu
 
 double deterministicConnectionUnit(unsigned int pre_id, unsigned int post_id);
 double softOrientationConnectionProbability(double similarity, unsigned int manhattan_distance, double bias_strength);
+double orientationNeutralConnectionProbability(unsigned int manhattan_distance, double probability_scale);
 
 std::vector<std::pair<unsigned int, unsigned int>> buildL4EToL23EConnectivity()
 {
@@ -1152,13 +1385,16 @@ std::vector<std::pair<unsigned int, unsigned int>> buildL4EToL23EConnectivity()
         static_cast<std::size_t>(v1_genn::kNumL4E)
         * static_cast<std::size_t>(((2u * v1_genn::kFeedforwardRadius) + 1u) * ((2u * v1_genn::kFeedforwardRadius) + 1u))
         * static_cast<std::size_t>(v1_genn::kL23EPerSite));
-    const double bias_strength = getOrientationSoftBiasStrength();
+    const L4L23OrientationConfig config = getL4L23OrientationConfig();
+    const bool use_neutral_density_match =
+        config.neutral_density_match_enabled && config.bias_strength == 0.0;
 
     for(unsigned int pre_id = 0; pre_id < v1_genn::kNumL4E; pre_id++) {
         const unsigned int pre_site = pre_id / v1_genn::kL4EPerSite;
         const unsigned int pre_x = pre_site % v1_genn::kSheetSide;
         const unsigned int pre_y = pre_site / v1_genn::kSheetSide;
-        const double pre_orientation = v1_genn::sitePreferredOrientationFromIndex(pre_site);
+        const double pre_orientation =
+            use_neutral_density_match ? 0.0 : v1_genn::sitePreferredOrientationFromIndex(pre_site);
 
         for(int dy = -static_cast<int>(v1_genn::kFeedforwardRadius); dy <= static_cast<int>(v1_genn::kFeedforwardRadius); dy++) {
             const int post_y = static_cast<int>(pre_y) + dy;
@@ -1175,12 +1411,22 @@ std::vector<std::pair<unsigned int, unsigned int>> buildL4EToL23EConnectivity()
                 const unsigned int post_site =
                     (static_cast<unsigned int>(post_y) * v1_genn::kSheetSide)
                     + static_cast<unsigned int>(post_x);
-                const double post_orientation = v1_genn::sitePreferredOrientationFromIndex(post_site);
-                const double delta = v1_genn::circularOrientationDifference(pre_orientation, post_orientation);
-                const double similarity = 0.5 * (1.0 + std::cos(2.0 * delta));
                 const unsigned int manhattan_distance = static_cast<unsigned int>(std::abs(dx) + std::abs(dy));
-                const double connection_probability =
-                    softOrientationConnectionProbability(similarity, manhattan_distance, bias_strength);
+                double connection_probability = 0.0;
+                if(use_neutral_density_match) {
+                    connection_probability = orientationNeutralConnectionProbability(
+                        manhattan_distance,
+                        config.neutral_probability_scale);
+                }
+                else {
+                    const double post_orientation = v1_genn::sitePreferredOrientationFromIndex(post_site);
+                    const double delta = v1_genn::circularOrientationDifference(pre_orientation, post_orientation);
+                    const double similarity = 0.5 * (1.0 + std::cos(2.0 * delta));
+                    connection_probability = softOrientationConnectionProbability(
+                        similarity,
+                        manhattan_distance,
+                        config.bias_strength);
+                }
 
                 for(unsigned int post_cell = 0; post_cell < v1_genn::kL23EPerSite; post_cell++) {
                     const unsigned int post_id = (post_site * v1_genn::kL23EPerSite) + post_cell;
@@ -1422,6 +1668,64 @@ WeightStats summarizeWeights(const std::vector<float> &weights)
     return stats;
 }
 
+double nonzeroWeightFraction(const std::vector<float> &weights)
+{
+    if(weights.empty()) {
+        return 0.0;
+    }
+    const std::size_t nonzero_count = static_cast<std::size_t>(std::count_if(
+        weights.begin(),
+        weights.end(),
+        [](float weight) { return weight != 0.0f; }));
+    return static_cast<double>(nonzero_count) / static_cast<double>(weights.size());
+}
+
+double giniCoefficient(std::vector<double> values)
+{
+    if(values.empty()) {
+        return 0.0;
+    }
+    std::sort(values.begin(), values.end());
+    const double total = std::accumulate(values.begin(), values.end(), 0.0);
+    if(total <= 0.0) {
+        return 0.0;
+    }
+    double weighted_sum = 0.0;
+    for(std::size_t i = 0; i < values.size(); i++) {
+        weighted_sum += static_cast<double>(i + 1u) * values[i];
+    }
+    const double count = static_cast<double>(values.size());
+    return ((2.0 * weighted_sum) / (count * total)) - ((count + 1.0) / count);
+}
+
+double topMassShare(std::vector<double> values, double fraction)
+{
+    if(values.empty()) {
+        return 0.0;
+    }
+    const double total = std::accumulate(values.begin(), values.end(), 0.0);
+    if(total <= 0.0) {
+        return 0.0;
+    }
+    std::sort(values.begin(), values.end(), std::greater<double>());
+    const std::size_t top_count = std::max<std::size_t>(
+        1u,
+        static_cast<std::size_t>(std::ceil(fraction * static_cast<double>(values.size()))));
+    return std::accumulate(values.begin(), values.begin() + std::min(top_count, values.size()), 0.0) / total;
+}
+
+std::vector<double> positiveWeightValues(const std::vector<float> &weights)
+{
+    std::vector<double> values;
+    values.reserve(weights.size());
+    for(float weight : weights) {
+        if(weight > 0.0f) {
+            values.push_back(static_cast<double>(weight));
+        }
+    }
+    return values;
+}
+
 double deterministicConnectionUnit(unsigned int pre_id, unsigned int post_id)
 {
     std::uint32_t hash =
@@ -1444,6 +1748,90 @@ double softOrientationConnectionProbability(double similarity, unsigned int manh
     probability -= v1_genn::kOrientationDistancePenalty * static_cast<double>(manhattan_distance);
     probability = std::max(v1_genn::kOrientationSoftProbabilityFloor, probability);
     return std::min(1.0, probability);
+}
+
+double orientationNeutralConnectionProbability(unsigned int manhattan_distance, double probability_scale)
+{
+    double probability =
+        v1_genn::kOrientationSoftProbabilityFloor
+        + ((1.0 - v1_genn::kOrientationSoftProbabilityFloor) * 0.5);
+    probability -= v1_genn::kOrientationDistancePenalty * static_cast<double>(manhattan_distance);
+    probability = std::max(v1_genn::kOrientationSoftProbabilityFloor, probability);
+    probability *= probability_scale;
+    probability = std::max(v1_genn::kOrientationSoftProbabilityFloor, probability);
+    return std::min(1.0, probability);
+}
+
+double clippedL23EEWeight(double weight)
+{
+    return std::min(kL23EEStdpWeightMax, std::max(kL23EEStdpWeightMin, weight));
+}
+
+double deterministicLognormalFactor(unsigned int pre_id, unsigned int post_id, double sigma)
+{
+    if(sigma == 0.0) {
+        return 1.0;
+    }
+    const double u1 = std::max(1.0e-12, deterministicConnectionUnit(pre_id, post_id));
+    const double u2 = deterministicConnectionUnit(post_id, pre_id);
+    const double z = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * v1_genn::kPi * u2);
+    return std::exp((-0.5 * sigma * sigma) + (sigma * z));
+}
+
+void applyL23EELognormalInitialWeights(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const L23EELognormalInitConfig &config)
+{
+    if(!config.enabled) {
+        return;
+    }
+
+    GeNN::Runtime::ArrayBase &weight_array = requireArray(runtime, synapse_group, "g");
+    if(weight_array.getCount() % v1_genn::kNumL23E != 0u) {
+        throw std::runtime_error("L23E->L23E lognormal init expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = weight_array.getCount() / v1_genn::kNumL23E;
+    weight_array.pullFromDevice();
+    float *weights = weight_array.getHostPointer<float>();
+
+    std::vector<std::size_t> active_slots;
+    std::vector<double> active_values;
+    active_slots.reserve(edges.size());
+    active_values.reserve(edges.size());
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23E->L23E lognormal init exceeded sparse row capacity.");
+        }
+
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        row_active_index++;
+        if(slot >= weight_array.getCount()) {
+            throw std::runtime_error("L23E->L23E lognormal init slot is outside the sparse weight array.");
+        }
+
+        active_slots.push_back(slot);
+        active_values.push_back(clippedL23EEWeight(
+            v1_genn::kL23EEWeight * deterministicLognormalFactor(pre_id, post_id, config.sigma)));
+    }
+    if(active_values.empty()) {
+        throw std::runtime_error("L23E->L23E lognormal init requires at least one active edge.");
+    }
+
+    for(std::size_t i = 0; i < active_slots.size(); i++) {
+        weights[active_slots[i]] = static_cast<float>(active_values[i]);
+    }
+    weight_array.pushToDevice();
 }
 
 void writeWeightCsv(
@@ -2167,6 +2555,209 @@ void writeSizeTuningCsv(
     }
 }
 
+const char *orientationContextConditionName(unsigned int condition_index)
+{
+    switch(condition_index) {
+    case kOrientationContextCenterOnly:
+        return "center_only";
+    case kOrientationContextSameSurround:
+        return "same_surround";
+    case kOrientationContextOrthSurround:
+        return "orth_surround";
+    case kOrientationContextSurroundSameOnly:
+        return "surround_same_only";
+    case kOrientationContextSurroundOrthOnly:
+        return "surround_orth_only";
+    default:
+        throw std::runtime_error("Invalid orientation-context condition index.");
+    }
+}
+
+double suppressionIndex(double center_rate_hz, double context_rate_hz)
+{
+    if(center_rate_hz <= 0.0) {
+        return 0.0;
+    }
+    return (center_rate_hz - context_rate_hz) / center_rate_hz;
+}
+
+void writeOrientationContextAssayCsv(
+    const std::string &path,
+    const std::vector<OrientationContextSiteMetrics> &metrics_by_site,
+    bool include_validation_site_id,
+    double som_output_scale)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+
+    output << std::fixed << std::setprecision(6);
+    output << "condition,site_id";
+    if(include_validation_site_id) {
+        output << ",validation_site_id";
+    }
+    output << ",preferred_orientation_deg,stimulus_orientation_deg,orthogonal_orientation_deg"
+           << ",aperture_radius_sites,inner_radius_sites,som_output_scale"
+           << ",l4e_rate_hz,l23e_rate_hz,l23pv_rate_hz,l23som_rate_hz"
+           << ",si_same_l4e,si_orth_l4e,osd_l4e"
+           << ",si_same_l23e,si_orth_l23e,osd_l23e"
+           << ",surround_same_l23e_ratio,surround_orth_l23e_ratio\n";
+
+    for(const OrientationContextSiteMetrics &metrics : metrics_by_site) {
+        const double center_l4e = metrics.l4e_rates_hz[kOrientationContextCenterOnly];
+        const double same_l4e = metrics.l4e_rates_hz[kOrientationContextSameSurround];
+        const double orth_l4e = metrics.l4e_rates_hz[kOrientationContextOrthSurround];
+        const double si_same_l4e = suppressionIndex(center_l4e, same_l4e);
+        const double si_orth_l4e = suppressionIndex(center_l4e, orth_l4e);
+        const double osd_l4e = si_same_l4e - si_orth_l4e;
+
+        const double center_l23e = metrics.l23e_rates_hz[kOrientationContextCenterOnly];
+        const double same_l23e = metrics.l23e_rates_hz[kOrientationContextSameSurround];
+        const double orth_l23e = metrics.l23e_rates_hz[kOrientationContextOrthSurround];
+        const double surround_same_l23e = metrics.l23e_rates_hz[kOrientationContextSurroundSameOnly];
+        const double surround_orth_l23e = metrics.l23e_rates_hz[kOrientationContextSurroundOrthOnly];
+        const double si_same_l23e = suppressionIndex(center_l23e, same_l23e);
+        const double si_orth_l23e = suppressionIndex(center_l23e, orth_l23e);
+        const double osd_l23e = si_same_l23e - si_orth_l23e;
+        const double surround_same_ratio = (center_l23e > 0.0) ? (surround_same_l23e / center_l23e) : 0.0;
+        const double surround_orth_ratio = (center_l23e > 0.0) ? (surround_orth_l23e / center_l23e) : 0.0;
+
+        for(unsigned int condition_index = 0; condition_index < kOrientationContextConditionCount; condition_index++) {
+            const double stimulus_orientation = (
+                condition_index == kOrientationContextOrthSurround
+                || condition_index == kOrientationContextSurroundOrthOnly)
+                ? metrics.orthogonal_orientation_rad
+                : metrics.preferred_orientation_rad;
+            output << orientationContextConditionName(condition_index) << ","
+                   << metrics.site_id;
+            if(include_validation_site_id) {
+                output << "," << metrics.validation_site_id;
+            }
+            output << ","
+                   << positiveModuloDegrees(radiansToDegrees(metrics.preferred_orientation_rad)) << ","
+                   << positiveModuloDegrees(radiansToDegrees(stimulus_orientation)) << ","
+                   << positiveModuloDegrees(radiansToDegrees(metrics.orthogonal_orientation_rad)) << ","
+                   << metrics.aperture_radius_sites[condition_index] << ","
+                   << metrics.inner_radius_sites[condition_index] << ","
+                   << som_output_scale << ","
+                   << metrics.l4e_rates_hz[condition_index] << ","
+                   << metrics.l23e_rates_hz[condition_index] << ","
+                   << metrics.l23pv_rates_hz[condition_index] << ","
+                   << metrics.l23som_rates_hz[condition_index] << ","
+                   << si_same_l4e << ","
+                   << si_orth_l4e << ","
+                   << osd_l4e << ","
+                   << si_same_l23e << ","
+                   << si_orth_l23e << ","
+                   << osd_l23e << ","
+                   << surround_same_ratio << ","
+                   << surround_orth_ratio << "\n";
+        }
+    }
+}
+
+double siteRateFromCounts(
+    const std::vector<double> &counts,
+    const std::vector<TrialWindow> &trials,
+    std::size_t trial_index,
+    unsigned int site_id,
+    unsigned int neurons_per_site)
+{
+    if(trial_index >= trials.size() || site_id >= v1_genn::kSiteCount) {
+        throw std::runtime_error("Site rate lookup is outside the recorded trial/site grid.");
+    }
+    const std::size_t count_index = (trial_index * v1_genn::kSiteCount) + site_id;
+    if(count_index >= counts.size()) {
+        throw std::runtime_error("Site spike count vector is too small for requested trial/site.");
+    }
+    const TrialWindow &trial = trials[trial_index];
+    const double measurement_duration_s = (trial.end_ms - trial.measure_start_ms) / 1000.0;
+    if(measurement_duration_s <= 0.0) {
+        throw std::runtime_error("Trial measurement duration must be positive.");
+    }
+    return counts[count_index] / (measurement_duration_s * static_cast<double>(neurons_per_site));
+}
+
+void writeBlankBaselineCsv(
+    const std::string &path,
+    const std::vector<TrialWindow> &blank_trials,
+    const std::vector<double> &l4e_counts,
+    const std::vector<double> &l23e_counts,
+    const std::vector<double> &l23pv_counts,
+    const std::vector<double> &l23som_counts)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+
+    output << std::fixed << std::setprecision(6);
+    output << "repeat_index,population,site_id,rate_hz\n";
+    const auto writeRows = [&](const std::string &population,
+                               const std::vector<double> &counts,
+                               unsigned int neurons_per_site) {
+        for(std::size_t trial_index = 0; trial_index < blank_trials.size(); trial_index++) {
+            for(unsigned int site_id = 0; site_id < v1_genn::kSiteCount; site_id++) {
+                output << trial_index << ","
+                       << population << ","
+                       << site_id << ","
+                       << siteRateFromCounts(counts, blank_trials, trial_index, site_id, neurons_per_site)
+                       << "\n";
+            }
+        }
+    };
+
+    writeRows("l4e", l4e_counts, v1_genn::kL4EPerSite);
+    writeRows("l23e", l23e_counts, v1_genn::kL23EPerSite);
+    writeRows("l23pv", l23pv_counts, v1_genn::kL23PVPerSite);
+    writeRows("l23som", l23som_counts, v1_genn::kL23SOMPerSite);
+}
+
+void writeContrastSweepCsv(
+    const std::string &path,
+    const std::vector<ContrastTrialRecord> &records,
+    const std::vector<TrialWindow> &contrast_trials,
+    const std::vector<double> &l4e_counts,
+    const std::vector<double> &l23e_counts,
+    const std::vector<double> &l23pv_counts,
+    const std::vector<double> &l23som_counts)
+{
+    if(records.size() != contrast_trials.size()) {
+        throw std::runtime_error("Contrast sweep records and trial windows do not align.");
+    }
+
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+
+    output << std::fixed << std::setprecision(6);
+    output << "contrast,site_id,validation_site_id,population,orientation_deg,aperture_radius_sites,rate_hz\n";
+    const auto writeRow = [&](const ContrastTrialRecord &record,
+                              std::size_t trial_index,
+                              const std::string &population,
+                              const std::vector<double> &counts,
+                              unsigned int neurons_per_site) {
+        output << record.contrast << ","
+               << record.site_id << ","
+               << record.validation_site_id << ","
+               << population << ","
+               << positiveModuloDegrees(radiansToDegrees(record.orientation_rad)) << ","
+               << record.aperture_radius_sites << ","
+               << siteRateFromCounts(counts, contrast_trials, trial_index, record.site_id, neurons_per_site)
+               << "\n";
+    };
+
+    for(std::size_t trial_index = 0; trial_index < records.size(); trial_index++) {
+        const ContrastTrialRecord &record = records[trial_index];
+        writeRow(record, trial_index, "l4e", l4e_counts, v1_genn::kL4EPerSite);
+        writeRow(record, trial_index, "l23e", l23e_counts, v1_genn::kL23EPerSite);
+        writeRow(record, trial_index, "l23pv", l23pv_counts, v1_genn::kL23PVPerSite);
+        writeRow(record, trial_index, "l23som", l23som_counts, v1_genn::kL23SOMPerSite);
+    }
+}
+
 void writeMetricRow(std::ofstream &output, const std::string &metric, double value)
 {
     output << metric << "," << value << "\n";
@@ -2382,9 +2973,24 @@ void writeSummaryFiles(
     const std::vector<PopulationRateSummary> &subtype_rates,
     const std::vector<ContextValidationSummary> &context_validation,
     const TrainingGratingConfig &training_grating_config,
-    double training_grating_phase_slot_ms)
+    double training_grating_phase_slot_ms,
+    const L4L23OrientationConfig &l4_l23_orientation_config,
+    std::size_t l4_l23_edge_count,
+    double l4_l23_weights_before_nonzero_fraction,
+    const L23EELognormalInitConfig &l23ee_lognormal_init_config,
+    std::size_t l23ee_initial_active_count,
+    double l23ee_initial_active_mean,
+    double l23ee_initial_active_gini,
+    double l23ee_initial_top10_mass_share,
+    double l23pv_context_output_scale,
+    const OrientationContextAssayConfig &orientation_context_assay_config,
+    const SensoryAssayConfig &sensory_assay_config)
 {
     const double l23_osi_delta = post.l23_median_osi - baseline.l23_median_osi;
+    const bool feedforward_orientation_prior_enabled = (l4_l23_orientation_config.bias_strength > 0.0);
+    const bool neutral_density_match_active =
+        l4_l23_orientation_config.neutral_density_match_enabled
+        && l4_l23_orientation_config.bias_strength == 0.0;
 
     std::ofstream csv((output_prefix + "_summary.csv").c_str());
     if(!csv) {
@@ -2411,6 +3017,39 @@ void writeSummaryFiles(
     csv << "training_grating_phase_count," << training_grating_config.phase_count << "\n";
     csv << "training_grating_phase_slot_ms," << training_grating_phase_slot_ms << "\n";
     csv << "training_grating_counterbalance_enabled," << (training_grating_config.counterbalance_direction ? 1.0 : 0.0) << "\n";
+    csv << "l4_l23_orientation_bias_strength," << l4_l23_orientation_config.bias_strength << "\n";
+    csv << "l4_l23_feedforward_orientation_prior_enabled," << (feedforward_orientation_prior_enabled ? 1.0 : 0.0) << "\n";
+    csv << "l4_l23_orientation_neutral_density_match_enabled,"
+        << (l4_l23_orientation_config.neutral_density_match_enabled ? 1.0 : 0.0) << "\n";
+    csv << "l4_l23_orientation_neutral_density_match_active,"
+        << (neutral_density_match_active ? 1.0 : 0.0) << "\n";
+    csv << "l4_l23_orientation_neutral_probability_scale,"
+        << l4_l23_orientation_config.neutral_probability_scale << "\n";
+    csv << "l4_l23_edge_count," << l4_l23_edge_count << "\n";
+    csv << "l4_l23_weights_before_nonzero_fraction," << l4_l23_weights_before_nonzero_fraction << "\n";
+    csv << "l4_l23_weights_before_mean_all_slots," << weights_before.mean << "\n";
+    csv << "l23ee_lognormal_init_enabled," << (l23ee_lognormal_init_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23ee_lognormal_init_sigma," << l23ee_lognormal_init_config.sigma << "\n";
+    csv << "l23ee_lognormal_init_target_mean," << v1_genn::kL23EEWeight << "\n";
+    csv << "l23ee_lognormal_init_wmin," << kL23EEStdpWeightMin << "\n";
+    csv << "l23ee_lognormal_init_wmax," << kL23EEStdpWeightMax << "\n";
+    csv << "l23ee_initial_active_count," << l23ee_initial_active_count << "\n";
+    csv << "l23ee_initial_active_mean," << l23ee_initial_active_mean << "\n";
+    csv << "l23ee_initial_active_gini," << l23ee_initial_active_gini << "\n";
+    csv << "l23ee_initial_top10_mass_share," << l23ee_initial_top10_mass_share << "\n";
+    csv << "l23pv_context_output_scale," << l23pv_context_output_scale << "\n";
+    csv << "l23pv_context_output_ablation_active," << (l23pv_context_output_scale != 1.0 ? 1.0 : 0.0) << "\n";
+    csv << "inhibitory_orientation_rule_enabled,0.000000\n";
+    csv << "orientation_context_assay_enabled," << (orientation_context_assay_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "orientation_context_center_radius_sites," << orientation_context_assay_config.center_radius_sites << "\n";
+    csv << "orientation_context_broad_radius_sites," << orientation_context_assay_config.broad_radius_sites << "\n";
+    csv << "orientation_context_surround_inner_radius_sites," << orientation_context_assay_config.surround_inner_radius_sites << "\n";
+    csv << "orientation_context_annular_surround_only_enabled," << (orientation_context_assay_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "orientation_context_assay_orientation_source_code," << (orientation_context_assay_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "sensory_assay_enabled," << (sensory_assay_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "blank_repeat_count," << sensory_assay_config.blank_repeat_count << "\n";
+    csv << "contrast_sweep_count," << sensory_assay_config.contrasts.size() << "\n";
+    csv << "contrast_sweep_radius_sites," << sensory_assay_config.contrast_radius_sites << "\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         csv << summary.name << "_weights_before_count," << summary.before.count << "\n";
         csv << summary.name << "_weights_before_min," << summary.before.min << "\n";
@@ -2463,6 +3102,56 @@ void writeSummaryFiles(
     text << "training_grating_counterbalance_enabled="
          << (training_grating_config.counterbalance_direction ? 1 : 0)
          << "\n";
+    text << "l4_l23_orientation_bias_strength=" << l4_l23_orientation_config.bias_strength << "\n";
+    text << "l4_l23_feedforward_orientation_prior_enabled="
+         << (feedforward_orientation_prior_enabled ? 1 : 0) << "\n";
+    text << "l4_l23_orientation_neutral_density_match_enabled="
+         << (l4_l23_orientation_config.neutral_density_match_enabled ? 1 : 0) << "\n";
+    text << "l4_l23_orientation_neutral_density_match_active="
+         << (neutral_density_match_active ? 1 : 0) << "\n";
+    text << "l4_l23_orientation_neutral_probability_scale="
+         << l4_l23_orientation_config.neutral_probability_scale << "\n";
+    text << "l4_l23_edge_count=" << l4_l23_edge_count << "\n";
+    text << "l4_l23_weights_before_nonzero_fraction="
+         << l4_l23_weights_before_nonzero_fraction << "\n";
+    text << "l4_l23_weights_before_mean_all_slots=" << weights_before.mean << "\n";
+    text << "l23ee_lognormal_init_enabled="
+         << (l23ee_lognormal_init_config.enabled ? 1 : 0) << "\n";
+    text << "l23ee_lognormal_init_sigma=" << l23ee_lognormal_init_config.sigma << "\n";
+    text << "l23ee_lognormal_init_target_mean=" << v1_genn::kL23EEWeight << "\n";
+    text << "l23ee_lognormal_init_wmin=" << kL23EEStdpWeightMin << "\n";
+    text << "l23ee_lognormal_init_wmax=" << kL23EEStdpWeightMax << "\n";
+    text << "l23ee_initial_active_count=" << l23ee_initial_active_count << "\n";
+    text << "l23ee_initial_active_mean=" << l23ee_initial_active_mean << "\n";
+    text << "l23ee_initial_active_gini=" << l23ee_initial_active_gini << "\n";
+    text << "l23ee_initial_top10_mass_share=" << l23ee_initial_top10_mass_share << "\n";
+    text << "l23pv_context_output_scale=" << l23pv_context_output_scale << "\n";
+    text << "l23pv_context_output_ablation_active="
+         << (l23pv_context_output_scale != 1.0 ? 1 : 0) << "\n";
+    text << "inhibitory_orientation_rule_enabled=0\n";
+    text << "orientation_context_assay_enabled="
+         << (orientation_context_assay_config.enabled ? 1 : 0) << "\n";
+    text << "orientation_context_protocol="
+         << (orientation_context_assay_config.enabled
+             ? "center_preferred_same_and_orthogonal_annular_surround"
+             : "disabled")
+         << "\n";
+    text << "orientation_context_center_radius_sites="
+         << orientation_context_assay_config.center_radius_sites << "\n";
+    text << "orientation_context_broad_radius_sites="
+         << orientation_context_assay_config.broad_radius_sites << "\n";
+    text << "orientation_context_surround_inner_radius_sites="
+         << orientation_context_assay_config.surround_inner_radius_sites << "\n";
+    text << "orientation_context_assay_orientation_source="
+         << (orientation_context_assay_config.enabled
+             ? "site_map_preferred_orientation"
+             : "disabled")
+         << "\n";
+    text << "sensory_assay_enabled="
+         << (sensory_assay_config.enabled ? 1 : 0) << "\n";
+    text << "blank_repeat_count=" << sensory_assay_config.blank_repeat_count << "\n";
+    text << "contrast_sweep_count=" << sensory_assay_config.contrasts.size() << "\n";
+    text << "contrast_sweep_radius_sites=" << sensory_assay_config.contrast_radius_sites << "\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         text << summary.name << "_weights_before=count:" << summary.before.count
              << ",min:" << summary.before.min
@@ -2879,9 +3568,14 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const double l23som_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23SOM_CONTEXT_OUTPUT_SCALE",
         kDefaultL23SOMContextOutputScale);
+    const double l23pv_context_output_scale = getEnvDoubleOrDefault(
+        "V1_L23PV_CONTEXT_OUTPUT_SCALE",
+        kDefaultL23PVContextOutputScale);
     const double l23ee_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23EE_CONTEXT_OUTPUT_SCALE",
         kDefaultL23EEContextOutputScale);
+    const L4L23OrientationConfig l4_l23_orientation_config = getL4L23OrientationConfig();
+    const L23EELognormalInitConfig l23ee_lognormal_init_config = getL23EELognormalInitConfig();
     const TrainingGratingConfig training_grating_config = getTrainingGratingConfig();
     const unsigned int cell_coverage_phase_count = getEnvUnsignedOrDefault(
         "V1_CELL_COVERAGE_PHASE_COUNT",
@@ -2889,6 +3583,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const double broad_stimulus_radius_sites = getEnvDoubleOrDefault(
         "V1_BROAD_STIMULUS_RADIUS_SITES",
         kDefaultBroadStimulusRadiusSites);
+    const OrientationContextAssayConfig orientation_context_assay_config =
+        getOrientationContextAssayConfig(broad_stimulus_radius_sites);
+    const SensoryAssayConfig sensory_assay_config = getSensoryAssayConfig();
     const std::vector<double> size_tuning_radii_sites = getEnvDoubleListOrDefault(
         "V1_SIZE_TUNING_RADII_SITES",
         kDefaultSizeTuningRadiiSites);
@@ -2921,6 +3618,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     if(l23som_context_output_scale < 0.0) {
         throw std::runtime_error("V1_L23SOM_CONTEXT_OUTPUT_SCALE must be non-negative.");
     }
+    if(l23pv_context_output_scale < 0.0) {
+        throw std::runtime_error("V1_L23PV_CONTEXT_OUTPUT_SCALE must be non-negative.");
+    }
     if(l23ee_context_output_scale < 0.0) {
         throw std::runtime_error("V1_L23EE_CONTEXT_OUTPUT_SCALE must be non-negative.");
     }
@@ -2949,6 +3649,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     GeNN::SynapseGroup &l4e_to_l23e = requireSynapseGroup(model, "L4E_to_L23E");
     GeNN::SynapseGroup &l23e_to_l23e = requireSynapseGroup(model, "L23E_to_L23E");
     GeNN::SynapseGroup &l23pv_to_l23e = requireSynapseGroup(model, "L23PV_to_L23E");
+    GeNN::SynapseGroup &l23pv_to_l23pv = requireSynapseGroup(model, "L23PV_to_L23PV");
     GeNN::SynapseGroup &l23som_to_l23e = requireSynapseGroup(model, "L23SOM_to_L23E");
     GeNN::SynapseGroup &l23som_to_l23pv = requireSynapseGroup(model, "L23SOM_to_L23PV");
     GeNN::SynapseGroup &l23som_to_l23vip = requireSynapseGroup(model, "L23SOM_to_L23VIP");
@@ -2981,8 +3682,26 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         multiphase_cell_coverage_enabled
             ? (static_cast<std::size_t>(orientation_count) * static_cast<std::size_t>(cell_coverage_phase_count))
             : 0u;
+    const std::size_t orientation_context_trial_count =
+        orientation_context_assay_config.enabled
+            ? (static_cast<std::size_t>(validation_site_config.site_ids.size())
+               * static_cast<std::size_t>(kOrientationContextConditionCount))
+            : 0u;
+    const std::size_t sensory_blank_trial_count =
+        sensory_assay_config.enabled
+            ? static_cast<std::size_t>(sensory_assay_config.blank_repeat_count)
+            : 0u;
+    const std::size_t sensory_contrast_trial_count =
+        sensory_assay_config.enabled
+            ? (static_cast<std::size_t>(validation_site_config.site_ids.size())
+               * sensory_assay_config.contrasts.size())
+            : 0u;
     const std::size_t total_trial_count =
-        (static_cast<std::size_t>(orientation_count) * sweep_count) + multiphase_trial_count;
+        (static_cast<std::size_t>(orientation_count) * sweep_count)
+        + multiphase_trial_count
+        + orientation_context_trial_count
+        + sensory_blank_trial_count
+        + sensory_contrast_trial_count;
     const std::size_t total_recording_steps = total_trial_count * static_cast<std::size_t>(trial_steps);
 
     runtime.allocate(total_recording_steps);
@@ -2996,6 +3715,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         scaleSomToL23EOutput(scale);
         scaleSynapseWeights(runtime, l23som_to_l23pv, scale);
         scaleSynapseWeights(runtime, l23som_to_l23vip, scale);
+    };
+    const auto scalePvOutputs = [&](double scale) {
+        scaleSynapseWeights(runtime, l23pv_to_l23e, scale);
+        scaleSynapseWeights(runtime, l23pv_to_l23pv, scale);
     };
 
     setConstantExternalCurrent(runtime, l4pv, 0.0);
@@ -3028,6 +3751,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         v1_genn::kL23EPerSite,
         v1_genn::kL23SOMOutputRadius,
         false);
+    applyL23EELognormalInitialWeights(
+        runtime,
+        l23e_to_l23e,
+        l23ee_edges,
+        l23ee_lognormal_init_config);
     const std::vector<float> weights_before = copyWeights(runtime, l4e_to_l23e);
     const std::vector<float> l23ee_weights_before = copyWeights(runtime, l23e_to_l23e);
     const std::vector<float> l23pv_weights_before = copyWeights(runtime, l23pv_to_l23e);
@@ -3037,10 +3765,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     std::vector<TrialWindow> post_trials;
     std::vector<TrialWindow> multiphase_cell_coverage_trials;
     std::vector<TrialWindow> recurrence_context_trials;
+    std::vector<TrialWindow> blank_baseline_trials;
+    std::vector<TrialWindow> contrast_sweep_trials;
+    std::vector<ContrastTrialRecord> contrast_sweep_records;
+    std::vector<OrientationContextTrialSet> orientation_context_trials;
     baseline_trials.reserve(orientation_count);
     post_trials.reserve(orientation_count);
     multiphase_cell_coverage_trials.reserve(multiphase_trial_count);
     recurrence_context_trials.reserve(orientation_count);
+    blank_baseline_trials.reserve(sensory_blank_trial_count);
+    contrast_sweep_trials.reserve(sensory_contrast_trial_count);
+    contrast_sweep_records.reserve(sensory_contrast_trial_count);
+    orientation_context_trials.reserve(validation_site_config.site_ids.size());
     std::vector<ValidationTrialSet> validation_trials;
     validation_trials.reserve(validation_site_config.site_ids.size());
     for(std::size_t i = 0; i < validation_site_config.site_ids.size(); i++) {
@@ -3191,6 +3927,141 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         }
     };
 
+    auto runHeldOutStimulusTrial = [&](double orientation_rad,
+                                       double phase_rad,
+                                       double aperture_radius_sites,
+                                       unsigned int aperture_center_site,
+                                       double aperture_inner_radius_sites) {
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        fillL4EDrive(
+            l4e_drive,
+            orientation_rad,
+            phase_rad,
+            aperture_radius_sites,
+            aperture_center_site,
+            aperture_inner_radius_sites);
+        std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
+        l4e_i_ext.pushToDevice();
+
+        const double trial_start_ms = runtime.getTime();
+        TrialWindow trial{
+            orientation_rad,
+            phase_rad,
+            trial_start_ms,
+            trial_start_ms + (static_cast<double>(effective_settle_steps) * v1_genn::kDtMs),
+            trial_start_ms + (static_cast<double>(trial_steps) * v1_genn::kDtMs),
+        };
+        for(unsigned int step = 0; step < trial_steps; step++) {
+            runtime.stepTime();
+        }
+        return trial;
+    };
+
+    auto runHeldOutCenterSurroundStimulusTrial = [&](double center_orientation_rad,
+                                                     double surround_orientation_rad,
+                                                     double phase_rad,
+                                                     double center_radius_sites,
+                                                     double surround_outer_radius_sites,
+                                                     unsigned int aperture_center_site) {
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        fillL4ECenterSurroundDrive(
+            l4e_drive,
+            center_orientation_rad,
+            surround_orientation_rad,
+            phase_rad,
+            center_radius_sites,
+            surround_outer_radius_sites,
+            aperture_center_site);
+        std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
+        l4e_i_ext.pushToDevice();
+
+        const double trial_start_ms = runtime.getTime();
+        TrialWindow trial{
+            surround_orientation_rad,
+            phase_rad,
+            trial_start_ms,
+            trial_start_ms + (static_cast<double>(effective_settle_steps) * v1_genn::kDtMs),
+            trial_start_ms + (static_cast<double>(trial_steps) * v1_genn::kDtMs),
+        };
+        for(unsigned int step = 0; step < trial_steps; step++) {
+            runtime.stepTime();
+        }
+        return trial;
+    };
+
+    auto runBlankBaselineTrial = [&]() {
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        std::fill(l4e_i_ext_host, l4e_i_ext_host + l4e_i_ext.getCount(), 0.0f);
+        l4e_i_ext.pushToDevice();
+
+        const double trial_start_ms = runtime.getTime();
+        TrialWindow trial{
+            0.0,
+            0.0,
+            trial_start_ms,
+            trial_start_ms + (static_cast<double>(effective_settle_steps) * v1_genn::kDtMs),
+            trial_start_ms + (static_cast<double>(trial_steps) * v1_genn::kDtMs),
+        };
+        for(unsigned int step = 0; step < trial_steps; step++) {
+            runtime.stepTime();
+        }
+        return trial;
+    };
+
+    auto runContrastStimulusTrial = [&](double orientation_rad,
+                                        double contrast,
+                                        double aperture_radius_sites,
+                                        unsigned int aperture_center_site) {
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        fillL4EDrive(
+            l4e_drive,
+            orientation_rad,
+            0.0,
+            aperture_radius_sites,
+            aperture_center_site,
+            -1.0,
+            contrast);
+        std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
+        l4e_i_ext.pushToDevice();
+
+        const double trial_start_ms = runtime.getTime();
+        TrialWindow trial{
+            orientation_rad,
+            0.0,
+            trial_start_ms,
+            trial_start_ms + (static_cast<double>(effective_settle_steps) * v1_genn::kDtMs),
+            trial_start_ms + (static_cast<double>(trial_steps) * v1_genn::kDtMs),
+        };
+        for(unsigned int step = 0; step < trial_steps; step++) {
+            runtime.stepTime();
+        }
+        return trial;
+    };
+
     runSweep("baseline", &baseline_trials, false, false, false, 0u, -1.0);
     for(unsigned int epoch = 0; epoch < training_epochs; epoch++) {
         runSweep("training", nullptr, true, true, true, epoch, -1.0);
@@ -3230,6 +4101,37 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     if(l23som_context_output_scale != 1.0) {
         scaleSomToL23EOutput(l23som_context_output_scale);
     }
+    if(l23pv_context_output_scale != 1.0) {
+        scalePvOutputs(l23pv_context_output_scale);
+    }
+
+    if(sensory_assay_config.enabled) {
+        for(unsigned int repeat = 0; repeat < sensory_assay_config.blank_repeat_count; repeat++) {
+            (void)repeat;
+            blank_baseline_trials.push_back(runBlankBaselineTrial());
+        }
+        for(std::size_t i = 0; i < validation_site_config.site_ids.size(); i++) {
+            const unsigned int site_id = validation_site_config.site_ids[i];
+            const unsigned int aperture_center_site = validation_site_config.aperture_center_sites[i];
+            const double preferred_orientation_rad = v1_genn::sitePreferredOrientationFromIndex(site_id);
+            for(double contrast : sensory_assay_config.contrasts) {
+                ContrastTrialRecord record;
+                record.validation_site_id = site_id;
+                record.site_id = site_id;
+                record.aperture_center_site = aperture_center_site;
+                record.contrast = contrast;
+                record.orientation_rad = preferred_orientation_rad;
+                record.aperture_radius_sites = sensory_assay_config.contrast_radius_sites;
+                record.trial = runContrastStimulusTrial(
+                    preferred_orientation_rad,
+                    contrast,
+                    sensory_assay_config.contrast_radius_sites,
+                    aperture_center_site);
+                contrast_sweep_trials.push_back(record.trial);
+                contrast_sweep_records.push_back(record);
+            }
+        }
+    }
 
     for(ValidationTrialSet &trial_set : validation_trials) {
         runSweep(
@@ -3260,6 +4162,56 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 0u,
                 radius_sites,
                 trial_set.aperture_center_site);
+        }
+    }
+    if(orientation_context_assay_config.enabled) {
+        for(std::size_t i = 0; i < validation_site_config.site_ids.size(); i++) {
+            const unsigned int site_id = validation_site_config.site_ids[i];
+            const unsigned int aperture_center_site = validation_site_config.aperture_center_sites[i];
+            const double preferred_orientation_rad =
+                v1_genn::sitePreferredOrientationFromIndex(site_id);
+            const double orthogonal_orientation_rad =
+                std::fmod(preferred_orientation_rad + (0.5 * v1_genn::kPi), v1_genn::kPi);
+
+            OrientationContextTrialSet trial_set;
+            trial_set.validation_site_id = site_id;
+            trial_set.site_id = site_id;
+            trial_set.aperture_center_site = aperture_center_site;
+            trial_set.preferred_orientation_rad = preferred_orientation_rad;
+            trial_set.orthogonal_orientation_rad = orthogonal_orientation_rad;
+            trial_set.trials[kOrientationContextCenterOnly] = runHeldOutStimulusTrial(
+                preferred_orientation_rad,
+                0.0,
+                orientation_context_assay_config.center_radius_sites,
+                aperture_center_site,
+                -1.0);
+            trial_set.trials[kOrientationContextSameSurround] = runHeldOutCenterSurroundStimulusTrial(
+                preferred_orientation_rad,
+                preferred_orientation_rad,
+                0.0,
+                orientation_context_assay_config.center_radius_sites,
+                orientation_context_assay_config.broad_radius_sites,
+                aperture_center_site);
+            trial_set.trials[kOrientationContextOrthSurround] = runHeldOutCenterSurroundStimulusTrial(
+                preferred_orientation_rad,
+                orthogonal_orientation_rad,
+                0.0,
+                orientation_context_assay_config.center_radius_sites,
+                orientation_context_assay_config.broad_radius_sites,
+                aperture_center_site);
+            trial_set.trials[kOrientationContextSurroundSameOnly] = runHeldOutStimulusTrial(
+                preferred_orientation_rad,
+                0.0,
+                orientation_context_assay_config.broad_radius_sites,
+                aperture_center_site,
+                orientation_context_assay_config.surround_inner_radius_sites);
+            trial_set.trials[kOrientationContextSurroundOrthOnly] = runHeldOutStimulusTrial(
+                orthogonal_orientation_rad,
+                0.0,
+                orientation_context_assay_config.broad_radius_sites,
+                aperture_center_site,
+                orientation_context_assay_config.surround_inner_radius_sites);
+            orientation_context_trials.push_back(trial_set);
         }
     }
     if(l23ee_context_output_scale != 1.0) {
@@ -3309,6 +4261,38 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         countSiteSpikesForTrials(l23vip_recordings.at(0), post_trials, v1_genn::kL23VIPPerSite);
     const std::vector<double> recurrence_l23_cell_counts =
         countNeuronSpikesForTrials(l23e_recordings.at(0), recurrence_context_trials, v1_genn::kNumL23E);
+    const std::vector<double> blank_l4e_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l4e_recordings.at(0), blank_baseline_trials, v1_genn::kL4EPerSite)
+            : std::vector<double>();
+    const std::vector<double> blank_l23e_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l23e_recordings.at(0), blank_baseline_trials, v1_genn::kL23EPerSite)
+            : std::vector<double>();
+    const std::vector<double> blank_l23pv_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l23pv_recordings.at(0), blank_baseline_trials, v1_genn::kL23PVPerSite)
+            : std::vector<double>();
+    const std::vector<double> blank_l23som_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l23som_recordings.at(0), blank_baseline_trials, v1_genn::kL23SOMPerSite)
+            : std::vector<double>();
+    const std::vector<double> contrast_l4e_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l4e_recordings.at(0), contrast_sweep_trials, v1_genn::kL4EPerSite)
+            : std::vector<double>();
+    const std::vector<double> contrast_l23e_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l23e_recordings.at(0), contrast_sweep_trials, v1_genn::kL23EPerSite)
+            : std::vector<double>();
+    const std::vector<double> contrast_l23pv_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l23pv_recordings.at(0), contrast_sweep_trials, v1_genn::kL23PVPerSite)
+            : std::vector<double>();
+    const std::vector<double> contrast_l23som_site_counts =
+        sensory_assay_config.enabled
+            ? countSiteSpikesForTrials(l23som_recordings.at(0), contrast_sweep_trials, v1_genn::kL23SOMPerSite)
+            : std::vector<double>();
 
     const std::vector<std::pair<std::string, std::vector<double>>> baseline_subtype_rates{
         {"l4pv", countPopulationRatesForTrials(l4pv_recordings.at(0), baseline_trials, v1_genn::kNumL4PV)},
@@ -3377,6 +4361,61 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             recurrence_l23_cell_counts,
             v1_genn::kNumL23E,
             v1_genn::kL23EPerSite);
+
+    std::vector<OrientationContextSiteMetrics> orientation_context_metrics;
+    orientation_context_metrics.reserve(orientation_context_trials.size());
+    for(const OrientationContextTrialSet &trial_set : orientation_context_trials) {
+        const std::vector<TrialWindow> trials(trial_set.trials.begin(), trial_set.trials.end());
+        const std::vector<double> l4e_counts =
+            countSiteSpikesForTrials(l4e_recordings.at(0), trials, v1_genn::kL4EPerSite);
+        const std::vector<double> l23e_counts =
+            countSiteSpikesForTrials(l23e_recordings.at(0), trials, v1_genn::kL23EPerSite);
+        const std::vector<double> l23pv_counts =
+            countSiteSpikesForTrials(l23pv_recordings.at(0), trials, v1_genn::kL23PVPerSite);
+        const std::vector<double> l23som_counts =
+            countSiteSpikesForTrials(l23som_recordings.at(0), trials, v1_genn::kL23SOMPerSite);
+        const std::vector<PopulationSiteMetrics> l4e_sites =
+            computeSiteMetrics(trials, l4e_counts, v1_genn::kL4EPerSite);
+        const std::vector<PopulationSiteMetrics> l23e_sites =
+            computeSiteMetrics(trials, l23e_counts, v1_genn::kL23EPerSite);
+        const std::vector<PopulationSiteMetrics> l23pv_sites =
+            computeSiteMetrics(trials, l23pv_counts, v1_genn::kL23PVPerSite);
+        const std::vector<PopulationSiteMetrics> l23som_sites =
+            computeSiteMetrics(trials, l23som_counts, v1_genn::kL23SOMPerSite);
+
+        OrientationContextSiteMetrics metrics;
+        metrics.validation_site_id = trial_set.validation_site_id;
+        metrics.site_id = trial_set.site_id;
+        metrics.aperture_center_site = trial_set.aperture_center_site;
+        metrics.preferred_orientation_rad = trial_set.preferred_orientation_rad;
+        metrics.orthogonal_orientation_rad = trial_set.orthogonal_orientation_rad;
+        metrics.aperture_radius_sites[kOrientationContextCenterOnly] =
+            orientation_context_assay_config.center_radius_sites;
+        metrics.aperture_radius_sites[kOrientationContextSameSurround] =
+            orientation_context_assay_config.broad_radius_sites;
+        metrics.aperture_radius_sites[kOrientationContextOrthSurround] =
+            orientation_context_assay_config.broad_radius_sites;
+        metrics.aperture_radius_sites[kOrientationContextSurroundSameOnly] =
+            orientation_context_assay_config.broad_radius_sites;
+        metrics.aperture_radius_sites[kOrientationContextSurroundOrthOnly] =
+            orientation_context_assay_config.broad_radius_sites;
+        metrics.inner_radius_sites.fill(-1.0);
+        metrics.inner_radius_sites[kOrientationContextSurroundSameOnly] =
+            orientation_context_assay_config.surround_inner_radius_sites;
+        metrics.inner_radius_sites[kOrientationContextSurroundOrthOnly] =
+            orientation_context_assay_config.surround_inner_radius_sites;
+        for(unsigned int condition_index = 0; condition_index < kOrientationContextConditionCount; condition_index++) {
+            metrics.l4e_rates_hz[condition_index] =
+                l4e_sites.at(trial_set.site_id).rates_hz.at(condition_index);
+            metrics.l23e_rates_hz[condition_index] =
+                l23e_sites.at(trial_set.site_id).rates_hz.at(condition_index);
+            metrics.l23pv_rates_hz[condition_index] =
+                l23pv_sites.at(trial_set.site_id).rates_hz.at(condition_index);
+            metrics.l23som_rates_hz[condition_index] =
+                l23som_sites.at(trial_set.site_id).rates_hz.at(condition_index);
+        }
+        orientation_context_metrics.push_back(metrics);
+    }
 
     std::vector<RetinotopicContextMetrics> context_validation_metrics;
     std::vector<RetinotopicSizeMetrics> size_validation_metrics;
@@ -3508,6 +4547,30 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         size_validation_metrics,
         validation_site_config.include_validation_site_id,
         l23som_output_scale * l23som_context_output_scale);
+    if(orientation_context_assay_config.enabled) {
+        writeOrientationContextAssayCsv(
+            output_prefix + "_l23_orientation_context_suppression.csv",
+            orientation_context_metrics,
+            validation_site_config.include_validation_site_id,
+            l23som_output_scale * l23som_context_output_scale);
+    }
+    if(sensory_assay_config.enabled) {
+        writeBlankBaselineCsv(
+            output_prefix + "_blank_baseline.csv",
+            blank_baseline_trials,
+            blank_l4e_site_counts,
+            blank_l23e_site_counts,
+            blank_l23pv_site_counts,
+            blank_l23som_site_counts);
+        writeContrastSweepCsv(
+            output_prefix + "_contrast_sweep.csv",
+            contrast_sweep_records,
+            contrast_sweep_trials,
+            contrast_l4e_site_counts,
+            contrast_l23e_site_counts,
+            contrast_l23pv_site_counts,
+            contrast_l23som_site_counts);
+    }
     writeL4IntersiteDiagnosticsCsv(
         output_prefix + "_l4_intersite_diagnostics.csv",
         l4_intersite_config,
@@ -3530,6 +4593,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         l23ee_weights_after,
         l23ee_edges,
         post_l23e_cell_tuning);
+    const std::vector<double> l23ee_initial_active_values = positiveWeightValues(l23ee_weights_before);
+    const double l23ee_initial_active_mean = l23ee_initial_active_values.empty()
+        ? 0.0
+        : (std::accumulate(l23ee_initial_active_values.begin(), l23ee_initial_active_values.end(), 0.0)
+           / static_cast<double>(l23ee_initial_active_values.size()));
+    const double l23ee_initial_active_gini = giniCoefficient(l23ee_initial_active_values);
+    const double l23ee_initial_top10_mass_share = topMassShare(l23ee_initial_active_values, 0.10);
     writeSummaryFiles(
         output_prefix,
         baseline,
@@ -3540,5 +4610,16 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         subtype_summaries,
         context_validation,
         training_grating_config,
-        training_grating_phase_slot_ms);
+        training_grating_phase_slot_ms,
+        l4_l23_orientation_config,
+        ff_edges.size(),
+        nonzeroWeightFraction(weights_before),
+        l23ee_lognormal_init_config,
+        l23ee_initial_active_values.size(),
+        l23ee_initial_active_mean,
+        l23ee_initial_active_gini,
+        l23ee_initial_top10_mass_share,
+        l23pv_context_output_scale,
+        orientation_context_assay_config,
+        sensory_assay_config);
 }
