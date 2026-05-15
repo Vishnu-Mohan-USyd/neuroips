@@ -2,6 +2,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 *.log
+/data/
+/datasets/
+*.zip.part
 
 # GeNN generated/build artifacts and experiment outputs
 genn/*_CODE/
