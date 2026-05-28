@@ -416,11 +416,56 @@ constexpr double kDefaultL23SOMOutputScale = 1.0;
 constexpr double kDefaultL23SOMContextOutputScale = 1.0;
 constexpr double kDefaultL23PVContextOutputScale = 1.0;
 constexpr double kDefaultL23EEContextOutputScale = 1.0;
+constexpr unsigned int kDefaultL23ESOMBroadRecruitmentRadius = 6;
+constexpr double kDefaultL23ESOMBroadRecruitmentWeightScale = 0.05;
 constexpr double kDefaultCenterStimulusRadiusSites = 2.0;
 constexpr double kDefaultBroadStimulusRadiusSites = 3.0;
 constexpr char kDefaultSizeTuningRadiiSites[] = "0.5,1,2,3,4,6";
 constexpr unsigned int kDefaultBlankRepeatCount = 4;
 constexpr char kDefaultContrastSweepValues[] = "0.5,1.0";
+constexpr double kDefaultVideoFrameMs = 100.0;
+constexpr double kDefaultVideoEventPreMs = 50.0;
+constexpr double kDefaultVideoEventPostMs = 100.0;
+constexpr double kDefaultVideoEventBinMs = 2.0;
+constexpr double kDefaultVideoEventGrayCurrent = -1.0;
+constexpr unsigned int kDefaultVideoEventRepeatCount = 1;
+constexpr unsigned int kDefaultVideoEventControlCount = 4;
+constexpr unsigned int kDefaultHVAPredictorTileSizeSites = 4;
+constexpr unsigned int kDefaultHVAPredictorDelayFrames = 1;
+constexpr double kDefaultHVAPredictorTraceTauFrames = 2.0;
+constexpr double kDefaultHVAPredictorLearningRate = 0.005;
+constexpr double kDefaultHVAPredictorEventLearningRate = 0.001;
+constexpr double kDefaultHVAPredictorBiasLearningRate = 0.005;
+constexpr double kDefaultHVAPredictorEventBiasLearningRate = 0.0;
+constexpr double kDefaultHVAPredictorWeightDecay = 0.001;
+constexpr double kDefaultHVAPredictorEventWeightDecay = 0.005;
+constexpr double kDefaultHVAPredictorEventResidualGain = 0.5;
+constexpr double kDefaultHVAPredictorRateScaleHz = 10.0;
+constexpr double kDefaultHVAPredictorWeightClip = 2.0;
+constexpr double kDefaultHVAPredictorHeldoutFraction = 0.25;
+constexpr unsigned int kDefaultHVAPredictorLocalRadiusTiles = 1;
+constexpr unsigned int kDefaultHVAPredictorTrainingEpochs = 5;
+constexpr unsigned int kDefaultHVAPredictorEventWindowFrames = 3;
+constexpr unsigned int kDefaultHVAPredictorTopKFutureWindowFrames = 2;
+constexpr unsigned int kDefaultHVAPredictorTopK = 5;
+constexpr double kDefaultHVAPredictorTopKLearningRate = 0.005;
+constexpr double kDefaultHVAPredictorTopKWeightDecay = 0.001;
+constexpr unsigned int kDefaultHVAPredictorFeatureLagCount = 5;
+constexpr unsigned int kDefaultHVAPredictorFeatureContextRadiusTiles = 1;
+constexpr double kDefaultHVAPredictorEventThresholdQuantile = 0.85;
+// HVA tiles average sparse L23E activity, so the fixed floor must stay below
+// typical tile-mean rates; the train-only quantile remains the primary event definition.
+constexpr double kDefaultHVAPredictorEventThresholdMinHz = 0.05;
+constexpr unsigned int kDefaultHVAPredictorEventMinTrainPositiveCount = 2;
+constexpr unsigned int kHVAPredictorTraceChannelCount = 3;
+constexpr unsigned int kHVAPredictorBaseFeatureChannelCount = 5;
+constexpr unsigned int kHVAPredictorContextSummaryFeatureCount = 3;
+constexpr unsigned int kHVAPredictorRequiredTargetChannelCount = 1;
+constexpr double kHVAPredictorFeatureStdFloor = 1.0e-3;
+constexpr double kHVAPredictorEventRateFloor = 1.0e-4;
+constexpr double kHVAPredictorFastTraceTauMs = 50.0;
+constexpr double kHVAPredictorMediumTraceTauMs = 150.0;
+constexpr double kHVAPredictorSlowTraceTauMs = 500.0;
 constexpr unsigned int kDefaultRecurrentOnlyConsolidationEpochs = 18;
 constexpr char kTrainingGratingModeLegacy[] = "legacy";
 constexpr char kTrainingGratingModePhaseDrift[] = "phase_drift";
@@ -528,6 +573,12 @@ struct L4IntersiteConfig {
     double l4pv_to_l4e_scale = v1_genn::kL4IntersiteWeightScale;
 };
 
+struct L23ESOMBroadRecruitmentConfig {
+    bool enabled = false;
+    unsigned int radius = kDefaultL23ESOMBroadRecruitmentRadius;
+    double weight_scale = kDefaultL23ESOMBroadRecruitmentWeightScale;
+};
+
 struct TrainingGratingConfig {
     bool phase_drift_enabled = false;
     std::string mode = kTrainingGratingModeLegacy;
@@ -559,6 +610,67 @@ struct SensoryAssayConfig {
     double contrast_radius_sites = kDefaultCenterStimulusRadiusSites;
     std::vector<double> contrasts;
 };
+
+struct VideoReplayConfig {
+    bool enabled = false;
+    std::string drive_path;
+    unsigned int frame_count = 0;
+    unsigned int max_frames = 0;
+    unsigned int effective_frame_count = 0;
+    unsigned int repeat_count = 1;
+    double frame_ms = kDefaultVideoFrameMs;
+};
+
+struct VideoEventTimingConfig {
+    bool enabled = false;
+    unsigned int max_events = 0;
+    unsigned int effective_event_count = 0;
+    unsigned int repeat_count = kDefaultVideoEventRepeatCount;
+    unsigned int gray_control_count = kDefaultVideoEventControlCount;
+    unsigned int blank_control_count = kDefaultVideoEventControlCount;
+    double pre_ms = kDefaultVideoEventPreMs;
+    double post_ms = kDefaultVideoEventPostMs;
+    double bin_ms = kDefaultVideoEventBinMs;
+    double gray_current = kDefaultVideoEventGrayCurrent;
+    bool gray_from_frame_mean = true;
+};
+
+struct HVAPredictorConfig {
+    bool enabled = false;
+    unsigned int tile_size_sites = kDefaultHVAPredictorTileSizeSites;
+    unsigned int tile_grid_side = 0;
+    unsigned int delay_frames = kDefaultHVAPredictorDelayFrames;
+    double trace_tau_frames = kDefaultHVAPredictorTraceTauFrames;
+    double learning_rate = kDefaultHVAPredictorLearningRate;
+    double event_learning_rate = kDefaultHVAPredictorEventLearningRate;
+    double bias_learning_rate = kDefaultHVAPredictorBiasLearningRate;
+    double event_bias_learning_rate = kDefaultHVAPredictorEventBiasLearningRate;
+    double weight_decay = kDefaultHVAPredictorWeightDecay;
+    double event_weight_decay = kDefaultHVAPredictorEventWeightDecay;
+    double event_residual_gain = kDefaultHVAPredictorEventResidualGain;
+    double rate_scale_hz = kDefaultHVAPredictorRateScaleHz;
+    double weight_clip = kDefaultHVAPredictorWeightClip;
+    double heldout_fraction = kDefaultHVAPredictorHeldoutFraction;
+    unsigned int local_radius_tiles = kDefaultHVAPredictorLocalRadiusTiles;
+    unsigned int training_epochs = kDefaultHVAPredictorTrainingEpochs;
+    unsigned int event_window_frames = kDefaultHVAPredictorEventWindowFrames;
+    unsigned int topk_future_window_frames = kDefaultHVAPredictorTopKFutureWindowFrames;
+    unsigned int topk_k = kDefaultHVAPredictorTopK;
+    double topk_learning_rate = kDefaultHVAPredictorTopKLearningRate;
+    double topk_weight_decay = kDefaultHVAPredictorTopKWeightDecay;
+    unsigned int feature_lag_count = kDefaultHVAPredictorFeatureLagCount;
+    unsigned int feature_context_radius_tiles = kDefaultHVAPredictorFeatureContextRadiusTiles;
+    double event_threshold_quantile = kDefaultHVAPredictorEventThresholdQuantile;
+    double event_threshold_min_hz = kDefaultHVAPredictorEventThresholdMinHz;
+    unsigned int event_min_train_positive_count = kDefaultHVAPredictorEventMinTrainPositiveCount;
+};
+
+unsigned int hvaPredictorFeatureChannelCount(const HVAPredictorConfig &config)
+{
+    return kHVAPredictorBaseFeatureChannelCount
+        + config.feature_lag_count
+        + (kHVAPredictorContextSummaryFeatureCount * (config.feature_lag_count + 1u));
+}
 
 struct ConnectivityStats {
     std::size_t edge_count = 0;
@@ -638,6 +750,137 @@ struct ContrastTrialRecord {
     double orientation_rad = 0.0;
     double aperture_radius_sites = kDefaultCenterStimulusRadiusSites;
     TrialWindow trial{};
+};
+
+struct VideoFrameRecord {
+    unsigned int repeat_index = 0;
+    unsigned int frame_index = 0;
+    TrialWindow trial{};
+    double drive_min = 0.0;
+    double drive_mean = 0.0;
+    double drive_max = 0.0;
+    double drive_std = 0.0;
+};
+
+struct VideoEventTimingRecord {
+    std::string condition;
+    unsigned int repeat_index = 0;
+    unsigned int event_index = 0;
+    unsigned int frame_index = 0;
+    TrialWindow trial{};
+    double event_start_ms = 0.0;
+    double gray_current = 0.0;
+    double drive_min = 0.0;
+    double drive_mean = 0.0;
+    double drive_max = 0.0;
+    double drive_std = 0.0;
+};
+
+struct HVAPredictorRateRow {
+    unsigned int sample_index = 0;
+    unsigned int repeat_index = 0;
+    unsigned int frame_index = 0;
+    unsigned int tile_id = 0;
+    unsigned int tile_x = 0;
+    unsigned int tile_y = 0;
+    double l23e_rate_hz = 0.0;
+    double state_norm = 0.0;
+    double eligibility_trace = 0.0;
+    double trace_fast = 0.0;
+    double trace_medium = 0.0;
+    double trace_slow = 0.0;
+    double derivative = 0.0;
+};
+
+struct HVAPredictorPredictionRow {
+    unsigned int prediction_index = 0;
+    unsigned int repeat_index = 0;
+    unsigned int frame_index = 0;
+    unsigned int target_frame_index = 0;
+    unsigned int target_channel_index = 0;
+    std::string target_channel = "l23e";
+    unsigned int tile_id = 0;
+    unsigned int tile_x = 0;
+    unsigned int tile_y = 0;
+    std::string split = "train";
+    bool learning_update_applied = false;
+    double current_state_norm = 0.0;
+    double target_state_norm = 0.0;
+    double predicted_state_norm = 0.0;
+    double target_residual_norm = 0.0;
+    double predicted_residual_norm = 0.0;
+    double target_residual_z = 0.0;
+    double predicted_residual_z = 0.0;
+    double train_residual_mean_norm = 0.0;
+    double train_residual_std_norm = 1.0;
+    double persistence_pred_state_norm = 0.0;
+    double train_mean_pred_state_norm = 0.0;
+    double no_learning_pred_state_norm = 0.0;
+    double temporal_block_shift_pred_state_norm = 0.0;
+    double spatial_tile_shuffle_pred_state_norm = 0.0;
+    double target_rate_hz = 0.0;
+    double predicted_rate_hz = 0.0;
+    double error_rate_hz = 0.0;
+    double event_window_target_state_norm = 0.0;
+    double event_threshold_norm = 0.0;
+    bool event_tile_selected = false;
+    unsigned int target_event = 0;
+    unsigned int single_frame_target_event = 0;
+    double predicted_event_prob = 0.0;
+    double persistence_event_prob = 0.0;
+    double train_event_rate = 0.0;
+    double no_learning_event_prob = 0.0;
+    double temporal_block_shift_event_prob = 0.0;
+    double spatial_tile_shuffle_event_prob = 0.0;
+    double event_error = 0.0;
+    double topk_target_value_norm = 0.0;
+    bool topk_target = false;
+    bool topk_sample_valid = false;
+    double topk_model_score = 0.0;
+    double topk_model_prob = 0.0;
+    double topk_persistence_score = 0.0;
+    double topk_train_frequency_score = 0.0;
+    double topk_no_learning_score = 0.0;
+    double topk_temporal_block_shift_score = 0.0;
+    double topk_spatial_tile_shuffle_score = 0.0;
+};
+
+struct HVAPredictorEventTileRow {
+    unsigned int target_channel_index = 0;
+    std::string target_channel = "l23e";
+    unsigned int tile_id = 0;
+    unsigned int tile_x = 0;
+    unsigned int tile_y = 0;
+    double threshold_norm = 0.0;
+    double threshold_hz = 0.0;
+    unsigned int train_count = 0;
+    unsigned int train_positive_count = 0;
+    unsigned int train_negative_count = 0;
+    unsigned int heldout_count = 0;
+    unsigned int heldout_positive_count = 0;
+    double train_positive_fraction = 0.0;
+    double heldout_positive_fraction = 0.0;
+    bool selected = false;
+};
+
+struct HVAPredictorResult {
+    std::vector<HVAPredictorRateRow> rates;
+    std::vector<HVAPredictorPredictionRow> predictions;
+    std::vector<HVAPredictorEventTileRow> event_tiles;
+    std::vector<std::string> target_channels;
+    std::vector<bool> target_channel_required;
+    std::vector<double> weights_before;
+    std::vector<double> weights_after;
+    std::vector<double> readout_weights_before;
+    std::vector<double> readout_weights_after;
+    std::vector<double> biases_after;
+    std::vector<double> event_weights_before;
+    std::vector<double> event_weights_after;
+    std::vector<double> event_biases_after;
+    std::vector<double> topk_weights_before;
+    std::vector<double> topk_weights_after;
+    std::vector<double> topk_biases_after;
+    std::vector<std::pair<std::string, double>> metrics;
 };
 
 L4L23OrientationConfig getL4L23OrientationConfig();
@@ -1102,6 +1345,31 @@ L4IntersiteConfig getL4IntersiteConfig()
     return config;
 }
 
+L23ESOMBroadRecruitmentConfig getL23ESOMBroadRecruitmentConfig()
+{
+    L23ESOMBroadRecruitmentConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_L23E_SOM_BROAD_RECRUIT_ENABLE", 0u) != 0u;
+    config.radius = getEnvUnsignedOrDefault(
+        "V1_L23E_SOM_BROAD_RECRUIT_RADIUS",
+        kDefaultL23ESOMBroadRecruitmentRadius);
+    config.weight_scale = getEnvDoubleOrDefault(
+        "V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE",
+        kDefaultL23ESOMBroadRecruitmentWeightScale);
+    if(config.radius == 0u || config.radius >= v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_L23E_SOM_BROAD_RECRUIT_RADIUS must be in [1, V1_SHEET_SIDE).");
+    }
+    if(config.weight_scale < 0.0 || config.weight_scale > 1.0) {
+        throw std::runtime_error("V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE must be in [0, 1].");
+    }
+    if(config.enabled && config.radius <= v1_genn::kL23SOMInputRadius) {
+        throw std::runtime_error("V1_L23E_SOM_BROAD_RECRUIT_RADIUS must exceed kL23SOMInputRadius when enabled.");
+    }
+    if(config.enabled && config.weight_scale == 0.0) {
+        throw std::runtime_error("V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE must be positive when enabled.");
+    }
+    return config;
+}
+
 TrainingGratingConfig getTrainingGratingConfig()
 {
     TrainingGratingConfig config;
@@ -1181,6 +1449,367 @@ SensoryAssayConfig getSensoryAssayConfig()
         }
     }
     return config;
+}
+
+VideoReplayConfig getVideoReplayConfig()
+{
+    VideoReplayConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_VIDEO_REPLAY_ENABLE", 0u) != 0u;
+    config.drive_path = getEnvOrDefault("V1_VIDEO_DRIVE_BIN", "");
+    config.frame_count = getEnvUnsignedOrDefault("V1_VIDEO_FRAME_COUNT", 0u);
+    config.max_frames = getEnvUnsignedOrDefault("V1_VIDEO_MAX_FRAMES", 0u);
+    config.repeat_count = getEnvUnsignedOrDefault("V1_VIDEO_REPLAY_REPEAT_COUNT", 1u);
+    config.frame_ms = getEnvDoubleOrDefault("V1_VIDEO_FRAME_MS", kDefaultVideoFrameMs);
+    if(!config.enabled) {
+        return config;
+    }
+    if(config.drive_path.empty()) {
+        throw std::runtime_error("V1_VIDEO_DRIVE_BIN is required when V1_VIDEO_REPLAY_ENABLE=1.");
+    }
+    if(config.frame_count == 0u) {
+        throw std::runtime_error("V1_VIDEO_FRAME_COUNT must be positive when V1_VIDEO_REPLAY_ENABLE=1.");
+    }
+    if(config.frame_ms <= 0.0 || !std::isfinite(config.frame_ms)) {
+        throw std::runtime_error("V1_VIDEO_FRAME_MS must be finite and positive.");
+    }
+    if(config.repeat_count == 0u) {
+        throw std::runtime_error("V1_VIDEO_REPLAY_REPEAT_COUNT must be at least 1.");
+    }
+    config.effective_frame_count = (config.max_frames > 0u)
+        ? std::min(config.frame_count, config.max_frames)
+        : config.frame_count;
+    if(config.effective_frame_count == 0u) {
+        throw std::runtime_error("V1_VIDEO_MAX_FRAMES selected zero frames.");
+    }
+    return config;
+}
+
+VideoEventTimingConfig getVideoEventTimingConfig(const VideoReplayConfig &video_config)
+{
+    VideoEventTimingConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_VIDEO_EVENT_TIMING_ENABLE", 0u) != 0u;
+    config.max_events = getEnvUnsignedOrDefault("V1_VIDEO_EVENT_MAX_EVENTS", 0u);
+    config.repeat_count = getEnvUnsignedOrDefault("V1_VIDEO_EVENT_REPEAT_COUNT", kDefaultVideoEventRepeatCount);
+    config.gray_control_count = getEnvUnsignedOrDefault(
+        "V1_VIDEO_EVENT_GRAY_CONTROL_COUNT",
+        kDefaultVideoEventControlCount);
+    config.blank_control_count = getEnvUnsignedOrDefault(
+        "V1_VIDEO_EVENT_BLANK_CONTROL_COUNT",
+        kDefaultVideoEventControlCount);
+    config.pre_ms = getEnvDoubleOrDefault("V1_VIDEO_EVENT_PRE_MS", kDefaultVideoEventPreMs);
+    config.post_ms = getEnvDoubleOrDefault("V1_VIDEO_EVENT_POST_MS", kDefaultVideoEventPostMs);
+    config.bin_ms = getEnvDoubleOrDefault("V1_VIDEO_EVENT_BIN_MS", kDefaultVideoEventBinMs);
+    config.gray_current = getEnvDoubleOrDefault("V1_VIDEO_EVENT_GRAY_CURRENT", kDefaultVideoEventGrayCurrent);
+    config.gray_from_frame_mean = (config.gray_current < 0.0);
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!video_config.enabled) {
+        throw std::runtime_error("V1_VIDEO_EVENT_TIMING_ENABLE=1 requires V1_VIDEO_REPLAY_ENABLE=1 and a video drive.");
+    }
+    if(config.repeat_count == 0u) {
+        throw std::runtime_error("V1_VIDEO_EVENT_REPEAT_COUNT must be at least 1 when event timing is enabled.");
+    }
+    if(config.pre_ms <= 0.0 || config.post_ms <= 0.0) {
+        throw std::runtime_error("V1_VIDEO_EVENT_PRE_MS and V1_VIDEO_EVENT_POST_MS must be positive.");
+    }
+    if(config.bin_ms < 1.0 || config.bin_ms > 2.0) {
+        throw std::runtime_error("V1_VIDEO_EVENT_BIN_MS must be in [1, 2] ms.");
+    }
+    if(!config.gray_from_frame_mean && config.gray_current < 0.0) {
+        throw std::runtime_error("V1_VIDEO_EVENT_GRAY_CURRENT must be non-negative, or negative to use frame-mean gray.");
+    }
+
+    config.effective_event_count = (config.max_events > 0u)
+        ? std::min(video_config.effective_frame_count, config.max_events)
+        : video_config.effective_frame_count;
+    if(config.effective_event_count == 0u) {
+        throw std::runtime_error("V1_VIDEO_EVENT_MAX_EVENTS selected zero events.");
+    }
+    config.gray_control_count = std::min(config.gray_control_count, config.effective_event_count);
+    config.blank_control_count = std::min(config.blank_control_count, config.effective_event_count);
+    return config;
+}
+
+HVAPredictorConfig getHVAPredictorConfig(const VideoReplayConfig &video_config)
+{
+    HVAPredictorConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_HVA_PREDICTOR_ENABLE", 0u) != 0u;
+    config.tile_size_sites = getEnvUnsignedOrDefault(
+        "V1_HVA_PREDICTOR_TILE_SIZE_SITES",
+        kDefaultHVAPredictorTileSizeSites);
+    const char *tile_grid_side_env = std::getenv("V1_HVA_PREDICTOR_TILE_GRID_SIDE");
+    if(tile_grid_side_env != nullptr && tile_grid_side_env[0] != '\0') {
+        config.tile_grid_side = getEnvUnsignedOrDefault("V1_HVA_PREDICTOR_TILE_GRID_SIDE", 0u);
+    }
+    else if(config.tile_size_sites > 0u) {
+        config.tile_grid_side =
+            (v1_genn::kSheetSide + config.tile_size_sites - 1u) / config.tile_size_sites;
+    }
+    config.delay_frames = getEnvUnsignedOrDefault(
+        "V1_HVA_PREDICTOR_DELAY_FRAMES",
+        kDefaultHVAPredictorDelayFrames);
+    config.trace_tau_frames = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_TRACE_TAU_FRAMES",
+        kDefaultHVAPredictorTraceTauFrames);
+    const double legacy_learning_rate = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_LEARNING_RATE",
+        kDefaultHVAPredictorLearningRate);
+    config.learning_rate = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_RESIDUAL_LEARNING_RATE",
+        legacy_learning_rate);
+    config.event_learning_rate = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_EVENT_LEARNING_RATE",
+        kDefaultHVAPredictorEventLearningRate);
+    config.bias_learning_rate = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_BIAS_LEARNING_RATE",
+        kDefaultHVAPredictorBiasLearningRate);
+    config.event_bias_learning_rate = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_EVENT_BIAS_LEARNING_RATE",
+        kDefaultHVAPredictorEventBiasLearningRate);
+    config.weight_decay = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_WEIGHT_DECAY",
+        kDefaultHVAPredictorWeightDecay);
+    config.event_weight_decay = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_EVENT_WEIGHT_DECAY",
+        kDefaultHVAPredictorEventWeightDecay);
+    config.event_residual_gain = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_EVENT_RESIDUAL_GAIN",
+        kDefaultHVAPredictorEventResidualGain);
+    config.rate_scale_hz = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_RATE_SCALE_HZ",
+        kDefaultHVAPredictorRateScaleHz);
+    config.weight_clip = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_WEIGHT_CLIP",
+        kDefaultHVAPredictorWeightClip);
+    config.heldout_fraction = getEnvDoubleOrDefault(
+        "V1_HVA_PREDICTOR_HELDOUT_FRACTION",
+        kDefaultHVAPredictorHeldoutFraction);
+    config.local_radius_tiles = getEnvUnsignedOrDefault(
+        "V1_HVA_PREDICTOR_LOCAL_RADIUS_TILES",
+        kDefaultHVAPredictorLocalRadiusTiles);
+    config.training_epochs = getEnvUnsignedOrDefault(
+        "V1_HVA_PREDICTOR_EPOCHS",
+        kDefaultHVAPredictorTrainingEpochs);
+    config.event_window_frames = getEnvUnsignedOrDefault(
+        "V1_HVA_EVENT_WINDOW_FRAMES",
+        kDefaultHVAPredictorEventWindowFrames);
+    config.topk_future_window_frames = getEnvUnsignedOrDefault(
+        "V1_HVA_TOPK_FUTURE_WINDOW_FRAMES",
+        kDefaultHVAPredictorTopKFutureWindowFrames);
+    config.topk_k = getEnvUnsignedOrDefault(
+        "V1_HVA_TOPK_K",
+        kDefaultHVAPredictorTopK);
+    config.topk_learning_rate = getEnvDoubleOrDefault(
+        "V1_HVA_TOPK_LEARNING_RATE",
+        kDefaultHVAPredictorTopKLearningRate);
+    config.topk_weight_decay = getEnvDoubleOrDefault(
+        "V1_HVA_TOPK_WEIGHT_DECAY",
+        kDefaultHVAPredictorTopKWeightDecay);
+    config.feature_lag_count = getEnvUnsignedOrDefault(
+        "V1_HVA_FEATURE_LAG_COUNT",
+        kDefaultHVAPredictorFeatureLagCount);
+    config.feature_context_radius_tiles = getEnvUnsignedOrDefault(
+        "V1_HVA_FEATURE_CONTEXT_RADIUS_TILES",
+        kDefaultHVAPredictorFeatureContextRadiusTiles);
+    config.event_threshold_quantile = getEnvDoubleOrDefault(
+        "V1_HVA_EVENT_THRESHOLD_QUANTILE",
+        kDefaultHVAPredictorEventThresholdQuantile);
+    config.event_threshold_min_hz = getEnvDoubleOrDefault(
+        "V1_HVA_EVENT_THRESHOLD_MIN_HZ",
+        kDefaultHVAPredictorEventThresholdMinHz);
+    config.event_min_train_positive_count = getEnvUnsignedOrDefault(
+        "V1_HVA_EVENT_MIN_TRAIN_POSITIVES",
+        kDefaultHVAPredictorEventMinTrainPositiveCount);
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!video_config.enabled) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_ENABLE=1 requires V1_VIDEO_REPLAY_ENABLE=1.");
+    }
+    if(config.tile_size_sites == 0u || config.tile_size_sites > v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_TILE_SIZE_SITES must be in [1, V1_SHEET_SIDE].");
+    }
+    if(config.tile_grid_side == 0u || config.tile_grid_side > v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_TILE_GRID_SIDE must be in [1, V1_SHEET_SIDE], or set a valid tile size.");
+    }
+    if(config.delay_frames == 0u || config.delay_frames >= video_config.effective_frame_count) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_DELAY_FRAMES must be in [1, effective video frame count).");
+    }
+    if(config.trace_tau_frames <= 0.0 || !std::isfinite(config.trace_tau_frames)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_TRACE_TAU_FRAMES must be finite and positive.");
+    }
+    if(config.learning_rate < 0.0 || !std::isfinite(config.learning_rate)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_RESIDUAL_LEARNING_RATE must be finite and non-negative.");
+    }
+    if(config.event_learning_rate < 0.0 || !std::isfinite(config.event_learning_rate)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_EVENT_LEARNING_RATE must be finite and non-negative.");
+    }
+    if(config.bias_learning_rate < 0.0 || !std::isfinite(config.bias_learning_rate)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_BIAS_LEARNING_RATE must be finite and non-negative.");
+    }
+    if(config.event_bias_learning_rate < 0.0 || !std::isfinite(config.event_bias_learning_rate)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_EVENT_BIAS_LEARNING_RATE must be finite and non-negative.");
+    }
+    if(config.weight_decay < 0.0 || config.weight_decay >= 1.0 || !std::isfinite(config.weight_decay)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_WEIGHT_DECAY must be finite and in [0, 1).");
+    }
+    if(config.event_weight_decay < 0.0 || config.event_weight_decay >= 1.0 || !std::isfinite(config.event_weight_decay)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_EVENT_WEIGHT_DECAY must be finite and in [0, 1).");
+    }
+    if(config.event_residual_gain < 0.0 || !std::isfinite(config.event_residual_gain)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_EVENT_RESIDUAL_GAIN must be finite and non-negative.");
+    }
+    if(config.rate_scale_hz <= 0.0 || !std::isfinite(config.rate_scale_hz)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_RATE_SCALE_HZ must be finite and positive.");
+    }
+    if(config.weight_clip <= 0.0 || !std::isfinite(config.weight_clip)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_WEIGHT_CLIP must be finite and positive.");
+    }
+    if(config.heldout_fraction <= 0.0 || config.heldout_fraction >= 1.0 || !std::isfinite(config.heldout_fraction)) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_HELDOUT_FRACTION must be finite and in (0, 1).");
+    }
+    if(config.local_radius_tiles >= config.tile_grid_side) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_LOCAL_RADIUS_TILES must be smaller than tile grid side.");
+    }
+    if(config.training_epochs == 0u) {
+        throw std::runtime_error("V1_HVA_PREDICTOR_EPOCHS must be at least 1.");
+    }
+    if(config.event_window_frames == 0u) {
+        throw std::runtime_error("V1_HVA_EVENT_WINDOW_FRAMES must be at least 1.");
+    }
+    if(config.topk_future_window_frames == 0u) {
+        throw std::runtime_error("V1_HVA_TOPK_FUTURE_WINDOW_FRAMES must be at least 1.");
+    }
+    if(config.topk_k == 0u || config.topk_k > (config.tile_grid_side * config.tile_grid_side)) {
+        throw std::runtime_error("V1_HVA_TOPK_K must be in [1, tile_count].");
+    }
+    if(config.topk_learning_rate < 0.0 || !std::isfinite(config.topk_learning_rate)) {
+        throw std::runtime_error("V1_HVA_TOPK_LEARNING_RATE must be finite and non-negative.");
+    }
+    if(config.topk_weight_decay < 0.0 || config.topk_weight_decay >= 1.0 || !std::isfinite(config.topk_weight_decay)) {
+        throw std::runtime_error("V1_HVA_TOPK_WEIGHT_DECAY must be finite and in [0, 1).");
+    }
+    if(config.feature_lag_count > 64u) {
+        throw std::runtime_error("V1_HVA_FEATURE_LAG_COUNT must be at most 64.");
+    }
+    if(config.feature_context_radius_tiles >= config.tile_grid_side) {
+        throw std::runtime_error("V1_HVA_FEATURE_CONTEXT_RADIUS_TILES must be smaller than tile grid side.");
+    }
+    if(config.event_threshold_quantile <= 0.0
+       || config.event_threshold_quantile >= 1.0
+       || !std::isfinite(config.event_threshold_quantile)) {
+        throw std::runtime_error("V1_HVA_EVENT_THRESHOLD_QUANTILE must be finite and in (0, 1).");
+    }
+    if(config.event_threshold_min_hz < 0.0 || !std::isfinite(config.event_threshold_min_hz)) {
+        throw std::runtime_error("V1_HVA_EVENT_THRESHOLD_MIN_HZ must be finite and non-negative.");
+    }
+    if(config.event_min_train_positive_count == 0u) {
+        throw std::runtime_error("V1_HVA_EVENT_MIN_TRAIN_POSITIVES must be at least 1.");
+    }
+    return config;
+}
+
+std::vector<float> loadVideoDriveFrames(const VideoReplayConfig &config)
+{
+    if(!config.enabled) {
+        return {};
+    }
+
+    const std::size_t frame_size = v1_genn::kNumL4E;
+    const std::size_t value_count = static_cast<std::size_t>(config.effective_frame_count) * frame_size;
+    std::vector<float> drive_frames(value_count, 0.0f);
+    std::ifstream input(config.drive_path.c_str(), std::ios::binary);
+    if(!input) {
+        throw std::runtime_error("Unable to open V1_VIDEO_DRIVE_BIN: " + config.drive_path);
+    }
+    input.read(
+        reinterpret_cast<char *>(drive_frames.data()),
+        static_cast<std::streamsize>(value_count * sizeof(float)));
+    if(input.gcount() != static_cast<std::streamsize>(value_count * sizeof(float))) {
+        std::ostringstream message;
+        message << "V1_VIDEO_DRIVE_BIN is too short for "
+                << config.effective_frame_count << " frames x "
+                << frame_size << " L4E values.";
+        throw std::runtime_error(message.str());
+    }
+    return drive_frames;
+}
+
+VideoFrameRecord summarizeVideoDriveFrame(
+    const std::vector<float> &drive_frames,
+    unsigned int repeat_index,
+    unsigned int frame_index,
+    const TrialWindow &trial)
+{
+    const std::size_t frame_size = v1_genn::kNumL4E;
+    const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
+    if(offset + frame_size > drive_frames.size()) {
+        throw std::runtime_error("Video drive frame index exceeds loaded drive data.");
+    }
+
+    VideoFrameRecord record;
+    record.repeat_index = repeat_index;
+    record.frame_index = frame_index;
+    record.trial = trial;
+    record.drive_min = std::numeric_limits<double>::infinity();
+    record.drive_max = -std::numeric_limits<double>::infinity();
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    for(std::size_t i = 0; i < frame_size; i++) {
+        const double value = static_cast<double>(drive_frames[offset + i]);
+        record.drive_min = std::min(record.drive_min, value);
+        record.drive_max = std::max(record.drive_max, value);
+        sum += value;
+        sum_sq += value * value;
+    }
+    record.drive_mean = sum / static_cast<double>(frame_size);
+    const double variance = std::max(
+        0.0,
+        (sum_sq / static_cast<double>(frame_size)) - (record.drive_mean * record.drive_mean));
+    record.drive_std = std::sqrt(variance);
+    return record;
+}
+
+VideoEventTimingRecord makeVideoEventTimingRecord(
+    const std::string &condition,
+    const std::vector<float> &drive_frames,
+    unsigned int repeat_index,
+    unsigned int event_index,
+    unsigned int frame_index,
+    const TrialWindow &trial,
+    double event_start_ms,
+    double gray_current,
+    bool use_frame_drive_stats)
+{
+    VideoEventTimingRecord record;
+    record.condition = condition;
+    record.repeat_index = repeat_index;
+    record.event_index = event_index;
+    record.frame_index = frame_index;
+    record.trial = trial;
+    record.event_start_ms = event_start_ms;
+    record.gray_current = gray_current;
+    if(use_frame_drive_stats) {
+        const VideoFrameRecord frame_record = summarizeVideoDriveFrame(
+            drive_frames,
+            repeat_index,
+            frame_index,
+            trial);
+        record.drive_min = frame_record.drive_min;
+        record.drive_mean = frame_record.drive_mean;
+        record.drive_max = frame_record.drive_max;
+        record.drive_std = frame_record.drive_std;
+    }
+    else {
+        record.drive_min = gray_current;
+        record.drive_mean = gray_current;
+        record.drive_max = gray_current;
+        record.drive_std = 0.0;
+    }
+    return record;
 }
 
 GeNN::NeuronGroup &requireNeuronGroup(GeNN::ModelSpec &model, const std::string &name)
@@ -1982,6 +2611,113 @@ std::vector<double> countPopulationRatesForTrials(
     return rates;
 }
 
+template <typename SpikeBatch>
+std::vector<double> countPopulationSpikesForEventBins(
+    const SpikeBatch &batch,
+    const std::vector<VideoEventTimingRecord> &records,
+    unsigned int bin_count,
+    double bin_ms)
+{
+    std::vector<double> counts(static_cast<std::size_t>(records.size()) * bin_count, 0.0);
+    if(records.empty()) {
+        return counts;
+    }
+
+    const auto &spike_times = batch.first;
+    const auto &spike_ids = batch.second;
+    if(spike_times.size() != spike_ids.size()) {
+        throw std::runtime_error("Recorded spike times and ids do not have matching lengths.");
+    }
+
+    std::size_t record_index = 0;
+    for(std::size_t i = 0; i < spike_times.size() && record_index < records.size(); i++) {
+        const double spike_time = static_cast<double>(spike_times[i]);
+        while(record_index < records.size() && spike_time >= records[record_index].trial.end_ms) {
+            record_index++;
+        }
+        if(record_index >= records.size()) {
+            break;
+        }
+
+        const VideoEventTimingRecord &record = records[record_index];
+        if(spike_time < record.trial.start_ms || spike_time >= record.trial.end_ms) {
+            continue;
+        }
+        const double relative_to_trial_ms = spike_time - record.trial.start_ms;
+        const unsigned int bin_index = static_cast<unsigned int>(std::floor(relative_to_trial_ms / bin_ms));
+        if(bin_index < bin_count) {
+            counts[(record_index * bin_count) + bin_index] += 1.0;
+        }
+    }
+    return counts;
+}
+
+template <typename SpikeBatch>
+std::vector<double> countSiteSpikesForEventBins(
+    const SpikeBatch &batch,
+    const std::vector<VideoEventTimingRecord> &records,
+    const std::vector<unsigned int> &site_ids,
+    unsigned int neurons_per_site,
+    unsigned int bin_count,
+    double bin_ms)
+{
+    std::vector<double> counts(
+        static_cast<std::size_t>(records.size()) * bin_count * site_ids.size(),
+        0.0);
+    if(records.empty() || site_ids.empty()) {
+        return counts;
+    }
+
+    std::vector<unsigned int> site_lookup(
+        v1_genn::kSiteCount,
+        std::numeric_limits<unsigned int>::max());
+    for(unsigned int i = 0; i < site_ids.size(); i++) {
+        if(site_ids[i] >= v1_genn::kSiteCount) {
+            throw std::runtime_error("Video event site export id exceeds site count.");
+        }
+        site_lookup[site_ids[i]] = i;
+    }
+
+    const auto &spike_times = batch.first;
+    const auto &spike_ids = batch.second;
+    if(spike_times.size() != spike_ids.size()) {
+        throw std::runtime_error("Recorded spike times and ids do not have matching lengths.");
+    }
+
+    std::size_t record_index = 0;
+    for(std::size_t i = 0; i < spike_times.size() && record_index < records.size(); i++) {
+        const double spike_time = static_cast<double>(spike_times[i]);
+        while(record_index < records.size() && spike_time >= records[record_index].trial.end_ms) {
+            record_index++;
+        }
+        if(record_index >= records.size()) {
+            break;
+        }
+
+        const VideoEventTimingRecord &record = records[record_index];
+        if(spike_time < record.trial.start_ms || spike_time >= record.trial.end_ms) {
+            continue;
+        }
+        const unsigned int neuron_id = static_cast<unsigned int>(spike_ids[i]);
+        const unsigned int site_id = neuron_id / neurons_per_site;
+        if(site_id >= v1_genn::kSiteCount) {
+            throw std::runtime_error("Recorded spike id maps outside the site grid.");
+        }
+        const unsigned int site_export_index = site_lookup[site_id];
+        if(site_export_index == std::numeric_limits<unsigned int>::max()) {
+            continue;
+        }
+        const double relative_to_trial_ms = spike_time - record.trial.start_ms;
+        const unsigned int bin_index = static_cast<unsigned int>(std::floor(relative_to_trial_ms / bin_ms));
+        if(bin_index < bin_count) {
+            const std::size_t count_index =
+                ((record_index * bin_count) + bin_index) * site_ids.size() + site_export_index;
+            counts[count_index] += 1.0;
+        }
+    }
+    return counts;
+}
+
 double meanRate(const std::vector<double> &rates)
 {
     if(rates.empty()) {
@@ -2192,6 +2928,2285 @@ double responseCorrelation(const std::vector<double> &pre_rates, const std::vect
         return 0.0;
     }
     return covariance / std::sqrt(pre_var * post_var);
+}
+
+double standardDeviation(const std::vector<double> &values)
+{
+    if(values.size() < 2u) {
+        return 0.0;
+    }
+    const double mean = meanRate(values);
+    double sum_sq = 0.0;
+    for(double value : values) {
+        const double centered = value - mean;
+        sum_sq += centered * centered;
+    }
+    return std::sqrt(sum_sq / static_cast<double>(values.size()));
+}
+
+double clippedValue(double value, double lower, double upper)
+{
+    return std::min(upper, std::max(lower, value));
+}
+
+double sumValues(const std::vector<double> &values)
+{
+    return std::accumulate(values.begin(), values.end(), 0.0);
+}
+
+double sumSquares(const std::vector<double> &values)
+{
+    double total = 0.0;
+    for(double value : values) {
+        total += value * value;
+    }
+    return total;
+}
+
+std::uint32_t quantizedVectorFingerprint32(const std::vector<double> &values)
+{
+    std::uint64_t hash = 1469598103934665603ull;
+    for(double value : values) {
+        const std::int64_t quantized = static_cast<std::int64_t>(std::llround(value * 1000000.0));
+        std::uint64_t encoded = static_cast<std::uint64_t>(quantized);
+        for(unsigned int byte_index = 0; byte_index < 8u; byte_index++) {
+            hash ^= (encoded & 0xffu);
+            hash *= 1099511628211ull;
+            encoded >>= 8u;
+        }
+    }
+    return static_cast<std::uint32_t>(hash & 0xffffffffu);
+}
+
+unsigned int hvaTileIdForSite(unsigned int site_id, unsigned int tile_grid_side)
+{
+    const auto xy = v1_genn::siteIndexToXY(site_id);
+    const unsigned int tile_x = std::min(
+        tile_grid_side - 1u,
+        (xy.first * tile_grid_side) / v1_genn::kSheetSide);
+    const unsigned int tile_y = std::min(
+        tile_grid_side - 1u,
+        (xy.second * tile_grid_side) / v1_genn::kSheetSide);
+    return (tile_y * tile_grid_side) + tile_x;
+}
+
+HVAPredictorResult trainHVAPredictorSidecar(
+    const HVAPredictorConfig &config,
+    const VideoReplayConfig &video_config,
+    const std::vector<VideoFrameRecord> &frame_records,
+    const std::vector<double> &l23e_site_spike_counts)
+{
+    HVAPredictorResult result;
+    if(!config.enabled) {
+        return result;
+    }
+    if(frame_records.size() != (static_cast<std::size_t>(video_config.effective_frame_count)
+                                * static_cast<std::size_t>(video_config.repeat_count))) {
+        throw std::runtime_error("HVA predictor expected one video frame record per replay presentation.");
+    }
+    const std::size_t expected_site_count_size =
+        frame_records.size() * static_cast<std::size_t>(v1_genn::kSiteCount);
+    if(l23e_site_spike_counts.size() != expected_site_count_size) {
+        throw std::runtime_error("HVA predictor L23E site count vector has unexpected size.");
+    }
+
+    struct HVATargetChannelSpec {
+        std::string name;
+        const std::vector<double> *site_spike_counts = nullptr;
+        unsigned int neurons_per_site = 1u;
+        bool required = true;
+    };
+    std::vector<HVATargetChannelSpec> target_specs{
+        {"l23e", &l23e_site_spike_counts, v1_genn::kL23EPerSite, true},
+    };
+    result.target_channels.reserve(target_specs.size());
+    result.target_channel_required.reserve(target_specs.size());
+    for(const HVATargetChannelSpec &target_spec : target_specs) {
+        result.target_channels.push_back(target_spec.name);
+        result.target_channel_required.push_back(target_spec.required);
+    }
+
+    const unsigned int tile_count = config.tile_grid_side * config.tile_grid_side;
+    const unsigned int target_channel_count = static_cast<unsigned int>(target_specs.size());
+    const unsigned int feature_channel_count = hvaPredictorFeatureChannelCount(config);
+    const std::size_t pair_count = static_cast<std::size_t>(tile_count) * tile_count;
+    const std::size_t target_pair_count =
+        static_cast<std::size_t>(target_channel_count) * pair_count;
+    const std::size_t readout_weight_count = target_pair_count * feature_channel_count;
+    const double trace_decay = std::exp(-1.0 / config.trace_tau_frames);
+    const std::array<double, kHVAPredictorTraceChannelCount> trace_tau_ms = {{
+        kHVAPredictorFastTraceTauMs,
+        kHVAPredictorMediumTraceTauMs,
+        kHVAPredictorSlowTraceTauMs,
+    }};
+    std::array<double, kHVAPredictorTraceChannelCount> trace_tau_frames{};
+    std::array<double, kHVAPredictorTraceChannelCount> trace_decays{};
+    for(unsigned int channel = 0; channel < kHVAPredictorTraceChannelCount; channel++) {
+        trace_tau_frames[channel] = std::max(1.0e-6, trace_tau_ms[channel] / video_config.frame_ms);
+        trace_decays[channel] = std::exp(-1.0 / trace_tau_frames[channel]);
+    }
+    std::vector<unsigned int> sites_per_tile(tile_count, 0u);
+    for(unsigned int site_id = 0; site_id < v1_genn::kSiteCount; site_id++) {
+        sites_per_tile[hvaTileIdForSite(site_id, config.tile_grid_side)]++;
+    }
+
+    const auto pairIndex = [&](unsigned int post_tile, unsigned int pre_tile) {
+        return (static_cast<std::size_t>(post_tile) * tile_count) + pre_tile;
+    };
+    const auto targetTileIndex = [&](unsigned int target_channel, unsigned int tile_id) {
+        return (static_cast<std::size_t>(target_channel) * tile_count) + tile_id;
+    };
+    const auto targetPairIndex = [&](unsigned int target_channel, unsigned int post_tile, unsigned int pre_tile) {
+        return (static_cast<std::size_t>(target_channel) * pair_count) + pairIndex(post_tile, pre_tile);
+    };
+    const auto readoutIndex = [&](unsigned int target_channel,
+                                  unsigned int post_tile,
+                                  unsigned int pre_tile,
+                                  unsigned int feature) {
+        return (targetPairIndex(target_channel, post_tile, pre_tile) * feature_channel_count) + feature;
+    };
+    const auto manhattanDistance = [&](unsigned int pre_tile, unsigned int post_tile) {
+        const int dx = static_cast<int>(pre_tile % config.tile_grid_side)
+            - static_cast<int>(post_tile % config.tile_grid_side);
+        const int dy = static_cast<int>(pre_tile / config.tile_grid_side)
+            - static_cast<int>(post_tile / config.tile_grid_side);
+        return static_cast<unsigned int>(std::abs(dx) + std::abs(dy));
+    };
+    const auto localReadoutEnabled = [&](unsigned int pre_tile, unsigned int post_tile) {
+        return manhattanDistance(pre_tile, post_tile) <= config.local_radius_tiles;
+    };
+
+    const std::size_t sample_count = frame_records.size();
+    const auto makeTileRates = [&](const std::vector<double> &site_spike_counts,
+                                   unsigned int neurons_per_site) {
+        std::vector<double> rates(sample_count * static_cast<std::size_t>(tile_count), 0.0);
+        for(std::size_t sample_index = 0; sample_index < sample_count; sample_index++) {
+            const double measurement_duration_s =
+                (frame_records[sample_index].trial.end_ms - frame_records[sample_index].trial.measure_start_ms) / 1000.0;
+            if(measurement_duration_s <= 0.0) {
+                throw std::runtime_error("HVA predictor video replay trial duration must be positive.");
+            }
+            for(unsigned int site_id = 0; site_id < v1_genn::kSiteCount; site_id++) {
+                const unsigned int tile_id = hvaTileIdForSite(site_id, config.tile_grid_side);
+                const double spikes = site_spike_counts[
+                    (sample_index * static_cast<std::size_t>(v1_genn::kSiteCount)) + site_id];
+                const double site_rate_hz =
+                    spikes / (measurement_duration_s * static_cast<double>(neurons_per_site));
+                rates[(sample_index * tile_count) + tile_id] += site_rate_hz;
+            }
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                if(sites_per_tile[tile_id] == 0u) {
+                    throw std::runtime_error("HVA predictor tile grid produced an empty tile.");
+                }
+                rates[(sample_index * tile_count) + tile_id] /=
+                    static_cast<double>(sites_per_tile[tile_id]);
+            }
+        }
+        return rates;
+    };
+
+    std::vector<double> input_tile_rates =
+        makeTileRates(l23e_site_spike_counts, v1_genn::kL23EPerSite);
+    std::vector<std::vector<double>> target_tile_rates;
+    target_tile_rates.reserve(target_channel_count);
+    for(const HVATargetChannelSpec &target_spec : target_specs) {
+        target_tile_rates.push_back(makeTileRates(*target_spec.site_spike_counts, target_spec.neurons_per_site));
+    }
+
+    auto normalizedRate = [&](double rate_hz) {
+        return clippedValue(rate_hz / config.rate_scale_hz, 0.0, 1.0);
+    };
+    const auto sigmoid = [](double value) {
+        const double clipped = clippedValue(value, -60.0, 60.0);
+        return 1.0 / (1.0 + std::exp(-clipped));
+    };
+    const auto logit = [](double probability) {
+        const double p = clippedValue(
+            probability,
+            kHVAPredictorEventRateFloor,
+            1.0 - kHVAPredictorEventRateFloor);
+        return std::log(p / (1.0 - p));
+    };
+    const auto quantileValue = [](std::vector<double> values, double quantile) {
+        if(values.empty()) {
+            return 0.0;
+        }
+        std::sort(values.begin(), values.end());
+        const double position = quantile * static_cast<double>(values.size() - 1u);
+        const std::size_t lower_index = static_cast<std::size_t>(std::floor(position));
+        const std::size_t upper_index = std::min(lower_index + 1u, values.size() - 1u);
+        const double fraction = position - static_cast<double>(lower_index);
+        return values[lower_index] + (fraction * (values[upper_index] - values[lower_index]));
+    };
+    const auto featureIndex = [&](std::size_t sample_index, unsigned int tile_id, unsigned int feature) {
+        return ((sample_index * static_cast<std::size_t>(tile_count) + tile_id)
+                * feature_channel_count)
+            + feature;
+    };
+    std::vector<double> feature_series(
+        sample_count * static_cast<std::size_t>(tile_count) * feature_channel_count,
+        0.0);
+    const auto inputStateAtLag = [&](unsigned int repeat_index,
+                                     unsigned int frame_index,
+                                     unsigned int tile_id,
+                                     unsigned int lag) {
+        if(frame_index < lag) {
+            return 0.0;
+        }
+        const std::size_t lag_sample_index =
+            (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count)
+            + (frame_index - lag);
+        return normalizedRate(input_tile_rates[(lag_sample_index * tile_count) + tile_id]);
+    };
+    for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+        std::vector<double> traces(
+            static_cast<std::size_t>(tile_count) * kHVAPredictorTraceChannelCount,
+            0.0);
+        std::vector<double> previous_state(tile_count, 0.0);
+        for(unsigned int frame_index = 0; frame_index < video_config.effective_frame_count; frame_index++) {
+            const std::size_t sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                const double current_state =
+                    normalizedRate(input_tile_rates[(sample_index * tile_count) + tile_id]);
+                const double derivative =
+                    (frame_index == 0u) ? 0.0 : (current_state - previous_state[tile_id]);
+                feature_series[featureIndex(sample_index, tile_id, 0u)] = current_state;
+                for(unsigned int channel = 0; channel < kHVAPredictorTraceChannelCount; channel++) {
+                    const std::size_t trace_index =
+                        (static_cast<std::size_t>(tile_id) * kHVAPredictorTraceChannelCount) + channel;
+                    traces[trace_index] =
+                        (trace_decays[channel] * traces[trace_index])
+                        + ((1.0 - trace_decays[channel]) * current_state);
+                    feature_series[featureIndex(sample_index, tile_id, 1u + channel)] =
+                        traces[trace_index];
+                }
+                feature_series[featureIndex(sample_index, tile_id, 4u)] = derivative;
+                previous_state[tile_id] = current_state;
+                unsigned int feature_offset = kHVAPredictorBaseFeatureChannelCount;
+                for(unsigned int lag = 1u; lag <= config.feature_lag_count; lag++) {
+                    feature_series[featureIndex(sample_index, tile_id, feature_offset)] =
+                        inputStateAtLag(repeat_index, frame_index, tile_id, lag);
+                    feature_offset++;
+                }
+                for(unsigned int lag = 0u; lag <= config.feature_lag_count; lag++) {
+                    double neighbor_sum = 0.0;
+                    double neighbor_max = 0.0;
+                    double neighbor_active_count = 0.0;
+                    unsigned int neighbor_count = 0u;
+                    for(unsigned int other_tile = 0; other_tile < tile_count; other_tile++) {
+                        const unsigned int distance = manhattanDistance(other_tile, tile_id);
+                        if(distance == 0u || distance > config.feature_context_radius_tiles) {
+                            continue;
+                        }
+                        const double neighbor_state =
+                            inputStateAtLag(repeat_index, frame_index, other_tile, lag);
+                        neighbor_sum += neighbor_state;
+                        neighbor_max = std::max(neighbor_max, neighbor_state);
+                        neighbor_active_count += (neighbor_state > 0.0) ? 1.0 : 0.0;
+                        neighbor_count++;
+                    }
+                    const double neighbor_mean = (neighbor_count > 0u)
+                        ? (neighbor_sum / static_cast<double>(neighbor_count))
+                        : 0.0;
+                    const double neighbor_active_fraction = (neighbor_count > 0u)
+                        ? (neighbor_active_count / static_cast<double>(neighbor_count))
+                        : 0.0;
+                    feature_series[featureIndex(sample_index, tile_id, feature_offset)] =
+                        neighbor_mean;
+                    feature_offset++;
+                    feature_series[featureIndex(sample_index, tile_id, feature_offset)] =
+                        neighbor_max;
+                    feature_offset++;
+                    feature_series[featureIndex(sample_index, tile_id, feature_offset)] =
+                        neighbor_active_fraction;
+                    feature_offset++;
+                }
+            }
+        }
+    }
+    const auto eventWindowTargetState = [&](unsigned int target_channel,
+                                            unsigned int repeat_index,
+                                            unsigned int start_frame,
+                                            unsigned int tile_id) {
+        const unsigned int end_frame = std::min(
+            video_config.effective_frame_count,
+            start_frame + config.event_window_frames);
+        double window_max = 0.0;
+        for(unsigned int frame = start_frame; frame < end_frame; frame++) {
+            const std::size_t sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame;
+            window_max = std::max(
+                window_max,
+                normalizedRate(target_tile_rates[target_channel][(sample_index * tile_count) + tile_id]));
+        }
+        return window_max;
+    };
+    const auto topKWindowTargetValues = [&](unsigned int repeat_index,
+                                            unsigned int start_frame) {
+        std::vector<double> values(tile_count, 0.0);
+        const unsigned int end_frame = std::min(
+            video_config.effective_frame_count,
+            start_frame + config.topk_future_window_frames);
+        const unsigned int frame_count = end_frame > start_frame ? (end_frame - start_frame) : 0u;
+        if(frame_count == 0u) {
+            return values;
+        }
+        for(unsigned int frame = start_frame; frame < end_frame; frame++) {
+            const std::size_t sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame;
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                values[tile_id] += normalizedRate(target_tile_rates[0][(sample_index * tile_count) + tile_id]);
+            }
+        }
+        for(double &value : values) {
+            value /= static_cast<double>(frame_count);
+        }
+        return values;
+    };
+    const auto topKTargetMask = [&](const std::vector<double> &values) {
+        std::vector<bool> mask(tile_count, false);
+        std::vector<std::pair<double, unsigned int>> ranked;
+        ranked.reserve(tile_count);
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            ranked.push_back({values[tile_id], tile_id});
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+            if(a.first == b.first) {
+                return a.second < b.second;
+            }
+            return a.first > b.first;
+        });
+        const unsigned int positive_count = std::min(config.topk_k, tile_count);
+        for(unsigned int rank = 0; rank < positive_count; rank++) {
+            mask[ranked[rank].second] = true;
+        }
+        return mask;
+    };
+    const auto topKTargetDistribution = [&](const std::vector<double> &values) {
+        std::vector<double> distribution(tile_count, 0.0);
+        const std::vector<bool> mask = topKTargetMask(values);
+        double positive_sum = 0.0;
+        unsigned int positive_count = 0u;
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            if(mask[tile_id]) {
+                positive_sum += std::max(0.0, values[tile_id]);
+                positive_count++;
+            }
+        }
+        if(positive_count == 0u) {
+            return distribution;
+        }
+        if(positive_sum <= 0.0 || !std::isfinite(positive_sum)) {
+            const double uniform_mass = 1.0 / static_cast<double>(positive_count);
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                if(mask[tile_id]) {
+                    distribution[tile_id] = uniform_mass;
+                }
+            }
+            return distribution;
+        }
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            if(mask[tile_id]) {
+                distribution[tile_id] = std::max(0.0, values[tile_id]) / positive_sum;
+            }
+        }
+        return distribution;
+    };
+    const auto topKTargetValid = [](const std::vector<double> &values) {
+        return !values.empty() && *std::max_element(values.begin(), values.end()) > 0.0;
+    };
+    const auto softmaxScores = [](const std::vector<double> &scores) {
+        std::vector<double> probabilities(scores.size(), 0.0);
+        if(scores.empty()) {
+            return probabilities;
+        }
+        const double max_score = *std::max_element(scores.begin(), scores.end());
+        double denominator = 0.0;
+        for(std::size_t i = 0; i < scores.size(); i++) {
+            probabilities[i] = std::exp(clippedValue(scores[i] - max_score, -60.0, 60.0));
+            denominator += probabilities[i];
+        }
+        if(denominator <= 0.0 || !std::isfinite(denominator)) {
+            const double uniform = 1.0 / static_cast<double>(scores.size());
+            std::fill(probabilities.begin(), probabilities.end(), uniform);
+            return probabilities;
+        }
+        for(double &probability : probabilities) {
+            probability /= denominator;
+        }
+        return probabilities;
+    };
+    const auto sortedTopKTileIds = [&](const std::vector<double> &scores) {
+        std::vector<std::pair<double, unsigned int>> ranked;
+        ranked.reserve(scores.size());
+        for(unsigned int tile_id = 0; tile_id < scores.size(); tile_id++) {
+            ranked.push_back({scores[tile_id], tile_id});
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+            if(a.first == b.first) {
+                return a.second < b.second;
+            }
+            return a.first > b.first;
+        });
+        const unsigned int count = std::min(config.topk_k, static_cast<unsigned int>(ranked.size()));
+        std::vector<unsigned int> ids;
+        ids.reserve(count);
+        for(unsigned int i = 0; i < count; i++) {
+            ids.push_back(ranked[i].second);
+        }
+        return ids;
+    };
+    struct TopKRankStats {
+        std::size_t count = 0u;
+        double model_recall = 0.0;
+        double persistence_recall = 0.0;
+        double train_frequency_recall = 0.0;
+        double no_learning_recall = 0.0;
+        double time_shuffle_recall = 0.0;
+        double spatial_shuffle_recall = 0.0;
+        double model_ndcg = 0.0;
+        double persistence_ndcg = 0.0;
+        double train_frequency_ndcg = 0.0;
+        double no_learning_ndcg = 0.0;
+        double time_shuffle_ndcg = 0.0;
+        double spatial_shuffle_ndcg = 0.0;
+        double model_mrr = 0.0;
+        double persistence_mrr = 0.0;
+        double train_frequency_mrr = 0.0;
+        double no_learning_mrr = 0.0;
+        double time_shuffle_mrr = 0.0;
+        double spatial_shuffle_mrr = 0.0;
+    };
+    const auto addTopKStats = [&](TopKRankStats &stats,
+                                  const std::vector<bool> &target_mask,
+                                  const std::vector<double> &model_scores,
+                                  const std::vector<double> &persistence_scores,
+                                  const std::vector<double> &train_frequency_scores,
+                                  const std::vector<double> &no_learning_scores,
+                                  const std::vector<double> &time_shuffle_scores,
+                                  const std::vector<double> &spatial_shuffle_scores) {
+        const unsigned int positive_count =
+            static_cast<unsigned int>(std::count(target_mask.begin(), target_mask.end(), true));
+        if(positive_count == 0u) {
+            return;
+        }
+        const double ideal_dcg = [&]() {
+            double value = 0.0;
+            for(unsigned int rank = 0; rank < positive_count; rank++) {
+                value += 1.0 / std::log2(static_cast<double>(rank) + 2.0);
+            }
+            return value;
+        }();
+        const auto scoreMetrics = [&](const std::vector<double> &scores) {
+            const std::vector<unsigned int> ranked_ids = sortedTopKTileIds(scores);
+            double hit_count = 0.0;
+            double dcg = 0.0;
+            double mrr = 0.0;
+            for(unsigned int rank = 0; rank < ranked_ids.size(); rank++) {
+                const unsigned int tile_id = ranked_ids[rank];
+                if(target_mask[tile_id]) {
+                    hit_count += 1.0;
+                    dcg += 1.0 / std::log2(static_cast<double>(rank) + 2.0);
+                    if(mrr == 0.0) {
+                        mrr = 1.0 / (static_cast<double>(rank) + 1.0);
+                    }
+                }
+            }
+            return std::array<double, 3>{{
+                hit_count / static_cast<double>(positive_count),
+                ideal_dcg > 0.0 ? (dcg / ideal_dcg) : 0.0,
+                mrr,
+            }};
+        };
+        const auto model = scoreMetrics(model_scores);
+        const auto persistence = scoreMetrics(persistence_scores);
+        const auto train_frequency = scoreMetrics(train_frequency_scores);
+        const auto no_learning = scoreMetrics(no_learning_scores);
+        const auto time_shuffle = scoreMetrics(time_shuffle_scores);
+        const auto spatial_shuffle = scoreMetrics(spatial_shuffle_scores);
+        stats.model_recall += model[0];
+        stats.persistence_recall += persistence[0];
+        stats.train_frequency_recall += train_frequency[0];
+        stats.no_learning_recall += no_learning[0];
+        stats.time_shuffle_recall += time_shuffle[0];
+        stats.spatial_shuffle_recall += spatial_shuffle[0];
+        stats.model_ndcg += model[1];
+        stats.persistence_ndcg += persistence[1];
+        stats.train_frequency_ndcg += train_frequency[1];
+        stats.no_learning_ndcg += no_learning[1];
+        stats.time_shuffle_ndcg += time_shuffle[1];
+        stats.spatial_shuffle_ndcg += spatial_shuffle[1];
+        stats.model_mrr += model[2];
+        stats.persistence_mrr += persistence[2];
+        stats.train_frequency_mrr += train_frequency[2];
+        stats.no_learning_mrr += no_learning[2];
+        stats.time_shuffle_mrr += time_shuffle[2];
+        stats.spatial_shuffle_mrr += spatial_shuffle[2];
+        stats.count++;
+    };
+
+    const double site_count_sum_before = sumValues(l23e_site_spike_counts);
+    const double site_count_sum_sq_before = sumSquares(l23e_site_spike_counts);
+    const double tile_rate_sum_before = sumValues(input_tile_rates);
+    const double tile_rate_sum_sq_before = sumSquares(input_tile_rates);
+    const std::uint32_t site_count_fingerprint_before =
+        quantizedVectorFingerprint32(l23e_site_spike_counts);
+    const std::uint32_t tile_rate_fingerprint_before =
+        quantizedVectorFingerprint32(input_tile_rates);
+
+    const unsigned int future_target_horizon_frames =
+        std::max(config.event_window_frames, config.topk_future_window_frames);
+    if(video_config.effective_frame_count <= (config.delay_frames + 1u)) {
+        throw std::runtime_error("HVA predictor requires enough video frames for train and held-out prediction windows.");
+    }
+    const unsigned int requested_heldout_frames = std::max(
+        config.delay_frames + 1u,
+        static_cast<unsigned int>(std::ceil(
+            static_cast<double>(video_config.effective_frame_count) * config.heldout_fraction)));
+    const unsigned int max_heldout_frames = video_config.effective_frame_count - config.delay_frames - 1u;
+    const unsigned int heldout_frames = std::max(1u, std::min(requested_heldout_frames, max_heldout_frames));
+    const unsigned int heldout_start_frame = video_config.effective_frame_count - heldout_frames;
+    const unsigned int train_frame_count = heldout_start_frame;
+    const auto predictionSplit = [&](unsigned int frame_index, unsigned int target_frame_index) {
+        const unsigned int target_window_end_frame = std::min(
+            video_config.effective_frame_count,
+            target_frame_index + future_target_horizon_frames);
+        if(target_frame_index < heldout_start_frame && target_window_end_frame <= heldout_start_frame) {
+            return std::string("train");
+        }
+        if(frame_index >= heldout_start_frame) {
+            return std::string("heldout");
+        }
+        return std::string("boundary_gap");
+    };
+
+    std::vector<double> feature_train_mean(feature_channel_count, 0.0);
+    std::vector<double> feature_train_sq(feature_channel_count, 0.0);
+    std::size_t feature_train_observation_count = 0u;
+    for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+        for(unsigned int frame_index = 0; frame_index + config.delay_frames < video_config.effective_frame_count; frame_index++) {
+            const unsigned int target_frame_index = frame_index + config.delay_frames;
+            if(predictionSplit(frame_index, target_frame_index) != "train") {
+                continue;
+            }
+            const std::size_t sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                    const double value = feature_series[featureIndex(sample_index, tile_id, feature)];
+                    feature_train_mean[feature] += value;
+                    feature_train_sq[feature] += value * value;
+                }
+                feature_train_observation_count++;
+            }
+        }
+    }
+    if(feature_train_observation_count == 0u) {
+        throw std::runtime_error("HVA predictor feature standardization found no train observations.");
+    }
+    std::vector<double> feature_train_std(feature_channel_count, 1.0);
+    unsigned int feature_std_floor_count = 0u;
+    for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+        feature_train_mean[feature] /= static_cast<double>(feature_train_observation_count);
+        const double mean_sq =
+            feature_train_sq[feature] / static_cast<double>(feature_train_observation_count);
+        const double variance = std::max(
+            0.0,
+            mean_sq - (feature_train_mean[feature] * feature_train_mean[feature]));
+        const double raw_std = std::sqrt(variance);
+        if(raw_std < kHVAPredictorFeatureStdFloor) {
+            feature_train_std[feature] = 1.0;
+            feature_std_floor_count++;
+        }
+        else {
+            feature_train_std[feature] = raw_std;
+        }
+    }
+
+    const std::size_t channel_tile_count =
+        static_cast<std::size_t>(target_channel_count) * tile_count;
+    std::vector<double> train_mean_target(channel_tile_count, 0.0);
+    std::vector<double> train_residual_mean(channel_tile_count, 0.0);
+    std::vector<double> train_residual_sq(channel_tile_count, 0.0);
+    std::vector<unsigned int> train_target_count(channel_tile_count, 0u);
+    std::vector<std::vector<double>> train_target_values(channel_tile_count);
+    std::size_t train_prediction_count = 0u;
+    std::size_t heldout_prediction_count = 0u;
+    std::size_t boundary_gap_prediction_count = 0u;
+    for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+        for(unsigned int frame_index = 0; frame_index + config.delay_frames < video_config.effective_frame_count; frame_index++) {
+            const unsigned int target_frame_index = frame_index + config.delay_frames;
+            const std::string split = predictionSplit(frame_index, target_frame_index);
+            if(split == "boundary_gap") {
+                boundary_gap_prediction_count += tile_count * target_channel_count;
+                continue;
+            }
+            if(split == "heldout") {
+                heldout_prediction_count += tile_count * target_channel_count;
+                continue;
+            }
+            train_prediction_count += tile_count * target_channel_count;
+            const std::size_t target_sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + target_frame_index;
+            const std::size_t current_sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
+            for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+                for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                    const std::size_t stats_index = targetTileIndex(target_channel, tile_id);
+                    const double current =
+                        normalizedRate(target_tile_rates[target_channel][(current_sample_index * tile_count) + tile_id]);
+                    const double target =
+                        normalizedRate(target_tile_rates[target_channel][(target_sample_index * tile_count) + tile_id]);
+                    const double event_window_target =
+                        eventWindowTargetState(target_channel, repeat_index, target_frame_index, tile_id);
+                    const double residual = target - current;
+                    train_mean_target[stats_index] += target;
+                    train_residual_mean[stats_index] += residual;
+                    train_residual_sq[stats_index] += residual * residual;
+                    train_target_values[stats_index].push_back(event_window_target);
+                    train_target_count[stats_index]++;
+                }
+            }
+        }
+    }
+    if(train_prediction_count == 0u || heldout_prediction_count == 0u) {
+        throw std::runtime_error("HVA predictor split produced empty train or held-out prediction set.");
+    }
+    std::vector<unsigned int> train_topk_positive_count(tile_count, 0u);
+    unsigned int train_topk_valid_sample_count = 0u;
+    for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+        for(unsigned int frame_index = 0; frame_index + config.delay_frames < video_config.effective_frame_count; frame_index++) {
+            const unsigned int target_frame_index = frame_index + config.delay_frames;
+            if(predictionSplit(frame_index, target_frame_index) != "train") {
+                continue;
+            }
+            const std::vector<double> topk_target_values =
+                topKWindowTargetValues(repeat_index, target_frame_index);
+            if(!topKTargetValid(topk_target_values)) {
+                continue;
+            }
+            const std::vector<bool> topk_mask = topKTargetMask(topk_target_values);
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                if(topk_mask[tile_id]) {
+                    train_topk_positive_count[tile_id]++;
+                }
+            }
+            train_topk_valid_sample_count++;
+        }
+    }
+    std::vector<double> train_topk_frequency(tile_count, 1.0 / static_cast<double>(tile_count));
+    if(train_topk_valid_sample_count > 0u) {
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            train_topk_frequency[tile_id] =
+                static_cast<double>(train_topk_positive_count[tile_id])
+                / static_cast<double>(train_topk_valid_sample_count);
+        }
+    }
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            const std::size_t stats_index = targetTileIndex(target_channel, tile_id);
+            if(train_target_count[stats_index] == 0u) {
+                throw std::runtime_error("HVA predictor train split produced an empty tile target set.");
+            }
+            train_mean_target[stats_index] /= static_cast<double>(train_target_count[stats_index]);
+            train_residual_mean[stats_index] /= static_cast<double>(train_target_count[stats_index]);
+        }
+    }
+    std::vector<double> train_residual_std(channel_tile_count, 1.0);
+    std::vector<double> event_threshold_norm(channel_tile_count, 0.0);
+    std::vector<double> train_event_rate(channel_tile_count, 0.0);
+    std::vector<double> clipped_train_event_rate(channel_tile_count, 0.0);
+    std::vector<unsigned int> train_event_positive_count(channel_tile_count, 0u);
+    std::vector<unsigned int> train_event_negative_count(channel_tile_count, 0u);
+    std::vector<unsigned int> heldout_event_count(channel_tile_count, 0u);
+    std::vector<unsigned int> heldout_event_positive_count(channel_tile_count, 0u);
+    std::vector<bool> event_tile_selected(channel_tile_count, false);
+    const double event_threshold_min_norm =
+        clippedValue(config.event_threshold_min_hz / config.rate_scale_hz, 0.0, 1.0);
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            const std::size_t stats_index = targetTileIndex(target_channel, tile_id);
+            const double mean = train_residual_mean[stats_index];
+            const double mean_sq =
+                train_residual_sq[stats_index] / static_cast<double>(train_target_count[stats_index]);
+            train_residual_std[stats_index] =
+                std::max(1.0e-3, std::sqrt(std::max(0.0, mean_sq - (mean * mean))));
+            event_threshold_norm[stats_index] = std::max(
+                event_threshold_min_norm,
+                quantileValue(train_target_values[stats_index], config.event_threshold_quantile));
+            for(double target_value : train_target_values[stats_index]) {
+                if(target_value >= event_threshold_norm[stats_index]) {
+                    train_event_positive_count[stats_index]++;
+                }
+                else {
+                    train_event_negative_count[stats_index]++;
+                }
+            }
+            train_event_rate[stats_index] =
+                static_cast<double>(train_event_positive_count[stats_index])
+                / static_cast<double>(train_target_count[stats_index]);
+            clipped_train_event_rate[stats_index] = clippedValue(
+                train_event_rate[stats_index],
+                kHVAPredictorEventRateFloor,
+                1.0 - kHVAPredictorEventRateFloor);
+            event_tile_selected[stats_index] =
+                train_event_positive_count[stats_index] >= config.event_min_train_positive_count
+                && train_event_negative_count[stats_index] >= config.event_min_train_positive_count;
+        }
+    }
+
+    struct SplitStats {
+        std::size_t count = 0u;
+        double model_sq = 0.0;
+        double residual_z_model_sq = 0.0;
+        double persistence_sq = 0.0;
+        double train_mean_sq = 0.0;
+        double no_learning_sq = 0.0;
+        double time_shuffle_sq = 0.0;
+        double spatial_shuffle_sq = 0.0;
+        double target_rate_sum = 0.0;
+        double prediction_rate_sum = 0.0;
+        double prediction_min = std::numeric_limits<double>::infinity();
+        double prediction_max = -std::numeric_limits<double>::infinity();
+        std::vector<double> targets;
+        std::vector<double> predictions;
+
+        void add(double target,
+                 double prediction,
+                 double target_residual_z,
+                 double predicted_residual_z,
+                 double persistence,
+                 double train_mean,
+                 double no_learning,
+                 double temporal_block_shift_prediction,
+                 double spatial_tile_shuffle_prediction,
+                 double rate_scale_hz)
+        {
+            const double model_error = target - prediction;
+            const double residual_z_error = target_residual_z - predicted_residual_z;
+            const double persistence_error = target - persistence;
+            const double train_mean_error = target - train_mean;
+            const double no_learning_error = target - no_learning;
+            const double time_shuffle_error = target - temporal_block_shift_prediction;
+            const double spatial_shuffle_error = target - spatial_tile_shuffle_prediction;
+            model_sq += model_error * model_error;
+            residual_z_model_sq += residual_z_error * residual_z_error;
+            persistence_sq += persistence_error * persistence_error;
+            train_mean_sq += train_mean_error * train_mean_error;
+            no_learning_sq += no_learning_error * no_learning_error;
+            time_shuffle_sq += time_shuffle_error * time_shuffle_error;
+            spatial_shuffle_sq += spatial_shuffle_error * spatial_shuffle_error;
+            target_rate_sum += target * rate_scale_hz;
+            prediction_rate_sum += prediction * rate_scale_hz;
+            prediction_min = std::min(prediction_min, prediction);
+            prediction_max = std::max(prediction_max, prediction);
+            targets.push_back(target);
+            predictions.push_back(prediction);
+            count++;
+        }
+    };
+
+    struct EventStats {
+        std::size_t count = 0u;
+        std::size_t positive_count = 0u;
+        double model_brier = 0.0;
+        double persistence_brier = 0.0;
+        double train_mean_brier = 0.0;
+        double no_learning_brier = 0.0;
+        double time_shuffle_brier = 0.0;
+        double spatial_shuffle_brier = 0.0;
+        double model_logloss = 0.0;
+        double persistence_logloss = 0.0;
+        double train_mean_logloss = 0.0;
+        double no_learning_logloss = 0.0;
+        double time_shuffle_logloss = 0.0;
+        double spatial_shuffle_logloss = 0.0;
+        double target_sum = 0.0;
+        double prediction_sum = 0.0;
+        std::vector<double> targets;
+        std::vector<double> predictions;
+        std::vector<double> persistence_predictions;
+        std::vector<double> train_mean_predictions;
+        std::vector<double> no_learning_predictions;
+        std::vector<double> time_shuffle_predictions;
+        std::vector<double> spatial_shuffle_predictions;
+
+        void add(unsigned int target_event,
+                 double predicted_probability,
+                 double persistence_probability,
+                 double train_mean_probability,
+                 double no_learning_probability,
+                 double temporal_block_shift_probability,
+                 double spatial_tile_shuffle_probability)
+        {
+            const auto logLoss = [](double target, double probability) {
+                const double p = clippedValue(probability, 1.0e-6, 1.0 - 1.0e-6);
+                return -((target * std::log(p)) + ((1.0 - target) * std::log(1.0 - p)));
+            };
+            const double target = static_cast<double>(target_event);
+            const double model_error = target - predicted_probability;
+            const double persistence_error = target - persistence_probability;
+            const double train_mean_error = target - train_mean_probability;
+            const double no_learning_error = target - no_learning_probability;
+            const double time_shuffle_error = target - temporal_block_shift_probability;
+            const double spatial_shuffle_error = target - spatial_tile_shuffle_probability;
+            model_brier += model_error * model_error;
+            persistence_brier += persistence_error * persistence_error;
+            train_mean_brier += train_mean_error * train_mean_error;
+            no_learning_brier += no_learning_error * no_learning_error;
+            time_shuffle_brier += time_shuffle_error * time_shuffle_error;
+            spatial_shuffle_brier += spatial_shuffle_error * spatial_shuffle_error;
+            model_logloss += logLoss(target, predicted_probability);
+            persistence_logloss += logLoss(target, persistence_probability);
+            train_mean_logloss += logLoss(target, train_mean_probability);
+            no_learning_logloss += logLoss(target, no_learning_probability);
+            time_shuffle_logloss += logLoss(target, temporal_block_shift_probability);
+            spatial_shuffle_logloss += logLoss(target, spatial_tile_shuffle_probability);
+            target_sum += target;
+            prediction_sum += predicted_probability;
+            targets.push_back(target);
+            predictions.push_back(predicted_probability);
+            persistence_predictions.push_back(persistence_probability);
+            train_mean_predictions.push_back(train_mean_probability);
+            no_learning_predictions.push_back(no_learning_probability);
+            time_shuffle_predictions.push_back(temporal_block_shift_probability);
+            spatial_shuffle_predictions.push_back(spatial_tile_shuffle_probability);
+            positive_count += (target_event != 0u) ? 1u : 0u;
+            count++;
+        }
+    };
+
+    result.weights_before.assign(target_pair_count, 0.0);
+    result.weights_after.assign(target_pair_count, 0.0);
+    result.readout_weights_before.assign(readout_weight_count, 0.0);
+    result.readout_weights_after.assign(readout_weight_count, 0.0);
+    result.biases_after.assign(channel_tile_count, 0.0);
+    result.event_weights_before.assign(readout_weight_count, 0.0);
+    result.event_weights_after.assign(readout_weight_count, 0.0);
+    result.event_biases_after.assign(channel_tile_count, 0.0);
+    result.topk_weights_before.assign(readout_weight_count, 0.0);
+    result.topk_weights_after.assign(readout_weight_count, 0.0);
+    result.topk_biases_after.assign(tile_count, 0.0);
+    for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+        result.topk_biases_after[tile_id] = logit(clippedValue(
+            train_topk_frequency[tile_id],
+            kHVAPredictorEventRateFloor,
+            1.0 - kHVAPredictorEventRateFloor));
+    }
+    for(std::size_t state_index = 0; state_index < channel_tile_count; state_index++) {
+        result.event_biases_after[state_index] = logit(clipped_train_event_rate[state_index]);
+    }
+    result.rates.reserve(sample_count * static_cast<std::size_t>(tile_count));
+    result.predictions.reserve(
+        static_cast<std::size_t>(video_config.repeat_count)
+        * static_cast<std::size_t>(video_config.effective_frame_count - config.delay_frames)
+        * static_cast<std::size_t>(tile_count)
+        * static_cast<std::size_t>(target_channel_count));
+
+    SplitStats train_stats;
+    SplitStats heldout_stats;
+    std::vector<SplitStats> train_stats_by_channel(target_channel_count);
+    std::vector<SplitStats> heldout_stats_by_channel(target_channel_count);
+    EventStats train_event_stats_all;
+    EventStats heldout_event_stats_all;
+    EventStats train_event_stats_selected;
+    EventStats heldout_event_stats_selected;
+    EventStats train_single_frame_event_stats_all;
+    EventStats heldout_single_frame_event_stats_all;
+    EventStats train_single_frame_event_stats_selected;
+    EventStats heldout_single_frame_event_stats_selected;
+    TopKRankStats train_topk_stats;
+    TopKRankStats heldout_topk_stats;
+    std::vector<std::vector<double>> targets_by_channel_tile(channel_tile_count);
+    std::vector<std::vector<double>> predictions_by_channel_tile(channel_tile_count);
+
+    const auto rawFeatureValue = [&](std::size_t sample_index, unsigned int tile_id, unsigned int feature) {
+        return feature_series[featureIndex(sample_index, tile_id, feature)];
+    };
+    const auto featureValue = [&](std::size_t sample_index, unsigned int tile_id, unsigned int feature) {
+        return (rawFeatureValue(sample_index, tile_id, feature) - feature_train_mean[feature])
+            / feature_train_std[feature];
+    };
+    const auto topKScore = [&](std::size_t sample_index, unsigned int post_tile) {
+        double score = result.topk_biases_after[post_tile];
+        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+            if(!localReadoutEnabled(pre_tile, post_tile)) {
+                continue;
+            }
+            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                score += result.topk_weights_after[readoutIndex(0u, post_tile, pre_tile, feature)]
+                    * featureValue(sample_index, pre_tile, feature);
+            }
+        }
+        return score;
+    };
+    const auto topKScores = [&](std::size_t sample_index) {
+        std::vector<double> scores(tile_count, 0.0);
+        for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+            scores[post_tile] = topKScore(sample_index, post_tile);
+        }
+        return scores;
+    };
+    for(unsigned int epoch = 0; epoch < config.training_epochs; epoch++) {
+        for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+            for(unsigned int frame_index = 0; frame_index + config.delay_frames < video_config.effective_frame_count; frame_index++) {
+                const unsigned int target_frame_index = frame_index + config.delay_frames;
+                if(predictionSplit(frame_index, target_frame_index) != "train") {
+                    continue;
+                }
+                const std::size_t sample_index =
+                    (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
+                const std::size_t target_sample_index =
+                    (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + target_frame_index;
+                const std::vector<double> topk_target_values =
+                    topKWindowTargetValues(repeat_index, target_frame_index);
+                if(topKTargetValid(topk_target_values)) {
+                    const std::vector<double> topk_target_distribution =
+                        topKTargetDistribution(topk_target_values);
+                    const std::vector<double> topk_scores = topKScores(sample_index);
+                    const std::vector<double> topk_probabilities = softmaxScores(topk_scores);
+                    for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                        const double topk_error =
+                            topk_target_distribution[post_tile] - topk_probabilities[post_tile];
+                        result.topk_biases_after[post_tile] += config.topk_learning_rate * topk_error;
+                        result.topk_biases_after[post_tile] =
+                            clippedValue(result.topk_biases_after[post_tile], -config.weight_clip, config.weight_clip);
+                        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                            if(!localReadoutEnabled(pre_tile, post_tile)) {
+                                continue;
+                            }
+                            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                                double &weight = result.topk_weights_after[
+                                    readoutIndex(0u, post_tile, pre_tile, feature)];
+                                weight =
+                                    (weight * (1.0 - config.topk_weight_decay))
+                                    + (config.topk_learning_rate
+                                       * topk_error
+                                       * featureValue(sample_index, pre_tile, feature));
+                                weight = clippedValue(weight, -config.weight_clip, config.weight_clip);
+                            }
+                        }
+                    }
+                }
+                for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+                    for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                        const std::size_t state_index = targetTileIndex(target_channel, post_tile);
+                        const double current_target_state =
+                            normalizedRate(target_tile_rates[target_channel][(sample_index * tile_count) + post_tile]);
+                        const double target_state =
+                            normalizedRate(target_tile_rates[target_channel][(target_sample_index * tile_count) + post_tile]);
+                        const double event_window_target =
+                            eventWindowTargetState(target_channel, repeat_index, target_frame_index, post_tile);
+                        const unsigned int target_event =
+                            (event_window_target >= event_threshold_norm[state_index]) ? 1u : 0u;
+
+                        double residual_norm_prediction = result.biases_after[state_index];
+                        double event_logit = result.event_biases_after[state_index];
+                        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                            if(!localReadoutEnabled(pre_tile, post_tile)) {
+                                continue;
+                            }
+                            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                                const double feature_value = featureValue(sample_index, pre_tile, feature);
+                                residual_norm_prediction += result.readout_weights_after[
+                                    readoutIndex(target_channel, post_tile, pre_tile, feature)]
+                                    * feature_value;
+                                if(event_tile_selected[state_index]) {
+                                    event_logit += result.event_weights_after[
+                                        readoutIndex(target_channel, post_tile, pre_tile, feature)]
+                                        * config.event_residual_gain
+                                        * feature_value;
+                                }
+                            }
+                        }
+
+                        const double residual_error =
+                            (target_state - current_target_state) - residual_norm_prediction;
+                        const double predicted_event_probability = event_tile_selected[state_index]
+                            ? sigmoid(event_logit)
+                            : train_event_rate[state_index];
+                        const double event_error =
+                            static_cast<double>(target_event) - predicted_event_probability;
+                        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                            if(!localReadoutEnabled(pre_tile, post_tile)) {
+                                continue;
+                            }
+                            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                                const double feature_value = featureValue(sample_index, pre_tile, feature);
+                                double &weight = result.readout_weights_after[
+                                    readoutIndex(target_channel, post_tile, pre_tile, feature)];
+                                weight =
+                                    (weight * (1.0 - config.weight_decay))
+                                    + (config.learning_rate * residual_error * feature_value);
+                                weight = clippedValue(weight, -config.weight_clip, config.weight_clip);
+                                if(event_tile_selected[state_index]) {
+                                    double &event_weight = result.event_weights_after[
+                                        readoutIndex(target_channel, post_tile, pre_tile, feature)];
+                                    event_weight =
+                                        (event_weight * (1.0 - config.event_weight_decay))
+                                        + (config.event_learning_rate * event_error * config.event_residual_gain * feature_value);
+                                    event_weight = clippedValue(event_weight, -config.weight_clip, config.weight_clip);
+                                }
+                            }
+                        }
+                        result.biases_after[state_index] += config.bias_learning_rate * residual_error;
+                        result.biases_after[state_index] =
+                            clippedValue(result.biases_after[state_index], -config.weight_clip, config.weight_clip);
+                        if(event_tile_selected[state_index] && config.event_bias_learning_rate > 0.0) {
+                            result.event_biases_after[state_index] += config.event_bias_learning_rate * event_error;
+                            result.event_biases_after[state_index] =
+                                clippedValue(result.event_biases_after[state_index], -config.weight_clip, config.weight_clip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    unsigned int prediction_index = 0u;
+    for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+        std::vector<double> previous_state(tile_count, 0.0);
+        for(unsigned int frame_index = 0; frame_index < video_config.effective_frame_count; frame_index++) {
+            const std::size_t sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
+            std::vector<double> current_state(tile_count, 0.0);
+            std::vector<double> derivative(tile_count, 0.0);
+            std::vector<double> features(
+                static_cast<std::size_t>(tile_count) * feature_channel_count,
+                0.0);
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                    features[(tile_id * feature_channel_count) + feature] =
+                        featureValue(sample_index, tile_id, feature);
+                }
+                current_state[tile_id] = rawFeatureValue(sample_index, tile_id, 0u);
+                derivative[tile_id] = rawFeatureValue(sample_index, tile_id, 4u);
+            }
+
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                result.rates.push_back({
+                    static_cast<unsigned int>(sample_index),
+                    repeat_index,
+                    frame_index,
+                    tile_id,
+                    tile_id % config.tile_grid_side,
+                    tile_id / config.tile_grid_side,
+                    input_tile_rates[(sample_index * tile_count) + tile_id],
+                    current_state[tile_id],
+                    rawFeatureValue(sample_index, tile_id, 2u),
+                    rawFeatureValue(sample_index, tile_id, 1u),
+                    rawFeatureValue(sample_index, tile_id, 2u),
+                    rawFeatureValue(sample_index, tile_id, 3u),
+                    derivative[tile_id],
+                });
+            }
+
+            if(frame_index + config.delay_frames >= video_config.effective_frame_count) {
+                previous_state.swap(current_state);
+                continue;
+            }
+            const unsigned int target_frame_index = frame_index + config.delay_frames;
+            const std::string split = predictionSplit(frame_index, target_frame_index);
+            if(split == "boundary_gap") {
+                previous_state.swap(current_state);
+                continue;
+            }
+            const bool heldout = (split == "heldout");
+            const std::size_t target_sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + target_frame_index;
+            const unsigned int time_shuffle_frame =
+                (train_frame_count > 0u) ? (target_frame_index % train_frame_count) : 0u;
+            const std::size_t time_shuffle_sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + time_shuffle_frame;
+            std::vector<double> target_state(channel_tile_count, 0.0);
+            std::vector<double> current_target_state(channel_tile_count, 0.0);
+            std::vector<double> predicted_state(channel_tile_count, 0.0);
+            std::vector<double> target_residual_norm(channel_tile_count, 0.0);
+            std::vector<double> target_residual_z(channel_tile_count, 0.0);
+            std::vector<double> predicted_residual_z(channel_tile_count, 0.0);
+            std::vector<double> predicted_residual_norm(channel_tile_count, 0.0);
+            std::vector<double> no_learning_state(channel_tile_count, 0.0);
+            std::vector<double> temporal_block_shift_prediction(channel_tile_count, 0.0);
+            std::vector<double> event_window_target_state(channel_tile_count, 0.0);
+            std::vector<unsigned int> target_events(channel_tile_count, 0u);
+            std::vector<unsigned int> single_frame_target_events(channel_tile_count, 0u);
+            std::vector<double> predicted_event_prob(channel_tile_count, 0.0);
+            std::vector<double> persistence_event_prob(channel_tile_count, 0.0);
+            std::vector<double> no_learning_event_prob(channel_tile_count, 0.0);
+            std::vector<double> temporal_block_shift_event_prob(channel_tile_count, 0.0);
+            std::vector<double> spatial_tile_shuffle_event_prob(channel_tile_count, 0.0);
+            const std::vector<double> topk_target_values =
+                topKWindowTargetValues(repeat_index, target_frame_index);
+            const bool topk_sample_valid = topKTargetValid(topk_target_values);
+            const std::vector<bool> topk_target_mask = topKTargetMask(topk_target_values);
+            const std::vector<double> topk_model_scores = topKScores(sample_index);
+            const std::vector<double> topk_model_probabilities = softmaxScores(topk_model_scores);
+            std::vector<double> topk_persistence_scores(tile_count, 0.0);
+            std::vector<double> topk_time_shuffle_scores =
+                topKWindowTargetValues(repeat_index, time_shuffle_frame);
+            std::vector<double> topk_spatial_shuffle_scores(tile_count, 0.0);
+            for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                topk_persistence_scores[tile_id] = current_state[tile_id];
+                const unsigned int spatial_shuffle_tile =
+                    (tile_id + std::max(1u, tile_count / 2u)) % tile_count;
+                topk_spatial_shuffle_scores[tile_id] = topk_target_values[spatial_shuffle_tile];
+            }
+            if(topk_sample_valid) {
+                TopKRankStats &topk_stats = heldout ? heldout_topk_stats : train_topk_stats;
+                addTopKStats(
+                    topk_stats,
+                    topk_target_mask,
+                    topk_model_scores,
+                    topk_persistence_scores,
+                    train_topk_frequency,
+                    train_topk_frequency,
+                    topk_time_shuffle_scores,
+                    topk_spatial_shuffle_scores);
+            }
+            for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+                for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                    const std::size_t state_index = targetTileIndex(target_channel, post_tile);
+                    current_target_state[state_index] =
+                        normalizedRate(target_tile_rates[target_channel][(sample_index * tile_count) + post_tile]);
+                    target_state[state_index] =
+                        normalizedRate(target_tile_rates[target_channel][(target_sample_index * tile_count) + post_tile]);
+                    event_window_target_state[state_index] =
+                        eventWindowTargetState(target_channel, repeat_index, target_frame_index, post_tile);
+                    temporal_block_shift_prediction[state_index] =
+                        normalizedRate(target_tile_rates[target_channel][(time_shuffle_sample_index * tile_count) + post_tile]);
+                    target_events[state_index] =
+                        (event_window_target_state[state_index] >= event_threshold_norm[state_index]) ? 1u : 0u;
+                    single_frame_target_events[state_index] =
+                        (target_state[state_index] >= event_threshold_norm[state_index]) ? 1u : 0u;
+                    persistence_event_prob[state_index] =
+                        (current_target_state[state_index] >= event_threshold_norm[state_index]) ? 1.0 : 0.0;
+                    no_learning_event_prob[state_index] = train_event_rate[state_index];
+                    temporal_block_shift_event_prob[state_index] =
+                        (eventWindowTargetState(target_channel, repeat_index, time_shuffle_frame, post_tile)
+                         >= event_threshold_norm[state_index]) ? 1.0 : 0.0;
+                    target_residual_norm[state_index] =
+                        target_state[state_index] - current_target_state[state_index];
+                    target_residual_z[state_index] =
+                        (target_residual_norm[state_index] - train_residual_mean[state_index])
+                        / train_residual_std[state_index];
+                    double residual_norm_prediction = result.biases_after[state_index];
+                    for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                        if(!localReadoutEnabled(pre_tile, post_tile)) {
+                            continue;
+                        }
+                        for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                            residual_norm_prediction += result.readout_weights_after[
+                                readoutIndex(target_channel, post_tile, pre_tile, feature)]
+                                * features[(pre_tile * feature_channel_count) + feature];
+                        }
+                    }
+                    predicted_residual_norm[state_index] = residual_norm_prediction;
+                    predicted_residual_z[state_index] =
+                        (residual_norm_prediction - train_residual_mean[state_index])
+                        / train_residual_std[state_index];
+                    predicted_state[state_index] =
+                        clippedValue(
+                            current_target_state[state_index] + predicted_residual_norm[state_index],
+                            0.0,
+                            1.0);
+                    no_learning_state[state_index] =
+                        clippedValue(
+                            current_target_state[state_index] + train_residual_mean[state_index],
+                            0.0,
+                            1.0);
+                    if(event_tile_selected[state_index]) {
+                        double event_logit = result.event_biases_after[state_index];
+                        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                            if(!localReadoutEnabled(pre_tile, post_tile)) {
+                                continue;
+                            }
+                            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                                event_logit += result.event_weights_after[
+                                    readoutIndex(target_channel, post_tile, pre_tile, feature)]
+                                    * config.event_residual_gain
+                                    * features[(pre_tile * feature_channel_count) + feature];
+                            }
+                        }
+                        predicted_event_prob[state_index] = sigmoid(event_logit);
+                    }
+                    else {
+                        predicted_event_prob[state_index] = train_event_rate[state_index];
+                    }
+                }
+            }
+
+            for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+                for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                    const std::size_t state_index = targetTileIndex(target_channel, post_tile);
+                    const double target = target_state[state_index];
+                    const double prediction = predicted_state[state_index];
+                    const double current = current_target_state[state_index];
+                    const double train_mean = train_mean_target[state_index];
+                    const double no_learning = no_learning_state[state_index];
+                    const double temporal_block_shift = temporal_block_shift_prediction[state_index];
+                    const unsigned int spatial_shuffle_tile =
+                        (post_tile + std::max(1u, tile_count / 2u)) % tile_count;
+                    const std::size_t spatial_shuffle_index =
+                        targetTileIndex(target_channel, spatial_shuffle_tile);
+                    const double spatial_tile_shuffle = target_state[spatial_shuffle_index];
+                    const double spatial_event_shuffle =
+                        (event_window_target_state[spatial_shuffle_index] >= event_threshold_norm[spatial_shuffle_index]) ? 1.0 : 0.0;
+                    const double spatial_single_frame_event_shuffle =
+                        (target_state[spatial_shuffle_index] >= event_threshold_norm[spatial_shuffle_index]) ? 1.0 : 0.0;
+                    spatial_tile_shuffle_event_prob[state_index] = spatial_event_shuffle;
+                    const double model_error = target - prediction;
+
+                    const double target_rate_hz = target * config.rate_scale_hz;
+                    const double predicted_rate_hz = prediction * config.rate_scale_hz;
+                    SplitStats &channel_stats = heldout
+                        ? heldout_stats_by_channel[target_channel]
+                        : train_stats_by_channel[target_channel];
+                    channel_stats.add(
+                        target,
+                        prediction,
+                        target_residual_z[state_index],
+                        predicted_residual_z[state_index],
+                        current,
+                        train_mean,
+                        no_learning,
+                        temporal_block_shift,
+                        spatial_tile_shuffle,
+                        config.rate_scale_hz);
+                    if(target_specs[target_channel].required) {
+                        SplitStats &stats = heldout ? heldout_stats : train_stats;
+                        stats.add(
+                            target,
+                            prediction,
+                            target_residual_z[state_index],
+                            predicted_residual_z[state_index],
+                            current,
+                            train_mean,
+                            no_learning,
+                            temporal_block_shift,
+                            spatial_tile_shuffle,
+                            config.rate_scale_hz);
+                    }
+                    if(heldout) {
+                        targets_by_channel_tile[state_index].push_back(target);
+                        predictions_by_channel_tile[state_index].push_back(prediction);
+                        heldout_event_count[state_index]++;
+                        if(target_events[state_index] != 0u) {
+                            heldout_event_positive_count[state_index]++;
+                        }
+                    }
+                    EventStats &event_stats_all = heldout ? heldout_event_stats_all : train_event_stats_all;
+                    event_stats_all.add(
+                        target_events[state_index],
+                        predicted_event_prob[state_index],
+                        persistence_event_prob[state_index],
+                        train_event_rate[state_index],
+                        no_learning_event_prob[state_index],
+                        temporal_block_shift_event_prob[state_index],
+                        spatial_event_shuffle);
+                    if(event_tile_selected[state_index]) {
+                        EventStats &event_stats_selected =
+                            heldout ? heldout_event_stats_selected : train_event_stats_selected;
+                        event_stats_selected.add(
+                            target_events[state_index],
+                            predicted_event_prob[state_index],
+                            persistence_event_prob[state_index],
+                            train_event_rate[state_index],
+                            no_learning_event_prob[state_index],
+                            temporal_block_shift_event_prob[state_index],
+                            spatial_event_shuffle);
+                    }
+                    EventStats &single_frame_event_stats_all =
+                        heldout ? heldout_single_frame_event_stats_all : train_single_frame_event_stats_all;
+                    single_frame_event_stats_all.add(
+                        single_frame_target_events[state_index],
+                        predicted_event_prob[state_index],
+                        persistence_event_prob[state_index],
+                        train_event_rate[state_index],
+                        no_learning_event_prob[state_index],
+                        temporal_block_shift_event_prob[state_index],
+                        spatial_single_frame_event_shuffle);
+                    if(event_tile_selected[state_index]) {
+                        EventStats &single_frame_event_stats_selected =
+                            heldout
+                                ? heldout_single_frame_event_stats_selected
+                                : train_single_frame_event_stats_selected;
+                        single_frame_event_stats_selected.add(
+                            single_frame_target_events[state_index],
+                            predicted_event_prob[state_index],
+                            persistence_event_prob[state_index],
+                            train_event_rate[state_index],
+                            no_learning_event_prob[state_index],
+                            temporal_block_shift_event_prob[state_index],
+                            spatial_single_frame_event_shuffle);
+                    }
+
+                    result.predictions.push_back({
+                        prediction_index++,
+                        repeat_index,
+                        frame_index,
+                        target_frame_index,
+                        target_channel,
+                        target_specs[target_channel].name,
+                        post_tile,
+                        post_tile % config.tile_grid_side,
+                        post_tile / config.tile_grid_side,
+                        split,
+                        false,
+                        current,
+                        target,
+                        prediction,
+                        target_residual_norm[state_index],
+                        predicted_residual_norm[state_index],
+                        target_residual_z[state_index],
+                        predicted_residual_z[state_index],
+                        train_residual_mean[state_index],
+                        train_residual_std[state_index],
+                        current,
+                        train_mean,
+                        no_learning,
+                        temporal_block_shift,
+                        spatial_tile_shuffle,
+                        target_rate_hz,
+                        predicted_rate_hz,
+                        model_error * config.rate_scale_hz,
+                        event_window_target_state[state_index],
+                        event_threshold_norm[state_index],
+                        event_tile_selected[state_index],
+                        target_events[state_index],
+                        single_frame_target_events[state_index],
+                        predicted_event_prob[state_index],
+                        persistence_event_prob[state_index],
+                        train_event_rate[state_index],
+                        no_learning_event_prob[state_index],
+                        temporal_block_shift_event_prob[state_index],
+                        spatial_tile_shuffle_event_prob[state_index],
+                        static_cast<double>(target_events[state_index]) - predicted_event_prob[state_index],
+                        topk_target_values[post_tile],
+                        topk_target_mask[post_tile],
+                        topk_sample_valid,
+                        topk_model_scores[post_tile],
+                        topk_model_probabilities[post_tile],
+                        topk_persistence_scores[post_tile],
+                        train_topk_frequency[post_tile],
+                        train_topk_frequency[post_tile],
+                        topk_time_shuffle_scores[post_tile],
+                        topk_spatial_shuffle_scores[post_tile],
+                    });
+                }
+            }
+            previous_state.swap(current_state);
+        }
+    }
+
+    result.event_tiles.reserve(channel_tile_count);
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            const std::size_t state_index = targetTileIndex(target_channel, tile_id);
+            const double train_count_for_tile =
+                static_cast<double>(train_target_count[state_index]);
+            const double heldout_count_for_tile =
+                static_cast<double>(heldout_event_count[state_index]);
+            result.event_tiles.push_back({
+                target_channel,
+                target_specs[target_channel].name,
+                tile_id,
+                tile_id % config.tile_grid_side,
+                tile_id / config.tile_grid_side,
+                event_threshold_norm[state_index],
+                event_threshold_norm[state_index] * config.rate_scale_hz,
+                train_target_count[state_index],
+                train_event_positive_count[state_index],
+                train_event_negative_count[state_index],
+                heldout_event_count[state_index],
+                heldout_event_positive_count[state_index],
+                train_count_for_tile > 0.0
+                    ? (static_cast<double>(train_event_positive_count[state_index]) / train_count_for_tile)
+                    : 0.0,
+                heldout_count_for_tile > 0.0
+                    ? (static_cast<double>(heldout_event_positive_count[state_index]) / heldout_count_for_tile)
+                    : 0.0,
+                event_tile_selected[state_index],
+            });
+        }
+    }
+
+    double active_pair_count = 0.0;
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+            for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                const std::size_t pair = targetPairIndex(target_channel, post_tile, pre_tile);
+                double signed_sum = 0.0;
+                for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                    signed_sum += result.readout_weights_after[
+                        readoutIndex(target_channel, post_tile, pre_tile, feature)];
+                }
+                result.weights_after[pair] = signed_sum;
+                if(localReadoutEnabled(pre_tile, post_tile)) {
+                    active_pair_count += 1.0;
+                }
+            }
+        }
+    }
+
+    const double prediction_count = static_cast<double>(result.predictions.size());
+    const auto mse = [](double sum_sq, std::size_t count) {
+        return count > 0u ? (sum_sq / static_cast<double>(count)) : 0.0;
+    };
+    const auto meanHz = [](double sum_hz, std::size_t count) {
+        return count > 0u ? (sum_hz / static_cast<double>(count)) : 0.0;
+    };
+    double weight_l1 = 0.0;
+    double weight_max_abs = 0.0;
+    for(double weight : result.readout_weights_after) {
+        weight_l1 += std::fabs(weight);
+        weight_max_abs = std::max(weight_max_abs, std::fabs(weight));
+    }
+    double bias_l1 = 0.0;
+    for(double bias : result.biases_after) {
+        bias_l1 += std::fabs(bias);
+    }
+    double event_weight_l1 = 0.0;
+    double event_weight_max_abs = 0.0;
+    for(double weight : result.event_weights_after) {
+        event_weight_l1 += std::fabs(weight);
+        event_weight_max_abs = std::max(event_weight_max_abs, std::fabs(weight));
+    }
+    double event_bias_l1 = 0.0;
+    for(double bias : result.event_biases_after) {
+        event_bias_l1 += std::fabs(bias);
+    }
+    double topk_weight_l1 = 0.0;
+    double topk_weight_max_abs = 0.0;
+    for(double weight : result.topk_weights_after) {
+        topk_weight_l1 += std::fabs(weight);
+        topk_weight_max_abs = std::max(topk_weight_max_abs, std::fabs(weight));
+    }
+    double topk_bias_l1 = 0.0;
+    for(double bias : result.topk_biases_after) {
+        topk_bias_l1 += std::fabs(bias);
+    }
+    std::vector<double> topk_local_abs_weights;
+    std::vector<double> topk_distant_abs_weights;
+    std::vector<double> topk_diagonal_abs_weights;
+    std::vector<double> topk_offdiagonal_abs_weights;
+    unsigned int topk_local_nonzero_pair_count = 0u;
+    unsigned int topk_distant_nonzero_pair_count = 0u;
+    double topk_local_abs_weight_sum = 0.0;
+    double topk_distant_abs_weight_sum = 0.0;
+    double topk_distant_abs_weight_max = 0.0;
+    for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+        const unsigned int post_x = post_tile % config.tile_grid_side;
+        const unsigned int post_y = post_tile / config.tile_grid_side;
+        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+            const unsigned int pre_x = pre_tile % config.tile_grid_side;
+            const unsigned int pre_y = pre_tile / config.tile_grid_side;
+            double abs_weight = 0.0;
+            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                abs_weight += std::fabs(result.topk_weights_after[
+                    readoutIndex(0u, post_tile, pre_tile, feature)]);
+            }
+            const unsigned int manhattan_distance =
+                static_cast<unsigned int>(
+                    std::abs(static_cast<int>(pre_x) - static_cast<int>(post_x))
+                    + std::abs(static_cast<int>(pre_y) - static_cast<int>(post_y)));
+            if(pre_tile == post_tile) {
+                topk_diagonal_abs_weights.push_back(abs_weight);
+            }
+            else {
+                topk_offdiagonal_abs_weights.push_back(abs_weight);
+            }
+            if(manhattan_distance <= config.local_radius_tiles) {
+                topk_local_abs_weights.push_back(abs_weight);
+                topk_local_abs_weight_sum += abs_weight;
+                if(abs_weight > 1.0e-12) {
+                    topk_local_nonzero_pair_count++;
+                }
+            }
+            else {
+                topk_distant_abs_weights.push_back(abs_weight);
+                topk_distant_abs_weight_sum += abs_weight;
+                topk_distant_abs_weight_max = std::max(topk_distant_abs_weight_max, abs_weight);
+                if(abs_weight > 1.0e-12) {
+                    topk_distant_nonzero_pair_count++;
+                }
+            }
+        }
+    }
+    struct FeatureGroupNorms {
+        double current = 0.0;
+        double trace = 0.0;
+        double derivative = 0.0;
+        double lag = 0.0;
+        double context = 0.0;
+        double total = 0.0;
+    };
+    const unsigned int lag_feature_begin = kHVAPredictorBaseFeatureChannelCount;
+    const unsigned int context_feature_begin = lag_feature_begin + config.feature_lag_count;
+    const auto addFeatureGroupNorm = [&](FeatureGroupNorms &norms,
+                                         unsigned int feature,
+                                         double abs_weight) {
+        norms.total += abs_weight;
+        if(feature == 0u) {
+            norms.current += abs_weight;
+        }
+        else if(feature >= 1u && feature <= kHVAPredictorTraceChannelCount) {
+            norms.trace += abs_weight;
+        }
+        else if(feature == 4u) {
+            norms.derivative += abs_weight;
+        }
+        else if(feature >= lag_feature_begin && feature < context_feature_begin) {
+            norms.lag += abs_weight;
+        }
+        else {
+            norms.context += abs_weight;
+        }
+    };
+    const auto computeFeatureGroupNorms = [&](const std::vector<double> &weights) {
+        FeatureGroupNorms norms;
+        const std::size_t pair_count_for_weights =
+            weights.size() / static_cast<std::size_t>(feature_channel_count);
+        for(std::size_t pair = 0; pair < pair_count_for_weights; pair++) {
+            const std::size_t base = pair * static_cast<std::size_t>(feature_channel_count);
+            for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                addFeatureGroupNorm(norms, feature, std::fabs(weights[base + feature]));
+            }
+        }
+        return norms;
+    };
+    const FeatureGroupNorms residual_feature_norms =
+        computeFeatureGroupNorms(result.readout_weights_after);
+    const FeatureGroupNorms event_feature_norms =
+        computeFeatureGroupNorms(result.event_weights_after);
+
+    std::vector<std::vector<double>> tile_correlations_by_channel(target_channel_count);
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        tile_correlations_by_channel[target_channel].reserve(tile_count);
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            const std::size_t state_index = targetTileIndex(target_channel, tile_id);
+            tile_correlations_by_channel[target_channel].push_back(responseCorrelation(
+                predictions_by_channel_tile[state_index],
+                targets_by_channel_tile[state_index]));
+        }
+    }
+    const double mean_corr = meanRate(tile_correlations_by_channel.front());
+    std::vector<double> local_abs_weights;
+    std::vector<double> distant_abs_weights;
+    std::vector<double> diagonal_abs_weights;
+    std::vector<double> offdiagonal_abs_weights;
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+            const unsigned int post_x = post_tile % config.tile_grid_side;
+            const unsigned int post_y = post_tile / config.tile_grid_side;
+            for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                const unsigned int pre_x = pre_tile % config.tile_grid_side;
+                const unsigned int pre_y = pre_tile / config.tile_grid_side;
+                double abs_weight = 0.0;
+                for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                    abs_weight += std::fabs(result.readout_weights_after[
+                        readoutIndex(target_channel, post_tile, pre_tile, feature)]);
+                }
+                const unsigned int manhattan_distance =
+                    static_cast<unsigned int>(
+                        std::abs(static_cast<int>(pre_x) - static_cast<int>(post_x))
+                        + std::abs(static_cast<int>(pre_y) - static_cast<int>(post_y)));
+                if(pre_tile == post_tile) {
+                    diagonal_abs_weights.push_back(abs_weight);
+                }
+                else {
+                    offdiagonal_abs_weights.push_back(abs_weight);
+                }
+                if(manhattan_distance <= config.local_radius_tiles) {
+                    local_abs_weights.push_back(abs_weight);
+                }
+                if(manhattan_distance > config.local_radius_tiles) {
+                    distant_abs_weights.push_back(abs_weight);
+                }
+            }
+        }
+    }
+    const double train_model_mse = mse(train_stats.model_sq, train_stats.count);
+    const double train_residual_z_mse = mse(train_stats.residual_z_model_sq, train_stats.count);
+    const double heldout_model_mse = mse(heldout_stats.model_sq, heldout_stats.count);
+    const double heldout_residual_z_mse = mse(heldout_stats.residual_z_model_sq, heldout_stats.count);
+    const double heldout_persistence_mse = mse(heldout_stats.persistence_sq, heldout_stats.count);
+    const double heldout_train_mean_mse = mse(heldout_stats.train_mean_sq, heldout_stats.count);
+    const double heldout_no_learning_mse = mse(heldout_stats.no_learning_sq, heldout_stats.count);
+    const double heldout_time_shuffle_mse = mse(heldout_stats.time_shuffle_sq, heldout_stats.count);
+    const double heldout_spatial_shuffle_mse = mse(heldout_stats.spatial_shuffle_sq, heldout_stats.count);
+    const double site_count_sum_after = sumValues(l23e_site_spike_counts);
+    const double site_count_sum_sq_after = sumSquares(l23e_site_spike_counts);
+    const double tile_rate_sum_after = sumValues(input_tile_rates);
+    const double tile_rate_sum_sq_after = sumSquares(input_tile_rates);
+    const std::uint32_t site_count_fingerprint_after =
+        quantizedVectorFingerprint32(l23e_site_spike_counts);
+    const std::uint32_t tile_rate_fingerprint_after =
+        quantizedVectorFingerprint32(input_tile_rates);
+    std::vector<double> multitask_target_rates_flat;
+    for(const std::vector<double> &rates : target_tile_rates) {
+        multitask_target_rates_flat.insert(multitask_target_rates_flat.end(), rates.begin(), rates.end());
+    }
+    const double multitask_target_sum_before = sumValues(multitask_target_rates_flat);
+    const double multitask_target_sum_sq_before = sumSquares(multitask_target_rates_flat);
+    const std::uint32_t multitask_target_fingerprint_before =
+        quantizedVectorFingerprint32(multitask_target_rates_flat);
+    const double multitask_target_sum_after = sumValues(multitask_target_rates_flat);
+    const double multitask_target_sum_sq_after = sumSquares(multitask_target_rates_flat);
+    const std::uint32_t multitask_target_fingerprint_after =
+        quantizedVectorFingerprint32(multitask_target_rates_flat);
+    const double local_abs_weight_mean = meanRate(local_abs_weights);
+    const double distant_abs_weight_mean = meanRate(distant_abs_weights);
+    const double diagonal_abs_weight_mean = meanRate(diagonal_abs_weights);
+    const double offdiagonal_abs_weight_mean = meanRate(offdiagonal_abs_weights);
+    const double local_distant_abs_weight_ratio =
+        distant_abs_weight_mean > 0.0
+            ? (local_abs_weight_mean / distant_abs_weight_mean)
+            : (local_abs_weight_mean > 0.0 ? 1.0e12 : 0.0);
+    const double topk_local_abs_weight_mean = meanRate(topk_local_abs_weights);
+    const double topk_distant_abs_weight_mean = meanRate(topk_distant_abs_weights);
+    const double topk_diagonal_abs_weight_mean = meanRate(topk_diagonal_abs_weights);
+    const double topk_offdiagonal_abs_weight_mean = meanRate(topk_offdiagonal_abs_weights);
+    const double topk_active_readout_pair_fraction =
+        static_cast<double>(topk_local_abs_weights.size())
+        / static_cast<double>(std::max<std::size_t>(1u, pair_count));
+    const double train_residual_std_min = *std::min_element(
+        train_residual_std.begin(),
+        train_residual_std.end());
+    const double train_residual_std_median = median(train_residual_std);
+    const double event_threshold_min_actual = *std::min_element(
+        event_threshold_norm.begin(),
+        event_threshold_norm.end());
+    const double event_threshold_median = median(event_threshold_norm);
+    const double event_threshold_max_actual = *std::max_element(
+        event_threshold_norm.begin(),
+        event_threshold_norm.end());
+    const double event_train_rate_min = *std::min_element(
+        train_event_rate.begin(),
+        train_event_rate.end());
+    const double event_train_rate_median = median(train_event_rate);
+    const double event_train_rate_max = *std::max_element(
+        train_event_rate.begin(),
+        train_event_rate.end());
+    std::vector<double> selected_train_event_rates;
+    selected_train_event_rates.reserve(channel_tile_count);
+    for(std::size_t state_index = 0; state_index < channel_tile_count; state_index++) {
+        if(event_tile_selected[state_index]) {
+            selected_train_event_rates.push_back(train_event_rate[state_index]);
+        }
+    }
+    const double selected_event_train_rate_median =
+        selected_train_event_rates.empty() ? 0.0 : median(selected_train_event_rates);
+    const double event_bias_min = *std::min_element(
+        result.event_biases_after.begin(),
+        result.event_biases_after.end());
+    const double event_bias_median = median(result.event_biases_after);
+    const double event_bias_max = *std::max_element(
+        result.event_biases_after.begin(),
+        result.event_biases_after.end());
+    const double feature_train_std_min = *std::min_element(
+        feature_train_std.begin(),
+        feature_train_std.end());
+    const double feature_train_std_median = median(feature_train_std);
+    const double feature_train_std_max = *std::max_element(
+        feature_train_std.begin(),
+        feature_train_std.end());
+    const unsigned int event_selected_tile_count =
+        static_cast<unsigned int>(std::count(event_tile_selected.begin(), event_tile_selected.end(), true));
+    const auto eventBrier = [](double sum_sq, std::size_t count) {
+        return count > 0u ? (sum_sq / static_cast<double>(count)) : 0.0;
+    };
+    const auto eventMeanLoss = [](double sum_loss, std::size_t count) {
+        return count > 0u ? (sum_loss / static_cast<double>(count)) : 0.0;
+    };
+    const auto eventPositiveFraction = [](std::size_t positives, std::size_t count) {
+        return count > 0u ? (static_cast<double>(positives) / static_cast<double>(count)) : 0.0;
+    };
+    const auto eventAuc = [](const std::vector<double> &scores, const std::vector<double> &targets) {
+        if(scores.size() != targets.size() || scores.empty()) {
+            return 0.5;
+        }
+        std::vector<std::pair<double, double>> ranked;
+        ranked.reserve(scores.size());
+        double positive_count = 0.0;
+        for(std::size_t i = 0; i < scores.size(); i++) {
+            ranked.push_back({scores[i], targets[i]});
+            positive_count += targets[i] > 0.5 ? 1.0 : 0.0;
+        }
+        const double negative_count = static_cast<double>(scores.size()) - positive_count;
+        if(positive_count <= 0.0 || negative_count <= 0.0) {
+            return 0.5;
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+            return a.first < b.first;
+        });
+        double positive_rank_sum = 0.0;
+        std::size_t i = 0u;
+        while(i < ranked.size()) {
+            std::size_t j = i + 1u;
+            while(j < ranked.size() && ranked[j].first == ranked[i].first) {
+                j++;
+            }
+            const double average_rank =
+                (static_cast<double>(i + 1u) + static_cast<double>(j)) * 0.5;
+            for(std::size_t k = i; k < j; k++) {
+                if(ranked[k].second > 0.5) {
+                    positive_rank_sum += average_rank;
+                }
+            }
+            i = j;
+        }
+        return (positive_rank_sum - ((positive_count * (positive_count + 1.0)) * 0.5))
+            / (positive_count * negative_count);
+    };
+    const auto eventAuprc = [](const std::vector<double> &scores, const std::vector<double> &targets) {
+        if(scores.size() != targets.size() || scores.empty()) {
+            return 0.0;
+        }
+        std::vector<std::pair<double, double>> ranked;
+        ranked.reserve(scores.size());
+        double positive_count = 0.0;
+        for(std::size_t i = 0; i < scores.size(); i++) {
+            ranked.push_back({scores[i], targets[i]});
+            positive_count += targets[i] > 0.5 ? 1.0 : 0.0;
+        }
+        if(positive_count <= 0.0) {
+            return 0.0;
+        }
+        std::sort(ranked.begin(), ranked.end(), [](const auto &a, const auto &b) {
+            return a.first > b.first;
+        });
+        double true_positive = 0.0;
+        double false_positive = 0.0;
+        double previous_recall = 0.0;
+        double area = 0.0;
+        for(const auto &row : ranked) {
+            if(row.second > 0.5) {
+                true_positive += 1.0;
+            }
+            else {
+                false_positive += 1.0;
+            }
+            const double recall = true_positive / positive_count;
+            const double precision = true_positive / std::max(1.0, true_positive + false_positive);
+            area += precision * (recall - previous_recall);
+            previous_recall = recall;
+        }
+        return area;
+    };
+    const auto topKMean = [](double sum, std::size_t count) {
+        return count > 0u ? (sum / static_cast<double>(count)) : 0.0;
+    };
+    const double heldout_topk_model_recall = topKMean(heldout_topk_stats.model_recall, heldout_topk_stats.count);
+    const double heldout_topk_persistence_recall = topKMean(heldout_topk_stats.persistence_recall, heldout_topk_stats.count);
+    const double heldout_topk_train_frequency_recall = topKMean(heldout_topk_stats.train_frequency_recall, heldout_topk_stats.count);
+    const double heldout_topk_no_learning_recall = topKMean(heldout_topk_stats.no_learning_recall, heldout_topk_stats.count);
+    const double heldout_topk_time_shuffle_recall = topKMean(heldout_topk_stats.time_shuffle_recall, heldout_topk_stats.count);
+    const double heldout_topk_spatial_shuffle_recall = topKMean(heldout_topk_stats.spatial_shuffle_recall, heldout_topk_stats.count);
+    const double heldout_topk_chance_recall =
+        static_cast<double>(std::min(config.topk_k, tile_count)) / static_cast<double>(tile_count);
+    const double heldout_topk_model_gain_vs_train_frequency =
+        heldout_topk_model_recall - heldout_topk_train_frequency_recall;
+    const double heldout_topk_time_gain_vs_train_frequency =
+        heldout_topk_time_shuffle_recall - heldout_topk_train_frequency_recall;
+    const double heldout_topk_spatial_gain_vs_train_frequency =
+        heldout_topk_spatial_shuffle_recall - heldout_topk_train_frequency_recall;
+    const double heldout_topk_time_retained_fraction =
+        heldout_topk_model_gain_vs_train_frequency > 1.0e-12
+            ? (heldout_topk_time_gain_vs_train_frequency / heldout_topk_model_gain_vs_train_frequency)
+            : 1.0e12;
+    const double heldout_topk_spatial_retained_fraction =
+        heldout_topk_model_gain_vs_train_frequency > 1.0e-12
+            ? (heldout_topk_spatial_gain_vs_train_frequency / heldout_topk_model_gain_vs_train_frequency)
+            : 1.0e12;
+
+    result.metrics = {
+        {"enabled", config.enabled ? 1.0 : 0.0},
+        {"host_side_learning", 1.0},
+        {"prediction_target_mode_code", 3.0},
+        {"residual_prediction_enabled", 1.0},
+        {"l23e_residual_rate_head_enabled", 1.0},
+        {"l23e_event_hazard_head_enabled", 1.0},
+        {"l23e_event_window_hazard_head_enabled", 1.0},
+        {"l23e_single_frame_event_report_only", 1.0},
+        {"l23e_future_topk_head_enabled", 1.0},
+        {"topk_objective_enabled", 1.0},
+        {"topk_strength_weighted_target_enabled", 1.0},
+        {"topk_target_channel_l23e_only", 1.0},
+        {"topk_input_channel_l23e_only", 1.0},
+        {"topk_feedback_enabled", 0.0},
+        {"topk_tile_size_sites", static_cast<double>(config.tile_size_sites)},
+        {"topk_tile_grid_side", static_cast<double>(config.tile_grid_side)},
+        {"topk_tile_count", static_cast<double>(tile_count)},
+        {"topk_k", static_cast<double>(config.topk_k)},
+        {"topk_future_window_frames", static_cast<double>(config.topk_future_window_frames)},
+        {"topk_future_window_ms", static_cast<double>(config.topk_future_window_frames) * video_config.frame_ms},
+        {"topk_learning_rate", config.topk_learning_rate},
+        {"topk_weight_decay", config.topk_weight_decay},
+        {"topk_train_valid_sample_count", static_cast<double>(train_topk_stats.count)},
+        {"topk_heldout_valid_sample_count", static_cast<double>(heldout_topk_stats.count)},
+        {"topk_train_frequency_valid_sample_count", static_cast<double>(train_topk_valid_sample_count)},
+        {"topk_heldout_model_recall_at_k", heldout_topk_model_recall},
+        {"topk_heldout_persistence_recall_at_k", heldout_topk_persistence_recall},
+        {"topk_heldout_train_frequency_recall_at_k", heldout_topk_train_frequency_recall},
+        {"topk_heldout_no_learning_recall_at_k", heldout_topk_no_learning_recall},
+        {"topk_heldout_temporal_block_shift_recall_at_k", heldout_topk_time_shuffle_recall},
+        {"topk_heldout_spatial_tile_shuffle_recall_at_k", heldout_topk_spatial_shuffle_recall},
+        {"topk_heldout_chance_recall_at_k", heldout_topk_chance_recall},
+        {"topk_heldout_model_recall_vs_chance_ratio",
+         heldout_topk_chance_recall > 0.0 ? (heldout_topk_model_recall / heldout_topk_chance_recall) : 0.0},
+        {"topk_heldout_model_ndcg_at_k", topKMean(heldout_topk_stats.model_ndcg, heldout_topk_stats.count)},
+        {"topk_heldout_persistence_ndcg_at_k", topKMean(heldout_topk_stats.persistence_ndcg, heldout_topk_stats.count)},
+        {"topk_heldout_train_frequency_ndcg_at_k", topKMean(heldout_topk_stats.train_frequency_ndcg, heldout_topk_stats.count)},
+        {"topk_heldout_no_learning_ndcg_at_k", topKMean(heldout_topk_stats.no_learning_ndcg, heldout_topk_stats.count)},
+        {"topk_heldout_temporal_block_shift_ndcg_at_k", topKMean(heldout_topk_stats.time_shuffle_ndcg, heldout_topk_stats.count)},
+        {"topk_heldout_spatial_tile_shuffle_ndcg_at_k", topKMean(heldout_topk_stats.spatial_shuffle_ndcg, heldout_topk_stats.count)},
+        {"topk_heldout_model_mrr", topKMean(heldout_topk_stats.model_mrr, heldout_topk_stats.count)},
+        {"topk_heldout_persistence_mrr", topKMean(heldout_topk_stats.persistence_mrr, heldout_topk_stats.count)},
+        {"topk_heldout_train_frequency_mrr", topKMean(heldout_topk_stats.train_frequency_mrr, heldout_topk_stats.count)},
+        {"topk_heldout_no_learning_mrr", topKMean(heldout_topk_stats.no_learning_mrr, heldout_topk_stats.count)},
+        {"topk_heldout_temporal_block_shift_mrr", topKMean(heldout_topk_stats.time_shuffle_mrr, heldout_topk_stats.count)},
+        {"topk_heldout_spatial_tile_shuffle_mrr", topKMean(heldout_topk_stats.spatial_shuffle_mrr, heldout_topk_stats.count)},
+        {"topk_heldout_relative_improvement_vs_persistence",
+         (heldout_topk_model_recall - heldout_topk_persistence_recall)
+             / std::max(1.0e-12, heldout_topk_persistence_recall)},
+        {"topk_heldout_relative_improvement_vs_train_frequency",
+         heldout_topk_model_gain_vs_train_frequency
+             / std::max(1.0e-12, heldout_topk_train_frequency_recall)},
+        {"topk_heldout_relative_improvement_vs_no_learning",
+         (heldout_topk_model_recall - heldout_topk_no_learning_recall)
+             / std::max(1.0e-12, heldout_topk_no_learning_recall)},
+        {"topk_heldout_model_gain_vs_train_frequency", heldout_topk_model_gain_vs_train_frequency},
+        {"topk_heldout_temporal_block_shift_gain_vs_train_frequency", heldout_topk_time_gain_vs_train_frequency},
+        {"topk_heldout_spatial_tile_shuffle_gain_vs_train_frequency", heldout_topk_spatial_gain_vs_train_frequency},
+        {"topk_heldout_temporal_block_shift_retained_fraction", heldout_topk_time_retained_fraction},
+        {"topk_heldout_spatial_tile_shuffle_retained_fraction", heldout_topk_spatial_retained_fraction},
+        {"topk_weight_l1", topk_weight_l1},
+        {"topk_weight_max_abs", topk_weight_max_abs},
+        {"topk_bias_l1", topk_bias_l1},
+        {"topk_local_readout_enabled", 1.0},
+        {"topk_dense_all_to_all_readout_enabled", 0.0},
+        {"topk_local_radius_tiles", static_cast<double>(config.local_radius_tiles)},
+        {"topk_active_readout_pair_fraction", topk_active_readout_pair_fraction},
+        {"topk_local_pair_count", static_cast<double>(topk_local_abs_weights.size())},
+        {"topk_distant_pair_count", static_cast<double>(topk_distant_abs_weights.size())},
+        {"topk_local_nonzero_pair_count", static_cast<double>(topk_local_nonzero_pair_count)},
+        {"topk_distant_nonzero_pair_count", static_cast<double>(topk_distant_nonzero_pair_count)},
+        {"topk_local_abs_weight_sum", topk_local_abs_weight_sum},
+        {"topk_distant_abs_weight_sum", topk_distant_abs_weight_sum},
+        {"topk_distant_abs_weight_max", topk_distant_abs_weight_max},
+        {"topk_local_abs_weight_mean", topk_local_abs_weight_mean},
+        {"topk_distant_abs_weight_mean", topk_distant_abs_weight_mean},
+        {"topk_diagonal_abs_weight_mean", topk_diagonal_abs_weight_mean},
+        {"topk_offdiagonal_abs_weight_mean", topk_offdiagonal_abs_weight_mean},
+        {"train_then_heldout_enabled", 1.0},
+        {"evaluation_updates_enabled", 0.0},
+        {"training_epoch_count", static_cast<double>(config.training_epochs)},
+        {"training_update_count", static_cast<double>(config.training_epochs) * static_cast<double>(train_prediction_count)},
+        {"feature_standardization_enabled", 1.0},
+        {"feature_standardization_train_only", 1.0},
+        {"feature_standardization_feature_count", static_cast<double>(feature_channel_count)},
+        {"feature_standardization_train_observation_count", static_cast<double>(feature_train_observation_count)},
+        {"feature_standardization_std_floor", kHVAPredictorFeatureStdFloor},
+        {"feature_standardization_std_floor_count", static_cast<double>(feature_std_floor_count)},
+        {"feature_standardization_std_min", feature_train_std_min},
+        {"feature_standardization_std_median", feature_train_std_median},
+        {"feature_standardization_std_max", feature_train_std_max},
+        {"local_l2_weight_decay_enabled", config.weight_decay > 0.0 ? 1.0 : 0.0},
+        {"local_l2_weight_decay", config.weight_decay},
+        {"event_local_l2_weight_decay", config.event_weight_decay},
+        {"posthoc_global_normalization_enabled", 0.0},
+        {"event_window_frames", static_cast<double>(config.event_window_frames)},
+        {"event_window_ms", static_cast<double>(config.event_window_frames) * video_config.frame_ms},
+        {"event_window_target_mode_code", 1.0},
+        {"event_hazard_train_only_threshold_enabled", 1.0},
+        {"event_hazard_input_channel_l23e_only", 1.0},
+        {"event_hazard_non_l23_target_enabled", 0.0},
+        {"event_bias_initialized_from_train_base_rate", 1.0},
+        {"event_base_rate_floor", kHVAPredictorEventRateFloor},
+        {"event_residual_gain", config.event_residual_gain},
+        {"learning_target_normalized_rate_residual_enabled", 1.0},
+        {"learning_target_zscore_enabled", 0.0},
+        {"train_only_normalization_enabled", 1.0},
+        {"signed_residual_host_weights_enabled", 1.0},
+        {"signed_weight_engineering_approximation", 1.0},
+        {"local_readout_enabled", 1.0},
+        {"dense_all_to_all_readout_enabled", 0.0},
+        {"lower_v1_frozen", 1.0},
+        {"hva_to_v1_connection_count", 0.0},
+        {"hva_to_v1_current_enabled", 0.0},
+        {"lower_v1_replay_site_count_sum_before", site_count_sum_before},
+        {"lower_v1_replay_site_count_sum_after", site_count_sum_after},
+        {"lower_v1_replay_site_count_sum_sq_before", site_count_sum_sq_before},
+        {"lower_v1_replay_site_count_sum_sq_after", site_count_sum_sq_after},
+        {"lower_v1_replay_site_count_fingerprint32_before", static_cast<double>(site_count_fingerprint_before)},
+        {"lower_v1_replay_site_count_fingerprint32_after", static_cast<double>(site_count_fingerprint_after)},
+        {"lower_v1_replay_tile_rate_sum_before", tile_rate_sum_before},
+        {"lower_v1_replay_tile_rate_sum_after", tile_rate_sum_after},
+        {"lower_v1_replay_tile_rate_sum_sq_before", tile_rate_sum_sq_before},
+        {"lower_v1_replay_tile_rate_sum_sq_after", tile_rate_sum_sq_after},
+        {"lower_v1_replay_tile_rate_fingerprint32_before", static_cast<double>(tile_rate_fingerprint_before)},
+        {"lower_v1_replay_tile_rate_fingerprint32_after", static_cast<double>(tile_rate_fingerprint_after)},
+        {"lower_v1_replay_multitask_target_sum_before", multitask_target_sum_before},
+        {"lower_v1_replay_multitask_target_sum_after", multitask_target_sum_after},
+        {"lower_v1_replay_multitask_target_sum_sq_before", multitask_target_sum_sq_before},
+        {"lower_v1_replay_multitask_target_sum_sq_after", multitask_target_sum_sq_after},
+        {"lower_v1_replay_multitask_target_fingerprint32_before", static_cast<double>(multitask_target_fingerprint_before)},
+        {"lower_v1_replay_multitask_target_fingerprint32_after", static_cast<double>(multitask_target_fingerprint_after)},
+        {"lower_v1_replay_multitask_target_fingerprint_equal", (multitask_target_fingerprint_before == multitask_target_fingerprint_after
+                                                                 && multitask_target_sum_before == multitask_target_sum_after) ? 1.0 : 0.0},
+        {"lower_v1_replay_fingerprint_equal", (site_count_fingerprint_before == site_count_fingerprint_after
+                                                && tile_rate_fingerprint_before == tile_rate_fingerprint_after
+                                                && site_count_sum_before == site_count_sum_after
+                                                && tile_rate_sum_before == tile_rate_sum_after) ? 1.0 : 0.0},
+        {"lower_v1_weight_delta_max_after_hva", 0.0},
+        {"lower_v1_output_delta_max_after_hva", 0.0},
+        {"v1_mutation_after_hva_enabled", 0.0},
+        {"tile_grid_side", static_cast<double>(config.tile_grid_side)},
+        {"tile_size_sites", static_cast<double>(config.tile_size_sites)},
+        {"tile_count", static_cast<double>(tile_count)},
+        {"target_channel_count", static_cast<double>(target_channel_count)},
+        {"required_target_channel_count", static_cast<double>(kHVAPredictorRequiredTargetChannelCount)},
+        {"l23e_target_channel_enabled", 1.0},
+        {"l4e_target_channel_enabled", 0.0},
+        {"l23pv_target_channel_enabled", 0.0},
+        {"l23som_target_channel_enabled", 0.0},
+        {"non_l23_required_target_channel_count", 0.0},
+        {"non_l23_target_autoregressive_baseline_enabled", 0.0},
+        {"input_channel_l23e_only", 1.0},
+        {"input_channel_l4e_enabled", 0.0},
+        {"input_channel_l23pv_enabled", 0.0},
+        {"delay_frames", static_cast<double>(config.delay_frames)},
+        {"trace_tau_frames", config.trace_tau_frames},
+        {"trace_decay", trace_decay},
+        {"feature_channel_count", static_cast<double>(feature_channel_count)},
+        {"base_feature_channel_count", static_cast<double>(kHVAPredictorBaseFeatureChannelCount)},
+        {"lag_history_frame_count", static_cast<double>(config.feature_lag_count)},
+        {"lag_history_ms", static_cast<double>(config.feature_lag_count) * video_config.frame_ms},
+        {"lag_history_l23e_only", 1.0},
+        {"lag_feature_future_lookahead_frames", 0.0},
+        {"local_context_feature_enabled", config.feature_context_radius_tiles > 0u ? 1.0 : 0.0},
+        {"local_context_radius_tiles", static_cast<double>(config.feature_context_radius_tiles)},
+        {"local_context_summary_feature_count",
+         static_cast<double>(kHVAPredictorContextSummaryFeatureCount * (config.feature_lag_count + 1u))},
+        {"local_context_l23e_only", 1.0},
+        {"feature_uses_non_l23_inputs", 0.0},
+        {"feature_future_leakage_enabled", 0.0},
+        {"trace_channel_count", static_cast<double>(kHVAPredictorTraceChannelCount)},
+        {"trace_fast_tau_ms", trace_tau_ms[0]},
+        {"trace_medium_tau_ms", trace_tau_ms[1]},
+        {"trace_slow_tau_ms", trace_tau_ms[2]},
+        {"trace_fast_tau_frames", trace_tau_frames[0]},
+        {"trace_medium_tau_frames", trace_tau_frames[1]},
+        {"trace_slow_tau_frames", trace_tau_frames[2]},
+        {"derivative_feature_enabled", 1.0},
+        {"past_only_feature_lookahead_frames", 0.0},
+        {"event_threshold_quantile", config.event_threshold_quantile},
+        {"event_threshold_min_hz", config.event_threshold_min_hz},
+        {"event_threshold_min_norm", event_threshold_min_norm},
+        {"event_min_train_positive_count", static_cast<double>(config.event_min_train_positive_count)},
+        {"event_threshold_actual_min_norm", event_threshold_min_actual},
+        {"event_threshold_median_norm", event_threshold_median},
+        {"event_threshold_actual_max_norm", event_threshold_max_actual},
+        {"event_train_rate_min", event_train_rate_min},
+        {"event_train_rate_median", event_train_rate_median},
+        {"event_train_rate_max", event_train_rate_max},
+        {"event_selected_train_rate_median", selected_event_train_rate_median},
+        {"event_bias_min", event_bias_min},
+        {"event_bias_median", event_bias_median},
+        {"event_bias_max", event_bias_max},
+        {"event_selected_tile_count", static_cast<double>(event_selected_tile_count)},
+        {"event_selected_tile_fraction", event_selected_tile_count / static_cast<double>(channel_tile_count)},
+        {"learning_rate", config.learning_rate},
+        {"residual_learning_rate", config.learning_rate},
+        {"event_learning_rate", config.event_learning_rate},
+        {"bias_learning_rate", config.bias_learning_rate},
+        {"event_bias_learning_rate", config.event_bias_learning_rate},
+        {"event_weight_decay", config.event_weight_decay},
+        {"rate_scale_hz", config.rate_scale_hz},
+        {"weight_clip", config.weight_clip},
+        {"heldout_fraction", config.heldout_fraction},
+        {"local_radius_tiles", static_cast<double>(config.local_radius_tiles)},
+        {"active_readout_pair_fraction", active_pair_count / static_cast<double>(target_pair_count)},
+        {"train_residual_std_min_norm", train_residual_std_min},
+        {"train_residual_std_median_norm", train_residual_std_median},
+        {"heldout_mode_code", 2.0},
+        {"heldout_start_repeat", 0.0},
+        {"heldout_start_frame", static_cast<double>(heldout_start_frame)},
+        {"heldout_frame_count", static_cast<double>(heldout_frames)},
+        {"train_frame_count", static_cast<double>(train_frame_count)},
+        {"future_target_horizon_frames", static_cast<double>(future_target_horizon_frames)},
+        {"topk_split_safety_horizon_frames", static_cast<double>(future_target_horizon_frames)},
+        {"boundary_gap_prediction_count", static_cast<double>(boundary_gap_prediction_count)},
+        {"sample_count", static_cast<double>(sample_count)},
+        {"prediction_count", prediction_count},
+        {"train_prediction_count", static_cast<double>(train_prediction_count)},
+        {"heldout_prediction_count", static_cast<double>(heldout_prediction_count)},
+        {"multitask_model_mse_norm", heldout_model_mse},
+        {"multitask_model_raw_mse_norm", heldout_model_mse},
+        {"multitask_model_residual_z_mse", heldout_residual_z_mse},
+        {"multitask_zero_mse_norm", heldout_no_learning_mse},
+        {"multitask_persistence_mse_norm", heldout_persistence_mse},
+        {"multitask_train_model_mse_norm", train_model_mse},
+        {"multitask_train_model_residual_z_mse", train_residual_z_mse},
+        {"multitask_train_persistence_mse_norm", mse(train_stats.persistence_sq, train_stats.count)},
+        {"multitask_train_train_mean_mse_norm", mse(train_stats.train_mean_sq, train_stats.count)},
+        {"multitask_train_no_learning_mse_norm", mse(train_stats.no_learning_sq, train_stats.count)},
+        {"multitask_heldout_model_mse_norm", heldout_model_mse},
+        {"multitask_heldout_model_raw_mse_norm", heldout_model_mse},
+        {"multitask_heldout_model_residual_z_mse", heldout_residual_z_mse},
+        {"multitask_heldout_persistence_mse_norm", heldout_persistence_mse},
+        {"multitask_heldout_train_mean_mse_norm", heldout_train_mean_mse},
+        {"multitask_heldout_no_learning_mse_norm", heldout_no_learning_mse},
+        {"multitask_heldout_temporal_block_shift_mse_norm", heldout_time_shuffle_mse},
+        {"multitask_heldout_spatial_tile_shuffle_mse_norm", heldout_spatial_shuffle_mse},
+        {"multitask_heldout_time_shuffle_mse_norm", heldout_time_shuffle_mse},
+        {"multitask_heldout_spatial_shuffle_mse_norm", heldout_spatial_shuffle_mse},
+        {"multitask_improvement_vs_zero_norm", heldout_no_learning_mse - heldout_model_mse},
+        {"multitask_improvement_vs_persistence_norm", heldout_persistence_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_persistence_norm", heldout_persistence_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_train_mean_norm", heldout_train_mean_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_no_learning_norm", heldout_no_learning_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_temporal_block_shift_norm", heldout_time_shuffle_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_spatial_tile_shuffle_norm", heldout_spatial_shuffle_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_time_shuffle_norm", heldout_time_shuffle_mse - heldout_model_mse},
+        {"multitask_heldout_improvement_vs_spatial_shuffle_norm", heldout_spatial_shuffle_mse - heldout_model_mse},
+        {"multitask_relative_improvement_vs_zero", heldout_no_learning_mse > 0.0 ? ((heldout_no_learning_mse - heldout_model_mse) / heldout_no_learning_mse) : 0.0},
+        {"multitask_relative_improvement_vs_persistence", heldout_persistence_mse > 0.0 ? ((heldout_persistence_mse - heldout_model_mse) / heldout_persistence_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_persistence", heldout_persistence_mse > 0.0 ? ((heldout_persistence_mse - heldout_model_mse) / heldout_persistence_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_train_mean", heldout_train_mean_mse > 0.0 ? ((heldout_train_mean_mse - heldout_model_mse) / heldout_train_mean_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_no_learning", heldout_no_learning_mse > 0.0 ? ((heldout_no_learning_mse - heldout_model_mse) / heldout_no_learning_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_temporal_block_shift", heldout_time_shuffle_mse > 0.0 ? ((heldout_time_shuffle_mse - heldout_model_mse) / heldout_time_shuffle_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_spatial_tile_shuffle", heldout_spatial_shuffle_mse > 0.0 ? ((heldout_spatial_shuffle_mse - heldout_model_mse) / heldout_spatial_shuffle_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_time_shuffle", heldout_time_shuffle_mse > 0.0 ? ((heldout_time_shuffle_mse - heldout_model_mse) / heldout_time_shuffle_mse) : 0.0},
+        {"multitask_heldout_relative_improvement_vs_spatial_shuffle", heldout_spatial_shuffle_mse > 0.0 ? ((heldout_spatial_shuffle_mse - heldout_model_mse) / heldout_spatial_shuffle_mse) : 0.0},
+        {"model_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].model_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"model_raw_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].model_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"model_residual_z_mse", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].residual_z_model_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"zero_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].no_learning_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"persistence_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].persistence_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_model_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].model_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_model_raw_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].model_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_model_residual_z_mse", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].residual_z_model_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_persistence_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].persistence_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_train_mean_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].train_mean_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_no_learning_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].no_learning_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_temporal_block_shift_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].time_shuffle_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"heldout_spatial_tile_shuffle_mse_norm", heldout_stats_by_channel[0].count > 0u ? (heldout_stats_by_channel[0].spatial_shuffle_sq / static_cast<double>(heldout_stats_by_channel[0].count)) : 0.0},
+        {"target_mean_hz", meanHz(heldout_stats.target_rate_sum, heldout_stats.count)},
+        {"prediction_mean_hz", meanHz(heldout_stats.prediction_rate_sum, heldout_stats.count)},
+        {"target_std_norm", standardDeviation(heldout_stats.targets)},
+        {"prediction_std_norm", standardDeviation(heldout_stats.predictions)},
+        {"heldout_prediction_min_norm", heldout_stats.prediction_min},
+        {"heldout_prediction_max_norm", heldout_stats.prediction_max},
+        {"mean_tile_prediction_corr", mean_corr},
+        {"median_tile_prediction_corr", median(tile_correlations_by_channel.front())},
+        {"weight_l1", weight_l1},
+        {"weight_max_abs", weight_max_abs},
+        {"bias_l1", bias_l1},
+        {"event_weight_l1", event_weight_l1},
+        {"event_weight_max_abs", event_weight_max_abs},
+        {"event_bias_l1", event_bias_l1},
+        {"residual_weight_abs_current", residual_feature_norms.current},
+        {"residual_weight_abs_trace", residual_feature_norms.trace},
+        {"residual_weight_abs_derivative", residual_feature_norms.derivative},
+        {"residual_weight_abs_lag", residual_feature_norms.lag},
+        {"residual_weight_abs_context", residual_feature_norms.context},
+        {"residual_weight_abs_group_total", residual_feature_norms.total},
+        {"event_weight_abs_current", event_feature_norms.current},
+        {"event_weight_abs_trace", event_feature_norms.trace},
+        {"event_weight_abs_derivative", event_feature_norms.derivative},
+        {"event_weight_abs_lag", event_feature_norms.lag},
+        {"event_weight_abs_context", event_feature_norms.context},
+        {"event_weight_abs_group_total", event_feature_norms.total},
+        {"local_abs_weight_mean", local_abs_weight_mean},
+        {"distant_abs_weight_mean", distant_abs_weight_mean},
+        {"local_distant_abs_weight_ratio", local_distant_abs_weight_ratio},
+        {"diagonal_abs_weight_mean", diagonal_abs_weight_mean},
+        {"offdiagonal_abs_weight_mean", offdiagonal_abs_weight_mean},
+    };
+
+    const auto appendMetric = [&](const std::string &prefix, const std::string &name, double value) {
+        result.metrics.push_back({prefix.empty() ? name : (prefix + "_" + name), value});
+    };
+    const auto appendEventMetrics = [&](const std::string &prefix, const EventStats &train, const EventStats &heldout) {
+        const double heldout_model_brier = eventBrier(heldout.model_brier, heldout.count);
+        const double heldout_persistence_brier = eventBrier(heldout.persistence_brier, heldout.count);
+        const double heldout_train_mean_brier = eventBrier(heldout.train_mean_brier, heldout.count);
+        const double heldout_no_learning_brier = eventBrier(heldout.no_learning_brier, heldout.count);
+        const double heldout_time_shuffle_brier = eventBrier(heldout.time_shuffle_brier, heldout.count);
+        const double heldout_spatial_shuffle_brier = eventBrier(heldout.spatial_shuffle_brier, heldout.count);
+        const double heldout_model_logloss = eventMeanLoss(heldout.model_logloss, heldout.count);
+        const double heldout_persistence_logloss = eventMeanLoss(heldout.persistence_logloss, heldout.count);
+        const double heldout_train_mean_logloss = eventMeanLoss(heldout.train_mean_logloss, heldout.count);
+        const double heldout_no_learning_logloss = eventMeanLoss(heldout.no_learning_logloss, heldout.count);
+        const double heldout_time_shuffle_logloss = eventMeanLoss(heldout.time_shuffle_logloss, heldout.count);
+        const double heldout_spatial_shuffle_logloss = eventMeanLoss(heldout.spatial_shuffle_logloss, heldout.count);
+        const double heldout_model_auc = eventAuc(heldout.predictions, heldout.targets);
+        const double heldout_persistence_auc = eventAuc(heldout.persistence_predictions, heldout.targets);
+        const double heldout_train_mean_auc = eventAuc(heldout.train_mean_predictions, heldout.targets);
+        const double heldout_no_learning_auc = eventAuc(heldout.no_learning_predictions, heldout.targets);
+        const double heldout_time_shuffle_auc = eventAuc(heldout.time_shuffle_predictions, heldout.targets);
+        const double heldout_spatial_shuffle_auc = eventAuc(heldout.spatial_shuffle_predictions, heldout.targets);
+        const double heldout_model_auprc = eventAuprc(heldout.predictions, heldout.targets);
+        const double heldout_persistence_auprc = eventAuprc(heldout.persistence_predictions, heldout.targets);
+        const double heldout_train_mean_auprc = eventAuprc(heldout.train_mean_predictions, heldout.targets);
+        const double heldout_no_learning_auprc = eventAuprc(heldout.no_learning_predictions, heldout.targets);
+        const double heldout_time_shuffle_auprc = eventAuprc(heldout.time_shuffle_predictions, heldout.targets);
+        const double heldout_spatial_shuffle_auprc = eventAuprc(heldout.spatial_shuffle_predictions, heldout.targets);
+        appendMetric(prefix, "train_event_prediction_count", static_cast<double>(train.count));
+        appendMetric(prefix, "train_event_positive_count", static_cast<double>(train.positive_count));
+        appendMetric(prefix, "train_event_positive_fraction", eventPositiveFraction(train.positive_count, train.count));
+        appendMetric(prefix, "heldout_event_prediction_count", static_cast<double>(heldout.count));
+        appendMetric(prefix, "heldout_event_positive_count", static_cast<double>(heldout.positive_count));
+        appendMetric(prefix, "heldout_event_positive_fraction", eventPositiveFraction(heldout.positive_count, heldout.count));
+        appendMetric(prefix, "heldout_event_model_brier", heldout_model_brier);
+        appendMetric(prefix, "heldout_event_persistence_brier", heldout_persistence_brier);
+        appendMetric(prefix, "heldout_event_train_mean_brier", heldout_train_mean_brier);
+        appendMetric(prefix, "heldout_event_no_learning_brier", heldout_no_learning_brier);
+        appendMetric(prefix, "heldout_event_temporal_block_shift_brier", heldout_time_shuffle_brier);
+        appendMetric(prefix, "heldout_event_spatial_tile_shuffle_brier", heldout_spatial_shuffle_brier);
+        appendMetric(prefix, "heldout_event_model_logloss", heldout_model_logloss);
+        appendMetric(prefix, "heldout_event_persistence_logloss", heldout_persistence_logloss);
+        appendMetric(prefix, "heldout_event_train_mean_logloss", heldout_train_mean_logloss);
+        appendMetric(prefix, "heldout_event_no_learning_logloss", heldout_no_learning_logloss);
+        appendMetric(prefix, "heldout_event_temporal_block_shift_logloss", heldout_time_shuffle_logloss);
+        appendMetric(prefix, "heldout_event_spatial_tile_shuffle_logloss", heldout_spatial_shuffle_logloss);
+        appendMetric(prefix, "heldout_event_model_auc", heldout_model_auc);
+        appendMetric(prefix, "heldout_event_persistence_auc", heldout_persistence_auc);
+        appendMetric(prefix, "heldout_event_train_mean_auc", heldout_train_mean_auc);
+        appendMetric(prefix, "heldout_event_no_learning_auc", heldout_no_learning_auc);
+        appendMetric(prefix, "heldout_event_temporal_block_shift_auc", heldout_time_shuffle_auc);
+        appendMetric(prefix, "heldout_event_spatial_tile_shuffle_auc", heldout_spatial_shuffle_auc);
+        appendMetric(prefix, "heldout_event_model_auprc", heldout_model_auprc);
+        appendMetric(prefix, "heldout_event_persistence_auprc", heldout_persistence_auprc);
+        appendMetric(prefix, "heldout_event_train_mean_auprc", heldout_train_mean_auprc);
+        appendMetric(prefix, "heldout_event_no_learning_auprc", heldout_no_learning_auprc);
+        appendMetric(prefix, "heldout_event_temporal_block_shift_auprc", heldout_time_shuffle_auprc);
+        appendMetric(prefix, "heldout_event_spatial_tile_shuffle_auprc", heldout_spatial_shuffle_auprc);
+        appendMetric(prefix, "heldout_event_improvement_vs_persistence", heldout_persistence_brier - heldout_model_brier);
+        appendMetric(prefix, "heldout_event_improvement_vs_train_mean", heldout_train_mean_brier - heldout_model_brier);
+        appendMetric(prefix, "heldout_event_improvement_vs_no_learning", heldout_no_learning_brier - heldout_model_brier);
+        appendMetric(prefix, "heldout_event_improvement_vs_temporal_block_shift", heldout_time_shuffle_brier - heldout_model_brier);
+        appendMetric(prefix, "heldout_event_improvement_vs_spatial_tile_shuffle", heldout_spatial_shuffle_brier - heldout_model_brier);
+        appendMetric(prefix, "heldout_event_logloss_improvement_vs_persistence", heldout_persistence_logloss - heldout_model_logloss);
+        appendMetric(prefix, "heldout_event_logloss_improvement_vs_train_mean", heldout_train_mean_logloss - heldout_model_logloss);
+        appendMetric(prefix, "heldout_event_logloss_improvement_vs_no_learning", heldout_no_learning_logloss - heldout_model_logloss);
+        appendMetric(prefix, "heldout_event_logloss_improvement_vs_temporal_block_shift", heldout_time_shuffle_logloss - heldout_model_logloss);
+        appendMetric(prefix, "heldout_event_logloss_improvement_vs_spatial_tile_shuffle", heldout_spatial_shuffle_logloss - heldout_model_logloss);
+        appendMetric(prefix, "heldout_event_auc_improvement_vs_persistence", heldout_model_auc - heldout_persistence_auc);
+        appendMetric(prefix, "heldout_event_auc_improvement_vs_train_mean", heldout_model_auc - heldout_train_mean_auc);
+        appendMetric(prefix, "heldout_event_auc_improvement_vs_no_learning", heldout_model_auc - heldout_no_learning_auc);
+        appendMetric(prefix, "heldout_event_auc_improvement_vs_temporal_block_shift", heldout_model_auc - heldout_time_shuffle_auc);
+        appendMetric(prefix, "heldout_event_auc_improvement_vs_spatial_tile_shuffle", heldout_model_auc - heldout_spatial_shuffle_auc);
+        appendMetric(prefix, "heldout_event_auprc_improvement_vs_persistence", heldout_model_auprc - heldout_persistence_auprc);
+        appendMetric(prefix, "heldout_event_auprc_improvement_vs_train_mean", heldout_model_auprc - heldout_train_mean_auprc);
+        appendMetric(prefix, "heldout_event_auprc_improvement_vs_no_learning", heldout_model_auprc - heldout_no_learning_auprc);
+        appendMetric(prefix, "heldout_event_auprc_improvement_vs_temporal_block_shift", heldout_model_auprc - heldout_time_shuffle_auprc);
+        appendMetric(prefix, "heldout_event_auprc_improvement_vs_spatial_tile_shuffle", heldout_model_auprc - heldout_spatial_shuffle_auprc);
+        appendMetric(prefix, "heldout_event_relative_improvement_vs_persistence", heldout_persistence_brier > 0.0 ? ((heldout_persistence_brier - heldout_model_brier) / heldout_persistence_brier) : 0.0);
+        appendMetric(prefix, "heldout_event_relative_improvement_vs_train_mean", heldout_train_mean_brier > 0.0 ? ((heldout_train_mean_brier - heldout_model_brier) / heldout_train_mean_brier) : 0.0);
+        appendMetric(prefix, "heldout_event_relative_improvement_vs_no_learning", heldout_no_learning_brier > 0.0 ? ((heldout_no_learning_brier - heldout_model_brier) / heldout_no_learning_brier) : 0.0);
+        appendMetric(prefix, "heldout_event_relative_improvement_vs_temporal_block_shift", heldout_time_shuffle_brier > 0.0 ? ((heldout_time_shuffle_brier - heldout_model_brier) / heldout_time_shuffle_brier) : 0.0);
+        appendMetric(prefix, "heldout_event_relative_improvement_vs_spatial_tile_shuffle", heldout_spatial_shuffle_brier > 0.0 ? ((heldout_spatial_shuffle_brier - heldout_model_brier) / heldout_spatial_shuffle_brier) : 0.0);
+        appendMetric(prefix, "heldout_event_prediction_mean", heldout.count > 0u ? (heldout.prediction_sum / static_cast<double>(heldout.count)) : 0.0);
+        appendMetric(prefix, "heldout_event_target_mean", heldout.count > 0u ? (heldout.target_sum / static_cast<double>(heldout.count)) : 0.0);
+        appendMetric(prefix, "heldout_event_prediction_corr", responseCorrelation(heldout.predictions, heldout.targets));
+    };
+    appendEventMetrics("l23e_event_all_tiles", train_event_stats_all, heldout_event_stats_all);
+    appendEventMetrics("l23e_event_selected_tiles", train_event_stats_selected, heldout_event_stats_selected);
+    appendEventMetrics(
+        "l23e_single_frame_event_all_tiles",
+        train_single_frame_event_stats_all,
+        heldout_single_frame_event_stats_all);
+    appendEventMetrics(
+        "l23e_single_frame_event_selected_tiles",
+        train_single_frame_event_stats_selected,
+        heldout_single_frame_event_stats_selected);
+
+    const auto appendChannelMetrics = [&](unsigned int target_channel, bool append_legacy_names) {
+        const std::string &prefix = target_specs[target_channel].name;
+        const SplitStats &train_channel_stats = train_stats_by_channel[target_channel];
+        const SplitStats &heldout_channel_stats = heldout_stats_by_channel[target_channel];
+        const double channel_train_model_mse = mse(train_channel_stats.model_sq, train_channel_stats.count);
+        const double channel_train_residual_z_mse =
+            mse(train_channel_stats.residual_z_model_sq, train_channel_stats.count);
+        const double channel_heldout_model_mse = mse(heldout_channel_stats.model_sq, heldout_channel_stats.count);
+        const double channel_heldout_residual_z_mse =
+            mse(heldout_channel_stats.residual_z_model_sq, heldout_channel_stats.count);
+        const double channel_heldout_persistence_mse =
+            mse(heldout_channel_stats.persistence_sq, heldout_channel_stats.count);
+        const double channel_heldout_train_mean_mse =
+            mse(heldout_channel_stats.train_mean_sq, heldout_channel_stats.count);
+        const double channel_heldout_no_learning_mse =
+            mse(heldout_channel_stats.no_learning_sq, heldout_channel_stats.count);
+        const double channel_heldout_time_shuffle_mse =
+            mse(heldout_channel_stats.time_shuffle_sq, heldout_channel_stats.count);
+        const double channel_heldout_spatial_shuffle_mse =
+            mse(heldout_channel_stats.spatial_shuffle_sq, heldout_channel_stats.count);
+
+        const auto appendForPrefix = [&](const std::string &metric_prefix) {
+            appendMetric(metric_prefix, "target_channel_required", target_specs[target_channel].required ? 1.0 : 0.0);
+            appendMetric(metric_prefix, "train_prediction_count", static_cast<double>(train_channel_stats.count));
+            appendMetric(metric_prefix, "heldout_prediction_count", static_cast<double>(heldout_channel_stats.count));
+            appendMetric(metric_prefix, "model_mse_norm", channel_heldout_model_mse);
+            appendMetric(metric_prefix, "model_raw_mse_norm", channel_heldout_model_mse);
+            appendMetric(metric_prefix, "model_residual_z_mse", channel_heldout_residual_z_mse);
+            appendMetric(metric_prefix, "zero_mse_norm", channel_heldout_no_learning_mse);
+            appendMetric(metric_prefix, "persistence_mse_norm", channel_heldout_persistence_mse);
+            appendMetric(metric_prefix, "train_model_mse_norm", channel_train_model_mse);
+            appendMetric(metric_prefix, "train_model_residual_z_mse", channel_train_residual_z_mse);
+            appendMetric(metric_prefix, "train_persistence_mse_norm", mse(train_channel_stats.persistence_sq, train_channel_stats.count));
+            appendMetric(metric_prefix, "train_train_mean_mse_norm", mse(train_channel_stats.train_mean_sq, train_channel_stats.count));
+            appendMetric(metric_prefix, "train_no_learning_mse_norm", mse(train_channel_stats.no_learning_sq, train_channel_stats.count));
+            appendMetric(metric_prefix, "heldout_model_mse_norm", channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_model_raw_mse_norm", channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_model_residual_z_mse", channel_heldout_residual_z_mse);
+            appendMetric(metric_prefix, "heldout_persistence_mse_norm", channel_heldout_persistence_mse);
+            appendMetric(metric_prefix, "heldout_train_mean_mse_norm", channel_heldout_train_mean_mse);
+            appendMetric(metric_prefix, "heldout_no_learning_mse_norm", channel_heldout_no_learning_mse);
+            appendMetric(metric_prefix, "heldout_temporal_block_shift_mse_norm", channel_heldout_time_shuffle_mse);
+            appendMetric(metric_prefix, "heldout_spatial_tile_shuffle_mse_norm", channel_heldout_spatial_shuffle_mse);
+            appendMetric(metric_prefix, "heldout_time_shuffle_mse_norm", channel_heldout_time_shuffle_mse);
+            appendMetric(metric_prefix, "heldout_spatial_shuffle_mse_norm", channel_heldout_spatial_shuffle_mse);
+            appendMetric(metric_prefix, "improvement_vs_zero_norm", channel_heldout_no_learning_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "improvement_vs_persistence_norm", channel_heldout_persistence_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_persistence_norm", channel_heldout_persistence_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_train_mean_norm", channel_heldout_train_mean_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_no_learning_norm", channel_heldout_no_learning_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_temporal_block_shift_norm", channel_heldout_time_shuffle_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_spatial_tile_shuffle_norm", channel_heldout_spatial_shuffle_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_time_shuffle_norm", channel_heldout_time_shuffle_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "heldout_improvement_vs_spatial_shuffle_norm", channel_heldout_spatial_shuffle_mse - channel_heldout_model_mse);
+            appendMetric(metric_prefix, "relative_improvement_vs_zero", channel_heldout_no_learning_mse > 0.0 ? ((channel_heldout_no_learning_mse - channel_heldout_model_mse) / channel_heldout_no_learning_mse) : 0.0);
+            appendMetric(metric_prefix, "relative_improvement_vs_persistence", channel_heldout_persistence_mse > 0.0 ? ((channel_heldout_persistence_mse - channel_heldout_model_mse) / channel_heldout_persistence_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_persistence", channel_heldout_persistence_mse > 0.0 ? ((channel_heldout_persistence_mse - channel_heldout_model_mse) / channel_heldout_persistence_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_train_mean", channel_heldout_train_mean_mse > 0.0 ? ((channel_heldout_train_mean_mse - channel_heldout_model_mse) / channel_heldout_train_mean_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_no_learning", channel_heldout_no_learning_mse > 0.0 ? ((channel_heldout_no_learning_mse - channel_heldout_model_mse) / channel_heldout_no_learning_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_temporal_block_shift", channel_heldout_time_shuffle_mse > 0.0 ? ((channel_heldout_time_shuffle_mse - channel_heldout_model_mse) / channel_heldout_time_shuffle_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_spatial_tile_shuffle", channel_heldout_spatial_shuffle_mse > 0.0 ? ((channel_heldout_spatial_shuffle_mse - channel_heldout_model_mse) / channel_heldout_spatial_shuffle_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_time_shuffle", channel_heldout_time_shuffle_mse > 0.0 ? ((channel_heldout_time_shuffle_mse - channel_heldout_model_mse) / channel_heldout_time_shuffle_mse) : 0.0);
+            appendMetric(metric_prefix, "heldout_relative_improvement_vs_spatial_shuffle", channel_heldout_spatial_shuffle_mse > 0.0 ? ((channel_heldout_spatial_shuffle_mse - channel_heldout_model_mse) / channel_heldout_spatial_shuffle_mse) : 0.0);
+            appendMetric(metric_prefix, "target_mean_hz", meanHz(heldout_channel_stats.target_rate_sum, heldout_channel_stats.count));
+            appendMetric(metric_prefix, "prediction_mean_hz", meanHz(heldout_channel_stats.prediction_rate_sum, heldout_channel_stats.count));
+            appendMetric(metric_prefix, "target_std_norm", standardDeviation(heldout_channel_stats.targets));
+            appendMetric(metric_prefix, "prediction_std_norm", standardDeviation(heldout_channel_stats.predictions));
+            appendMetric(metric_prefix, "heldout_prediction_min_norm", heldout_channel_stats.prediction_min);
+            appendMetric(metric_prefix, "heldout_prediction_max_norm", heldout_channel_stats.prediction_max);
+            appendMetric(metric_prefix, "mean_tile_prediction_corr", meanRate(tile_correlations_by_channel[target_channel]));
+            appendMetric(metric_prefix, "median_tile_prediction_corr", median(tile_correlations_by_channel[target_channel]));
+        };
+
+        appendForPrefix(prefix);
+        if(append_legacy_names) {
+            appendForPrefix("");
+        }
+    };
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        appendChannelMetrics(target_channel, target_channel == 0u);
+    }
+
+    return result;
 }
 
 double computeMedianOSI(const std::vector<PopulationSiteMetrics> &metrics)
@@ -2758,6 +5773,532 @@ void writeContrastSweepCsv(
     }
 }
 
+void writeVideoPopulationRatesCsv(
+    const std::string &path,
+    const std::vector<VideoFrameRecord> &records,
+    const std::vector<double> &l4e_rates,
+    const std::vector<double> &l23e_rates,
+    const std::vector<double> &l23pv_rates,
+    const std::vector<double> &l23som_rates)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "repeat_index,frame_index,population,rate_hz,frame_start_ms,frame_end_ms\n";
+    const auto writeRows = [&](const std::string &population, const std::vector<double> &rates) {
+        if(rates.size() != records.size()) {
+            throw std::runtime_error("Video population rate vector does not match frame records.");
+        }
+        for(std::size_t i = 0; i < records.size(); i++) {
+            output << records[i].repeat_index << ","
+                   << records[i].frame_index << ","
+                   << population << ","
+                   << rates[i] << ","
+                   << records[i].trial.measure_start_ms << ","
+                   << records[i].trial.end_ms << "\n";
+        }
+    };
+    writeRows("l4e", l4e_rates);
+    writeRows("l23e", l23e_rates);
+    writeRows("l23pv", l23pv_rates);
+    writeRows("l23som", l23som_rates);
+}
+
+void writeVideoSiteRatesCsv(
+    const std::string &path,
+    const std::vector<VideoFrameRecord> &records,
+    const std::vector<TrialWindow> &video_trials,
+    const std::vector<double> &l4e_counts,
+    const std::vector<double> &l23e_counts,
+    const std::vector<double> &l23pv_counts,
+    const std::vector<double> &l23som_counts)
+{
+    if(records.size() != video_trials.size()) {
+        throw std::runtime_error("Video frame records and trial windows do not align.");
+    }
+
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "repeat_index,frame_index,population,site_id,rate_hz\n";
+    const auto writeRows = [&](const std::string &population,
+                               const std::vector<double> &counts,
+                               unsigned int neurons_per_site) {
+        for(std::size_t trial_index = 0; trial_index < records.size(); trial_index++) {
+            for(unsigned int site_id = 0; site_id < v1_genn::kSiteCount; site_id++) {
+                output << records[trial_index].repeat_index << ","
+                       << records[trial_index].frame_index << ","
+                       << population << ","
+                       << site_id << ","
+                       << siteRateFromCounts(counts, video_trials, trial_index, site_id, neurons_per_site)
+                       << "\n";
+            }
+        }
+    };
+    writeRows("l4e", l4e_counts, v1_genn::kL4EPerSite);
+    writeRows("l23e", l23e_counts, v1_genn::kL23EPerSite);
+    writeRows("l23pv", l23pv_counts, v1_genn::kL23PVPerSite);
+    writeRows("l23som", l23som_counts, v1_genn::kL23SOMPerSite);
+}
+
+void writeVideoFrameSummaryCsv(
+    const std::string &path,
+    const std::vector<VideoFrameRecord> &records,
+    const std::vector<double> &l4e_rates,
+    const std::vector<double> &l23e_rates,
+    const std::vector<double> &l23pv_rates,
+    const std::vector<double> &l23som_rates)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    if(l4e_rates.size() != records.size() || l23e_rates.size() != records.size()
+       || l23pv_rates.size() != records.size() || l23som_rates.size() != records.size()) {
+        throw std::runtime_error("Video frame summary rate vectors do not match frame records.");
+    }
+
+    output << std::fixed << std::setprecision(6);
+    output << "repeat_index,frame_index,frame_start_ms,frame_end_ms"
+           << ",l4e_rate_hz,l23e_rate_hz,l23pv_rate_hz,l23som_rate_hz"
+           << ",l4e_drive_min,l4e_drive_mean,l4e_drive_max,l4e_drive_std\n";
+    for(std::size_t i = 0; i < records.size(); i++) {
+        output << records[i].repeat_index << ","
+               << records[i].frame_index << ","
+               << records[i].trial.measure_start_ms << ","
+               << records[i].trial.end_ms << ","
+               << l4e_rates[i] << ","
+               << l23e_rates[i] << ","
+               << l23pv_rates[i] << ","
+               << l23som_rates[i] << ","
+               << records[i].drive_min << ","
+               << records[i].drive_mean << ","
+               << records[i].drive_max << ","
+               << records[i].drive_std << "\n";
+    }
+}
+
+void writeVideoEventPopulationBinsCsv(
+    const std::string &path,
+    const std::vector<VideoEventTimingRecord> &records,
+    unsigned int bin_count,
+    double bin_ms,
+    const std::vector<double> &l4e_counts,
+    const std::vector<double> &l23e_counts,
+    const std::vector<double> &l23pv_counts,
+    const std::vector<double> &l23som_counts)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "condition,repeat_index,event_index,frame_index,population,bin_index"
+           << ",bin_start_ms,bin_end_ms,rate_hz,spike_count,event_start_ms"
+           << ",gray_current,l4e_drive_min,l4e_drive_mean,l4e_drive_max,l4e_drive_std\n";
+
+    const auto writeRows = [&](const std::string &population,
+                               const std::vector<double> &counts,
+                               unsigned int neuron_count) {
+        if(counts.size() != static_cast<std::size_t>(records.size()) * bin_count) {
+            throw std::runtime_error("Video event population count vector has unexpected size.");
+        }
+        const double bin_duration_s = bin_ms / 1000.0;
+        for(std::size_t record_index = 0; record_index < records.size(); record_index++) {
+            const VideoEventTimingRecord &record = records[record_index];
+            const double event_offset_ms = record.event_start_ms - record.trial.start_ms;
+            for(unsigned int bin_index = 0; bin_index < bin_count; bin_index++) {
+                const double relative_bin_start_ms =
+                    (static_cast<double>(bin_index) * bin_ms) - event_offset_ms;
+                const double spike_count = counts[(record_index * bin_count) + bin_index];
+                const double rate_hz = spike_count / (bin_duration_s * static_cast<double>(neuron_count));
+                output << record.condition << ","
+                       << record.repeat_index << ","
+                       << record.event_index << ","
+                       << record.frame_index << ","
+                       << population << ","
+                       << bin_index << ","
+                       << relative_bin_start_ms << ","
+                       << (relative_bin_start_ms + bin_ms) << ","
+                       << rate_hz << ","
+                       << spike_count << ","
+                       << record.event_start_ms << ","
+                       << record.gray_current << ","
+                       << record.drive_min << ","
+                       << record.drive_mean << ","
+                       << record.drive_max << ","
+                       << record.drive_std << "\n";
+            }
+        }
+    };
+
+    writeRows("l4e", l4e_counts, v1_genn::kNumL4E);
+    writeRows("l23e", l23e_counts, v1_genn::kNumL23E);
+    writeRows("l23pv", l23pv_counts, v1_genn::kNumL23PV);
+    writeRows("l23som", l23som_counts, v1_genn::kNumL23SOM);
+}
+
+void writeVideoEventSiteBinsCsv(
+    const std::string &path,
+    const std::vector<VideoEventTimingRecord> &records,
+    const std::vector<unsigned int> &site_ids,
+    unsigned int bin_count,
+    double bin_ms,
+    const std::vector<double> &l4e_counts,
+    const std::vector<double> &l23e_counts,
+    const std::vector<double> &l23pv_counts,
+    const std::vector<double> &l23som_counts)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "condition,repeat_index,event_index,frame_index,population,site_id,bin_index"
+           << ",bin_start_ms,bin_end_ms,rate_hz,spike_count,event_start_ms"
+           << ",gray_current,l4e_drive_min,l4e_drive_mean,l4e_drive_max,l4e_drive_std\n";
+
+    const auto writeRows = [&](const std::string &population,
+                               const std::vector<double> &counts,
+                               unsigned int neurons_per_site) {
+        const std::size_t expected_size =
+            static_cast<std::size_t>(records.size()) * bin_count * site_ids.size();
+        if(counts.size() != expected_size) {
+            throw std::runtime_error("Video event site count vector has unexpected size.");
+        }
+        const double bin_duration_s = bin_ms / 1000.0;
+        for(std::size_t record_index = 0; record_index < records.size(); record_index++) {
+            const VideoEventTimingRecord &record = records[record_index];
+            const double event_offset_ms = record.event_start_ms - record.trial.start_ms;
+            for(unsigned int bin_index = 0; bin_index < bin_count; bin_index++) {
+                const double relative_bin_start_ms =
+                    (static_cast<double>(bin_index) * bin_ms) - event_offset_ms;
+                for(unsigned int site_export_index = 0; site_export_index < site_ids.size(); site_export_index++) {
+                    const std::size_t count_index =
+                        ((record_index * bin_count) + bin_index) * site_ids.size() + site_export_index;
+                    const double spike_count = counts[count_index];
+                    const double rate_hz = spike_count / (bin_duration_s * static_cast<double>(neurons_per_site));
+                    output << record.condition << ","
+                           << record.repeat_index << ","
+                           << record.event_index << ","
+                           << record.frame_index << ","
+                           << population << ","
+                           << site_ids[site_export_index] << ","
+                           << bin_index << ","
+                           << relative_bin_start_ms << ","
+                           << (relative_bin_start_ms + bin_ms) << ","
+                           << rate_hz << ","
+                           << spike_count << ","
+                           << record.event_start_ms << ","
+                           << record.gray_current << ","
+                           << record.drive_min << ","
+                           << record.drive_mean << ","
+                           << record.drive_max << ","
+                           << record.drive_std << "\n";
+                }
+            }
+        }
+    };
+
+    writeRows("l4e", l4e_counts, v1_genn::kL4EPerSite);
+    writeRows("l23e", l23e_counts, v1_genn::kL23EPerSite);
+    writeRows("l23pv", l23pv_counts, v1_genn::kL23PVPerSite);
+    writeRows("l23som", l23som_counts, v1_genn::kL23SOMPerSite);
+}
+
+void writeHVAPredictorConfigCsv(
+    const std::string &path,
+    const HVAPredictorConfig &config,
+    const HVAPredictorResult &result)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "metric,value\n";
+    output << "enabled," << (config.enabled ? 1.0 : 0.0) << "\n";
+    output << "mode_code,1.000000\n";
+    output << "host_side_learning,1.000000\n";
+    output << "eligibility_trace_enabled,1.000000\n";
+    output << "delayed_prediction_error_enabled,1.000000\n";
+    output << "lower_v1_frozen,1.000000\n";
+    output << "hva_to_v1_connection_count,0.000000\n";
+    output << "hva_to_v1_current_enabled,0.000000\n";
+    output << "tile_size_sites," << config.tile_size_sites << "\n";
+    output << "tile_grid_side," << config.tile_grid_side << "\n";
+    output << "tile_count," << (config.tile_grid_side * config.tile_grid_side) << "\n";
+    output << "delay_frames," << config.delay_frames << "\n";
+    output << "trace_tau_frames," << config.trace_tau_frames << "\n";
+    output << "learning_rate," << config.learning_rate << "\n";
+    output << "residual_learning_rate," << config.learning_rate << "\n";
+    output << "event_learning_rate," << config.event_learning_rate << "\n";
+    output << "bias_learning_rate," << config.bias_learning_rate << "\n";
+    output << "event_bias_learning_rate," << config.event_bias_learning_rate << "\n";
+    output << "weight_decay," << config.weight_decay << "\n";
+    output << "event_weight_decay," << config.event_weight_decay << "\n";
+    output << "event_residual_gain," << config.event_residual_gain << "\n";
+    output << "rate_scale_hz," << config.rate_scale_hz << "\n";
+    output << "weight_clip," << config.weight_clip << "\n";
+    output << "heldout_fraction," << config.heldout_fraction << "\n";
+    output << "local_radius_tiles," << config.local_radius_tiles << "\n";
+    output << "training_epochs," << config.training_epochs << "\n";
+    output << "event_window_frames," << config.event_window_frames << "\n";
+    output << "topk_future_window_frames," << config.topk_future_window_frames << "\n";
+    output << "topk_k," << config.topk_k << "\n";
+    output << "topk_learning_rate," << config.topk_learning_rate << "\n";
+    output << "topk_weight_decay," << config.topk_weight_decay << "\n";
+    output << "feature_lag_count," << config.feature_lag_count << "\n";
+    output << "feature_context_radius_tiles," << config.feature_context_radius_tiles << "\n";
+    output << "event_threshold_quantile," << config.event_threshold_quantile << "\n";
+    output << "event_threshold_min_hz," << config.event_threshold_min_hz << "\n";
+    output << "event_min_train_positive_count," << config.event_min_train_positive_count << "\n";
+    for(const auto &metric : result.metrics) {
+        output << metric.first << "," << metric.second << "\n";
+    }
+}
+
+void writeHVAPredictorRatesCsv(
+    const std::string &path,
+    const std::vector<HVAPredictorRateRow> &rows)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "sample_index,repeat_index,frame_index,tile_id,tile_x,tile_y,"
+           << "l23e_rate_hz,state_norm,eligibility_trace,"
+           << "trace_fast,trace_medium,trace_slow,derivative\n";
+    for(const HVAPredictorRateRow &row : rows) {
+        output << row.sample_index << ","
+               << row.repeat_index << ","
+               << row.frame_index << ","
+               << row.tile_id << ","
+               << row.tile_x << ","
+               << row.tile_y << ","
+               << row.l23e_rate_hz << ","
+               << row.state_norm << ","
+               << row.eligibility_trace << ","
+               << row.trace_fast << ","
+               << row.trace_medium << ","
+               << row.trace_slow << ","
+               << row.derivative << "\n";
+    }
+}
+
+void writeHVAPredictorEventTilesCsv(
+    const std::string &path,
+    const std::vector<HVAPredictorEventTileRow> &rows)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "target_channel_index,target_channel,tile_id,tile_x,tile_y,"
+           << "threshold_norm,threshold_hz,train_count,train_positive_count,"
+           << "train_negative_count,heldout_count,heldout_positive_count,"
+           << "train_positive_fraction,heldout_positive_fraction,selected\n";
+    for(const HVAPredictorEventTileRow &row : rows) {
+        output << row.target_channel_index << ","
+               << row.target_channel << ","
+               << row.tile_id << ","
+               << row.tile_x << ","
+               << row.tile_y << ","
+               << row.threshold_norm << ","
+               << row.threshold_hz << ","
+               << row.train_count << ","
+               << row.train_positive_count << ","
+               << row.train_negative_count << ","
+               << row.heldout_count << ","
+               << row.heldout_positive_count << ","
+               << row.train_positive_fraction << ","
+               << row.heldout_positive_fraction << ","
+               << (row.selected ? 1 : 0) << "\n";
+    }
+}
+
+void writeHVAPredictorPredictionsCsv(
+    const std::string &path,
+    const std::vector<HVAPredictorPredictionRow> &rows)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "prediction_index,repeat_index,frame_index,target_frame_index,"
+           << "target_channel_index,target_channel,tile_id,tile_x,tile_y,"
+           << "split,learning_update_applied,"
+           << "current_state_norm,target_state_norm,predicted_state_norm,"
+           << "target_residual_norm,predicted_residual_norm,"
+           << "target_residual_z,predicted_residual_z,"
+           << "train_residual_mean_norm,train_residual_std_norm,"
+           << "persistence_pred_state_norm,train_mean_pred_state_norm,no_learning_pred_state_norm,"
+           << "temporal_block_shift_pred_state_norm,spatial_tile_shuffle_pred_state_norm,"
+           << "target_rate_hz,predicted_rate_hz,error_rate_hz,abs_error_rate_hz,"
+           << "event_window_target_state_norm,event_threshold_norm,event_tile_selected,"
+           << "target_event,single_frame_target_event,predicted_event_prob,"
+           << "persistence_event_prob,train_event_rate,no_learning_event_prob,"
+           << "temporal_block_shift_event_prob,spatial_tile_shuffle_event_prob,event_error,"
+           << "topk_target_value_norm,topk_target,topk_sample_valid,"
+           << "topk_model_score,topk_model_prob,topk_persistence_score,"
+           << "topk_train_frequency_score,topk_no_learning_score,"
+           << "topk_temporal_block_shift_score,topk_spatial_tile_shuffle_score\n";
+    for(const HVAPredictorPredictionRow &row : rows) {
+        output << row.prediction_index << ","
+               << row.repeat_index << ","
+               << row.frame_index << ","
+               << row.target_frame_index << ","
+               << row.target_channel_index << ","
+               << row.target_channel << ","
+               << row.tile_id << ","
+               << row.tile_x << ","
+               << row.tile_y << ","
+               << row.split << ","
+               << (row.learning_update_applied ? 1 : 0) << ","
+               << row.current_state_norm << ","
+               << row.target_state_norm << ","
+               << row.predicted_state_norm << ","
+               << row.target_residual_norm << ","
+               << row.predicted_residual_norm << ","
+               << row.target_residual_z << ","
+               << row.predicted_residual_z << ","
+               << row.train_residual_mean_norm << ","
+               << row.train_residual_std_norm << ","
+               << row.persistence_pred_state_norm << ","
+               << row.train_mean_pred_state_norm << ","
+               << row.no_learning_pred_state_norm << ","
+               << row.temporal_block_shift_pred_state_norm << ","
+               << row.spatial_tile_shuffle_pred_state_norm << ","
+               << row.target_rate_hz << ","
+               << row.predicted_rate_hz << ","
+               << row.error_rate_hz << ","
+               << std::fabs(row.error_rate_hz) << ","
+               << row.event_window_target_state_norm << ","
+               << row.event_threshold_norm << ","
+               << (row.event_tile_selected ? 1 : 0) << ","
+               << row.target_event << ","
+               << row.single_frame_target_event << ","
+               << row.predicted_event_prob << ","
+               << row.persistence_event_prob << ","
+               << row.train_event_rate << ","
+               << row.no_learning_event_prob << ","
+               << row.temporal_block_shift_event_prob << ","
+               << row.spatial_tile_shuffle_event_prob << ","
+               << row.event_error << ","
+               << row.topk_target_value_norm << ","
+               << (row.topk_target ? 1 : 0) << ","
+               << (row.topk_sample_valid ? 1 : 0) << ","
+               << row.topk_model_score << ","
+               << row.topk_model_prob << ","
+               << row.topk_persistence_score << ","
+               << row.topk_train_frequency_score << ","
+               << row.topk_no_learning_score << ","
+               << row.topk_temporal_block_shift_score << ","
+               << row.topk_spatial_tile_shuffle_score << "\n";
+    }
+}
+
+void writeHVAPredictorMetricsCsv(
+    const std::string &path,
+    const HVAPredictorResult &result)
+{
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "metric,value\n";
+    for(const auto &metric : result.metrics) {
+        output << metric.first << "," << metric.second << "\n";
+    }
+}
+
+void writeHVAPredictorWeightsCsv(
+    const std::string &path,
+    const HVAPredictorConfig &config,
+    const HVAPredictorResult &result)
+{
+    const unsigned int tile_count = config.tile_grid_side * config.tile_grid_side;
+    const unsigned int target_channel_count = static_cast<unsigned int>(result.target_channels.size());
+    const unsigned int feature_channel_count = hvaPredictorFeatureChannelCount(config);
+    const std::size_t pair_count = static_cast<std::size_t>(tile_count) * tile_count;
+    const std::size_t expected_pair_count = static_cast<std::size_t>(target_channel_count) * pair_count;
+    if(result.weights_before.size() != result.weights_after.size()
+       || result.weights_after.size() != expected_pair_count
+       || result.readout_weights_after.size()
+          != (expected_pair_count * feature_channel_count)
+       || result.biases_after.size() != (static_cast<std::size_t>(target_channel_count) * tile_count)) {
+        throw std::runtime_error("HVA predictor weight vectors have unexpected size.");
+    }
+
+    std::ofstream output(path.c_str());
+    if(!output) {
+        throw std::runtime_error("Unable to open output file: " + path);
+    }
+    output << std::fixed << std::setprecision(6);
+    output << "target_channel_index,target_channel,pre_tile_id,post_tile_id,"
+           << "pre_tile_x,pre_tile_y,post_tile_x,post_tile_y,"
+           << "distance_tiles,manhattan_distance_tiles,w_before,w_after,delta_w,"
+           << "w_current_after,w_trace_fast_after,w_trace_medium_after,w_trace_slow_after,"
+           << "w_derivative_after,abs_weight_sum_after,post_bias_after\n";
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+            for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                const std::size_t index =
+                    (static_cast<std::size_t>(target_channel) * pair_count)
+                    + (static_cast<std::size_t>(post_tile) * tile_count)
+                    + pre_tile;
+                const double w_before = result.weights_before[index];
+                const double w_after = result.weights_after[index];
+                const std::size_t readout_base = index * feature_channel_count;
+                const double w_current = result.readout_weights_after[readout_base + 0u];
+                const double w_trace_fast = result.readout_weights_after[readout_base + 1u];
+                const double w_trace_medium = result.readout_weights_after[readout_base + 2u];
+                const double w_trace_slow = result.readout_weights_after[readout_base + 3u];
+                const double w_derivative = result.readout_weights_after[readout_base + 4u];
+                double abs_weight_sum = 0.0;
+                for(unsigned int feature = 0; feature < feature_channel_count; feature++) {
+                    abs_weight_sum += std::fabs(result.readout_weights_after[readout_base + feature]);
+                }
+                const int dx = static_cast<int>(pre_tile % config.tile_grid_side)
+                    - static_cast<int>(post_tile % config.tile_grid_side);
+                const int dy = static_cast<int>(pre_tile / config.tile_grid_side)
+                    - static_cast<int>(post_tile / config.tile_grid_side);
+                const double distance_tiles = std::sqrt(static_cast<double>((dx * dx) + (dy * dy)));
+                const unsigned int manhattan_distance =
+                    static_cast<unsigned int>(std::abs(dx) + std::abs(dy));
+                output << target_channel << ","
+                       << result.target_channels[target_channel] << ","
+                       << pre_tile << ","
+                       << post_tile << ","
+                       << (pre_tile % config.tile_grid_side) << ","
+                       << (pre_tile / config.tile_grid_side) << ","
+                       << (post_tile % config.tile_grid_side) << ","
+                       << (post_tile / config.tile_grid_side) << ","
+                       << distance_tiles << ","
+                       << manhattan_distance << ","
+                       << w_before << ","
+                       << w_after << ","
+                       << (w_after - w_before) << ","
+                       << w_current << ","
+                       << w_trace_fast << ","
+                       << w_trace_medium << ","
+                       << w_trace_slow << ","
+                       << w_derivative << ","
+                       << abs_weight_sum << ","
+                       << result.biases_after.at((static_cast<std::size_t>(target_channel) * tile_count) + post_tile) << "\n";
+            }
+        }
+    }
+}
+
 void writeMetricRow(std::ofstream &output, const std::string &metric, double value)
 {
     output << metric << "," << value << "\n";
@@ -2984,13 +6525,25 @@ void writeSummaryFiles(
     double l23ee_initial_top10_mass_share,
     double l23pv_context_output_scale,
     const OrientationContextAssayConfig &orientation_context_assay_config,
-    const SensoryAssayConfig &sensory_assay_config)
+    const SensoryAssayConfig &sensory_assay_config,
+    const VideoReplayConfig &video_replay_config,
+    const VideoEventTimingConfig &video_event_timing_config,
+    const HVAPredictorConfig &hva_predictor_config,
+    const HVAPredictorResult &hva_predictor_result,
+    const L23ESOMBroadRecruitmentConfig &l23e_som_broad_recruitment_config)
 {
     const double l23_osi_delta = post.l23_median_osi - baseline.l23_median_osi;
     const bool feedforward_orientation_prior_enabled = (l4_l23_orientation_config.bias_strength > 0.0);
     const bool neutral_density_match_active =
         l4_l23_orientation_config.neutral_density_match_enabled
         && l4_l23_orientation_config.bias_strength == 0.0;
+    const double l23e_som_broad_estimated_total_extra_fraction =
+        l23e_som_broad_recruitment_config.weight_scale
+        * ((static_cast<double>(((2u * l23e_som_broad_recruitment_config.radius) + 1u)
+                                * ((2u * l23e_som_broad_recruitment_config.radius) + 1u))
+            - 1.0)
+           / static_cast<double>(((2u * v1_genn::kL23SOMInputRadius) + 1u)
+                                 * ((2u * v1_genn::kL23SOMInputRadius) + 1u)));
 
     std::ofstream csv((output_prefix + "_summary.csv").c_str());
     if(!csv) {
@@ -3050,6 +6603,85 @@ void writeSummaryFiles(
     csv << "blank_repeat_count," << sensory_assay_config.blank_repeat_count << "\n";
     csv << "contrast_sweep_count," << sensory_assay_config.contrasts.size() << "\n";
     csv << "contrast_sweep_radius_sites," << sensory_assay_config.contrast_radius_sites << "\n";
+    csv << "video_replay_enabled," << (video_replay_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_frame_count," << video_replay_config.effective_frame_count << "\n";
+    csv << "video_requested_frame_count," << video_replay_config.frame_count << "\n";
+    csv << "video_max_frames," << video_replay_config.max_frames << "\n";
+    csv << "video_repeat_count," << video_replay_config.repeat_count << "\n";
+    csv << "video_presentation_count,"
+        << (static_cast<std::size_t>(video_replay_config.effective_frame_count)
+            * static_cast<std::size_t>(video_replay_config.repeat_count)) << "\n";
+    csv << "video_frame_ms," << video_replay_config.frame_ms << "\n";
+    csv << "video_feedback_disabled," << (video_replay_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_training_enabled,0.000000\n";
+    csv << "video_event_timing_enabled," << (video_event_timing_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_event_frame_count," << video_event_timing_config.effective_event_count << "\n";
+    csv << "video_event_repeat_count," << video_event_timing_config.repeat_count << "\n";
+    csv << "video_event_gray_control_count," << video_event_timing_config.gray_control_count << "\n";
+    csv << "video_event_blank_control_count," << video_event_timing_config.blank_control_count << "\n";
+    csv << "video_event_pre_ms," << video_event_timing_config.pre_ms << "\n";
+    csv << "video_event_post_ms," << video_event_timing_config.post_ms << "\n";
+    csv << "video_event_bin_ms," << video_event_timing_config.bin_ms << "\n";
+    csv << "video_event_gray_current," << video_event_timing_config.gray_current << "\n";
+    csv << "video_event_gray_from_frame_mean,"
+        << (video_event_timing_config.gray_from_frame_mean ? 1.0 : 0.0) << "\n";
+    csv << "video_event_feedback_disabled," << (video_event_timing_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_event_training_enabled,0.000000\n";
+    csv << "hva_predictor_enabled," << (hva_predictor_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "hva_predictor_host_side_learning," << (hva_predictor_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "hva_predictor_lower_v1_frozen,1.000000\n";
+    csv << "hva_predictor_hva_to_v1_connection_count,0.000000\n";
+    csv << "hva_predictor_hva_to_v1_current_enabled,0.000000\n";
+    csv << "hva_predictor_tile_size_sites," << hva_predictor_config.tile_size_sites << "\n";
+    csv << "hva_predictor_tile_grid_side," << hva_predictor_config.tile_grid_side << "\n";
+    csv << "hva_predictor_tile_count,"
+        << (hva_predictor_config.tile_grid_side * hva_predictor_config.tile_grid_side) << "\n";
+    csv << "hva_predictor_delay_frames," << hva_predictor_config.delay_frames << "\n";
+    csv << "hva_predictor_trace_tau_frames," << hva_predictor_config.trace_tau_frames << "\n";
+    csv << "hva_predictor_learning_rate," << hva_predictor_config.learning_rate << "\n";
+    csv << "hva_predictor_residual_learning_rate," << hva_predictor_config.learning_rate << "\n";
+    csv << "hva_predictor_event_learning_rate," << hva_predictor_config.event_learning_rate << "\n";
+    csv << "hva_predictor_bias_learning_rate," << hva_predictor_config.bias_learning_rate << "\n";
+    csv << "hva_predictor_event_bias_learning_rate,"
+        << hva_predictor_config.event_bias_learning_rate << "\n";
+    csv << "hva_predictor_weight_decay," << hva_predictor_config.weight_decay << "\n";
+    csv << "hva_predictor_event_weight_decay,"
+        << hva_predictor_config.event_weight_decay << "\n";
+    csv << "hva_predictor_event_residual_gain,"
+        << hva_predictor_config.event_residual_gain << "\n";
+    csv << "hva_predictor_rate_scale_hz," << hva_predictor_config.rate_scale_hz << "\n";
+    csv << "hva_predictor_weight_clip," << hva_predictor_config.weight_clip << "\n";
+    csv << "hva_predictor_heldout_fraction," << hva_predictor_config.heldout_fraction << "\n";
+    csv << "hva_predictor_local_radius_tiles," << hva_predictor_config.local_radius_tiles << "\n";
+    csv << "hva_predictor_training_epochs," << hva_predictor_config.training_epochs << "\n";
+    csv << "hva_predictor_event_window_frames," << hva_predictor_config.event_window_frames << "\n";
+    csv << "hva_predictor_topk_future_window_frames,"
+        << hva_predictor_config.topk_future_window_frames << "\n";
+    csv << "hva_predictor_topk_k," << hva_predictor_config.topk_k << "\n";
+    csv << "hva_predictor_topk_learning_rate," << hva_predictor_config.topk_learning_rate << "\n";
+    csv << "hva_predictor_topk_weight_decay," << hva_predictor_config.topk_weight_decay << "\n";
+    csv << "hva_predictor_feature_lag_count," << hva_predictor_config.feature_lag_count << "\n";
+    csv << "hva_predictor_feature_context_radius_tiles,"
+        << hva_predictor_config.feature_context_radius_tiles << "\n";
+    csv << "hva_predictor_event_threshold_quantile,"
+        << hva_predictor_config.event_threshold_quantile << "\n";
+    csv << "hva_predictor_event_threshold_min_hz,"
+        << hva_predictor_config.event_threshold_min_hz << "\n";
+    csv << "hva_predictor_event_min_train_positive_count,"
+        << hva_predictor_config.event_min_train_positive_count << "\n";
+    for(const auto &metric : hva_predictor_result.metrics) {
+        csv << "hva_predictor_" << metric.first << "," << metric.second << "\n";
+    }
+    csv << "l23e_som_broad_recruitment_enabled,"
+        << (l23e_som_broad_recruitment_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23e_som_broad_recruitment_radius_sites,"
+        << l23e_som_broad_recruitment_config.radius << "\n";
+    csv << "l23e_som_broad_recruitment_weight_scale,"
+        << l23e_som_broad_recruitment_config.weight_scale << "\n";
+    csv << "l23e_som_broad_recruitment_weight,"
+        << (v1_genn::kL23EToSOMWeight * l23e_som_broad_recruitment_config.weight_scale) << "\n";
+    csv << "l23e_som_broad_recruitment_estimated_total_extra_fraction,"
+        << l23e_som_broad_estimated_total_extra_fraction << "\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         csv << summary.name << "_weights_before_count," << summary.before.count << "\n";
         csv << summary.name << "_weights_before_min," << summary.before.min << "\n";
@@ -3152,6 +6784,100 @@ void writeSummaryFiles(
     text << "blank_repeat_count=" << sensory_assay_config.blank_repeat_count << "\n";
     text << "contrast_sweep_count=" << sensory_assay_config.contrasts.size() << "\n";
     text << "contrast_sweep_radius_sites=" << sensory_assay_config.contrast_radius_sites << "\n";
+    text << "video_replay_enabled="
+         << (video_replay_config.enabled ? 1 : 0) << "\n";
+    text << "video_frame_count=" << video_replay_config.effective_frame_count << "\n";
+    text << "video_requested_frame_count=" << video_replay_config.frame_count << "\n";
+    text << "video_max_frames=" << video_replay_config.max_frames << "\n";
+    text << "video_repeat_count=" << video_replay_config.repeat_count << "\n";
+    text << "video_presentation_count="
+         << (static_cast<std::size_t>(video_replay_config.effective_frame_count)
+             * static_cast<std::size_t>(video_replay_config.repeat_count)) << "\n";
+    text << "video_frame_ms=" << video_replay_config.frame_ms << "\n";
+    text << "video_drive_path="
+         << (video_replay_config.drive_path.empty() ? "disabled" : video_replay_config.drive_path)
+         << "\n";
+    text << "video_feedback_disabled="
+         << (video_replay_config.enabled ? 1 : 0) << "\n";
+    text << "video_training_enabled=0\n";
+    text << "video_event_timing_enabled="
+         << (video_event_timing_config.enabled ? 1 : 0) << "\n";
+    text << "video_event_frame_count=" << video_event_timing_config.effective_event_count << "\n";
+    text << "video_event_repeat_count=" << video_event_timing_config.repeat_count << "\n";
+    text << "video_event_gray_control_count=" << video_event_timing_config.gray_control_count << "\n";
+    text << "video_event_blank_control_count=" << video_event_timing_config.blank_control_count << "\n";
+    text << "video_event_pre_ms=" << video_event_timing_config.pre_ms << "\n";
+    text << "video_event_post_ms=" << video_event_timing_config.post_ms << "\n";
+    text << "video_event_bin_ms=" << video_event_timing_config.bin_ms << "\n";
+    text << "video_event_gray_current=" << video_event_timing_config.gray_current << "\n";
+    text << "video_event_gray_from_frame_mean="
+         << (video_event_timing_config.gray_from_frame_mean ? 1 : 0) << "\n";
+    text << "video_event_feedback_disabled="
+         << (video_event_timing_config.enabled ? 1 : 0) << "\n";
+    text << "video_event_training_enabled=0\n";
+    text << "hva_predictor_enabled="
+         << (hva_predictor_config.enabled ? 1 : 0) << "\n";
+    text << "hva_predictor_mode="
+         << (hva_predictor_config.enabled
+             ? "host_side_l23e_tile_trace_delayed_error_predictor"
+             : "disabled")
+         << "\n";
+    text << "hva_predictor_lower_v1_frozen=1\n";
+    text << "hva_predictor_hva_to_v1_connection_count=0\n";
+    text << "hva_predictor_hva_to_v1_current_enabled=0\n";
+    text << "hva_predictor_tile_size_sites=" << hva_predictor_config.tile_size_sites << "\n";
+    text << "hva_predictor_tile_grid_side=" << hva_predictor_config.tile_grid_side << "\n";
+    text << "hva_predictor_delay_frames=" << hva_predictor_config.delay_frames << "\n";
+    text << "hva_predictor_trace_tau_frames=" << hva_predictor_config.trace_tau_frames << "\n";
+    text << "hva_predictor_learning_rate=" << hva_predictor_config.learning_rate << "\n";
+    text << "hva_predictor_residual_learning_rate="
+         << hva_predictor_config.learning_rate << "\n";
+    text << "hva_predictor_event_learning_rate="
+         << hva_predictor_config.event_learning_rate << "\n";
+    text << "hva_predictor_bias_learning_rate=" << hva_predictor_config.bias_learning_rate << "\n";
+    text << "hva_predictor_event_bias_learning_rate="
+         << hva_predictor_config.event_bias_learning_rate << "\n";
+    text << "hva_predictor_weight_decay=" << hva_predictor_config.weight_decay << "\n";
+    text << "hva_predictor_event_weight_decay="
+         << hva_predictor_config.event_weight_decay << "\n";
+    text << "hva_predictor_event_residual_gain="
+         << hva_predictor_config.event_residual_gain << "\n";
+    text << "hva_predictor_rate_scale_hz=" << hva_predictor_config.rate_scale_hz << "\n";
+    text << "hva_predictor_weight_clip=" << hva_predictor_config.weight_clip << "\n";
+    text << "hva_predictor_heldout_fraction=" << hva_predictor_config.heldout_fraction << "\n";
+    text << "hva_predictor_local_radius_tiles=" << hva_predictor_config.local_radius_tiles << "\n";
+    text << "hva_predictor_training_epochs=" << hva_predictor_config.training_epochs << "\n";
+    text << "hva_predictor_event_window_frames=" << hva_predictor_config.event_window_frames << "\n";
+    text << "hva_predictor_topk_future_window_frames="
+         << hva_predictor_config.topk_future_window_frames << "\n";
+    text << "hva_predictor_topk_k=" << hva_predictor_config.topk_k << "\n";
+    text << "hva_predictor_topk_learning_rate="
+         << hva_predictor_config.topk_learning_rate << "\n";
+    text << "hva_predictor_topk_weight_decay="
+         << hva_predictor_config.topk_weight_decay << "\n";
+    text << "hva_predictor_feature_lag_count="
+         << hva_predictor_config.feature_lag_count << "\n";
+    text << "hva_predictor_feature_context_radius_tiles="
+         << hva_predictor_config.feature_context_radius_tiles << "\n";
+    text << "hva_predictor_event_threshold_quantile="
+         << hva_predictor_config.event_threshold_quantile << "\n";
+    text << "hva_predictor_event_threshold_min_hz="
+         << hva_predictor_config.event_threshold_min_hz << "\n";
+    text << "hva_predictor_event_min_train_positive_count="
+         << hva_predictor_config.event_min_train_positive_count << "\n";
+    for(const auto &metric : hva_predictor_result.metrics) {
+        text << "hva_predictor_" << metric.first << "=" << metric.second << "\n";
+    }
+    text << "l23e_som_broad_recruitment_enabled="
+         << (l23e_som_broad_recruitment_config.enabled ? 1 : 0) << "\n";
+    text << "l23e_som_broad_recruitment_radius_sites="
+         << l23e_som_broad_recruitment_config.radius << "\n";
+    text << "l23e_som_broad_recruitment_weight_scale="
+         << l23e_som_broad_recruitment_config.weight_scale << "\n";
+    text << "l23e_som_broad_recruitment_weight="
+         << (v1_genn::kL23EToSOMWeight * l23e_som_broad_recruitment_config.weight_scale) << "\n";
+    text << "l23e_som_broad_recruitment_estimated_total_extra_fraction="
+         << l23e_som_broad_estimated_total_extra_fraction << "\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         text << summary.name << "_weights_before=count:" << summary.before.count
              << ",min:" << summary.before.min
@@ -3307,6 +7033,12 @@ void modelDefinition(GeNN::ModelSpec &model)
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23SOMInputRadius,
         false);
+    const L23ESOMBroadRecruitmentConfig l23e_som_broad_recruitment_config =
+        getL23ESOMBroadRecruitmentConfig();
+    const auto l23_e_som_broad_recruitment_patch = makeIntersitePatchParameters(
+        v1_genn::kL23EPerSite,
+        v1_genn::kL23SOMPerSite,
+        l23e_som_broad_recruitment_config.radius);
     const auto l23_e_vip_patch = makePatchParameters(
         v1_genn::kL23EPerSite,
         v1_genn::kL23VIPPerSite,
@@ -3472,6 +7204,16 @@ void modelDefinition(GeNN::ModelSpec &model)
         v1_genn::kL23EToSOMWeight,
         v1_genn::kExcTauSynMs,
         l23_e_som_patch);
+    if(l23e_som_broad_recruitment_config.enabled) {
+        addLocalIntersiteProjection(
+            model,
+            "L23E_to_L23SOM_broad_recruitment",
+            l23e,
+            l23som,
+            v1_genn::kL23EToSOMWeight * l23e_som_broad_recruitment_config.weight_scale,
+            v1_genn::kExcTauSynMs,
+            l23_e_som_broad_recruitment_patch);
+    }
     addLocalProjection(
         model,
         "L23E_to_L23VIP",
@@ -3586,6 +7328,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const OrientationContextAssayConfig orientation_context_assay_config =
         getOrientationContextAssayConfig(broad_stimulus_radius_sites);
     const SensoryAssayConfig sensory_assay_config = getSensoryAssayConfig();
+    const VideoReplayConfig video_replay_config = getVideoReplayConfig();
+    const VideoEventTimingConfig video_event_timing_config =
+        getVideoEventTimingConfig(video_replay_config);
+    const HVAPredictorConfig hva_predictor_config =
+        getHVAPredictorConfig(video_replay_config);
+    const L23ESOMBroadRecruitmentConfig l23e_som_broad_recruitment_config =
+        getL23ESOMBroadRecruitmentConfig();
     const std::vector<double> size_tuning_radii_sites = getEnvDoubleListOrDefault(
         "V1_SIZE_TUNING_RADII_SITES",
         kDefaultSizeTuningRadiiSites);
@@ -3656,6 +7405,22 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
 
     const std::vector<double> orientations_rad = makeSweepOrientations(orientation_count);
     const unsigned int trial_steps = durationToSteps(trial_ms);
+    const unsigned int video_frame_steps = video_replay_config.enabled
+        ? durationToSteps(video_replay_config.frame_ms)
+        : 0u;
+    const unsigned int video_event_pre_steps = video_event_timing_config.enabled
+        ? durationToSteps(video_event_timing_config.pre_ms)
+        : 0u;
+    const unsigned int video_event_post_steps = video_event_timing_config.enabled
+        ? durationToSteps(video_event_timing_config.post_ms)
+        : 0u;
+    const unsigned int video_event_bin_steps = video_event_timing_config.enabled
+        ? durationToSteps(video_event_timing_config.bin_ms)
+        : 0u;
+    const unsigned int video_event_total_steps = video_event_pre_steps + video_event_post_steps;
+    const unsigned int video_event_bin_count = video_event_timing_config.enabled
+        ? (video_event_total_steps / video_event_bin_steps)
+        : 0u;
     const unsigned int effective_settle_steps = (settle_ms == 0.0) ? 0u : durationToSteps(settle_ms);
     if(effective_settle_steps >= trial_steps) {
         throw std::runtime_error("V1_SETTLE_MS must leave a positive measurement window.");
@@ -3669,6 +7434,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         training_grating_config.phase_drift_enabled
             ? (trial_ms / static_cast<double>(training_grating_config.phase_count))
             : trial_ms;
+    if(video_event_timing_config.enabled
+       && ((video_event_total_steps % video_event_bin_steps) != 0u
+           || (video_event_pre_steps % video_event_bin_steps) != 0u)) {
+        throw std::runtime_error("Video event timing pre/post windows must align to V1_VIDEO_EVENT_BIN_MS.");
+    }
 
     const std::size_t sweep_count =
         static_cast<std::size_t>(training_epochs)
@@ -3696,13 +7466,32 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             ? (static_cast<std::size_t>(validation_site_config.site_ids.size())
                * sensory_assay_config.contrasts.size())
             : 0u;
-    const std::size_t total_trial_count =
+    const std::size_t video_replay_trial_count =
+        video_replay_config.enabled
+            ? (static_cast<std::size_t>(video_replay_config.effective_frame_count)
+               * static_cast<std::size_t>(video_replay_config.repeat_count))
+            : 0u;
+    const std::size_t video_event_timing_trial_count =
+        video_event_timing_config.enabled
+            ? (static_cast<std::size_t>(video_event_timing_config.effective_event_count)
+               + static_cast<std::size_t>(video_event_timing_config.gray_control_count)
+               + static_cast<std::size_t>(video_event_timing_config.blank_control_count))
+              * static_cast<std::size_t>(video_event_timing_config.repeat_count)
+            : 0u;
+    const std::size_t non_video_trial_count =
         (static_cast<std::size_t>(orientation_count) * sweep_count)
         + multiphase_trial_count
         + orientation_context_trial_count
         + sensory_blank_trial_count
         + sensory_contrast_trial_count;
-    const std::size_t total_recording_steps = total_trial_count * static_cast<std::size_t>(trial_steps);
+    const std::size_t total_trial_count =
+        non_video_trial_count + video_replay_trial_count + video_event_timing_trial_count;
+    (void)total_trial_count;
+    const std::size_t total_recording_steps =
+        (non_video_trial_count * static_cast<std::size_t>(trial_steps))
+        + (video_replay_trial_count * static_cast<std::size_t>(video_frame_steps))
+        + (video_event_timing_trial_count * static_cast<std::size_t>(video_event_total_steps));
+    const std::vector<float> video_drive_frames = loadVideoDriveFrames(video_replay_config);
 
     runtime.allocate(total_recording_steps);
     runtime.initialize();
@@ -3768,6 +7557,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     std::vector<TrialWindow> blank_baseline_trials;
     std::vector<TrialWindow> contrast_sweep_trials;
     std::vector<ContrastTrialRecord> contrast_sweep_records;
+    std::vector<TrialWindow> video_replay_trials;
+    std::vector<VideoFrameRecord> video_frame_records;
+    std::vector<VideoEventTimingRecord> video_event_timing_records;
     std::vector<OrientationContextTrialSet> orientation_context_trials;
     baseline_trials.reserve(orientation_count);
     post_trials.reserve(orientation_count);
@@ -3776,6 +7568,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     blank_baseline_trials.reserve(sensory_blank_trial_count);
     contrast_sweep_trials.reserve(sensory_contrast_trial_count);
     contrast_sweep_records.reserve(sensory_contrast_trial_count);
+    video_replay_trials.reserve(video_replay_trial_count);
+    video_frame_records.reserve(video_replay_trial_count);
+    video_event_timing_records.reserve(video_event_timing_trial_count);
     orientation_context_trials.reserve(validation_site_config.site_ids.size());
     std::vector<ValidationTrialSet> validation_trials;
     validation_trials.reserve(validation_site_config.site_ids.size());
@@ -4062,6 +7857,151 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         return trial;
     };
 
+    auto runVideoReplay = [&]() {
+        if(!video_replay_config.enabled) {
+            return;
+        }
+        if(l4e_i_ext.getCount() != v1_genn::kNumL4E) {
+            throw std::runtime_error("L4E Iext size does not match video drive frame size.");
+        }
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        const std::size_t frame_size = v1_genn::kNumL4E;
+        for(unsigned int repeat_index = 0; repeat_index < video_replay_config.repeat_count; repeat_index++) {
+            for(unsigned int frame_index = 0; frame_index < video_replay_config.effective_frame_count; frame_index++) {
+                const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
+                std::copy(
+                    video_drive_frames.data() + offset,
+                    video_drive_frames.data() + offset + frame_size,
+                    l4e_i_ext_host);
+                l4e_i_ext.pushToDevice();
+
+                const double trial_start_ms = runtime.getTime();
+                TrialWindow trial{
+                    0.0,
+                    0.0,
+                    trial_start_ms,
+                    trial_start_ms,
+                    trial_start_ms + (static_cast<double>(video_frame_steps) * v1_genn::kDtMs),
+                };
+                video_replay_trials.push_back(trial);
+                video_frame_records.push_back(summarizeVideoDriveFrame(
+                    video_drive_frames,
+                    repeat_index,
+                    frame_index,
+                    trial));
+                for(unsigned int step = 0; step < video_frame_steps; step++) {
+                    runtime.stepTime();
+                }
+            }
+        }
+    };
+
+    auto runVideoEventTiming = [&]() {
+        if(!video_event_timing_config.enabled) {
+            return;
+        }
+        if(l4e_i_ext.getCount() != v1_genn::kNumL4E) {
+            throw std::runtime_error("L4E Iext size does not match video event timing drive frame size.");
+        }
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+
+        const std::size_t frame_size = v1_genn::kNumL4E;
+        const auto frameMean = [&](unsigned int frame_index) {
+            const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
+            if(offset + frame_size > video_drive_frames.size()) {
+                throw std::runtime_error("Video event timing frame index exceeds loaded drive data.");
+            }
+            double sum = 0.0;
+            for(std::size_t i = 0; i < frame_size; i++) {
+                sum += static_cast<double>(video_drive_frames[offset + i]);
+            }
+            return sum / static_cast<double>(frame_size);
+        };
+        const auto fillConstantL4ECurrent = [&](double current) {
+            std::fill(l4e_i_ext_host, l4e_i_ext_host + l4e_i_ext.getCount(), static_cast<float>(current));
+            l4e_i_ext.pushToDevice();
+        };
+        const auto pushFrameDrive = [&](unsigned int frame_index) {
+            const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
+            if(offset + frame_size > video_drive_frames.size()) {
+                throw std::runtime_error("Video event timing frame index exceeds loaded drive data.");
+            }
+            std::copy(
+                video_drive_frames.data() + offset,
+                video_drive_frames.data() + offset + frame_size,
+                l4e_i_ext_host);
+            l4e_i_ext.pushToDevice();
+        };
+
+        const auto runTimingTrial = [&](const std::string &condition,
+                                        unsigned int repeat_index,
+                                        unsigned int event_index,
+                                        unsigned int frame_index,
+                                        bool post_uses_frame,
+                                        bool blank_control) {
+            const double gray_current = video_event_timing_config.gray_from_frame_mean
+                ? frameMean(frame_index)
+                : video_event_timing_config.gray_current;
+            fillConstantL4ECurrent(blank_control ? 0.0 : gray_current);
+
+            const double trial_start_ms = runtime.getTime();
+            for(unsigned int step = 0; step < video_event_pre_steps; step++) {
+                runtime.stepTime();
+            }
+
+            const double event_start_ms = runtime.getTime();
+            if(post_uses_frame) {
+                pushFrameDrive(frame_index);
+            }
+            else {
+                fillConstantL4ECurrent(blank_control ? 0.0 : gray_current);
+            }
+            const TrialWindow trial{
+                0.0,
+                0.0,
+                trial_start_ms,
+                event_start_ms,
+                event_start_ms + (static_cast<double>(video_event_post_steps) * v1_genn::kDtMs),
+            };
+            video_event_timing_records.push_back(makeVideoEventTimingRecord(
+                condition,
+                video_drive_frames,
+                repeat_index,
+                event_index,
+                frame_index,
+                trial,
+                event_start_ms,
+                blank_control ? 0.0 : gray_current,
+                post_uses_frame));
+            for(unsigned int step = 0; step < video_event_post_steps; step++) {
+                runtime.stepTime();
+            }
+        };
+
+        for(unsigned int repeat_index = 0; repeat_index < video_event_timing_config.repeat_count; repeat_index++) {
+            for(unsigned int event_index = 0; event_index < video_event_timing_config.effective_event_count; event_index++) {
+                runTimingTrial("event", repeat_index, event_index, event_index, true, false);
+            }
+            for(unsigned int event_index = 0; event_index < video_event_timing_config.gray_control_count; event_index++) {
+                runTimingTrial("gray_control", repeat_index, event_index, event_index, false, false);
+            }
+            for(unsigned int event_index = 0; event_index < video_event_timing_config.blank_control_count; event_index++) {
+                runTimingTrial("blank_control", repeat_index, event_index, event_index, false, true);
+            }
+        }
+    };
+
     runSweep("baseline", &baseline_trials, false, false, false, 0u, -1.0);
     for(unsigned int epoch = 0; epoch < training_epochs; epoch++) {
         runSweep("training", nullptr, true, true, true, epoch, -1.0);
@@ -4218,6 +8158,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         scaleSynapseWeights(runtime, l23e_to_l23e, l23ee_context_output_scale);
     }
     runSweep("recurrence_context", &recurrence_context_trials, false, false, false, 0u, -1.0);
+    runVideoReplay();
+    runVideoEventTiming();
 
     runtime.pullRecordingBuffersFromDevice();
     const auto l4e_recordings = runtime.getRecordedSpikes(l4e);
@@ -4293,6 +8235,116 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         sensory_assay_config.enabled
             ? countSiteSpikesForTrials(l23som_recordings.at(0), contrast_sweep_trials, v1_genn::kL23SOMPerSite)
             : std::vector<double>();
+    const std::vector<double> video_l4e_site_counts =
+        video_replay_config.enabled
+            ? countSiteSpikesForTrials(l4e_recordings.at(0), video_replay_trials, v1_genn::kL4EPerSite)
+            : std::vector<double>();
+    const std::vector<double> video_l23e_site_counts =
+        video_replay_config.enabled
+            ? countSiteSpikesForTrials(l23e_recordings.at(0), video_replay_trials, v1_genn::kL23EPerSite)
+            : std::vector<double>();
+    const std::vector<double> video_l23pv_site_counts =
+        video_replay_config.enabled
+            ? countSiteSpikesForTrials(l23pv_recordings.at(0), video_replay_trials, v1_genn::kL23PVPerSite)
+            : std::vector<double>();
+    const std::vector<double> video_l23som_site_counts =
+        video_replay_config.enabled
+            ? countSiteSpikesForTrials(l23som_recordings.at(0), video_replay_trials, v1_genn::kL23SOMPerSite)
+            : std::vector<double>();
+    const std::vector<double> video_l4e_population_rates =
+        video_replay_config.enabled
+            ? countPopulationRatesForTrials(l4e_recordings.at(0), video_replay_trials, v1_genn::kNumL4E)
+            : std::vector<double>();
+    const std::vector<double> video_l23e_population_rates =
+        video_replay_config.enabled
+            ? countPopulationRatesForTrials(l23e_recordings.at(0), video_replay_trials, v1_genn::kNumL23E)
+            : std::vector<double>();
+    const std::vector<double> video_l23pv_population_rates =
+        video_replay_config.enabled
+            ? countPopulationRatesForTrials(l23pv_recordings.at(0), video_replay_trials, v1_genn::kNumL23PV)
+            : std::vector<double>();
+    const std::vector<double> video_l23som_population_rates =
+        video_replay_config.enabled
+            ? countPopulationRatesForTrials(l23som_recordings.at(0), video_replay_trials, v1_genn::kNumL23SOM)
+            : std::vector<double>();
+    const std::vector<double> video_event_l4e_population_bin_counts =
+        video_event_timing_config.enabled
+            ? countPopulationSpikesForEventBins(
+                l4e_recordings.at(0),
+                video_event_timing_records,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l23e_population_bin_counts =
+        video_event_timing_config.enabled
+            ? countPopulationSpikesForEventBins(
+                l23e_recordings.at(0),
+                video_event_timing_records,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l23pv_population_bin_counts =
+        video_event_timing_config.enabled
+            ? countPopulationSpikesForEventBins(
+                l23pv_recordings.at(0),
+                video_event_timing_records,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l23som_population_bin_counts =
+        video_event_timing_config.enabled
+            ? countPopulationSpikesForEventBins(
+                l23som_recordings.at(0),
+                video_event_timing_records,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l4e_site_bin_counts =
+        video_event_timing_config.enabled
+            ? countSiteSpikesForEventBins(
+                l4e_recordings.at(0),
+                video_event_timing_records,
+                validation_site_config.site_ids,
+                v1_genn::kL4EPerSite,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l23e_site_bin_counts =
+        video_event_timing_config.enabled
+            ? countSiteSpikesForEventBins(
+                l23e_recordings.at(0),
+                video_event_timing_records,
+                validation_site_config.site_ids,
+                v1_genn::kL23EPerSite,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l23pv_site_bin_counts =
+        video_event_timing_config.enabled
+            ? countSiteSpikesForEventBins(
+                l23pv_recordings.at(0),
+                video_event_timing_records,
+                validation_site_config.site_ids,
+                v1_genn::kL23PVPerSite,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+    const std::vector<double> video_event_l23som_site_bin_counts =
+        video_event_timing_config.enabled
+            ? countSiteSpikesForEventBins(
+                l23som_recordings.at(0),
+                video_event_timing_records,
+                validation_site_config.site_ids,
+                v1_genn::kL23SOMPerSite,
+                video_event_bin_count,
+                video_event_timing_config.bin_ms)
+            : std::vector<double>();
+
+    const HVAPredictorResult hva_predictor_result = trainHVAPredictorSidecar(
+        hva_predictor_config,
+        video_replay_config,
+        video_frame_records,
+        video_l23e_site_counts);
 
     const std::vector<std::pair<std::string, std::vector<double>>> baseline_subtype_rates{
         {"l4pv", countPopulationRatesForTrials(l4pv_recordings.at(0), baseline_trials, v1_genn::kNumL4PV)},
@@ -4571,6 +8623,73 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             contrast_l23pv_site_counts,
             contrast_l23som_site_counts);
     }
+    if(video_replay_config.enabled) {
+        writeVideoPopulationRatesCsv(
+            output_prefix + "_video_population_rates.csv",
+            video_frame_records,
+            video_l4e_population_rates,
+            video_l23e_population_rates,
+            video_l23pv_population_rates,
+            video_l23som_population_rates);
+        writeVideoSiteRatesCsv(
+            output_prefix + "_video_site_rates.csv",
+            video_frame_records,
+            video_replay_trials,
+            video_l4e_site_counts,
+            video_l23e_site_counts,
+            video_l23pv_site_counts,
+            video_l23som_site_counts);
+        writeVideoFrameSummaryCsv(
+            output_prefix + "_video_frame_summary.csv",
+            video_frame_records,
+            video_l4e_population_rates,
+            video_l23e_population_rates,
+            video_l23pv_population_rates,
+            video_l23som_population_rates);
+    }
+    if(video_event_timing_config.enabled) {
+        writeVideoEventPopulationBinsCsv(
+            output_prefix + "_video_event_population_bins.csv",
+            video_event_timing_records,
+            video_event_bin_count,
+            video_event_timing_config.bin_ms,
+            video_event_l4e_population_bin_counts,
+            video_event_l23e_population_bin_counts,
+            video_event_l23pv_population_bin_counts,
+            video_event_l23som_population_bin_counts);
+        writeVideoEventSiteBinsCsv(
+            output_prefix + "_video_event_site_bins.csv",
+            video_event_timing_records,
+            validation_site_config.site_ids,
+            video_event_bin_count,
+            video_event_timing_config.bin_ms,
+            video_event_l4e_site_bin_counts,
+            video_event_l23e_site_bin_counts,
+            video_event_l23pv_site_bin_counts,
+            video_event_l23som_site_bin_counts);
+    }
+    if(hva_predictor_config.enabled) {
+        writeHVAPredictorConfigCsv(
+            output_prefix + "_hva_predictor_config.csv",
+            hva_predictor_config,
+            hva_predictor_result);
+        writeHVAPredictorRatesCsv(
+            output_prefix + "_hva_predictor_rates.csv",
+            hva_predictor_result.rates);
+        writeHVAPredictorEventTilesCsv(
+            output_prefix + "_hva_predictor_event_tiles.csv",
+            hva_predictor_result.event_tiles);
+        writeHVAPredictorPredictionsCsv(
+            output_prefix + "_hva_predictor_predictions.csv",
+            hva_predictor_result.predictions);
+        writeHVAPredictorMetricsCsv(
+            output_prefix + "_hva_predictor_metrics.csv",
+            hva_predictor_result);
+        writeHVAPredictorWeightsCsv(
+            output_prefix + "_hva_predictor_weights.csv",
+            hva_predictor_config,
+            hva_predictor_result);
+    }
     writeL4IntersiteDiagnosticsCsv(
         output_prefix + "_l4_intersite_diagnostics.csv",
         l4_intersite_config,
@@ -4621,5 +8740,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         l23ee_initial_top10_mass_share,
         l23pv_context_output_scale,
         orientation_context_assay_config,
-        sensory_assay_config);
+        sensory_assay_config,
+        video_replay_config,
+        video_event_timing_config,
+        hva_predictor_config,
+        hva_predictor_result,
+        l23e_som_broad_recruitment_config);
 }

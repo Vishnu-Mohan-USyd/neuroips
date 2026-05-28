@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import math
 import os
 import shutil
 import sys
@@ -28,6 +30,11 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+
+L4E_PER_SITE = 16
+DEFAULT_GABOR_ORIENTATIONS_DEG = (0.0, 45.0, 90.0, 135.0)
+DEFAULT_GABOR_PHASES_RAD = (0.0, 0.5 * math.pi, math.pi, 1.5 * math.pi)
 
 
 KITTI_BASE_URL = "https://s3.eu-central-1.amazonaws.com/avg-kitti/raw_data"
@@ -244,6 +251,214 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
+def bilinear_resize(frame: np.ndarray, out_size: int) -> np.ndarray:
+    """Resize a 2D normalized frame to the V1 sheet grid without extra deps."""
+    if frame.ndim != 2:
+        raise ValueError(f"Expected a 2D frame, got shape {frame.shape}")
+    in_h, in_w = frame.shape
+    if in_h == out_size and in_w == out_size:
+        return frame.astype(np.float32, copy=False)
+    y = np.linspace(0.0, float(in_h - 1), out_size, dtype=np.float32)
+    x = np.linspace(0.0, float(in_w - 1), out_size, dtype=np.float32)
+    y0 = np.floor(y).astype(np.int32)
+    x0 = np.floor(x).astype(np.int32)
+    y1 = np.minimum(y0 + 1, in_h - 1)
+    x1 = np.minimum(x0 + 1, in_w - 1)
+    wy = (y - y0).astype(np.float32)
+    wx = (x - x0).astype(np.float32)
+
+    top = (1.0 - wx)[None, :] * frame[y0[:, None], x0[None, :]] + wx[None, :] * frame[y0[:, None], x1[None, :]]
+    bottom = (1.0 - wx)[None, :] * frame[y1[:, None], x0[None, :]] + wx[None, :] * frame[y1[:, None], x1[None, :]]
+    return ((1.0 - wy)[:, None] * top + wy[:, None] * bottom).astype(np.float32)
+
+
+def make_gabor_bank(*, kernel_size: int, sigma: float, wavelength: float) -> np.ndarray:
+    """Return deterministic orientation x phase simple-cell kernels.
+
+    The 16 channels per site mirror the model's L4E layout as four orientations
+    and four contrast phases. Kernels are zero-mean/unit-norm so the drive scale
+    argument controls current magnitude independently of kernel size.
+    """
+    if kernel_size % 2 == 0 or kernel_size < 3:
+        raise ValueError("--kernel-size must be an odd integer >= 3")
+    radius = kernel_size // 2
+    coords = np.arange(-radius, radius + 1, dtype=np.float32)
+    xx, yy = np.meshgrid(coords, coords)
+    gaussian = np.exp(-(xx * xx + yy * yy) / (2.0 * sigma * sigma)).astype(np.float32)
+
+    kernels: list[np.ndarray] = []
+    for orientation_deg in DEFAULT_GABOR_ORIENTATIONS_DEG:
+        theta = math.radians(orientation_deg)
+        x_theta = xx * math.cos(theta) + yy * math.sin(theta)
+        for phase in DEFAULT_GABOR_PHASES_RAD:
+            kernel = gaussian * np.cos((2.0 * math.pi * x_theta / wavelength) + phase)
+            kernel = kernel.astype(np.float32)
+            kernel -= np.float32(kernel.mean())
+            norm = float(np.sqrt(np.sum(kernel * kernel)))
+            if norm < 1e-8:
+                raise RuntimeError("Degenerate Gabor kernel")
+            kernels.append((kernel / norm).astype(np.float32))
+    return np.stack(kernels, axis=0)
+
+
+def manifest_frame_column(fieldnames: list[str] | None, requested: str) -> str:
+    if requested != "auto":
+        return requested
+    if not fieldnames:
+        raise ValueError("Manifest has no header")
+    for candidate in ("processed_frame_path", "frame_t_path", "frame_t_plus_1_path"):
+        if candidate in fieldnames:
+            return candidate
+    raise ValueError(
+        "Could not infer frame path column; pass --frame-path-column "
+        "(expected processed_frame_path, frame_t_path, or frame_t_plus_1_path)"
+    )
+
+
+def load_manifest_frame_paths(args: argparse.Namespace) -> list[tuple[int, Path]]:
+    manifest = Path(args.manifest).expanduser().resolve()
+    rows: list[tuple[int, Path]] = []
+    with manifest.open(newline="") as f:
+        reader = csv.DictReader(f)
+        column = manifest_frame_column(reader.fieldnames, args.frame_path_column)
+        for row_index, row in enumerate(reader):
+            if args.split and row.get("split") != args.split:
+                continue
+            raw_path = row.get(column, "")
+            if not raw_path:
+                raise ValueError(f"Manifest row {row_index} has empty {column}")
+            path = Path(raw_path).expanduser()
+            if not path.is_absolute():
+                path = (manifest.parent / path).resolve()
+            rows.append((row_index, path))
+            if args.max_frames and len(rows) >= args.max_frames:
+                break
+    if not rows:
+        raise ValueError("No frames selected from manifest")
+    return rows
+
+
+def frame_to_l4e_drive(
+    frame: np.ndarray,
+    kernels: np.ndarray,
+    *,
+    sheet_side: int,
+    drive_scale: float,
+    drive_offset: float,
+    clip_min: float,
+    clip_max: float,
+) -> np.ndarray:
+    if sheet_side <= 0:
+        raise ValueError("--sheet-side must be positive")
+    resized = bilinear_resize(frame.astype(np.float32, copy=False), sheet_side)
+    radius = kernels.shape[1] // 2
+    padded = np.pad(resized, radius, mode="reflect")
+    drive = np.empty(sheet_side * sheet_side * L4E_PER_SITE, dtype=np.float32)
+
+    for site_y in range(sheet_side):
+        for site_x in range(sheet_side):
+            patch = padded[site_y : site_y + kernels.shape[1], site_x : site_x + kernels.shape[2]]
+            responses = np.einsum("kij,ij->k", kernels, patch, optimize=True)
+            currents = drive_offset + drive_scale * np.maximum(responses, 0.0)
+            site_id = site_y * sheet_side + site_x
+            start = site_id * L4E_PER_SITE
+            drive[start : start + L4E_PER_SITE] = np.clip(currents, clip_min, clip_max)
+    return drive.astype(np.float32, copy=False)
+
+
+def precompute_l4_drive(args: argparse.Namespace) -> None:
+    """Precompute opt-in natural-video L4E current frames for GeNN replay."""
+    output_bin = Path(args.output_bin).expanduser().resolve()
+    output_manifest = (
+        Path(args.output_manifest).expanduser().resolve()
+        if args.output_manifest
+        else output_bin.with_suffix(output_bin.suffix + ".csv")
+    )
+    output_meta = (
+        Path(args.output_meta).expanduser().resolve()
+        if args.output_meta
+        else output_bin.with_suffix(output_bin.suffix + ".json")
+    )
+    if args.clip_max <= args.clip_min:
+        raise ValueError("--clip-max must be greater than --clip-min")
+    if args.drive_scale < 0.0:
+        raise ValueError("--drive-scale must be non-negative")
+
+    frame_paths = load_manifest_frame_paths(args)
+    kernels = make_gabor_bank(kernel_size=args.kernel_size, sigma=args.sigma, wavelength=args.wavelength)
+    k_num_l4e = args.sheet_side * args.sheet_side * L4E_PER_SITE
+    ensure_dir(output_bin.parent)
+
+    manifest_rows: list[dict[str, object]] = []
+    with output_bin.open("wb") as out:
+        for frame_index, (source_row_index, frame_path) in enumerate(frame_paths):
+            if not frame_path.exists():
+                raise FileNotFoundError(frame_path)
+            frame = np.load(frame_path)
+            drive = frame_to_l4e_drive(
+                frame,
+                kernels,
+                sheet_side=args.sheet_side,
+                drive_scale=args.drive_scale,
+                drive_offset=args.drive_offset,
+                clip_min=args.clip_min,
+                clip_max=args.clip_max,
+            )
+            if drive.shape != (k_num_l4e,):
+                raise RuntimeError(f"Internal drive shape {drive.shape}, expected {(k_num_l4e,)}")
+            byte_offset = frame_index * k_num_l4e * np.dtype(np.float32).itemsize
+            drive.tofile(out)
+            manifest_rows.append(
+                {
+                    "frame_index": frame_index,
+                    "source_row_index": source_row_index,
+                    "source_frame_path": str(frame_path),
+                    "drive_bin_path": str(output_bin),
+                    "byte_offset": byte_offset,
+                    "frame_size_float32": k_num_l4e,
+                    "sheet_side": args.sheet_side,
+                    "l4e_per_site": L4E_PER_SITE,
+                    "k_num_l4e": k_num_l4e,
+                    "drive_min": f"{float(drive.min()):.9g}",
+                    "drive_max": f"{float(drive.max()):.9g}",
+                    "drive_mean": f"{float(drive.mean()):.9g}",
+                    "drive_std": f"{float(drive.std()):.9g}",
+                }
+            )
+
+    write_csv(output_manifest, manifest_rows)
+    meta = {
+        "command": "precompute-l4-drive",
+        "frame_count": len(manifest_rows),
+        "drive_bin_path": str(output_bin),
+        "manifest_path": str(output_manifest),
+        "sheet_side": args.sheet_side,
+        "l4e_per_site": L4E_PER_SITE,
+        "k_num_l4e": k_num_l4e,
+        "dtype": "float32",
+        "filter_bank": {
+            "type": "zero_mean_unit_norm_gabor",
+            "orientation_deg": list(DEFAULT_GABOR_ORIENTATIONS_DEG),
+            "phase_rad": list(DEFAULT_GABOR_PHASES_RAD),
+            "kernel_size": args.kernel_size,
+            "sigma": args.sigma,
+            "wavelength": args.wavelength,
+        },
+        "drive_scale": args.drive_scale,
+        "drive_offset": args.drive_offset,
+        "clip_min": args.clip_min,
+        "clip_max": args.clip_max,
+        "source_manifest": str(Path(args.manifest).expanduser().resolve()),
+        "frame_path_column": args.frame_path_column,
+        "split": args.split,
+    }
+    ensure_dir(output_meta.parent)
+    output_meta.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"[l4-drive] {output_bin} frames={len(manifest_rows)} shape=({len(manifest_rows)}, {k_num_l4e})")
+    print(f"[manifest] {output_manifest}")
+    print(f"[meta] {output_meta}")
+
+
 def parse_drives(values: list[str], date: str) -> list[KittiDrive]:
     drives = []
     for value in values:
@@ -429,6 +644,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     bdd = sub.add_parser("write-bdd-note", help="Create BDD100K manual-download note")
     bdd.set_defaults(func=write_bdd_note)
+
+    l4_drive = sub.add_parser(
+        "precompute-l4-drive",
+        help="Convert normalized frame/transition manifests into raw float32 L4E replay drives",
+    )
+    l4_drive.add_argument("--manifest", required=True, help="Frame or transition CSV manifest")
+    l4_drive.add_argument("--output-bin", required=True, help="Raw float32 output path")
+    l4_drive.add_argument("--output-manifest", help="Per-frame drive manifest CSV")
+    l4_drive.add_argument("--output-meta", help="JSON metadata path")
+    l4_drive.add_argument("--sheet-side", type=int, default=32, help="V1 sheet side used by the model")
+    l4_drive.add_argument("--max-frames", type=int, default=0, help="Optional frame cap; 0 means all selected")
+    l4_drive.add_argument("--split", help="Optional manifest split filter, e.g. train or val")
+    l4_drive.add_argument(
+        "--frame-path-column",
+        default="auto",
+        help="Manifest path column, or auto for processed_frame_path/frame_t_path/frame_t_plus_1_path",
+    )
+    l4_drive.add_argument("--kernel-size", type=int, default=7, help="Odd Gabor kernel size in sheet sites")
+    l4_drive.add_argument("--sigma", type=float, default=1.15, help="Gabor Gaussian sigma in sheet sites")
+    l4_drive.add_argument("--wavelength", type=float, default=4.0, help="Gabor wavelength in sheet sites")
+    l4_drive.add_argument("--drive-scale", type=float, default=0.25, help="Half-wave response to current scale")
+    l4_drive.add_argument("--drive-offset", type=float, default=0.0, help="Additive current offset after filtering")
+    l4_drive.add_argument("--clip-min", type=float, default=0.0, help="Minimum output current")
+    l4_drive.add_argument("--clip-max", type=float, default=1.0, help="Maximum output current")
+    l4_drive.set_defaults(func=precompute_l4_drive)
 
     check = sub.add_parser("verify", help="Verify generated KITTI manifests and sample arrays")
     check.set_defaults(func=verify)

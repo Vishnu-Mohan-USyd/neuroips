@@ -2,6 +2,11 @@
 
 Branch snapshot: `v1-realistic-grating-training`
 
+Update: the pre-feedback higher-area predictor milestone is now documented in
+`docs/hva_predictor_system_report.md`. That follow-up keeps this lower-V1
+validation stack fixed, adds a predictor-only HVA-like sidecar, and validates
+future L23E population-state prediction without HVA-to-V1 feedback.
+
 Primary H200 artifact directory:
 
 ```text
@@ -16,11 +21,22 @@ mechanisms.
 
 ## Current Validated Configuration
 
-The latest passing configuration family is `v1_round7_sensory1_repeat_*`, a
-Round 7 sensory-assay repeat of the `v1_pvnorm1_*` pre-top-down configuration.
-It is a `40 x 40` sheet run with distributed validation, strict zero
-L4-to-L2/3 orientation structural bias, and validation-only blank/contrast/
-annular sensory assays.
+The latest grating/sensory passing configuration family is
+`v1_round7_sensory1_repeat_*`, a Round 7 sensory-assay repeat of the
+`v1_pvnorm1_*` pre-top-down configuration. It is a `40 x 40` sheet run with
+distributed validation, strict zero L4-to-L2/3 orientation structural bias, and
+validation-only blank/contrast/annular sensory assays.
+
+The lower-V1 natural-video replay extension was then validated as
+`v1_natvideo_replay4_sombroad_repeat3_*`. It keeps the same lower L4/L2/3
+trained state and adds replay-only KITTI L4E drive presentation with feedback
+and video training disabled.
+
+A stricter millisecond event-aligned natural-video timing assay was then
+validated as `v1_natvideo_event_timing2_bin2_repeat6_*`. It uses the same
+lower-V1 trained state and direct L4E video drive, keeps feedback/top-down and
+video training disabled, and adds 2 ms event/gray/blank replay bins for latency
+validation.
 
 Active compile/runtime controls:
 
@@ -45,6 +61,18 @@ V1_L23EE_LOGNORMAL_SIGMA=0.37
 V1_SENSORY_ASSAY_ENABLE=1
 V1_BLANK_REPEAT_COUNT=4
 V1_CONTRAST_SWEEP_VALUES=0.5,1.0
+V1_VIDEO_REPLAY_ENABLE=1
+V1_VIDEO_DRIVE_BIN=/scratch/proj/v1_snn_l4_l23/data/kitti_raw_image_00_l4e_drive_40x40_128f_scale1_offset012_clip1.bin
+V1_VIDEO_FRAME_COUNT=128
+V1_VIDEO_MAX_FRAMES=64
+V1_VIDEO_FRAME_MS=100
+V1_VIDEO_REPLAY_REPEAT_COUNT=3
+V1_VIDEO_EVENT_TIMING_ENABLE=1
+V1_VIDEO_EVENT_BIN_MS=2
+V1_VIDEO_EVENT_REPEAT_COUNT=6
+V1_L23E_SOM_BROAD_RECRUIT_ENABLE=1
+V1_L23E_SOM_BROAD_RECRUIT_RADIUS=6
+V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE=0.05
 ```
 
 Run prefixes:
@@ -66,6 +94,16 @@ v1_pvnorm1_somoff
 v1_pvnorm1_recoff
 v1_pvnorm1_pvweak
 v1_pvnorm1_pvoff
+v1_natvideo_replay4_sombroad_repeat3_full
+v1_natvideo_replay4_sombroad_repeat3_control
+v1_natvideo_replay4_sombroad_repeat3_somoff
+v1_natvideo_replay4_sombroad_repeat3_recoff
+v1_natvideo_replay4_sombroad_repeat3_pvoff
+v1_natvideo_event_timing2_bin2_repeat6_full
+v1_natvideo_event_timing2_bin2_repeat6_control
+v1_natvideo_event_timing2_bin2_repeat6_somoff
+v1_natvideo_event_timing2_bin2_repeat6_recoff
+v1_natvideo_event_timing2_bin2_repeat6_pvoff
 ```
 
 Validator logs used for the final evidence:
@@ -77,6 +115,9 @@ v1_pvnorm1_round5_respsparse_validator.log
 v1_pvnorm1_round6_scalingmap_validator.log
 v1_round7_sensory1_validator.log
 v1_round7_sensory1_repeat_validator.log
+v1_natvideo_replay4_sombroad_repeat3_validator.log
+v1_natvideo_replay4_sombroad_repeat3_validator_rerun1.log
+v1_natvideo_event_timing2_bin2_repeat6_validator_rerun1.log
 ```
 
 All model runs and final additive validators above returned `rc=0`. The earlier
@@ -84,6 +125,24 @@ All model runs and final additive validators above returned `rc=0`. The earlier
 and failed only the PV causality magnitude gate; the PV-off stress run
 (`v1_pvnorm1_pvoff`, repeated as `v1_round7_sensory1_repeat_pvoff`) is the
 passing PV causality artifact.
+
+The natural-video validator-only rerun for
+`v1_natvideo_replay4_sombroad_repeat3` returned `rc=0` after the recurrence
+correlation interpretation fix:
+
+```text
+/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_replay4_sombroad_repeat3_validator_rerun1.log
+/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_replay4_sombroad_repeat3_validator_rerun1.status
+```
+
+The strict event-aligned natural-video timing validator rerun for
+`v1_natvideo_event_timing2_bin2_repeat6` also returned `rc=0` after the
+validator-only correction to gate on event-minus-gray-control traces:
+
+```text
+/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_event_timing2_bin2_repeat6_validator_rerun1.log
+/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_event_timing2_bin2_repeat6_validator_rerun1.status
+```
 
 ## Architecture
 
@@ -161,6 +220,8 @@ Emergent/measured within this reduced model:
 - PV gain-normalization causality under validation-only PV-off stress.
 - True zero-drive blank silence and basic contrast monotonicity under
   validation-only sensory assays.
+- Bounded lower-V1 natural-video replay responses, repeat reliability, and
+  recurrent coactivation diagnostics under replay-only KITTI drive.
 - Cell-level responsive coverage under held-out multiphase measurement.
 - Distributed map consistency over `40 x 40` sheet.
 
@@ -188,6 +249,10 @@ Training/consolidation:
   plasticity off.
 - Round 7 blank/contrast/annular sensory assays are validation-only and run
   after training and context output-scale application.
+- Natural-video replay is also validation-only: the lower L4/L2/3 network is
+  trained first by the grating protocol above, then KITTI L4E drive frames are
+  replayed with plasticity off, `video_training_enabled=0`, and
+  `video_feedback_disabled=1`.
 
 ## Validation Summary
 
@@ -371,6 +436,212 @@ monotonically to the minimal contrast sweep without exceeding rate safety
 limits, and preserves SOM-dependent annular same-vs-orthogonal surround
 suppression.
 
+### Lower-V1 Natural-Video Replay
+
+The lower-V1 natural-video pass used H200 prefix
+`v1_natvideo_replay4_sombroad_repeat3`. This was a replay-only validation after
+the lower L4/L2/3 grating-trained state; it did not add video prediction
+training, feedback projections, or top-down/VIP expectation.
+
+Dataset and drive:
+
+```text
+source_manifest=/home/vishnu/datasets/v1_video/manifests/kitti_raw_image_00_32x32_frames.csv
+source_dataset=KITTI Raw 2011_09_26 image_00, local-contrast-normalized 32x32 frames
+drive=/scratch/proj/v1_snn_l4_l23/data/kitti_raw_image_00_l4e_drive_40x40_128f_scale1_offset012_clip1.bin
+drive_shape=128 frames x 25,600 L4E currents
+validated_replay=64 frames x 3 repeats, 100 ms/frame
+```
+
+The drive was generated by `precompute-l4-drive` using a deterministic
+zero-mean/unit-norm Gabor simple-cell bank with 4 orientations, 4 phases, and
+`16` L4E channels per site. The replay run used the calibrated current variant
+with `drive_scale=1.0`, `drive_offset=0.12`, and clipping to `[0, 1]`.
+
+Replay mechanisms added for this stage:
+
+```text
+V1_VIDEO_REPLAY_ENABLE=1
+V1_VIDEO_DRIVE_BIN=/scratch/proj/v1_snn_l4_l23/data/kitti_raw_image_00_l4e_drive_40x40_128f_scale1_offset012_clip1.bin
+V1_VIDEO_FRAME_COUNT=128
+V1_VIDEO_MAX_FRAMES=64
+V1_VIDEO_FRAME_MS=100
+V1_VIDEO_REPLAY_REPEAT_COUNT=3
+```
+
+The model exports:
+
+```text
+<prefix>_video_population_rates.csv
+<prefix>_video_site_rates.csv
+<prefix>_video_frame_summary.csv
+```
+
+The natural-video validator gates are opt-in under
+`--require-natural-video-physiology` and cover artifact availability, feedback
+disabled metadata, bounded L4/L23/interneuron rates, population dynamic range,
+frame-lag cross-correlation, replay reliability across repeats, and
+L23E-to-L23E recurrent-video coactivation metrics.
+
+The replay pass also used weak broad L23E-to-L23SOM recruitment to keep SOM
+engaged under broader naturalistic drive, without orientation labels or
+validation-condition switches:
+
+```text
+V1_L23E_SOM_BROAD_RECRUIT_ENABLE=1
+V1_L23E_SOM_BROAD_RECRUIT_RADIUS=6
+V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE=0.05
+l23e_som_broad_recruitment_weight=0.000275
+l23e_som_broad_recruitment_estimated_total_extra_fraction=0.171429
+```
+
+Final validator rerun:
+
+```text
+prefix=v1_natvideo_replay4_sombroad_repeat3
+validator_log=/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_replay4_sombroad_repeat3_validator_rerun1.log
+validator_status=/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_replay4_sombroad_repeat3_validator_rerun1.status
+rc=0
+```
+
+Key replay metrics from the `rc=0` validator rerun:
+
+```text
+PASS natural_video_artifacts_available video_replay_enabled=1 summary_frame_count=64 population_rows=768 site_rows=1228800 frame_summary_rows=192 unique_frames=64
+PASS natural_video_feedback_disabled video_feedback_disabled=1 video_training_enabled=0
+PASS natural_video_l4_responsive_bounded l4e_mean_rate_hz=83.085573 l4e_site_p95_hz=108.750000 l4e_site_p99_hz=121.250000
+PASS natural_video_l23e_sparse_safe l23e_mean_rate_hz=0.128446 l23e_site_p95_hz=0.625000 l23e_site_p99_hz=3.125000 l23e_site_frac_lt1=0.956956
+PASS natural_video_interneurons_active_safe l23pv_mean_rate_hz=2.005924 l23som_mean_rate_hz=7.993978 l23pv_site_p99_hz=30.000000 l23som_site_p99_hz=20.000000
+PASS natural_video_population_dynamic_range frame_count=64 l4e_frame_std=1.492121 l23e_frame_std=0.013957 l23pv_frame_std=0.366350 l23som_frame_std=0.544508 drive_std_max=0.128025
+PASS natural_video_delay_crosscorr max_lag_frames=5 l23e_best_lag_frames=5 l23e_best_corr=0.475157 l23e_lag0_corr=0.273686 l23e_lag1_corr=0.323353 l23pv_best_lag_frames=0 l23pv_best_corr=0.927028 l23som_best_lag_frames=5 l23som_best_corr=0.448591
+PASS natural_video_replay_reliability observed_repeat_count=3 summary_repeat_count=3 l4e_repeat_corr=0.862811 l23e_repeat_corr=0.314291 l23pv_repeat_corr=0.924275 l23som_repeat_corr=0.332300
+PASS natural_video_l23ee_recurrent_video_metrics edge_count=422578 mean_site_response_corr=0.234921 median_site_response_corr=0.134421 top10_weight_mean_site_response_corr=0.237874 low_delta_mean_site_response_corr=0.484362 same_site_fraction=0.079559
+```
+
+The same `rc=0` rerun preserved the prior lower-V1 grating/sensory gates while
+using the video-enabled artifacts:
+
+```text
+PASS osi full_post=0.798057 control_post=0.000000 delta=0.798057
+PASS som_size_som_recruitment som_recruitment_index=-0.186441 som_large_or_broad_rate=26.666667 som_center_or_peak_rate=32.777778
+PASS som_size_somoff_site_rescue site_rescue_fraction=1.000000 somoff_large_l23e_rate=29.166667 mean_suppression_reduction_full_minus_somoff=0.306908
+PASS pv_gain_normalization_causality pvweak_scale=0 full_mean_l23e_hz=29.472656 pvweak_mean_l23e_hz=32.796875 mean_increase_fraction=0.112790 pvweak_l23e_context_p99_hz=56.381250
+PASS l23ee_recurrent_heavy_tail gini=0.204641 top10pct_mass_share=0.178642 upper_cap_fraction=0.008612
+PASS l23ee_recurrent_shuffle_specificity observed_delta=0.027487 shuffle_q95_delta=0.015038 z_score=3.323069
+PASS l23ee_recurrence_corr_contribution mean_corr_on=0.115027 mean_corr_off=0.081740 mean_corr_delta=0.033288 frac_corr_gt_0p2_delta=0.049439
+```
+
+Biological interpretation: this is evidence that the lower V1 scaffold can
+replay simple natural-video L4 drive with bounded L4 activation, sparse/safe
+L23E responses, active PV/SOM populations, repeatable frame-locked population
+dynamics, and recurrent coactivation diagnostics. It is not evidence of
+natural-video prediction learning or top-down inference.
+
+Important limits of this pass:
+
+- The delay assay is frame-level (`100 ms` frames, lag in frames), not
+  millisecond-resolved spike timing or synaptic-delay physiology.
+- The drive is a deterministic simple-cell/Gabor approximation from `32 x 32`
+  KITTI frames, not a spiking LGN retina model.
+- Video was replayed after grating training with plasticity off; no video
+  prediction objective or video-specific lower-layer training was run.
+- Feedback and higher-area/top-down pathways were disabled or absent.
+- This is one calibrated drive/replay repeat protocol, not a multi-dataset or
+  multi-seed naturalistic robustness claim.
+
+### Millisecond Event-Aligned Natural-Video Timing
+
+The frame-level replay pass above was useful for bounded-rate physiology,
+repeatability, and coarse frame-lag correlations, but it could not validate
+millisecond event timing. With `100 ms` frame windows, a best lag of a few
+frames only says that one population covaries before or after another at the
+frame scale. It does not identify event-locked onset or peak timing, and it can
+confound stimulus responses with gray-control or baseline fluctuations.
+
+The strict timing assay uses the same lower L4/L2/3 trained state and the same
+precomputed KITTI L4E drive, but replays selected natural-frame events with
+plasticity off, feedback/top-down disabled, and explicit pre-event gray
+baseline plus post-event recording. The validated run used `2 ms` bins and
+six repeated event/gray comparisons:
+
+```text
+prefix=v1_natvideo_event_timing2_bin2_repeat6
+validator_log=/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_event_timing2_bin2_repeat6_validator_rerun1.log
+validator_status=/scratch/proj/v1_snn_l4_l23/genn/v1_natvideo_event_timing2_bin2_repeat6_validator_rerun1.status
+validator_rerun_rc=0
+```
+
+Relevant model controls and artifacts:
+
+```text
+V1_VIDEO_REPLAY_ENABLE=1
+V1_VIDEO_EVENT_TIMING_ENABLE=1
+V1_VIDEO_EVENT_BIN_MS=2
+V1_VIDEO_EVENT_REPEAT_COUNT=6
+V1_VIDEO_EVENT_PRE_MS=50
+V1_VIDEO_EVENT_POST_MS=100
+V1_VIDEO_EVENT_GRAY_CONTROL_COUNT=4
+V1_VIDEO_EVENT_BLANK_CONTROL_COUNT=4
+V1_VIDEO_EVENT_GRAY_CURRENT=-1  # use frame-mean gray
+
+<prefix>_video_event_population_bins.csv
+<prefix>_video_event_site_bins.csv
+```
+
+The artifacts include population-level and selected site-level binned rates for
+`l4e`, `l23e`, `l23pv`, and `l23som`, with event, gray-control, and blank-control
+conditions where available. The assay remains replay-only: it freezes the lower
+V1 weights, does not train on video, and does not add feedback or higher-area
+state.
+
+The validator correction for this round was interpretation-only. The
+`natural_video_event_l23_interneuron_latency_peak` gate now computes causal
+event timing from matched `event - gray_control` traces when gray controls are
+available. Raw event-only and gray-control trace metrics remain useful for
+debugging/reporting, but gray-control fluctuations are not treated as
+event-specific onset. If gray controls are absent, the validator falls back to
+event-minus-baseline semantics rather than failing with misleading raw timing.
+
+Key latency metrics from the final `rc=0` rerun:
+
+```text
+PASS natural_video_event_l4_onset_peak l4_reference_peak_ms=2
+PASS natural_video_event_l23_interneuron_latency_peak timing_source=event_minus_gray_control l4_reference_ms=2 l23pv_peak_ms=8 l23e_peak_ms=28 l23som_peak_ms=28
+```
+
+Interpretation: under direct L4E event replay, PV activity peaks early relative
+to L23E/SOM, while L23E and SOM show later event-locked peaks. These are timing
+relationships inside the reduced lower-V1 model, not retina-to-cortex absolute
+latencies.
+
+The same validator rerun preserved the already-required lower-V1 gates:
+
+```text
+--require-natural-video-physiology
+--require-natural-video-event-timing
+--require-sensory-baseline-contrast-annulus
+--require-scaling-map-consistency
+--require-responsiveness-sparsity
+--require-som-size-surround
+--require-pv-gain-normalization
+--require-l23ee-recurrent-biology
+--require-emergent-l23-orientation-suppression
+--require-l4-intersite
+```
+
+Thus the event-timing assay is an additive validation layer: it did not replace
+the prior OSI, SOM, PV, recurrent, sensory, scaling/map, or frame-level
+natural-video gates.
+
+Remaining timing limits:
+
+- The model receives direct L4E current drive, so latencies are relative to the
+  assay's L4 drive onset, not absolute retina/LGN/cortical arrival latency.
+- The millisecond artifact is selected site/population binned timing, not yet a
+  full cell-level latency distribution over all L23E/PV/SOM cells.
+- The event set is still a small lower-V1 replay assay, not a broad natural
+  movie benchmark or video prediction training regime.
+
 ### Repeat Robustness and Determinism
 
 There is no explicit seed environment variable in the current model interface.
@@ -459,6 +730,24 @@ delta under the no-hardcode assay. The latest run still has positive plasticity
 enhancement (`delta=0.051665`), but the biological claim is not that control OSD
 is absent.
 
+### Natural-video SOM under-recruitment
+
+Problem: initial natural-video replay diagnostics under-engaged SOM relative to
+the validated grating/size-surround assays, weakening the lower-V1 replay
+biology interpretation.
+
+Fix: add weak, static, orientation-blind broad L23E-to-L23SOM recruitment:
+
+```text
+V1_L23E_SOM_BROAD_RECRUIT_ENABLE=1
+V1_L23E_SOM_BROAD_RECRUIT_RADIUS=6
+V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE=0.05
+```
+
+This is not a validation-condition switch and does not use orientation labels.
+In the passing replay run, the added broad pathway had estimated total extra
+drive fraction `0.171429` relative to existing local L23E-to-SOM recruitment.
+
 ## Limitations and Out of Scope
 
 Not implemented:
@@ -467,7 +756,9 @@ Not implemented:
 - No conductance synapses or dendritic compartments.
 - No multi-seed validation yet, because the model currently has no explicit
   seed/salt mechanism for topology or lognormal initialization.
-- No natural image or natural movie stimulus battery.
+- No broad natural image or natural movie stimulus battery beyond the initial
+  KITTI lower-V1 replay and event-timing assays.
+- No video prediction training yet.
 - Blank baseline is site/population-rate only, not cell-level spontaneous
   activity characterization.
 - No emergent L4 orientation map or pinwheel development.
@@ -486,6 +777,13 @@ Important simplifications:
   biological proof.
 - Orientation-context assays use controlled validation stimuli; the model does
   not yet implement a full naturalistic stimulus battery.
+- Natural-video replay includes both frame-level diagnostics and a strict
+  event-aligned timing assay, but the event timing is relative to direct L4E
+  drive onset, not retina/LGN absolute latency.
+- Natural-video replay uses a deterministic simple-cell drive approximation and
+  has feedback/top-down disabled.
+- Event-timing artifacts are selected site/population bins, not a full
+  cell-level latency map.
 - Responsive coverage is measured with held-out phase sweeps, not a full
   contrast/spontaneous tuning protocol.
 
@@ -493,7 +791,9 @@ Important simplifications:
 
 The current `v1_pvnorm1` / `v1_round7_sensory1` family is the first strict
 pre-top-down configuration that simultaneously validates, with Round 7 repeated
-as `v1_round7_sensory1_repeat`:
+as `v1_round7_sensory1_repeat` and lower-V1 natural-video replay validated as
+`v1_natvideo_replay4_sombroad_repeat3` plus event timing validated as
+`v1_natvideo_event_timing2_bin2_repeat6`:
 
 - `40 x 40` distributed sheet behavior.
 - Phase-drift grating training.
@@ -505,8 +805,13 @@ as `v1_round7_sensory1_repeat`:
 - PV gain-normalization causality under PV-off stress.
 - True zero-drive blank silence, monotonic `0.5/1.0` contrast response, and
   true annular surround/SOM causality.
+- Replay-only natural-video lower-V1 physiology with feedback and video
+  training disabled.
+- Millisecond event-aligned natural-video timing with event-minus-gray-control
+  latency interpretation.
 - Sparse but non-collapsed L23E cell responsiveness.
 - L4/L23 map and tile coverage consistency.
 
-The model is therefore ready for the next stage: adding top-down/VIP expectation
-mechanisms without relying on a hardcoded L4-to-L23 orientation structural prior.
+The model is therefore ready for the next stage: adding video prediction and
+top-down/VIP expectation mechanisms without relying on a hardcoded L4-to-L23
+orientation structural prior.

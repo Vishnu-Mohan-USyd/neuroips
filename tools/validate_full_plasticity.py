@@ -139,6 +139,162 @@ class ContrastSweepRow:
 
 
 @dataclass(frozen=True)
+class VideoPopulationRateRow:
+    """One natural-video replay population-rate row."""
+
+    repeat_index: int
+    frame_index: int
+    population: str
+    rate_hz: float
+    frame_start_ms: float
+    frame_end_ms: float
+
+
+@dataclass(frozen=True)
+class VideoSiteRateRow:
+    """One natural-video replay site-rate row."""
+
+    repeat_index: int
+    frame_index: int
+    population: str
+    site_id: int
+    rate_hz: float
+
+
+@dataclass(frozen=True)
+class VideoFrameSummaryRow:
+    """One natural-video replay frame summary row."""
+
+    repeat_index: int
+    frame_index: int
+    frame_start_ms: float
+    frame_end_ms: float
+    l4e_rate_hz: float
+    l23e_rate_hz: float
+    l23pv_rate_hz: float
+    l23som_rate_hz: float
+    l4e_drive_min: float
+    l4e_drive_mean: float
+    l4e_drive_max: float
+    l4e_drive_std: float
+
+
+@dataclass(frozen=True)
+class VideoEventBinRow:
+    """One event-aligned natural-video timing bin row."""
+
+    condition: str
+    repeat_index: int
+    event_index: int
+    frame_index: int
+    population: str
+    site_id: int | None
+    bin_index: int
+    bin_start_ms: float
+    bin_end_ms: float
+    rate_hz: float
+    spike_count: float
+    event_start_ms: float
+    gray_current: float
+    l4e_drive_min: float
+    l4e_drive_mean: float
+    l4e_drive_max: float
+    l4e_drive_std: float
+
+
+@dataclass(frozen=True)
+class HVAPredictorPredictionRow:
+    """One host-side HVA sidecar future-tile prediction row."""
+
+    prediction_index: int
+    repeat_index: int
+    frame_index: int
+    target_frame_index: int
+    target_channel_index: int
+    target_channel: str
+    tile_id: int
+    split: str
+    learning_update_applied: int
+    target_state_norm: float
+    predicted_state_norm: float
+    target_residual_norm: float
+    predicted_residual_norm: float
+    target_residual_z: float
+    predicted_residual_z: float
+    train_residual_mean_norm: float
+    train_residual_std_norm: float
+    persistence_pred_state_norm: float
+    train_mean_pred_state_norm: float
+    no_learning_pred_state_norm: float
+    temporal_block_shift_pred_state_norm: float
+    spatial_tile_shuffle_pred_state_norm: float
+    target_rate_hz: float
+    predicted_rate_hz: float
+    error_rate_hz: float
+    event_window_target_state_norm: float = 0.0
+    event_threshold_norm: float = 0.0
+    event_tile_selected: int = 0
+    target_event: int = 0
+    single_frame_target_event: int = 0
+    predicted_event_prob: float = 0.0
+    persistence_event_prob: float = 0.0
+    train_event_rate: float = 0.0
+    no_learning_event_prob: float = 0.0
+    temporal_block_shift_event_prob: float = 0.0
+    spatial_tile_shuffle_event_prob: float = 0.0
+    event_error: float = 0.0
+    topk_target_value_norm: float = 0.0
+    topk_target: int = 0
+    topk_sample_valid: int = 0
+    topk_model_score: float = 0.0
+    topk_model_prob: float = 0.0
+    topk_persistence_score: float = 0.0
+    topk_train_frequency_score: float = 0.0
+    topk_no_learning_score: float = 0.0
+    topk_temporal_block_shift_score: float = 0.0
+    topk_spatial_tile_shuffle_score: float = 0.0
+
+
+@dataclass(frozen=True)
+class HVAPredictorEventTileRow:
+    """One HVA L23E event-threshold summary row for a predictor tile."""
+
+    target_channel_index: int
+    target_channel: str
+    tile_id: int
+    threshold_norm: float
+    threshold_hz: float
+    train_count: int
+    train_positive_count: int
+    train_negative_count: int
+    heldout_count: int
+    heldout_positive_count: int
+    train_positive_fraction: float
+    heldout_positive_fraction: float
+    selected: int
+
+
+@dataclass(frozen=True)
+class HVAPredictorWeightRow:
+    """One host-side HVA sidecar tile-to-tile predictor weight row."""
+
+    pre_tile_id: int
+    post_tile_id: int
+    target_channel_index: int
+    target_channel: str
+    pre_tile_x: int
+    pre_tile_y: int
+    post_tile_x: int
+    post_tile_y: int
+    distance_tiles: float
+    manhattan_distance_tiles: int
+    w_before: float
+    w_after: float
+    delta_w: float
+    abs_weight_sum_after: float
+
+
+@dataclass(frozen=True)
 class CellTuningRow:
     """One L23E cell response vector across orientation."""
 
@@ -284,6 +440,17 @@ class RunData:
     orientation_context_rows: list[OrientationContextRow] | None = None
     blank_baseline_rows: list[BlankBaselineRow] | None = None
     contrast_sweep_rows: list[ContrastSweepRow] | None = None
+    video_population_rows: list[VideoPopulationRateRow] | None = None
+    video_site_rows: list[VideoSiteRateRow] | None = None
+    video_frame_summary_rows: list[VideoFrameSummaryRow] | None = None
+    video_event_population_bin_rows: list[VideoEventBinRow] | None = None
+    video_event_site_bin_rows: list[VideoEventBinRow] | None = None
+    hva_predictor_config: dict[str, float] | None = None
+    hva_predictor_metrics: dict[str, float] | None = None
+    hva_predictor_rate_row_count: int | None = None
+    hva_predictor_predictions: list[HVAPredictorPredictionRow] | None = None
+    hva_predictor_event_tiles: list[HVAPredictorEventTileRow] | None = None
+    hva_predictor_weights: list[HVAPredictorWeightRow] | None = None
     specificity_rows: list[SpecificityRow] | None = None
     l23e_cell_tuning: dict[int, CellTuningRow] | None = None
     l23e_cell_tuning_multiphase: dict[int, MultiPhaseCellTuningRow] | None = None
@@ -407,6 +574,21 @@ def parse_args() -> argparse.Namespace:
         "--require-sensory-baseline-contrast-annulus",
         action="store_true",
         help="Require additive sensory blank, contrast, and annular surround validation diagnostics.",
+    )
+    parser.add_argument(
+        "--require-natural-video-physiology",
+        action="store_true",
+        help="Require opt-in natural-video lower-V1 replay artifacts and bounded physiology gates.",
+    )
+    parser.add_argument(
+        "--require-natural-video-event-timing",
+        action="store_true",
+        help="Require opt-in millisecond event-aligned natural-video timing artifacts and gates.",
+    )
+    parser.add_argument(
+        "--require-hva-predictor",
+        action="store_true",
+        help="Require default-off HVA predictor-only sidecar artifacts and isolation/prediction gates.",
     )
     parser.add_argument(
         "--allow-responsive-osi",
@@ -831,6 +1013,527 @@ def parse_contrast_sweep_csv(path: Path) -> list[ContrastSweepRow]:
     return rows
 
 
+def parse_video_population_rates_csv(path: Path) -> list[VideoPopulationRateRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {"frame_index", "population", "rate_hz", "frame_start_ms", "frame_end_ms"}
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing video population-rate columns in {path}: {sorted(missing)}")
+
+        rows: list[VideoPopulationRateRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            population = (row.get("population") or "").strip()
+            if not population:
+                raise ValidationError(f"Missing population in {path} row {row_number}")
+            rows.append(
+                VideoPopulationRateRow(
+                    repeat_index=(
+                        parse_int(row["repeat_index"], path, row_number, "repeat_index")
+                        if "repeat_index" in row and row.get("repeat_index", "") != ""
+                        else 0
+                    ),
+                    frame_index=parse_int(row["frame_index"], path, row_number, "frame_index"),
+                    population=population,
+                    rate_hz=parse_float(row["rate_hz"], path, row_number, "rate_hz"),
+                    frame_start_ms=parse_float(row["frame_start_ms"], path, row_number, "frame_start_ms"),
+                    frame_end_ms=parse_float(row["frame_end_ms"], path, row_number, "frame_end_ms"),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"Video population-rate file is empty: {path}")
+    return rows
+
+
+def parse_video_site_rates_csv(path: Path) -> list[VideoSiteRateRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {"frame_index", "population", "site_id", "rate_hz"}
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing video site-rate columns in {path}: {sorted(missing)}")
+
+        rows: list[VideoSiteRateRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            population = (row.get("population") or "").strip()
+            if not population:
+                raise ValidationError(f"Missing population in {path} row {row_number}")
+            rows.append(
+                VideoSiteRateRow(
+                    repeat_index=(
+                        parse_int(row["repeat_index"], path, row_number, "repeat_index")
+                        if "repeat_index" in row and row.get("repeat_index", "") != ""
+                        else 0
+                    ),
+                    frame_index=parse_int(row["frame_index"], path, row_number, "frame_index"),
+                    population=population,
+                    site_id=parse_int(row["site_id"], path, row_number, "site_id"),
+                    rate_hz=parse_float(row["rate_hz"], path, row_number, "rate_hz"),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"Video site-rate file is empty: {path}")
+    return rows
+
+
+def parse_video_frame_summary_csv(path: Path) -> list[VideoFrameSummaryRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {
+            "frame_index",
+            "frame_start_ms",
+            "frame_end_ms",
+            "l4e_rate_hz",
+            "l23e_rate_hz",
+            "l23pv_rate_hz",
+            "l23som_rate_hz",
+            "l4e_drive_min",
+            "l4e_drive_mean",
+            "l4e_drive_max",
+            "l4e_drive_std",
+        }
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing video frame-summary columns in {path}: {sorted(missing)}")
+
+        rows: list[VideoFrameSummaryRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            rows.append(
+                VideoFrameSummaryRow(
+                    repeat_index=(
+                        parse_int(row["repeat_index"], path, row_number, "repeat_index")
+                        if "repeat_index" in row and row.get("repeat_index", "") != ""
+                        else 0
+                    ),
+                    frame_index=parse_int(row["frame_index"], path, row_number, "frame_index"),
+                    frame_start_ms=parse_float(row["frame_start_ms"], path, row_number, "frame_start_ms"),
+                    frame_end_ms=parse_float(row["frame_end_ms"], path, row_number, "frame_end_ms"),
+                    l4e_rate_hz=parse_float(row["l4e_rate_hz"], path, row_number, "l4e_rate_hz"),
+                    l23e_rate_hz=parse_float(row["l23e_rate_hz"], path, row_number, "l23e_rate_hz"),
+                    l23pv_rate_hz=parse_float(row["l23pv_rate_hz"], path, row_number, "l23pv_rate_hz"),
+                    l23som_rate_hz=parse_float(row["l23som_rate_hz"], path, row_number, "l23som_rate_hz"),
+                    l4e_drive_min=parse_float(row["l4e_drive_min"], path, row_number, "l4e_drive_min"),
+                    l4e_drive_mean=parse_float(row["l4e_drive_mean"], path, row_number, "l4e_drive_mean"),
+                    l4e_drive_max=parse_float(row["l4e_drive_max"], path, row_number, "l4e_drive_max"),
+                    l4e_drive_std=parse_float(row["l4e_drive_std"], path, row_number, "l4e_drive_std"),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"Video frame-summary file is empty: {path}")
+    return rows
+
+
+def parse_video_event_bins_csv(path: Path, *, has_site_id: bool) -> list[VideoEventBinRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {
+            "condition",
+            "repeat_index",
+            "event_index",
+            "frame_index",
+            "population",
+            "bin_index",
+            "bin_start_ms",
+            "bin_end_ms",
+            "rate_hz",
+            "spike_count",
+            "event_start_ms",
+            "gray_current",
+            "l4e_drive_min",
+            "l4e_drive_mean",
+            "l4e_drive_max",
+            "l4e_drive_std",
+        }
+        if has_site_id:
+            required.add("site_id")
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing video event-bin columns in {path}: {sorted(missing)}")
+
+        rows: list[VideoEventBinRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            condition = (row.get("condition") or "").strip()
+            population = (row.get("population") or "").strip()
+            if not condition or not population:
+                raise ValidationError(f"Missing condition/population in {path} row {row_number}")
+            rows.append(
+                VideoEventBinRow(
+                    condition=condition,
+                    repeat_index=parse_int(row["repeat_index"], path, row_number, "repeat_index"),
+                    event_index=parse_int(row["event_index"], path, row_number, "event_index"),
+                    frame_index=parse_int(row["frame_index"], path, row_number, "frame_index"),
+                    population=population,
+                    site_id=(
+                        parse_int(row["site_id"], path, row_number, "site_id")
+                        if has_site_id
+                        else None
+                    ),
+                    bin_index=parse_int(row["bin_index"], path, row_number, "bin_index"),
+                    bin_start_ms=parse_float(row["bin_start_ms"], path, row_number, "bin_start_ms"),
+                    bin_end_ms=parse_float(row["bin_end_ms"], path, row_number, "bin_end_ms"),
+                    rate_hz=parse_float(row["rate_hz"], path, row_number, "rate_hz"),
+                    spike_count=parse_float(row["spike_count"], path, row_number, "spike_count"),
+                    event_start_ms=parse_float(row["event_start_ms"], path, row_number, "event_start_ms"),
+                    gray_current=parse_float(row["gray_current"], path, row_number, "gray_current"),
+                    l4e_drive_min=parse_float(row["l4e_drive_min"], path, row_number, "l4e_drive_min"),
+                    l4e_drive_mean=parse_float(row["l4e_drive_mean"], path, row_number, "l4e_drive_mean"),
+                    l4e_drive_max=parse_float(row["l4e_drive_max"], path, row_number, "l4e_drive_max"),
+                    l4e_drive_std=parse_float(row["l4e_drive_std"], path, row_number, "l4e_drive_std"),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"Video event-bin file is empty: {path}")
+    return rows
+
+
+def count_csv_data_rows(path: Path) -> int:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            next(reader)
+        except StopIteration as exc:
+            raise ValidationError(f"CSV file is empty: {path}") from exc
+        return sum(1 for _ in reader)
+
+
+def parse_hva_predictor_predictions_csv(path: Path) -> list[HVAPredictorPredictionRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {
+            "prediction_index",
+            "repeat_index",
+            "frame_index",
+            "target_frame_index",
+            "target_channel_index",
+            "target_channel",
+            "tile_id",
+            "split",
+            "learning_update_applied",
+            "target_state_norm",
+            "predicted_state_norm",
+            "target_residual_norm",
+            "predicted_residual_norm",
+            "target_residual_z",
+            "predicted_residual_z",
+            "train_residual_mean_norm",
+            "train_residual_std_norm",
+            "persistence_pred_state_norm",
+            "train_mean_pred_state_norm",
+            "no_learning_pred_state_norm",
+            "temporal_block_shift_pred_state_norm",
+            "spatial_tile_shuffle_pred_state_norm",
+            "target_rate_hz",
+            "predicted_rate_hz",
+            "error_rate_hz",
+        }
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing HVA prediction columns in {path}: {sorted(missing)}")
+
+        rows: list[HVAPredictorPredictionRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            def optional_float(column: str, default: float = 0.0) -> float:
+                return (
+                    parse_float(row[column], path, row_number, column)
+                    if column in row and row[column] != ""
+                    else default
+                )
+
+            def optional_int(column: str, default: int = 0) -> int:
+                return (
+                    parse_int(row[column], path, row_number, column)
+                    if column in row and row[column] != ""
+                    else default
+                )
+
+            rows.append(
+                HVAPredictorPredictionRow(
+                    prediction_index=parse_int(row["prediction_index"], path, row_number, "prediction_index"),
+                    repeat_index=parse_int(row["repeat_index"], path, row_number, "repeat_index"),
+                    frame_index=parse_int(row["frame_index"], path, row_number, "frame_index"),
+                    target_frame_index=parse_int(row["target_frame_index"], path, row_number, "target_frame_index"),
+                    target_channel_index=parse_int(
+                        row["target_channel_index"],
+                        path,
+                        row_number,
+                        "target_channel_index",
+                    ),
+                    target_channel=(row.get("target_channel") or "").strip(),
+                    tile_id=parse_int(row["tile_id"], path, row_number, "tile_id"),
+                    split=(row.get("split") or "").strip(),
+                    learning_update_applied=parse_int(
+                        row["learning_update_applied"],
+                        path,
+                        row_number,
+                        "learning_update_applied",
+                    ),
+                    target_state_norm=parse_float(row["target_state_norm"], path, row_number, "target_state_norm"),
+                    predicted_state_norm=parse_float(row["predicted_state_norm"], path, row_number, "predicted_state_norm"),
+                    target_residual_norm=parse_float(
+                        row["target_residual_norm"],
+                        path,
+                        row_number,
+                        "target_residual_norm",
+                    ),
+                    predicted_residual_norm=parse_float(
+                        row["predicted_residual_norm"],
+                        path,
+                        row_number,
+                        "predicted_residual_norm",
+                    ),
+                    target_residual_z=parse_float(
+                        row["target_residual_z"],
+                        path,
+                        row_number,
+                        "target_residual_z",
+                    ),
+                    predicted_residual_z=parse_float(
+                        row["predicted_residual_z"],
+                        path,
+                        row_number,
+                        "predicted_residual_z",
+                    ),
+                    train_residual_mean_norm=parse_float(
+                        row["train_residual_mean_norm"],
+                        path,
+                        row_number,
+                        "train_residual_mean_norm",
+                    ),
+                    train_residual_std_norm=parse_float(
+                        row["train_residual_std_norm"],
+                        path,
+                        row_number,
+                        "train_residual_std_norm",
+                    ),
+                    persistence_pred_state_norm=parse_float(
+                        row["persistence_pred_state_norm"],
+                        path,
+                        row_number,
+                        "persistence_pred_state_norm",
+                    ),
+                    train_mean_pred_state_norm=parse_float(
+                        row["train_mean_pred_state_norm"],
+                        path,
+                        row_number,
+                        "train_mean_pred_state_norm",
+                    ),
+                    no_learning_pred_state_norm=parse_float(
+                        row["no_learning_pred_state_norm"],
+                        path,
+                        row_number,
+                        "no_learning_pred_state_norm",
+                    ),
+                    temporal_block_shift_pred_state_norm=parse_float(
+                        row["temporal_block_shift_pred_state_norm"],
+                        path,
+                        row_number,
+                        "temporal_block_shift_pred_state_norm",
+                    ),
+                    spatial_tile_shuffle_pred_state_norm=parse_float(
+                        row["spatial_tile_shuffle_pred_state_norm"],
+                        path,
+                        row_number,
+                        "spatial_tile_shuffle_pred_state_norm",
+                    ),
+                    target_rate_hz=parse_float(row["target_rate_hz"], path, row_number, "target_rate_hz"),
+                    predicted_rate_hz=parse_float(row["predicted_rate_hz"], path, row_number, "predicted_rate_hz"),
+                    error_rate_hz=parse_float(row["error_rate_hz"], path, row_number, "error_rate_hz"),
+                    event_window_target_state_norm=optional_float("event_window_target_state_norm"),
+                    event_threshold_norm=optional_float("event_threshold_norm"),
+                    event_tile_selected=optional_int("event_tile_selected"),
+                    target_event=optional_int("target_event"),
+                    single_frame_target_event=optional_int("single_frame_target_event"),
+                    predicted_event_prob=optional_float("predicted_event_prob"),
+                    persistence_event_prob=optional_float("persistence_event_prob"),
+                    train_event_rate=optional_float("train_event_rate"),
+                    no_learning_event_prob=optional_float("no_learning_event_prob"),
+                    temporal_block_shift_event_prob=optional_float("temporal_block_shift_event_prob"),
+                    spatial_tile_shuffle_event_prob=optional_float("spatial_tile_shuffle_event_prob"),
+                    event_error=optional_float("event_error"),
+                    topk_target_value_norm=optional_float("topk_target_value_norm"),
+                    topk_target=optional_int("topk_target"),
+                    topk_sample_valid=optional_int("topk_sample_valid"),
+                    topk_model_score=optional_float("topk_model_score"),
+                    topk_model_prob=optional_float("topk_model_prob"),
+                    topk_persistence_score=optional_float("topk_persistence_score"),
+                    topk_train_frequency_score=optional_float("topk_train_frequency_score"),
+                    topk_no_learning_score=optional_float("topk_no_learning_score"),
+                    topk_temporal_block_shift_score=optional_float("topk_temporal_block_shift_score"),
+                    topk_spatial_tile_shuffle_score=optional_float("topk_spatial_tile_shuffle_score"),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"HVA prediction file is empty: {path}")
+    return rows
+
+
+def parse_hva_predictor_event_tiles_csv(path: Path) -> list[HVAPredictorEventTileRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {
+            "target_channel_index",
+            "target_channel",
+            "tile_id",
+            "threshold_norm",
+            "threshold_hz",
+            "train_count",
+            "train_positive_count",
+            "train_negative_count",
+            "heldout_count",
+            "heldout_positive_count",
+            "train_positive_fraction",
+            "heldout_positive_fraction",
+            "selected",
+        }
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing HVA event-tile columns in {path}: {sorted(missing)}")
+
+        rows: list[HVAPredictorEventTileRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            rows.append(
+                HVAPredictorEventTileRow(
+                    target_channel_index=parse_int(
+                        row["target_channel_index"],
+                        path,
+                        row_number,
+                        "target_channel_index",
+                    ),
+                    target_channel=(row.get("target_channel") or "").strip(),
+                    tile_id=parse_int(row["tile_id"], path, row_number, "tile_id"),
+                    threshold_norm=parse_float(row["threshold_norm"], path, row_number, "threshold_norm"),
+                    threshold_hz=parse_float(row["threshold_hz"], path, row_number, "threshold_hz"),
+                    train_count=parse_int(row["train_count"], path, row_number, "train_count"),
+                    train_positive_count=parse_int(
+                        row["train_positive_count"],
+                        path,
+                        row_number,
+                        "train_positive_count",
+                    ),
+                    train_negative_count=parse_int(
+                        row["train_negative_count"],
+                        path,
+                        row_number,
+                        "train_negative_count",
+                    ),
+                    heldout_count=parse_int(row["heldout_count"], path, row_number, "heldout_count"),
+                    heldout_positive_count=parse_int(
+                        row["heldout_positive_count"],
+                        path,
+                        row_number,
+                        "heldout_positive_count",
+                    ),
+                    train_positive_fraction=parse_float(
+                        row["train_positive_fraction"],
+                        path,
+                        row_number,
+                        "train_positive_fraction",
+                    ),
+                    heldout_positive_fraction=parse_float(
+                        row["heldout_positive_fraction"],
+                        path,
+                        row_number,
+                        "heldout_positive_fraction",
+                    ),
+                    selected=parse_int(row["selected"], path, row_number, "selected"),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"HVA event-tile file is empty: {path}")
+    return rows
+
+
+def parse_hva_predictor_weights_csv(path: Path) -> list[HVAPredictorWeightRow]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing header in {path}")
+
+        required = {
+            "target_channel_index",
+            "target_channel",
+            "pre_tile_id",
+            "post_tile_id",
+            "pre_tile_x",
+            "pre_tile_y",
+            "post_tile_x",
+            "post_tile_y",
+            "distance_tiles",
+            "manhattan_distance_tiles",
+            "w_before",
+            "w_after",
+            "delta_w",
+            "abs_weight_sum_after",
+        }
+        missing = required.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing HVA weight columns in {path}: {sorted(missing)}")
+
+        rows: list[HVAPredictorWeightRow] = []
+        for row_number, row in enumerate(reader, start=2):
+            rows.append(
+                HVAPredictorWeightRow(
+                    pre_tile_id=parse_int(row["pre_tile_id"], path, row_number, "pre_tile_id"),
+                    post_tile_id=parse_int(row["post_tile_id"], path, row_number, "post_tile_id"),
+                    target_channel_index=parse_int(
+                        row["target_channel_index"],
+                        path,
+                        row_number,
+                        "target_channel_index",
+                    ),
+                    target_channel=(row.get("target_channel") or "").strip(),
+                    pre_tile_x=parse_int(row["pre_tile_x"], path, row_number, "pre_tile_x"),
+                    pre_tile_y=parse_int(row["pre_tile_y"], path, row_number, "pre_tile_y"),
+                    post_tile_x=parse_int(row["post_tile_x"], path, row_number, "post_tile_x"),
+                    post_tile_y=parse_int(row["post_tile_y"], path, row_number, "post_tile_y"),
+                    distance_tiles=parse_float(row["distance_tiles"], path, row_number, "distance_tiles"),
+                    manhattan_distance_tiles=parse_int(
+                        row["manhattan_distance_tiles"],
+                        path,
+                        row_number,
+                        "manhattan_distance_tiles",
+                    ),
+                    w_before=parse_float(row["w_before"], path, row_number, "w_before"),
+                    w_after=parse_float(row["w_after"], path, row_number, "w_after"),
+                    delta_w=parse_float(row["delta_w"], path, row_number, "delta_w"),
+                    abs_weight_sum_after=parse_float(
+                        row["abs_weight_sum_after"],
+                        path,
+                        row_number,
+                        "abs_weight_sum_after",
+                    ),
+                )
+            )
+
+    if not rows:
+        raise ValidationError(f"HVA weight file is empty: {path}")
+    return rows
+
+
 def parse_cell_tuning_csv(path: Path) -> dict[int, CellTuningRow]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -1141,6 +1844,72 @@ def load_run(
         if contrast_sweep_path.is_file()
         else None
     )
+    video_population_path = genn_dir / f"{prefix}_video_population_rates.csv"
+    video_population_rows = (
+        parse_video_population_rates_csv(video_population_path)
+        if video_population_path.is_file()
+        else None
+    )
+    video_site_path = genn_dir / f"{prefix}_video_site_rates.csv"
+    video_site_rows = (
+        parse_video_site_rates_csv(video_site_path)
+        if video_site_path.is_file()
+        else None
+    )
+    video_frame_summary_path = genn_dir / f"{prefix}_video_frame_summary.csv"
+    video_frame_summary_rows = (
+        parse_video_frame_summary_csv(video_frame_summary_path)
+        if video_frame_summary_path.is_file()
+        else None
+    )
+    video_event_population_path = genn_dir / f"{prefix}_video_event_population_bins.csv"
+    video_event_population_bin_rows = (
+        parse_video_event_bins_csv(video_event_population_path, has_site_id=False)
+        if video_event_population_path.is_file()
+        else None
+    )
+    video_event_site_path = genn_dir / f"{prefix}_video_event_site_bins.csv"
+    video_event_site_bin_rows = (
+        parse_video_event_bins_csv(video_event_site_path, has_site_id=True)
+        if video_event_site_path.is_file()
+        else None
+    )
+    hva_predictor_config_path = genn_dir / f"{prefix}_hva_predictor_config.csv"
+    hva_predictor_config = (
+        parse_summary_csv(hva_predictor_config_path)
+        if hva_predictor_config_path.is_file()
+        else None
+    )
+    hva_predictor_metrics_path = genn_dir / f"{prefix}_hva_predictor_metrics.csv"
+    hva_predictor_metrics = (
+        parse_summary_csv(hva_predictor_metrics_path)
+        if hva_predictor_metrics_path.is_file()
+        else None
+    )
+    hva_predictor_rates_path = genn_dir / f"{prefix}_hva_predictor_rates.csv"
+    hva_predictor_rate_row_count = (
+        count_csv_data_rows(hva_predictor_rates_path)
+        if hva_predictor_rates_path.is_file()
+        else None
+    )
+    hva_predictor_predictions_path = genn_dir / f"{prefix}_hva_predictor_predictions.csv"
+    hva_predictor_predictions = (
+        parse_hva_predictor_predictions_csv(hva_predictor_predictions_path)
+        if hva_predictor_predictions_path.is_file()
+        else None
+    )
+    hva_predictor_event_tiles_path = genn_dir / f"{prefix}_hva_predictor_event_tiles.csv"
+    hva_predictor_event_tiles = (
+        parse_hva_predictor_event_tiles_csv(hva_predictor_event_tiles_path)
+        if hva_predictor_event_tiles_path.is_file()
+        else None
+    )
+    hva_predictor_weights_path = genn_dir / f"{prefix}_hva_predictor_weights.csv"
+    hva_predictor_weights = (
+        parse_hva_predictor_weights_csv(hva_predictor_weights_path)
+        if hva_predictor_weights_path.is_file()
+        else None
+    )
     specificity_rows = (
         parse_specificity_csv(require_file(genn_dir / f"{prefix}_l23ee_specificity.csv"))
         if require_specificity
@@ -1169,6 +1938,17 @@ def load_run(
         orientation_context_rows=orientation_context_rows,
         blank_baseline_rows=blank_baseline_rows,
         contrast_sweep_rows=contrast_sweep_rows,
+        video_population_rows=video_population_rows,
+        video_site_rows=video_site_rows,
+        video_frame_summary_rows=video_frame_summary_rows,
+        video_event_population_bin_rows=video_event_population_bin_rows,
+        video_event_site_bin_rows=video_event_site_bin_rows,
+        hva_predictor_config=hva_predictor_config,
+        hva_predictor_metrics=hva_predictor_metrics,
+        hva_predictor_rate_row_count=hva_predictor_rate_row_count,
+        hva_predictor_predictions=hva_predictor_predictions,
+        hva_predictor_event_tiles=hva_predictor_event_tiles,
+        hva_predictor_weights=hva_predictor_weights,
         specificity_rows=specificity_rows,
         l23e_cell_tuning=l23e_cell_tuning,
         l23e_cell_tuning_multiphase=l23e_cell_tuning_multiphase,
@@ -2674,20 +3454,83 @@ def compute_response_correlation_metrics(rows: list[SpecificityRow]) -> dict[str
     if not rows:
         raise ValidationError("Response-correlation specificity requested for an empty row set.")
 
-    sorted_rows = sorted(rows, key=lambda row: row.response_corr)
+    active_rows = [row for row in rows if row.pre_peak_hz > 0.0 and row.post_peak_hz > 0.0]
+    min_active_count = min(100, max(20, len(rows) // 100))
+    active_or_all_rows = active_rows if len(active_rows) >= min_active_count else rows
+    active_nonzero_corr_rows = [
+        row
+        for row in active_rows
+        if abs(row.response_corr) > 1.0e-9
+    ]
+    nonzero_corr_rows = [
+        row
+        for row in active_or_all_rows
+        if abs(row.response_corr) > 1.0e-9
+    ]
+    min_nonzero_count = min(50, max(5, len(active_or_all_rows) // 20))
+    nonzero_corr_fraction_floor = 0.80
+    nonzero_corr_fraction = len(nonzero_corr_rows) / len(active_or_all_rows)
+    active_nonzero_corr_fraction = (
+        len(active_nonzero_corr_rows) / len(active_rows)
+        if active_rows
+        else 0.0
+    )
+    nonzero_subset_allowed = (
+        len(nonzero_corr_rows) >= min_nonzero_count
+        and nonzero_corr_fraction >= nonzero_corr_fraction_floor
+    )
+    if nonzero_subset_allowed:
+        selected_rows = nonzero_corr_rows
+        selected_label = "nonzero_corr_active_endpoints" if active_or_all_rows is active_rows else "nonzero_corr_all"
+        selected_mode_code = 2.0 if active_or_all_rows is active_rows else 3.0
+    else:
+        selected_rows = active_or_all_rows
+        selected_label = "active_endpoints" if active_or_all_rows is active_rows else "all"
+        selected_mode_code = 1.0 if active_or_all_rows is active_rows else 0.0
+
+    sorted_rows = sorted(selected_rows, key=lambda row: row.response_corr)
     quantile_count = max(1, len(sorted_rows) // 4)
     min_count = min(50, max(5, len(sorted_rows) // 20))
     low_corr = sorted_rows[:quantile_count]
     high_corr = sorted_rows[-quantile_count:]
+    active_sorted_rows = sorted(active_rows, key=lambda row: row.response_corr)
+    active_quantile_count = max(1, len(active_sorted_rows) // 4) if active_sorted_rows else 0
+    active_low_corr = active_sorted_rows[:active_quantile_count]
+    active_high_corr = active_sorted_rows[-active_quantile_count:] if active_quantile_count > 0 else []
+    active_min_count = min(50, max(5, len(active_sorted_rows) // 20)) if active_sorted_rows else min_count
+    all_sorted_rows = sorted(rows, key=lambda row: row.response_corr)
+    all_quantile_count = max(1, len(all_sorted_rows) // 4)
+    all_low_corr = all_sorted_rows[:all_quantile_count]
+    all_high_corr = all_sorted_rows[-all_quantile_count:]
 
     metrics = {
-        "row_count": float(len(rows)),
+        "row_count": float(len(selected_rows)),
+        "all_row_count": float(len(rows)),
+        "active_endpoint_count": float(len(active_rows)),
+        "nonzero_corr_count": float(len(nonzero_corr_rows)),
+        "active_nonzero_corr_count": float(len(active_nonzero_corr_rows)),
+        "nonzero_corr_fraction": nonzero_corr_fraction,
+        "active_nonzero_corr_fraction": active_nonzero_corr_fraction,
+        "nonzero_corr_fraction_floor": nonzero_corr_fraction_floor,
+        "nonzero_subset_allowed": 1.0 if nonzero_subset_allowed else 0.0,
+        "min_active_count": float(min_active_count),
+        "min_nonzero_count": float(min_nonzero_count),
+        "active_min_count": float(active_min_count),
+        "selected_mode_code": selected_mode_code,
         "quantile_fraction": 0.25,
         "min_count": float(min_count),
-        "p95_abs_delta_w": percentile([abs(row.delta_w) for row in rows], 95.0),
+        "p95_abs_delta_w": percentile([abs(row.delta_w) for row in selected_rows], 95.0),
+        "active_p95_abs_delta_w": percentile([abs(row.delta_w) for row in active_rows], 95.0)
+        if active_rows
+        else math.nan,
     }
     metrics.update(summarize_correlation_group(low_corr, "low_corr"))
     metrics.update(summarize_correlation_group(high_corr, "high_corr"))
+    metrics.update(summarize_correlation_group(active_low_corr, "active_low_corr"))
+    metrics.update(summarize_correlation_group(active_high_corr, "active_high_corr"))
+    metrics.update(summarize_correlation_group(all_low_corr, "all_low_corr"))
+    metrics.update(summarize_correlation_group(all_high_corr, "all_high_corr"))
+    metrics["selected_label"] = selected_label
     return metrics
 
 
@@ -3151,6 +3994,2227 @@ def print_result(passed: bool, label: str, details: str) -> bool:
     return passed
 
 
+def standard_deviation(values: list[float]) -> float:
+    if not values:
+        raise ValidationError("Cannot compute standard deviation of an empty collection.")
+    value_mean = mean(values)
+    return math.sqrt(sum((value - value_mean) ** 2 for value in values) / len(values))
+
+
+def video_population_rates_by_name(rows: list[VideoPopulationRateRow]) -> dict[str, list[float]]:
+    rates: dict[str, list[float]] = {}
+    for row in rows:
+        rates.setdefault(row.population, []).append(row.rate_hz)
+    return rates
+
+
+def video_site_rates_by_name(rows: list[VideoSiteRateRow]) -> dict[str, list[float]]:
+    rates: dict[str, list[float]] = {}
+    for row in rows:
+        rates.setdefault(row.population, []).append(row.rate_hz)
+    return rates
+
+
+def fraction_less_than(values: list[float], threshold: float) -> float:
+    if not values:
+        raise ValidationError("Cannot compute fraction of an empty collection.")
+    return sum(1 for value in values if value < threshold) / len(values)
+
+
+def pearson_correlation_optional(x_values: list[float], y_values: list[float]) -> float | None:
+    if len(x_values) != len(y_values) or len(x_values) < 3:
+        return None
+    x_mean = sum(x_values) / len(x_values)
+    y_mean = sum(y_values) / len(y_values)
+    numerator = 0.0
+    x_sq = 0.0
+    y_sq = 0.0
+    for x_value, y_value in zip(x_values, y_values):
+        dx = x_value - x_mean
+        dy = y_value - y_mean
+        numerator += dx * dy
+        x_sq += dx * dx
+        y_sq += dy * dy
+    denominator = math.sqrt(x_sq * y_sq)
+    if denominator <= 1.0e-12:
+        return None
+    return numerator / denominator
+
+
+def format_optional_float(value: float | None) -> str:
+    return "nan" if value is None or not math.isfinite(value) else f"{value:.6f}"
+
+
+def mean_frame_series(frame_rows: list[VideoFrameSummaryRow], attribute: str) -> tuple[list[int], list[float]]:
+    values_by_frame: dict[int, list[float]] = {}
+    for row in frame_rows:
+        values_by_frame.setdefault(row.frame_index, []).append(float(getattr(row, attribute)))
+    frame_indices = sorted(values_by_frame)
+    return frame_indices, [mean(values_by_frame[frame_index]) for frame_index in frame_indices]
+
+
+def lagged_correlations(
+    source: list[float],
+    target: list[float],
+    max_lag: int,
+) -> dict[int, float | None]:
+    correlations: dict[int, float | None] = {}
+    for lag in range(max_lag + 1):
+        if lag == 0:
+            correlations[lag] = pearson_correlation_optional(source, target)
+        else:
+            correlations[lag] = pearson_correlation_optional(source[:-lag], target[lag:])
+    return correlations
+
+
+def best_lag(correlations: dict[int, float | None]) -> tuple[int | None, float | None]:
+    finite = [(lag, corr) for lag, corr in correlations.items() if corr is not None and math.isfinite(corr)]
+    if not finite:
+        return None, None
+    return max(finite, key=lambda item: item[1])
+
+
+def compute_video_delay_metrics(frame_rows: list[VideoFrameSummaryRow]) -> dict[str, float | None]:
+    frame_indices, l4e = mean_frame_series(frame_rows, "l4e_rate_hz")
+    _, l23e = mean_frame_series(frame_rows, "l23e_rate_hz")
+    _, l23pv = mean_frame_series(frame_rows, "l23pv_rate_hz")
+    _, l23som = mean_frame_series(frame_rows, "l23som_rate_hz")
+    if len(frame_indices) < 3:
+        return {"frame_count": float(len(frame_indices)), "max_lag": 0.0}
+
+    max_lag = min(5, len(frame_indices) - 2)
+    metrics: dict[str, float | None] = {
+        "frame_count": float(len(frame_indices)),
+        "max_lag": float(max_lag),
+    }
+    for population, target in (("l23e", l23e), ("l23pv", l23pv), ("l23som", l23som)):
+        correlations = lagged_correlations(l4e, target, max_lag)
+        lag, corr = best_lag(correlations)
+        metrics[f"{population}_best_lag_frames"] = float(lag) if lag is not None else None
+        metrics[f"{population}_best_corr"] = corr
+        metrics[f"{population}_lag0_corr"] = correlations.get(0)
+        metrics[f"{population}_lag1_corr"] = correlations.get(1)
+    return metrics
+
+
+def repeat_population_series(
+    frame_rows: list[VideoFrameSummaryRow],
+    attribute: str,
+) -> dict[int, dict[int, float]]:
+    series_by_repeat: dict[int, dict[int, float]] = {}
+    for row in frame_rows:
+        series_by_repeat.setdefault(row.repeat_index, {})[row.frame_index] = float(getattr(row, attribute))
+    return series_by_repeat
+
+
+def pairwise_repeat_reliability(frame_rows: list[VideoFrameSummaryRow], attribute: str) -> float | None:
+    series_by_repeat = repeat_population_series(frame_rows, attribute)
+    repeats = sorted(series_by_repeat)
+    if len(repeats) < 2:
+        return None
+    correlations: list[float] = []
+    for i, first_repeat in enumerate(repeats):
+        for second_repeat in repeats[i + 1:]:
+            common_frames = sorted(
+                set(series_by_repeat[first_repeat]).intersection(series_by_repeat[second_repeat])
+            )
+            if len(common_frames) < 3:
+                continue
+            corr = pearson_correlation_optional(
+                [series_by_repeat[first_repeat][frame] for frame in common_frames],
+                [series_by_repeat[second_repeat][frame] for frame in common_frames],
+            )
+            if corr is not None and math.isfinite(corr):
+                correlations.append(corr)
+    return mean(correlations) if correlations else None
+
+
+def l23e_site_frame_vectors(site_rows: list[VideoSiteRateRow]) -> dict[int, list[float]]:
+    values_by_site_frame: dict[int, dict[int, list[float]]] = {}
+    frame_ids: set[int] = set()
+    for row in site_rows:
+        if row.population != "l23e":
+            continue
+        values_by_site_frame.setdefault(row.site_id, {}).setdefault(row.frame_index, []).append(row.rate_hz)
+        frame_ids.add(row.frame_index)
+    ordered_frames = sorted(frame_ids)
+    vectors: dict[int, list[float]] = {}
+    for site_id, by_frame in values_by_site_frame.items():
+        if all(frame_index in by_frame for frame_index in ordered_frames):
+            vectors[site_id] = [mean(by_frame[frame_index]) for frame_index in ordered_frames]
+    return vectors
+
+
+def compute_recurrent_video_metrics(
+    site_rows: list[VideoSiteRateRow],
+    specificity_rows: list[SpecificityRow] | None,
+) -> dict[str, float]:
+    if specificity_rows is None:
+        raise ValidationError("Natural-video recurrent metrics require l23ee specificity rows.")
+    site_vectors = l23e_site_frame_vectors(site_rows)
+    edge_metrics: list[tuple[float, float, float, bool]] = []
+    for row in specificity_rows:
+        if row.w_after <= 0.0:
+            continue
+        pre_vector = site_vectors.get(row.pre_site)
+        post_vector = site_vectors.get(row.post_site)
+        if pre_vector is None or post_vector is None:
+            continue
+        corr = pearson_correlation_optional(pre_vector, post_vector)
+        if corr is None or not math.isfinite(corr):
+            continue
+        edge_metrics.append((corr, row.w_after, row.delta_pref_deg, row.pre_site == row.post_site))
+
+    if not edge_metrics:
+        return {
+            "edge_count": 0.0,
+            "mean_corr": math.nan,
+            "median_corr": math.nan,
+            "top10_weight_mean_corr": math.nan,
+            "low_delta_mean_corr": math.nan,
+            "same_site_fraction": math.nan,
+        }
+
+    corr_values = [item[0] for item in edge_metrics]
+    top_count = max(1, int(math.ceil(0.10 * len(edge_metrics))))
+    top_by_weight = sorted(edge_metrics, key=lambda item: item[1], reverse=True)[:top_count]
+    delta_p25 = percentile([item[2] for item in edge_metrics], 25.0)
+    low_delta = [item for item in edge_metrics if item[2] <= delta_p25]
+    return {
+        "edge_count": float(len(edge_metrics)),
+        "mean_corr": mean(corr_values),
+        "median_corr": median(corr_values),
+        "top10_weight_mean_corr": mean([item[0] for item in top_by_weight]),
+        "low_delta_mean_corr": mean([item[0] for item in low_delta]),
+        "same_site_fraction": sum(1 for item in edge_metrics if item[3]) / len(edge_metrics),
+    }
+
+
+def mean_event_bin_series(
+    rows: list[VideoEventBinRow],
+    condition: str,
+    population: str,
+) -> list[tuple[int, float, float, float]]:
+    values_by_bin: dict[int, list[float]] = {}
+    starts_by_bin: dict[int, float] = {}
+    ends_by_bin: dict[int, float] = {}
+    for row in rows:
+        if row.condition != condition or row.population != population:
+            continue
+        values_by_bin.setdefault(row.bin_index, []).append(row.rate_hz)
+        starts_by_bin[row.bin_index] = row.bin_start_ms
+        ends_by_bin[row.bin_index] = row.bin_end_ms
+    return [
+        (bin_index, starts_by_bin[bin_index], ends_by_bin[bin_index], mean(values_by_bin[bin_index]))
+        for bin_index in sorted(values_by_bin)
+    ]
+
+
+def matched_event_minus_control_series(
+    rows: list[VideoEventBinRow],
+    population: str,
+    control_condition: str,
+) -> list[tuple[int, float, float, float]]:
+    event_by_key: dict[tuple[int, int, int], VideoEventBinRow] = {}
+    control_by_key: dict[tuple[int, int, int], VideoEventBinRow] = {}
+    for row in rows:
+        if row.population != population:
+            continue
+        key = (row.repeat_index, row.event_index, row.bin_index)
+        if row.condition == "event":
+            event_by_key[key] = row
+        elif row.condition == control_condition:
+            control_by_key[key] = row
+
+    values_by_bin: dict[int, list[float]] = {}
+    starts_by_bin: dict[int, float] = {}
+    ends_by_bin: dict[int, float] = {}
+    for key in sorted(set(event_by_key).intersection(control_by_key)):
+        event_row = event_by_key[key]
+        control_row = control_by_key[key]
+        values_by_bin.setdefault(event_row.bin_index, []).append(event_row.rate_hz - control_row.rate_hz)
+        starts_by_bin[event_row.bin_index] = event_row.bin_start_ms
+        ends_by_bin[event_row.bin_index] = event_row.bin_end_ms
+
+    return [
+        (bin_index, starts_by_bin[bin_index], ends_by_bin[bin_index], mean(values_by_bin[bin_index]))
+        for bin_index in sorted(values_by_bin)
+    ]
+
+
+def event_response_metrics(series: list[tuple[int, float, float, float]]) -> dict[str, float]:
+    baseline = [rate for _, start_ms, _, rate in series if start_ms < 0.0]
+    post = [(start_ms, rate) for _, start_ms, _, rate in series if start_ms >= 0.0]
+    if not baseline or not post:
+        return {
+            "baseline_mean": math.nan,
+            "baseline_std": math.nan,
+            "post_peak": math.nan,
+            "post_mean": math.nan,
+            "onset_latency_ms": math.nan,
+            "peak_latency_ms": math.nan,
+            "pre_bin_count": float(len(baseline)),
+            "post_bin_count": float(len(post)),
+        }
+
+    baseline_mean = mean(baseline)
+    baseline_std = standard_deviation(baseline) if len(baseline) > 1 else 0.0
+    post_rates = [rate for _, rate in post]
+    post_peak = max(post_rates)
+    peak_index = post_rates.index(post_peak)
+    peak_latency_ms = post[peak_index][0]
+    threshold = baseline_mean + max(
+        2.0 * baseline_std,
+        0.05 * max(0.0, post_peak - baseline_mean),
+        1.0e-9,
+    )
+    onset_latency_ms = math.nan
+    for start_ms, rate in post:
+        if rate >= threshold:
+            onset_latency_ms = start_ms
+            break
+    return {
+        "baseline_mean": baseline_mean,
+        "baseline_std": baseline_std,
+        "post_peak": post_peak,
+        "post_mean": mean(post_rates),
+        "onset_latency_ms": onset_latency_ms,
+        "peak_latency_ms": peak_latency_ms,
+        "pre_bin_count": float(len(baseline)),
+        "post_bin_count": float(len(post)),
+    }
+
+
+def event_best_lag_correlation(
+    source_series: list[tuple[int, float, float, float]],
+    target_series: list[tuple[int, float, float, float]],
+    max_lag_ms: float,
+) -> dict[str, float | None]:
+    if len(source_series) != len(target_series) or len(source_series) < 3:
+        return {"best_lag_ms": None, "best_corr": None, "lag0_corr": None, "shifted_null_corr": None}
+    source = [row[3] for row in source_series]
+    target = [row[3] for row in target_series]
+    bin_ms = source_series[0][2] - source_series[0][1]
+    max_lag_bins = max(0, min(len(source) - 2, int(math.floor(max_lag_ms / max(bin_ms, 1.0e-9)))))
+    correlations = lagged_correlations(source, target, max_lag_bins)
+    lag, corr = best_lag(correlations)
+    shift = max(1, len(source) // 2)
+    shifted_source = source[shift:] + source[:shift]
+    shifted_null_corr = pearson_correlation_optional(shifted_source, target)
+    return {
+        "best_lag_ms": (float(lag) * bin_ms) if lag is not None else None,
+        "best_corr": corr,
+        "lag0_corr": correlations.get(0),
+        "shifted_null_corr": shifted_null_corr,
+    }
+
+
+def validate_hva_predictor(run: RunData) -> bool:
+    overall_ok = True
+    config = run.hva_predictor_config
+    metrics = run.hva_predictor_metrics
+    predictions = run.hva_predictor_predictions
+    event_tiles = run.hva_predictor_event_tiles
+    weights = run.hva_predictor_weights
+    rate_row_count = run.hva_predictor_rate_row_count
+    summary_enabled = run.summary.get("hva_predictor_enabled", 0.0)
+    artifacts_available = (
+        summary_enabled == 1.0
+        and config is not None
+        and metrics is not None
+        and predictions is not None
+        and event_tiles is not None
+        and weights is not None
+        and rate_row_count is not None
+        and len(predictions) > 0
+        and len(event_tiles) > 0
+        and len(weights) > 0
+        and rate_row_count > 0
+    )
+    overall_ok &= print_result(
+        artifacts_available,
+        "hva_predictor_artifacts_available",
+        (
+            f"hva_predictor_enabled={summary_enabled:.6f} "
+            f"config_rows={len(config) if config is not None else 0} "
+            f"metric_rows={len(metrics) if metrics is not None else 0} "
+            f"rate_rows={rate_row_count if rate_row_count is not None else 0} "
+            f"prediction_rows={len(predictions) if predictions is not None else 0} "
+            f"event_tile_rows={len(event_tiles) if event_tiles is not None else 0} "
+            f"weight_rows={len(weights) if weights is not None else 0}"
+        ),
+    )
+    if (
+        not artifacts_available
+        or config is None
+        or metrics is None
+        or predictions is None
+        or event_tiles is None
+        or weights is None
+    ):
+        return overall_ok
+
+    train_rows = [row for row in predictions if row.split == "train"]
+    heldout_rows = [row for row in predictions if row.split == "heldout"]
+    required_target_channels = ("l23e",)
+    target_channels = sorted({row.target_channel for row in predictions})
+    heldout_by_channel = {
+        channel: [row for row in heldout_rows if row.target_channel == channel]
+        for channel in target_channels
+    }
+    split_ok = (
+        len(train_rows) > 0
+        and len(heldout_rows) > 0
+        and all(channel in target_channels for channel in required_target_channels)
+        and target_channels == ["l23e"]
+        and all(row.learning_update_applied == 0 for row in train_rows)
+        and all(row.learning_update_applied == 0 for row in heldout_rows)
+        and int(round(require_metric(metrics, "train_prediction_count", "HVA predictor metrics"))) == len(train_rows)
+        and int(round(require_metric(metrics, "heldout_prediction_count", "HVA predictor metrics"))) == len(heldout_rows)
+        and require_metric(metrics, "heldout_mode_code", "HVA predictor metrics") == 2.0
+        and all(
+            row.target_frame_index < int(round(require_metric(metrics, "heldout_start_frame", "HVA predictor metrics")))
+            for row in train_rows
+        )
+        and all(
+            row.frame_index >= int(round(require_metric(metrics, "heldout_start_frame", "HVA predictor metrics")))
+            and row.target_frame_index >= int(round(require_metric(metrics, "heldout_start_frame", "HVA predictor metrics")))
+            for row in heldout_rows
+        )
+    )
+    overall_ok &= print_result(
+        split_ok,
+        "hva_predictor_heldout_split",
+        (
+            f"train_rows={len(train_rows)} heldout_rows={len(heldout_rows)} "
+            f"heldout_mode_code={require_metric(metrics, 'heldout_mode_code', 'HVA predictor metrics'):.0f} "
+            f"heldout_start_repeat={require_metric(metrics, 'heldout_start_repeat', 'HVA predictor metrics'):.0f} "
+            f"heldout_start_frame={require_metric(metrics, 'heldout_start_frame', 'HVA predictor metrics'):.0f} "
+            f"train_frame_count={require_metric(metrics, 'train_frame_count', 'HVA predictor metrics'):.0f} "
+            f"heldout_frame_count={require_metric(metrics, 'heldout_frame_count', 'HVA predictor metrics'):.0f} "
+            f"boundary_gap_prediction_count={require_metric(metrics, 'boundary_gap_prediction_count', 'HVA predictor metrics'):.0f} "
+            f"target_channels={','.join(target_channels)} "
+            f"evaluation_updates_applied=0"
+        ),
+    )
+
+    lower_v1_frozen = run.summary.get("hva_predictor_lower_v1_frozen", config.get("lower_v1_frozen", 0.0))
+    hva_to_v1_connections = run.summary.get(
+        "hva_predictor_hva_to_v1_connection_count",
+        config.get("hva_to_v1_connection_count", math.nan),
+    )
+    hva_to_v1_current = run.summary.get(
+        "hva_predictor_hva_to_v1_current_enabled",
+        config.get("hva_to_v1_current_enabled", math.nan),
+    )
+    lower_v1_weight_delta = run.summary.get(
+        "hva_predictor_lower_v1_weight_delta_max_after_hva",
+        config.get("lower_v1_weight_delta_max_after_hva", math.nan),
+    )
+    lower_v1_output_delta = run.summary.get(
+        "hva_predictor_lower_v1_output_delta_max_after_hva",
+        config.get("lower_v1_output_delta_max_after_hva", math.nan),
+    )
+    v1_mutation_after_hva = run.summary.get(
+        "hva_predictor_v1_mutation_after_hva_enabled",
+        config.get("v1_mutation_after_hva_enabled", math.nan),
+    )
+    fingerprint_equal = run.summary.get(
+        "hva_predictor_lower_v1_replay_fingerprint_equal",
+        config.get("lower_v1_replay_fingerprint_equal", math.nan),
+    )
+    site_hash_before = run.summary.get(
+        "hva_predictor_lower_v1_replay_site_count_fingerprint32_before",
+        config.get("lower_v1_replay_site_count_fingerprint32_before", math.nan),
+    )
+    site_hash_after = run.summary.get(
+        "hva_predictor_lower_v1_replay_site_count_fingerprint32_after",
+        config.get("lower_v1_replay_site_count_fingerprint32_after", math.nan),
+    )
+    tile_hash_before = run.summary.get(
+        "hva_predictor_lower_v1_replay_tile_rate_fingerprint32_before",
+        config.get("lower_v1_replay_tile_rate_fingerprint32_before", math.nan),
+    )
+    tile_hash_after = run.summary.get(
+        "hva_predictor_lower_v1_replay_tile_rate_fingerprint32_after",
+        config.get("lower_v1_replay_tile_rate_fingerprint32_after", math.nan),
+    )
+    site_sum_before = run.summary.get(
+        "hva_predictor_lower_v1_replay_site_count_sum_before",
+        config.get("lower_v1_replay_site_count_sum_before", math.nan),
+    )
+    site_sum_after = run.summary.get(
+        "hva_predictor_lower_v1_replay_site_count_sum_after",
+        config.get("lower_v1_replay_site_count_sum_after", math.nan),
+    )
+    tile_sum_before = run.summary.get(
+        "hva_predictor_lower_v1_replay_tile_rate_sum_before",
+        config.get("lower_v1_replay_tile_rate_sum_before", math.nan),
+    )
+    tile_sum_after = run.summary.get(
+        "hva_predictor_lower_v1_replay_tile_rate_sum_after",
+        config.get("lower_v1_replay_tile_rate_sum_after", math.nan),
+    )
+    multitask_target_fingerprint_equal = run.summary.get(
+        "hva_predictor_lower_v1_replay_multitask_target_fingerprint_equal",
+        config.get("lower_v1_replay_multitask_target_fingerprint_equal", math.nan),
+    )
+    multitask_target_hash_before = run.summary.get(
+        "hva_predictor_lower_v1_replay_multitask_target_fingerprint32_before",
+        config.get("lower_v1_replay_multitask_target_fingerprint32_before", math.nan),
+    )
+    multitask_target_hash_after = run.summary.get(
+        "hva_predictor_lower_v1_replay_multitask_target_fingerprint32_after",
+        config.get("lower_v1_replay_multitask_target_fingerprint32_after", math.nan),
+    )
+    multitask_target_sum_before = run.summary.get(
+        "hva_predictor_lower_v1_replay_multitask_target_sum_before",
+        config.get("lower_v1_replay_multitask_target_sum_before", math.nan),
+    )
+    multitask_target_sum_after = run.summary.get(
+        "hva_predictor_lower_v1_replay_multitask_target_sum_after",
+        config.get("lower_v1_replay_multitask_target_sum_after", math.nan),
+    )
+    video_training_enabled = run.summary.get("video_training_enabled", math.nan)
+    video_feedback_disabled = run.summary.get("video_feedback_disabled", math.nan)
+    isolation_ok = (
+        lower_v1_frozen == 1.0
+        and hva_to_v1_connections == 0.0
+        and hva_to_v1_current == 0.0
+        and lower_v1_weight_delta <= 1.0e-12
+        and lower_v1_output_delta <= 1.0e-12
+        and v1_mutation_after_hva == 0.0
+        and fingerprint_equal == 1.0
+        and site_hash_before == site_hash_after
+        and tile_hash_before == tile_hash_after
+        and site_sum_before == site_sum_after
+        and tile_sum_before == tile_sum_after
+        and multitask_target_fingerprint_equal == 1.0
+        and multitask_target_hash_before == multitask_target_hash_after
+        and multitask_target_sum_before == multitask_target_sum_after
+        and video_training_enabled == 0.0
+        and video_feedback_disabled == 1.0
+    )
+    overall_ok &= print_result(
+        isolation_ok,
+        "hva_predictor_isolation",
+        (
+            f"lower_v1_frozen={lower_v1_frozen:.6f} "
+            f"hva_to_v1_connection_count={hva_to_v1_connections:.6f} "
+            f"hva_to_v1_current_enabled={hva_to_v1_current:.6f} "
+            f"lower_v1_weight_delta_max_after_hva={lower_v1_weight_delta:.6e} "
+            f"lower_v1_output_delta_max_after_hva={lower_v1_output_delta:.6e} "
+            f"v1_mutation_after_hva_enabled={v1_mutation_after_hva:.6f} "
+            f"fingerprint_equal={fingerprint_equal:.6f} "
+            f"site_fingerprint_before={site_hash_before:.0f} "
+            f"site_fingerprint_after={site_hash_after:.0f} "
+            f"tile_fingerprint_before={tile_hash_before:.0f} "
+            f"tile_fingerprint_after={tile_hash_after:.0f} "
+            f"multitask_target_fingerprint_equal={multitask_target_fingerprint_equal:.6f} "
+            f"multitask_target_fingerprint_before={multitask_target_hash_before:.0f} "
+            f"multitask_target_fingerprint_after={multitask_target_hash_after:.0f} "
+            f"video_training_enabled={video_training_enabled:.6f} "
+            f"video_feedback_disabled={video_feedback_disabled:.6f}"
+        ),
+    )
+
+    prediction_count = require_metric(metrics, "prediction_count", "HVA predictor metrics")
+    sample_count = require_metric(metrics, "sample_count", "HVA predictor metrics")
+    tile_count = require_metric(metrics, "tile_count", "HVA predictor metrics")
+    train_count = require_metric(metrics, "train_prediction_count", "HVA predictor metrics")
+    heldout_count = require_metric(metrics, "heldout_prediction_count", "HVA predictor metrics")
+    target_channel_count = require_metric(metrics, "target_channel_count", "HVA predictor metrics")
+    required_target_channel_count = require_metric(metrics, "required_target_channel_count", "HVA predictor metrics")
+    l23e_target_enabled = require_metric(metrics, "l23e_target_channel_enabled", "HVA predictor metrics")
+    l4e_target_enabled = require_metric(metrics, "l4e_target_channel_enabled", "HVA predictor metrics")
+    l23pv_target_enabled = require_metric(metrics, "l23pv_target_channel_enabled", "HVA predictor metrics")
+    non_l23_required_count = require_metric(
+        metrics,
+        "non_l23_required_target_channel_count",
+        "HVA predictor metrics",
+    )
+    non_l23_autoreg_baseline = require_metric(
+        metrics,
+        "non_l23_target_autoregressive_baseline_enabled",
+        "HVA predictor metrics",
+    )
+    l23e_only_input = require_metric(metrics, "input_channel_l23e_only", "HVA predictor metrics")
+    l4e_input_enabled = require_metric(metrics, "input_channel_l4e_enabled", "HVA predictor metrics")
+    l23pv_input_enabled = require_metric(metrics, "input_channel_l23pv_enabled", "HVA predictor metrics")
+    target_mode = require_metric(metrics, "prediction_target_mode_code", "HVA predictor metrics")
+    residual_enabled = require_metric(metrics, "residual_prediction_enabled", "HVA predictor metrics")
+    residual_rate_head = require_metric(metrics, "l23e_residual_rate_head_enabled", "HVA predictor metrics")
+    event_head = require_metric(metrics, "l23e_event_hazard_head_enabled", "HVA predictor metrics")
+    event_window_head = require_metric(metrics, "l23e_event_window_hazard_head_enabled", "HVA predictor metrics")
+    single_frame_report_only = require_metric(metrics, "l23e_single_frame_event_report_only", "HVA predictor metrics")
+    topk_head = require_metric(metrics, "l23e_future_topk_head_enabled", "HVA predictor metrics")
+    topk_objective = require_metric(metrics, "topk_objective_enabled", "HVA predictor metrics")
+    topk_target_l23e_only = require_metric(metrics, "topk_target_channel_l23e_only", "HVA predictor metrics")
+    topk_input_l23e_only = require_metric(metrics, "topk_input_channel_l23e_only", "HVA predictor metrics")
+    topk_feedback_enabled = require_metric(metrics, "topk_feedback_enabled", "HVA predictor metrics")
+    topk_tile_size_sites = require_metric(metrics, "topk_tile_size_sites", "HVA predictor metrics")
+    topk_metric_tile_grid_side = require_metric(metrics, "topk_tile_grid_side", "HVA predictor metrics")
+    topk_metric_tile_count = require_metric(metrics, "topk_tile_count", "HVA predictor metrics")
+    topk_k = require_metric(metrics, "topk_k", "HVA predictor metrics")
+    topk_future_window_frames = require_metric(metrics, "topk_future_window_frames", "HVA predictor metrics")
+    topk_future_window_ms = require_metric(metrics, "topk_future_window_ms", "HVA predictor metrics")
+    topk_learning_rate = require_metric(metrics, "topk_learning_rate", "HVA predictor metrics")
+    topk_weight_decay = require_metric(metrics, "topk_weight_decay", "HVA predictor metrics")
+    topk_train_valid_count = require_metric(metrics, "topk_train_valid_sample_count", "HVA predictor metrics")
+    topk_heldout_valid_count = require_metric(metrics, "topk_heldout_valid_sample_count", "HVA predictor metrics")
+    topk_frequency_valid_count = require_metric(
+        metrics,
+        "topk_train_frequency_valid_sample_count",
+        "HVA predictor metrics",
+    )
+    train_then_heldout = require_metric(metrics, "train_then_heldout_enabled", "HVA predictor metrics")
+    evaluation_updates = require_metric(metrics, "evaluation_updates_enabled", "HVA predictor metrics")
+    training_epochs = require_metric(metrics, "training_epoch_count", "HVA predictor metrics")
+    training_update_count = require_metric(metrics, "training_update_count", "HVA predictor metrics")
+    event_window_frames = require_metric(metrics, "event_window_frames", "HVA predictor metrics")
+    event_window_ms = require_metric(metrics, "event_window_ms", "HVA predictor metrics")
+    event_window_mode = require_metric(metrics, "event_window_target_mode_code", "HVA predictor metrics")
+    event_train_only_threshold = require_metric(
+        metrics,
+        "event_hazard_train_only_threshold_enabled",
+        "HVA predictor metrics",
+    )
+    event_l23e_only_input = require_metric(metrics, "event_hazard_input_channel_l23e_only", "HVA predictor metrics")
+    event_non_l23_target = require_metric(metrics, "event_hazard_non_l23_target_enabled", "HVA predictor metrics")
+    normalized_residual_target = require_metric(
+        metrics,
+        "learning_target_normalized_rate_residual_enabled",
+        "HVA predictor metrics",
+    )
+    zscore_target = require_metric(metrics, "learning_target_zscore_enabled", "HVA predictor metrics")
+    train_only_norm = require_metric(metrics, "train_only_normalization_enabled", "HVA predictor metrics")
+    signed_weights = require_metric(metrics, "signed_residual_host_weights_enabled", "HVA predictor metrics")
+    local_readout = require_metric(metrics, "local_readout_enabled", "HVA predictor metrics")
+    dense_readout = require_metric(metrics, "dense_all_to_all_readout_enabled", "HVA predictor metrics")
+    feature_count = require_metric(metrics, "feature_channel_count", "HVA predictor metrics")
+    base_feature_count = require_metric(metrics, "base_feature_channel_count", "HVA predictor metrics")
+    lag_history_frame_count = require_metric(metrics, "lag_history_frame_count", "HVA predictor metrics")
+    lag_history_ms = require_metric(metrics, "lag_history_ms", "HVA predictor metrics")
+    lag_history_l23e_only = require_metric(metrics, "lag_history_l23e_only", "HVA predictor metrics")
+    lag_future_lookahead = require_metric(metrics, "lag_feature_future_lookahead_frames", "HVA predictor metrics")
+    local_context_enabled = require_metric(metrics, "local_context_feature_enabled", "HVA predictor metrics")
+    local_context_radius = require_metric(metrics, "local_context_radius_tiles", "HVA predictor metrics")
+    local_context_summary_count = require_metric(
+        metrics,
+        "local_context_summary_feature_count",
+        "HVA predictor metrics",
+    )
+    local_context_l23e_only = require_metric(metrics, "local_context_l23e_only", "HVA predictor metrics")
+    feature_non_l23_inputs = require_metric(metrics, "feature_uses_non_l23_inputs", "HVA predictor metrics")
+    feature_future_leakage = require_metric(metrics, "feature_future_leakage_enabled", "HVA predictor metrics")
+    derivative_feature = require_metric(metrics, "derivative_feature_enabled", "HVA predictor metrics")
+    past_only_lookahead = require_metric(metrics, "past_only_feature_lookahead_frames", "HVA predictor metrics")
+    active_pair_fraction = require_metric(metrics, "active_readout_pair_fraction", "HVA predictor metrics")
+    residual_std_min = require_metric(metrics, "train_residual_std_min_norm", "HVA predictor metrics")
+    target_std = require_metric(metrics, "target_std_norm", "HVA predictor metrics")
+    prediction_std = require_metric(metrics, "prediction_std_norm", "HVA predictor metrics")
+    weight_l1 = require_metric(metrics, "weight_l1", "HVA predictor metrics")
+    event_weight_l1 = require_metric(metrics, "event_weight_l1", "HVA predictor metrics")
+    weight_max_abs = require_metric(metrics, "weight_max_abs", "HVA predictor metrics")
+    event_weight_max_abs = require_metric(metrics, "event_weight_max_abs", "HVA predictor metrics")
+    weight_clip = require_metric(metrics, "weight_clip", "HVA predictor metrics")
+    event_selected_tile_count = require_metric(metrics, "event_selected_tile_count", "HVA predictor metrics")
+    feature_standardization_enabled = require_metric(
+        metrics,
+        "feature_standardization_enabled",
+        "HVA predictor metrics",
+    )
+    feature_standardization_train_only = require_metric(
+        metrics,
+        "feature_standardization_train_only",
+        "HVA predictor metrics",
+    )
+    feature_standardization_count = require_metric(
+        metrics,
+        "feature_standardization_feature_count",
+        "HVA predictor metrics",
+    )
+    feature_standardization_observations = require_metric(
+        metrics,
+        "feature_standardization_train_observation_count",
+        "HVA predictor metrics",
+    )
+    feature_std_floor = require_metric(metrics, "feature_standardization_std_floor", "HVA predictor metrics")
+    feature_std_floor_count = require_metric(
+        metrics,
+        "feature_standardization_std_floor_count",
+        "HVA predictor metrics",
+    )
+    feature_std_min = require_metric(metrics, "feature_standardization_std_min", "HVA predictor metrics")
+    feature_std_median = require_metric(metrics, "feature_standardization_std_median", "HVA predictor metrics")
+    feature_std_max = require_metric(metrics, "feature_standardization_std_max", "HVA predictor metrics")
+    residual_learning_rate = require_metric(metrics, "residual_learning_rate", "HVA predictor metrics")
+    event_learning_rate = require_metric(metrics, "event_learning_rate", "HVA predictor metrics")
+    bias_learning_rate = require_metric(metrics, "bias_learning_rate", "HVA predictor metrics")
+    event_bias_learning_rate = require_metric(metrics, "event_bias_learning_rate", "HVA predictor metrics")
+    local_l2_decay_enabled = require_metric(metrics, "local_l2_weight_decay_enabled", "HVA predictor metrics")
+    local_l2_decay = require_metric(metrics, "local_l2_weight_decay", "HVA predictor metrics")
+    event_l2_decay = require_metric(metrics, "event_local_l2_weight_decay", "HVA predictor metrics")
+    posthoc_global_norm = require_metric(metrics, "posthoc_global_normalization_enabled", "HVA predictor metrics")
+    event_bias_initialized = require_metric(
+        metrics,
+        "event_bias_initialized_from_train_base_rate",
+        "HVA predictor metrics",
+    )
+    event_base_rate_floor = require_metric(metrics, "event_base_rate_floor", "HVA predictor metrics")
+    event_residual_gain = require_metric(metrics, "event_residual_gain", "HVA predictor metrics")
+    event_train_rate_min = require_metric(metrics, "event_train_rate_min", "HVA predictor metrics")
+    event_train_rate_median = require_metric(metrics, "event_train_rate_median", "HVA predictor metrics")
+    event_train_rate_max = require_metric(metrics, "event_train_rate_max", "HVA predictor metrics")
+    event_selected_train_rate_median = require_metric(
+        metrics,
+        "event_selected_train_rate_median",
+        "HVA predictor metrics",
+    )
+    event_bias_min = require_metric(metrics, "event_bias_min", "HVA predictor metrics")
+    event_bias_median = require_metric(metrics, "event_bias_median", "HVA predictor metrics")
+    event_bias_max = require_metric(metrics, "event_bias_max", "HVA predictor metrics")
+    residual_group_total = require_metric(metrics, "residual_weight_abs_group_total", "HVA predictor metrics")
+    event_group_total = require_metric(metrics, "event_weight_abs_group_total", "HVA predictor metrics")
+    residual_group_values = [
+        require_metric(metrics, "residual_weight_abs_current", "HVA predictor metrics"),
+        require_metric(metrics, "residual_weight_abs_trace", "HVA predictor metrics"),
+        require_metric(metrics, "residual_weight_abs_derivative", "HVA predictor metrics"),
+        require_metric(metrics, "residual_weight_abs_lag", "HVA predictor metrics"),
+        require_metric(metrics, "residual_weight_abs_context", "HVA predictor metrics"),
+    ]
+    event_group_values = [
+        require_metric(metrics, "event_weight_abs_current", "HVA predictor metrics"),
+        require_metric(metrics, "event_weight_abs_trace", "HVA predictor metrics"),
+        require_metric(metrics, "event_weight_abs_derivative", "HVA predictor metrics"),
+        require_metric(metrics, "event_weight_abs_lag", "HVA predictor metrics"),
+        require_metric(metrics, "event_weight_abs_context", "HVA predictor metrics"),
+    ]
+    expected_feature_count = base_feature_count + lag_history_frame_count + local_context_summary_count
+    lag_context_feature_ok = (
+        feature_count >= expected_feature_count
+        and base_feature_count >= 5.0
+        and lag_history_frame_count >= 5.0
+        and lag_history_ms > 0.0
+        and lag_history_l23e_only == 1.0
+        and lag_future_lookahead == 0.0
+        and local_context_enabled == 1.0
+        and local_context_radius >= 1.0
+        and local_context_summary_count >= (3.0 * (lag_history_frame_count + 1.0))
+        and local_context_l23e_only == 1.0
+        and feature_non_l23_inputs == 0.0
+        and feature_future_leakage == 0.0
+        and past_only_lookahead == 0.0
+    )
+    overall_ok &= print_result(
+        lag_context_feature_ok,
+        "hva_predictor_l23e_lag_context_features",
+        (
+            f"feature_channel_count={feature_count:.0f} "
+            f"expected_min_feature_count={expected_feature_count:.0f} "
+            f"base_feature_channel_count={base_feature_count:.0f} "
+            f"lag_history_frame_count={lag_history_frame_count:.0f} "
+            f"lag_history_ms={lag_history_ms:.6f} "
+            f"lag_history_l23e_only={lag_history_l23e_only:.0f} "
+            f"lag_feature_future_lookahead_frames={lag_future_lookahead:.0f} "
+            f"local_context_feature_enabled={local_context_enabled:.0f} "
+            f"local_context_radius_tiles={local_context_radius:.0f} "
+            f"local_context_summary_feature_count={local_context_summary_count:.0f} "
+            f"local_context_l23e_only={local_context_l23e_only:.0f} "
+            f"feature_uses_non_l23_inputs={feature_non_l23_inputs:.0f} "
+            f"feature_future_leakage_enabled={feature_future_leakage:.0f}"
+        ),
+    )
+    conditioning_ok = (
+        feature_standardization_enabled == 1.0
+        and feature_standardization_train_only == 1.0
+        and feature_standardization_count == feature_count
+        and feature_standardization_observations >= train_count
+        and feature_std_floor > 0.0
+        and 0.0 <= feature_std_floor_count <= feature_count
+        and math.isfinite(feature_std_min)
+        and math.isfinite(feature_std_median)
+        and math.isfinite(feature_std_max)
+        and feature_std_min > 0.0
+        and feature_std_max >= feature_std_min
+        and residual_learning_rate > 0.0
+        and event_learning_rate > 0.0
+        and residual_learning_rate <= 0.01
+        and event_learning_rate <= 0.01
+        and event_learning_rate <= residual_learning_rate
+        and bias_learning_rate <= 0.01
+        and event_bias_learning_rate <= 0.001
+        and local_l2_decay_enabled == 1.0
+        and 0.0 < local_l2_decay < 0.1
+        and event_l2_decay >= local_l2_decay
+        and event_l2_decay < 0.1
+        and posthoc_global_norm == 0.0
+        and event_bias_initialized == 1.0
+        and 0.0 < event_base_rate_floor < 0.01
+        and 0.0 < event_residual_gain <= 1.0
+        and 0.0 <= event_train_rate_min <= event_train_rate_median <= event_train_rate_max <= 1.0
+        and 0.0 <= event_selected_train_rate_median <= 1.0
+        and math.isfinite(event_bias_min)
+        and math.isfinite(event_bias_median)
+        and math.isfinite(event_bias_max)
+        and event_bias_min <= event_bias_median <= event_bias_max
+        and math.isfinite(residual_group_total)
+        and math.isfinite(event_group_total)
+        and abs(sum(residual_group_values) - residual_group_total) <= max(1.0e-6, 1.0e-6 * max(1.0, residual_group_total))
+        and abs(sum(event_group_values) - event_group_total) <= max(1.0e-6, 1.0e-6 * max(1.0, event_group_total))
+    )
+    overall_ok &= print_result(
+        conditioning_ok,
+        "hva_predictor_feature_standardization_homeostasis",
+        (
+            f"feature_standardization_enabled={feature_standardization_enabled:.0f} "
+            f"feature_standardization_train_only={feature_standardization_train_only:.0f} "
+            f"feature_standardization_feature_count={feature_standardization_count:.0f} "
+            f"feature_standardization_train_observation_count={feature_standardization_observations:.0f} "
+            f"feature_std_floor={feature_std_floor:.6f} "
+            f"feature_std_floor_count={feature_std_floor_count:.0f} "
+            f"feature_std_min={feature_std_min:.6f} "
+            f"feature_std_median={feature_std_median:.6f} "
+            f"feature_std_max={feature_std_max:.6f} "
+            f"residual_learning_rate={residual_learning_rate:.6f} "
+            f"event_learning_rate={event_learning_rate:.6f} "
+            f"bias_learning_rate={bias_learning_rate:.6f} "
+            f"event_bias_learning_rate={event_bias_learning_rate:.6f} "
+            f"local_l2_weight_decay={local_l2_decay:.6f} "
+            f"event_local_l2_weight_decay={event_l2_decay:.6f} "
+            f"event_bias_initialized_from_train_base_rate={event_bias_initialized:.0f} "
+            f"event_base_rate_floor={event_base_rate_floor:.6f} "
+            f"event_residual_gain={event_residual_gain:.6f} "
+            f"event_train_rate_range=[{event_train_rate_min:.6f},{event_train_rate_max:.6f}] "
+            f"event_train_rate_median={event_train_rate_median:.6f} "
+            f"event_selected_train_rate_median={event_selected_train_rate_median:.6f} "
+            f"event_bias_range=[{event_bias_min:.6f},{event_bias_max:.6f}] "
+            f"event_bias_median={event_bias_median:.6f} "
+            f"posthoc_global_normalization_enabled={posthoc_global_norm:.0f} "
+            f"residual_group_total={residual_group_total:.6f} "
+            f"event_group_total={event_group_total:.6f}"
+        ),
+    )
+    print(
+        "INFO hva_predictor_feature_group_weight_norms "
+        f"residual_current={residual_group_values[0]:.6f} "
+        f"residual_trace={residual_group_values[1]:.6f} "
+        f"residual_derivative={residual_group_values[2]:.6f} "
+        f"residual_lag={residual_group_values[3]:.6f} "
+        f"residual_context={residual_group_values[4]:.6f} "
+        f"event_current={event_group_values[0]:.6f} "
+        f"event_trace={event_group_values[1]:.6f} "
+        f"event_derivative={event_group_values[2]:.6f} "
+        f"event_lag={event_group_values[3]:.6f} "
+        f"event_context={event_group_values[4]:.6f}"
+    )
+    learning_signal_ok = (
+        prediction_count >= 16.0
+        and train_count >= 8.0
+        and heldout_count >= 8.0
+        and sample_count >= 2.0
+        and tile_count >= 4.0
+        and target_channel_count == 1.0
+        and required_target_channel_count == 1.0
+        and l23e_target_enabled == 1.0
+        and l4e_target_enabled == 0.0
+        and l23pv_target_enabled == 0.0
+        and non_l23_required_count == 0.0
+        and non_l23_autoreg_baseline == 0.0
+        and l23e_only_input == 1.0
+        and l4e_input_enabled == 0.0
+        and l23pv_input_enabled == 0.0
+        and target_mode == 3.0
+        and residual_enabled == 1.0
+        and residual_rate_head == 1.0
+        and event_head == 1.0
+        and event_window_head == 1.0
+        and single_frame_report_only == 1.0
+        and topk_head == 1.0
+        and topk_objective == 1.0
+        and topk_target_l23e_only == 1.0
+        and topk_input_l23e_only == 1.0
+        and topk_feedback_enabled == 0.0
+        and topk_tile_size_sites >= 1.0
+        and abs((topk_metric_tile_grid_side * topk_metric_tile_grid_side) - topk_metric_tile_count) <= 1.0e-6
+        and topk_metric_tile_count == tile_count
+        and 1.0 <= topk_k <= tile_count
+        and topk_future_window_frames >= 1.0
+        and topk_future_window_ms > 0.0
+        and topk_learning_rate > 0.0
+        and 0.0 <= topk_weight_decay < 0.1
+        and topk_train_valid_count > 0.0
+        and topk_heldout_valid_count > 0.0
+        and topk_frequency_valid_count > 0.0
+        and train_then_heldout == 1.0
+        and evaluation_updates == 0.0
+        and training_epochs >= 1.0
+        and training_update_count >= train_count
+        and event_window_frames >= 2.0
+        and event_window_ms >= 100.0
+        and event_window_mode == 1.0
+        and event_train_only_threshold == 1.0
+        and event_l23e_only_input == 1.0
+        and event_non_l23_target == 0.0
+        and normalized_residual_target == 1.0
+        and zscore_target == 0.0
+        and train_only_norm == 1.0
+        and signed_weights == 1.0
+        and local_readout == 1.0
+        and dense_readout == 0.0
+        and lag_context_feature_ok
+        and conditioning_ok
+        and derivative_feature == 1.0
+        and past_only_lookahead == 0.0
+        and 0.0 < active_pair_fraction < 1.0
+        and residual_std_min > 0.0
+        and target_std > 1.0e-8
+        and prediction_std >= 0.0
+        and weight_l1 > 1.0e-9
+        and event_weight_l1 > 1.0e-9
+        and weight_max_abs <= (weight_clip + 1.0e-6)
+        and event_weight_max_abs <= (weight_clip + 1.0e-6)
+        and event_selected_tile_count >= 1.0
+    )
+    overall_ok &= print_result(
+        learning_signal_ok,
+        "hva_predictor_learning_signal",
+        (
+            f"sample_count={sample_count:.0f} prediction_count={prediction_count:.0f} "
+            f"train_prediction_count={train_count:.0f} heldout_prediction_count={heldout_count:.0f} "
+            f"tile_count={tile_count:.0f} target_channel_count={target_channel_count:.0f} "
+            f"required_target_channel_count={required_target_channel_count:.0f} "
+            f"non_l23_required_target_channel_count={non_l23_required_count:.0f} "
+            f"non_l23_target_autoregressive_baseline_enabled={non_l23_autoreg_baseline:.0f} "
+            f"target_std_norm={target_std:.6f} "
+            f"prediction_std_norm={prediction_std:.6f} weight_l1={weight_l1:.6f} "
+            f"weight_max_abs={weight_max_abs:.6f} weight_clip={weight_clip:.6f} "
+            f"event_weight_l1={event_weight_l1:.6f} "
+            f"event_weight_max_abs={event_weight_max_abs:.6f} "
+            f"event_selected_tile_count={event_selected_tile_count:.0f} "
+            f"training_epoch_count={training_epochs:.0f} "
+            f"training_update_count={training_update_count:.0f} "
+            f"train_then_heldout_enabled={train_then_heldout:.0f} "
+            f"evaluation_updates_enabled={evaluation_updates:.0f} "
+            f"event_window_frames={event_window_frames:.0f} "
+            f"event_window_ms={event_window_ms:.6f} "
+            f"prediction_target_mode_code={target_mode:.0f} "
+            f"residual_prediction_enabled={residual_enabled:.0f} "
+            f"l23e_residual_rate_head_enabled={residual_rate_head:.0f} "
+            f"l23e_event_hazard_head_enabled={event_head:.0f} "
+            f"l23e_event_window_hazard_head_enabled={event_window_head:.0f} "
+            f"l23e_future_topk_head_enabled={topk_head:.0f} "
+            f"topk_objective_enabled={topk_objective:.0f} "
+            f"topk_target_channel_l23e_only={topk_target_l23e_only:.0f} "
+            f"topk_input_channel_l23e_only={topk_input_l23e_only:.0f} "
+            f"topk_feedback_enabled={topk_feedback_enabled:.0f} "
+            f"topk_tile_size_sites={topk_tile_size_sites:.0f} "
+            f"topk_tile_grid_side={topk_metric_tile_grid_side:.0f} "
+            f"topk_tile_count={topk_metric_tile_count:.0f} "
+            f"topk_k={topk_k:.0f} "
+            f"topk_future_window_frames={topk_future_window_frames:.0f} "
+            f"topk_future_window_ms={topk_future_window_ms:.6f} "
+            f"topk_train_valid_sample_count={topk_train_valid_count:.0f} "
+            f"topk_heldout_valid_sample_count={topk_heldout_valid_count:.0f} "
+            f"learning_target_normalized_rate_residual_enabled={normalized_residual_target:.0f} "
+            f"learning_target_zscore_enabled={zscore_target:.0f} "
+            f"train_only_normalization_enabled={train_only_norm:.0f} "
+            f"input_channel_l23e_only={l23e_only_input:.0f} "
+            f"feature_channel_count={feature_count:.0f} "
+            f"lag_history_frame_count={lag_history_frame_count:.0f} "
+            f"local_context_radius_tiles={local_context_radius:.0f} "
+            f"feature_standardization_train_only={feature_standardization_train_only:.0f} "
+            f"residual_learning_rate={residual_learning_rate:.6f} "
+            f"event_learning_rate={event_learning_rate:.6f} "
+            f"local_l2_weight_decay={local_l2_decay:.6f} "
+            f"event_residual_gain={event_residual_gain:.6f} "
+            f"active_readout_pair_fraction={active_pair_fraction:.6f}"
+        ),
+    )
+
+    topk_model_recall = require_metric(metrics, "topk_heldout_model_recall_at_k", "HVA predictor metrics")
+    topk_persistence_recall = require_metric(
+        metrics,
+        "topk_heldout_persistence_recall_at_k",
+        "HVA predictor metrics",
+    )
+    topk_train_frequency_recall = require_metric(
+        metrics,
+        "topk_heldout_train_frequency_recall_at_k",
+        "HVA predictor metrics",
+    )
+    topk_no_learning_recall = require_metric(
+        metrics,
+        "topk_heldout_no_learning_recall_at_k",
+        "HVA predictor metrics",
+    )
+    topk_time_recall = require_metric(
+        metrics,
+        "topk_heldout_temporal_block_shift_recall_at_k",
+        "HVA predictor metrics",
+    )
+    topk_spatial_recall = require_metric(
+        metrics,
+        "topk_heldout_spatial_tile_shuffle_recall_at_k",
+        "HVA predictor metrics",
+    )
+    topk_chance_recall = require_metric(metrics, "topk_heldout_chance_recall_at_k", "HVA predictor metrics")
+    topk_chance_ratio = require_metric(
+        metrics,
+        "topk_heldout_model_recall_vs_chance_ratio",
+        "HVA predictor metrics",
+    )
+    topk_model_ndcg = require_metric(metrics, "topk_heldout_model_ndcg_at_k", "HVA predictor metrics")
+    topk_persistence_ndcg = require_metric(
+        metrics,
+        "topk_heldout_persistence_ndcg_at_k",
+        "HVA predictor metrics",
+    )
+    topk_train_frequency_ndcg = require_metric(
+        metrics,
+        "topk_heldout_train_frequency_ndcg_at_k",
+        "HVA predictor metrics",
+    )
+    topk_no_learning_ndcg = require_metric(
+        metrics,
+        "topk_heldout_no_learning_ndcg_at_k",
+        "HVA predictor metrics",
+    )
+    topk_time_ndcg = require_metric(
+        metrics,
+        "topk_heldout_temporal_block_shift_ndcg_at_k",
+        "HVA predictor metrics",
+    )
+    topk_spatial_ndcg = require_metric(
+        metrics,
+        "topk_heldout_spatial_tile_shuffle_ndcg_at_k",
+        "HVA predictor metrics",
+    )
+    topk_model_mrr = require_metric(metrics, "topk_heldout_model_mrr", "HVA predictor metrics")
+    topk_train_frequency_mrr = require_metric(
+        metrics,
+        "topk_heldout_train_frequency_mrr",
+        "HVA predictor metrics",
+    )
+    topk_rel_persistence = require_metric(
+        metrics,
+        "topk_heldout_relative_improvement_vs_persistence",
+        "HVA predictor metrics",
+    )
+    topk_rel_train_frequency = require_metric(
+        metrics,
+        "topk_heldout_relative_improvement_vs_train_frequency",
+        "HVA predictor metrics",
+    )
+    topk_rel_no_learning = require_metric(
+        metrics,
+        "topk_heldout_relative_improvement_vs_no_learning",
+        "HVA predictor metrics",
+    )
+    topk_model_gain = require_metric(
+        metrics,
+        "topk_heldout_model_gain_vs_train_frequency",
+        "HVA predictor metrics",
+    )
+    topk_time_gain = require_metric(
+        metrics,
+        "topk_heldout_temporal_block_shift_gain_vs_train_frequency",
+        "HVA predictor metrics",
+    )
+    topk_spatial_gain = require_metric(
+        metrics,
+        "topk_heldout_spatial_tile_shuffle_gain_vs_train_frequency",
+        "HVA predictor metrics",
+    )
+    topk_time_retained = require_metric(
+        metrics,
+        "topk_heldout_temporal_block_shift_retained_fraction",
+        "HVA predictor metrics",
+    )
+    topk_spatial_retained = require_metric(
+        metrics,
+        "topk_heldout_spatial_tile_shuffle_retained_fraction",
+        "HVA predictor metrics",
+    )
+    topk_weight_l1 = require_metric(metrics, "topk_weight_l1", "HVA predictor metrics")
+    topk_weight_max_abs = require_metric(metrics, "topk_weight_max_abs", "HVA predictor metrics")
+    topk_bias_l1 = require_metric(metrics, "topk_bias_l1", "HVA predictor metrics")
+    future_target_horizon_frames = require_metric(
+        metrics,
+        "future_target_horizon_frames",
+        "HVA predictor metrics",
+    )
+    topk_split_safety_horizon_frames = require_metric(
+        metrics,
+        "topk_split_safety_horizon_frames",
+        "HVA predictor metrics",
+    )
+    topk_local_readout = require_metric(metrics, "topk_local_readout_enabled", "HVA predictor metrics")
+    topk_dense_readout = require_metric(metrics, "topk_dense_all_to_all_readout_enabled", "HVA predictor metrics")
+    topk_local_radius = require_metric(metrics, "topk_local_radius_tiles", "HVA predictor metrics")
+    local_radius_for_topk = require_metric(metrics, "local_radius_tiles", "HVA predictor metrics")
+    topk_active_pair_fraction = require_metric(
+        metrics,
+        "topk_active_readout_pair_fraction",
+        "HVA predictor metrics",
+    )
+    topk_local_pair_count = require_metric(metrics, "topk_local_pair_count", "HVA predictor metrics")
+    topk_distant_pair_count = require_metric(metrics, "topk_distant_pair_count", "HVA predictor metrics")
+    topk_local_nonzero_pair_count = require_metric(
+        metrics,
+        "topk_local_nonzero_pair_count",
+        "HVA predictor metrics",
+    )
+    topk_distant_nonzero_pair_count = require_metric(
+        metrics,
+        "topk_distant_nonzero_pair_count",
+        "HVA predictor metrics",
+    )
+    topk_local_abs_weight_sum = require_metric(
+        metrics,
+        "topk_local_abs_weight_sum",
+        "HVA predictor metrics",
+    )
+    topk_distant_abs_weight_sum = require_metric(
+        metrics,
+        "topk_distant_abs_weight_sum",
+        "HVA predictor metrics",
+    )
+    topk_distant_abs_weight_max = require_metric(
+        metrics,
+        "topk_distant_abs_weight_max",
+        "HVA predictor metrics",
+    )
+    topk_local_abs_weight_mean = require_metric(
+        metrics,
+        "topk_local_abs_weight_mean",
+        "HVA predictor metrics",
+    )
+    topk_distant_abs_weight_mean = require_metric(
+        metrics,
+        "topk_distant_abs_weight_mean",
+        "HVA predictor metrics",
+    )
+    topk_diagonal_abs_weight_mean = require_metric(
+        metrics,
+        "topk_diagonal_abs_weight_mean",
+        "HVA predictor metrics",
+    )
+    topk_offdiagonal_abs_weight_mean = require_metric(
+        metrics,
+        "topk_offdiagonal_abs_weight_mean",
+        "HVA predictor metrics",
+    )
+    heldout_topk_rows = [row for row in heldout_rows if row.topk_sample_valid == 1]
+    expected_future_target_horizon = max(event_window_frames, topk_future_window_frames)
+    heldout_start_frame_int = int(round(require_metric(metrics, "heldout_start_frame", "HVA predictor metrics")))
+    future_target_horizon_int = int(round(future_target_horizon_frames))
+    topk_horizon_safety_ok = (
+        abs(future_target_horizon_frames - expected_future_target_horizon) <= 1.0e-6
+        and abs(topk_split_safety_horizon_frames - future_target_horizon_frames) <= 1.0e-6
+        and future_target_horizon_int >= int(round(topk_future_window_frames))
+        and future_target_horizon_int >= int(round(event_window_frames))
+        and all(
+            row.target_frame_index + future_target_horizon_int <= heldout_start_frame_int
+            for row in train_rows
+        )
+        and all(
+            row.frame_index >= heldout_start_frame_int
+            and row.target_frame_index >= heldout_start_frame_int
+            for row in heldout_rows
+        )
+    )
+    overall_ok &= print_result(
+        topk_horizon_safety_ok,
+        "hva_predictor_topk_horizon_safety",
+        (
+            f"future_target_horizon_frames={future_target_horizon_frames:.0f} "
+            f"expected_future_target_horizon_frames={expected_future_target_horizon:.0f} "
+            f"topk_split_safety_horizon_frames={topk_split_safety_horizon_frames:.0f} "
+            f"event_window_frames={event_window_frames:.0f} "
+            f"topk_future_window_frames={topk_future_window_frames:.0f} "
+            f"heldout_start_frame={heldout_start_frame_int} "
+            f"train_rows={len(train_rows)} heldout_rows={len(heldout_rows)}"
+        ),
+    )
+    topk_weight_sum_match = abs((topk_local_abs_weight_sum + topk_distant_abs_weight_sum) - topk_weight_l1) <= max(
+        1.0e-6,
+        1.0e-6 * max(1.0, topk_weight_l1),
+    )
+    topk_pair_count_match = abs((topk_local_pair_count + topk_distant_pair_count) - (tile_count * tile_count)) <= 1.0e-6
+    topk_locality_ok = (
+        topk_local_readout == 1.0
+        and topk_dense_readout == 0.0
+        and abs(topk_local_radius - local_radius_for_topk) <= 1.0e-6
+        and topk_pair_count_match
+        and topk_local_pair_count > 0.0
+        and topk_distant_pair_count > 0.0
+        and topk_local_nonzero_pair_count > 0.0
+        and topk_distant_nonzero_pair_count == 0.0
+        and topk_local_abs_weight_sum > 1.0e-9
+        and topk_distant_abs_weight_sum <= 1.0e-9
+        and topk_distant_abs_weight_max <= 1.0e-9
+        and topk_distant_abs_weight_mean <= 1.0e-9
+        and topk_local_abs_weight_mean > 0.0
+        and topk_diagonal_abs_weight_mean > 0.0
+        and topk_offdiagonal_abs_weight_mean >= 0.0
+        and topk_weight_sum_match
+        and abs(topk_active_pair_fraction - active_pair_fraction) <= 1.0e-6
+    )
+    overall_ok &= print_result(
+        topk_locality_ok,
+        "hva_predictor_topk_head_locality_structure",
+        (
+            f"topk_local_readout_enabled={topk_local_readout:.0f} "
+            f"topk_dense_all_to_all_readout_enabled={topk_dense_readout:.0f} "
+            f"topk_local_radius_tiles={topk_local_radius:.0f} "
+            f"topk_active_readout_pair_fraction={topk_active_pair_fraction:.6f} "
+            f"active_readout_pair_fraction={active_pair_fraction:.6f} "
+            f"topk_local_pair_count={topk_local_pair_count:.0f} "
+            f"topk_distant_pair_count={topk_distant_pair_count:.0f} "
+            f"topk_local_nonzero_pair_count={topk_local_nonzero_pair_count:.0f} "
+            f"topk_distant_nonzero_pair_count={topk_distant_nonzero_pair_count:.0f} "
+            f"topk_local_abs_weight_sum={topk_local_abs_weight_sum:.6f} "
+            f"topk_distant_abs_weight_sum={topk_distant_abs_weight_sum:.6e} "
+            f"topk_distant_abs_weight_max={topk_distant_abs_weight_max:.6e} "
+            f"topk_local_abs_weight_mean={topk_local_abs_weight_mean:.6f} "
+            f"topk_distant_abs_weight_mean={topk_distant_abs_weight_mean:.6e} "
+            f"topk_diagonal_abs_weight_mean={topk_diagonal_abs_weight_mean:.6f} "
+            f"topk_offdiagonal_abs_weight_mean={topk_offdiagonal_abs_weight_mean:.6f} "
+            f"topk_weight_sum_match={1 if topk_weight_sum_match else 0}"
+        ),
+    )
+    topk_prediction_fields_ok = (
+        len(heldout_topk_rows) == int(round(topk_heldout_valid_count * tile_count))
+        and all(row.target_channel == "l23e" for row in heldout_topk_rows)
+        and all(row.topk_target in (0, 1) for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_target_value_norm) and row.topk_target_value_norm >= 0.0 for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_model_score) for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_model_prob) and 0.0 <= row.topk_model_prob <= 1.0 for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_persistence_score) for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_train_frequency_score) for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_temporal_block_shift_score) for row in heldout_topk_rows)
+        and all(math.isfinite(row.topk_spatial_tile_shuffle_score) for row in heldout_topk_rows)
+    )
+    topk_success_ok = (
+        topk_prediction_fields_ok
+        and topk_horizon_safety_ok
+        and topk_locality_ok
+        and topk_heldout_valid_count >= 2.0
+        and topk_model_recall >= 1.10 * topk_persistence_recall
+        and topk_model_recall >= 1.10 * topk_train_frequency_recall
+        and topk_model_recall >= 1.10 * topk_no_learning_recall
+        and topk_chance_ratio >= 1.50
+        and topk_model_ndcg >= 1.10 * topk_train_frequency_ndcg
+        and topk_model_mrr >= topk_train_frequency_mrr
+        and topk_model_gain > 0.0
+        and topk_time_gain <= (0.30 * topk_model_gain)
+        and topk_spatial_gain <= (0.70 * topk_model_gain)
+        and topk_time_retained <= 0.30
+        and topk_spatial_retained <= 0.70
+        and topk_weight_l1 > 1.0e-9
+        and topk_weight_max_abs <= (weight_clip + 1.0e-6)
+        and topk_bias_l1 > 0.0
+    )
+    overall_ok &= print_result(
+        topk_success_ok,
+        "hva_predictor_l23e_future_topk_success",
+        (
+            f"heldout_valid_sample_count={topk_heldout_valid_count:.0f} "
+            f"heldout_topk_rows={len(heldout_topk_rows)} "
+            f"topk_k={topk_k:.0f} tile_count={tile_count:.0f} "
+            f"model_recall_at_k={topk_model_recall:.6f} "
+            f"persistence_recall_at_k={topk_persistence_recall:.6f} "
+            f"train_frequency_recall_at_k={topk_train_frequency_recall:.6f} "
+            f"no_learning_recall_at_k={topk_no_learning_recall:.6f} "
+            f"time_shuffle_recall_at_k={topk_time_recall:.6f} "
+            f"spatial_shuffle_recall_at_k={topk_spatial_recall:.6f} "
+            f"chance_recall_at_k={topk_chance_recall:.6f} "
+            f"model_chance_ratio={topk_chance_ratio:.6f} "
+            f"model_ndcg_at_k={topk_model_ndcg:.6f} "
+            f"persistence_ndcg_at_k={topk_persistence_ndcg:.6f} "
+            f"train_frequency_ndcg_at_k={topk_train_frequency_ndcg:.6f} "
+            f"no_learning_ndcg_at_k={topk_no_learning_ndcg:.6f} "
+            f"time_shuffle_ndcg_at_k={topk_time_ndcg:.6f} "
+            f"spatial_shuffle_ndcg_at_k={topk_spatial_ndcg:.6f} "
+            f"model_mrr={topk_model_mrr:.6f} "
+            f"train_frequency_mrr={topk_train_frequency_mrr:.6f} "
+            f"relative_vs_persistence={topk_rel_persistence:.6f} "
+            f"relative_vs_train_frequency={topk_rel_train_frequency:.6f} "
+            f"relative_vs_no_learning={topk_rel_no_learning:.6f} "
+            f"model_gain_vs_train_frequency={topk_model_gain:.6f} "
+            f"time_shuffle_gain_vs_train_frequency={topk_time_gain:.6f} "
+            f"spatial_shuffle_gain_vs_train_frequency={topk_spatial_gain:.6f} "
+            f"time_shuffle_retained_fraction={topk_time_retained:.6f} "
+            f"spatial_shuffle_retained_fraction={topk_spatial_retained:.6f} "
+            f"topk_weight_l1={topk_weight_l1:.6f} "
+            f"topk_weight_max_abs={topk_weight_max_abs:.6f} "
+            f"topk_bias_l1={topk_bias_l1:.6f} "
+            f"prediction_fields_ok={1 if topk_prediction_fields_ok else 0}"
+        ),
+    )
+
+    model_mse = require_metric(metrics, "heldout_model_mse_norm", "HVA predictor metrics")
+    model_raw_mse = require_metric(metrics, "heldout_model_raw_mse_norm", "HVA predictor metrics")
+    residual_z_mse = require_metric(metrics, "heldout_model_residual_z_mse", "HVA predictor metrics")
+    no_learning_mse = require_metric(metrics, "heldout_no_learning_mse_norm", "HVA predictor metrics")
+    persistence_mse = require_metric(metrics, "heldout_persistence_mse_norm", "HVA predictor metrics")
+    train_mean_mse = require_metric(metrics, "heldout_train_mean_mse_norm", "HVA predictor metrics")
+    time_shuffle_mse = require_metric(metrics, "heldout_temporal_block_shift_mse_norm", "HVA predictor metrics")
+    spatial_shuffle_mse = require_metric(metrics, "heldout_spatial_tile_shuffle_mse_norm", "HVA predictor metrics")
+    corr = require_metric(metrics, "mean_tile_prediction_corr", "HVA predictor metrics")
+    relative_no_learning = require_metric(metrics, "heldout_relative_improvement_vs_no_learning", "HVA predictor metrics")
+    relative_persistence = require_metric(metrics, "heldout_relative_improvement_vs_persistence", "HVA predictor metrics")
+    relative_train_mean = require_metric(metrics, "heldout_relative_improvement_vs_train_mean", "HVA predictor metrics")
+    relative_time_shuffle = require_metric(metrics, "heldout_relative_improvement_vs_temporal_block_shift", "HVA predictor metrics")
+    relative_spatial_shuffle = require_metric(metrics, "heldout_relative_improvement_vs_spatial_tile_shuffle", "HVA predictor metrics")
+    residual_reporting_ok = (
+        math.isfinite(model_mse)
+        and math.isfinite(model_raw_mse)
+        and math.isfinite(residual_z_mse)
+        and abs(model_raw_mse - model_mse) <= 1.0e-12
+        and math.isfinite(no_learning_mse)
+        and math.isfinite(persistence_mse)
+        and math.isfinite(train_mean_mse)
+        and math.isfinite(relative_no_learning)
+        and math.isfinite(relative_persistence)
+        and math.isfinite(relative_train_mean)
+        and math.isfinite(corr)
+    )
+    overall_ok &= print_result(
+        residual_reporting_ok,
+        "hva_predictor_residual_rate_reporting",
+        (
+            f"heldout_model_mse_norm={model_mse:.6f} "
+            f"heldout_model_raw_mse_norm={model_raw_mse:.6f} "
+            f"heldout_model_residual_z_mse={residual_z_mse:.6f} "
+            f"heldout_no_learning_mse_norm={no_learning_mse:.6f} "
+            f"heldout_persistence_mse_norm={persistence_mse:.6f} "
+            f"heldout_train_mean_mse_norm={train_mean_mse:.6f} "
+            f"heldout_relative_improvement_vs_no_learning={relative_no_learning:.6f} "
+            f"heldout_relative_improvement_vs_persistence={relative_persistence:.6f} "
+            f"heldout_relative_improvement_vs_train_mean={relative_train_mean:.6f} "
+            f"mean_tile_prediction_corr={corr:.6f}"
+        ),
+    )
+
+    print(
+        "INFO hva_predictor_residual_rate_shuffle_reporting "
+        f"heldout_model_mse_norm={model_mse:.6f} "
+        f"heldout_temporal_block_shift_mse_norm={time_shuffle_mse:.6f} "
+        f"heldout_spatial_tile_shuffle_mse_norm={spatial_shuffle_mse:.6f} "
+        f"heldout_relative_improvement_vs_temporal_block_shift={relative_time_shuffle:.6f} "
+        f"heldout_relative_improvement_vs_spatial_tile_shuffle={relative_spatial_shuffle:.6f}"
+    )
+
+    event_min_train_positive_count = require_metric(
+        metrics,
+        "event_min_train_positive_count",
+        "HVA predictor metrics",
+    )
+    selected_event_tiles = [
+        row
+        for row in event_tiles
+        if row.target_channel == "l23e" and row.selected == 1
+    ]
+    event_tile_export_ok = (
+        len(event_tiles) == int(round(tile_count))
+        and all(row.target_channel == "l23e" for row in event_tiles)
+        and len(selected_event_tiles) == int(round(event_selected_tile_count))
+        and len(selected_event_tiles) > 0
+        and all(math.isfinite(row.threshold_norm) and row.threshold_norm >= 0.0 for row in event_tiles)
+        and all(math.isfinite(row.threshold_hz) and row.threshold_hz >= 0.0 for row in event_tiles)
+        and all(row.train_count == row.train_positive_count + row.train_negative_count for row in event_tiles)
+        and all(row.heldout_count > 0 for row in event_tiles)
+        and all(
+            row.train_positive_count >= int(round(event_min_train_positive_count))
+            and row.train_negative_count >= int(round(event_min_train_positive_count))
+            for row in selected_event_tiles
+        )
+    )
+    overall_ok &= print_result(
+        event_tile_export_ok,
+        "hva_predictor_l23e_event_tile_selection",
+        (
+            f"event_tile_rows={len(event_tiles)} tile_count={tile_count:.0f} "
+            f"selected_event_tile_count={len(selected_event_tiles)} "
+            f"metric_selected_event_tile_count={event_selected_tile_count:.0f} "
+            f"event_min_train_positive_count={event_min_train_positive_count:.0f} "
+            f"selected_train_positive_total={sum(row.train_positive_count for row in selected_event_tiles)} "
+            f"selected_train_negative_total={sum(row.train_negative_count for row in selected_event_tiles)} "
+            f"selected_heldout_positive_total={sum(row.heldout_positive_count for row in selected_event_tiles)}"
+        ),
+    )
+
+    selected_event_count = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_prediction_count",
+        "HVA predictor metrics",
+    )
+    selected_event_positive_count = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_positive_count",
+        "HVA predictor metrics",
+    )
+    selected_event_positive_fraction = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_positive_fraction",
+        "HVA predictor metrics",
+    )
+    selected_event_brier = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_model_brier",
+        "HVA predictor metrics",
+    )
+    selected_event_persistence_brier = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_persistence_brier",
+        "HVA predictor metrics",
+    )
+    selected_event_train_mean_brier = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_train_mean_brier",
+        "HVA predictor metrics",
+    )
+    selected_event_no_learning_brier = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_no_learning_brier",
+        "HVA predictor metrics",
+    )
+    selected_event_time_brier = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_temporal_block_shift_brier",
+        "HVA predictor metrics",
+    )
+    selected_event_spatial_brier = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_spatial_tile_shuffle_brier",
+        "HVA predictor metrics",
+    )
+    selected_event_rel_persistence = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_relative_improvement_vs_persistence",
+        "HVA predictor metrics",
+    )
+    selected_event_rel_train_mean = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_relative_improvement_vs_train_mean",
+        "HVA predictor metrics",
+    )
+    selected_event_rel_no_learning = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_relative_improvement_vs_no_learning",
+        "HVA predictor metrics",
+    )
+    selected_event_rel_time = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_relative_improvement_vs_temporal_block_shift",
+        "HVA predictor metrics",
+    )
+    selected_event_rel_spatial = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_relative_improvement_vs_spatial_tile_shuffle",
+        "HVA predictor metrics",
+    )
+    selected_event_corr = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_prediction_corr",
+        "HVA predictor metrics",
+    )
+    selected_event_logloss = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_model_logloss",
+        "HVA predictor metrics",
+    )
+    selected_event_persistence_logloss = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_persistence_logloss",
+        "HVA predictor metrics",
+    )
+    selected_event_train_mean_logloss = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_train_mean_logloss",
+        "HVA predictor metrics",
+    )
+    selected_event_no_learning_logloss = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_no_learning_logloss",
+        "HVA predictor metrics",
+    )
+    selected_event_time_logloss = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_temporal_block_shift_logloss",
+        "HVA predictor metrics",
+    )
+    selected_event_spatial_logloss = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_spatial_tile_shuffle_logloss",
+        "HVA predictor metrics",
+    )
+    selected_event_auc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_model_auc",
+        "HVA predictor metrics",
+    )
+    selected_event_persistence_auc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_persistence_auc",
+        "HVA predictor metrics",
+    )
+    selected_event_train_mean_auc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_train_mean_auc",
+        "HVA predictor metrics",
+    )
+    selected_event_no_learning_auc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_no_learning_auc",
+        "HVA predictor metrics",
+    )
+    selected_event_time_auc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_temporal_block_shift_auc",
+        "HVA predictor metrics",
+    )
+    selected_event_spatial_auc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_spatial_tile_shuffle_auc",
+        "HVA predictor metrics",
+    )
+    selected_event_auprc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_model_auprc",
+        "HVA predictor metrics",
+    )
+    selected_event_persistence_auprc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_persistence_auprc",
+        "HVA predictor metrics",
+    )
+    selected_event_train_mean_auprc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_train_mean_auprc",
+        "HVA predictor metrics",
+    )
+    selected_event_no_learning_auprc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_no_learning_auprc",
+        "HVA predictor metrics",
+    )
+    selected_event_time_auprc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_temporal_block_shift_auprc",
+        "HVA predictor metrics",
+    )
+    selected_event_spatial_auprc = require_metric(
+        metrics,
+        "l23e_event_selected_tiles_heldout_event_spatial_tile_shuffle_auprc",
+        "HVA predictor metrics",
+    )
+    selected_heldout_rows = [row for row in heldout_rows if row.event_tile_selected == 1]
+    event_probs_finite = all(
+        math.isfinite(row.predicted_event_prob)
+        and 0.0 <= row.predicted_event_prob <= 1.0
+        and math.isfinite(row.train_event_rate)
+        and 0.0 <= row.train_event_rate <= 1.0
+        and row.target_event in (0, 1)
+        for row in heldout_rows
+    )
+    event_success_ok = (
+        selected_event_count >= 8.0
+        and selected_event_positive_count >= 1.0
+        and 0.0 < selected_event_positive_fraction < 1.0
+        and len(selected_heldout_rows) == int(round(selected_event_count))
+        and event_probs_finite
+        and math.isfinite(selected_event_brier)
+        and math.isfinite(selected_event_logloss)
+        and math.isfinite(selected_event_auc)
+        and math.isfinite(selected_event_auprc)
+        and math.isfinite(selected_event_corr)
+        and selected_event_persistence_brier > 0.0
+        and selected_event_train_mean_brier > 0.0
+        and selected_event_no_learning_brier > 0.0
+        and selected_event_time_brier > 0.0
+        and selected_event_spatial_brier > 0.0
+        and selected_event_rel_persistence >= 0.001
+        and selected_event_rel_train_mean >= 0.001
+        and selected_event_rel_no_learning >= 0.001
+        and selected_event_rel_time >= 0.001
+        and selected_event_rel_spatial >= 0.001
+        and selected_event_logloss <= selected_event_persistence_logloss - 0.001
+        and selected_event_logloss <= selected_event_train_mean_logloss - 0.001
+        and selected_event_logloss <= selected_event_no_learning_logloss - 0.001
+        and selected_event_logloss <= selected_event_time_logloss - 0.001
+        and selected_event_logloss <= selected_event_spatial_logloss - 0.001
+        and selected_event_auc >= 0.52
+        and selected_event_auc >= selected_event_persistence_auc + 0.001
+        and selected_event_auc >= selected_event_train_mean_auc + 0.001
+        and selected_event_auc >= selected_event_no_learning_auc + 0.001
+        and selected_event_auc >= selected_event_time_auc + 0.001
+        and selected_event_auc >= selected_event_spatial_auc + 0.001
+        and selected_event_auprc >= selected_event_positive_fraction + 0.005
+        and selected_event_auprc >= selected_event_persistence_auprc + 0.001
+        and selected_event_auprc >= selected_event_train_mean_auprc + 0.001
+        and selected_event_auprc >= selected_event_no_learning_auprc + 0.001
+        and selected_event_auprc >= selected_event_time_auprc + 0.001
+        and selected_event_auprc >= selected_event_spatial_auprc + 0.001
+    )
+    print(
+        "INFO hva_predictor_l23e_event_window_hazard_reporting "
+        f"legacy_gate_passed={1 if event_success_ok else 0} "
+        f"selected_heldout_event_count={selected_event_count:.0f} "
+        f"selected_heldout_event_positive_count={selected_event_positive_count:.0f} "
+        f"selected_heldout_event_positive_fraction={selected_event_positive_fraction:.6f} "
+        f"selected_heldout_event_model_brier={selected_event_brier:.6f} "
+        f"selected_heldout_event_persistence_brier={selected_event_persistence_brier:.6f} "
+        f"selected_heldout_event_train_mean_brier={selected_event_train_mean_brier:.6f} "
+        f"selected_heldout_event_no_learning_brier={selected_event_no_learning_brier:.6f} "
+        f"selected_heldout_event_time_shuffle_brier={selected_event_time_brier:.6f} "
+        f"selected_heldout_event_spatial_shuffle_brier={selected_event_spatial_brier:.6f} "
+        f"selected_heldout_event_logloss={selected_event_logloss:.6f} "
+        f"selected_heldout_event_persistence_logloss={selected_event_persistence_logloss:.6f} "
+        f"selected_heldout_event_time_shuffle_logloss={selected_event_time_logloss:.6f} "
+        f"selected_heldout_event_spatial_shuffle_logloss={selected_event_spatial_logloss:.6f} "
+        f"selected_heldout_event_auc={selected_event_auc:.6f} "
+        f"persistence_auc={selected_event_persistence_auc:.6f} "
+        f"time_shuffle_auc={selected_event_time_auc:.6f} "
+        f"spatial_shuffle_auc={selected_event_spatial_auc:.6f} "
+        f"selected_heldout_event_auprc={selected_event_auprc:.6f} "
+        f"persistence_auprc={selected_event_persistence_auprc:.6f} "
+        f"time_shuffle_auprc={selected_event_time_auprc:.6f} "
+        f"spatial_shuffle_auprc={selected_event_spatial_auprc:.6f} "
+        f"rel_vs_persistence={selected_event_rel_persistence:.6f} "
+        f"rel_vs_train_mean={selected_event_rel_train_mean:.6f} "
+        f"rel_vs_no_learning={selected_event_rel_no_learning:.6f} "
+        f"rel_vs_time_shuffle={selected_event_rel_time:.6f} "
+        f"rel_vs_spatial_shuffle={selected_event_rel_spatial:.6f} "
+        f"prediction_corr={selected_event_corr:.6f} "
+        "gate=topk_primary"
+    )
+
+    single_frame_auc = require_metric(
+        metrics,
+        "l23e_single_frame_event_selected_tiles_heldout_event_model_auc",
+        "HVA predictor metrics",
+    )
+    single_frame_auprc = require_metric(
+        metrics,
+        "l23e_single_frame_event_selected_tiles_heldout_event_model_auprc",
+        "HVA predictor metrics",
+    )
+    single_frame_brier = require_metric(
+        metrics,
+        "l23e_single_frame_event_selected_tiles_heldout_event_model_brier",
+        "HVA predictor metrics",
+    )
+    print(
+        "INFO hva_predictor_l23e_single_frame_event_reporting "
+        f"selected_single_frame_event_auc={single_frame_auc:.6f} "
+        f"selected_single_frame_event_auprc={single_frame_auprc:.6f} "
+        f"selected_single_frame_event_brier={single_frame_brier:.6f} "
+        "gate=event_window_only"
+    )
+
+    all_event_count = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_prediction_count",
+        "HVA predictor metrics",
+    )
+    all_event_positive_fraction = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_positive_fraction",
+        "HVA predictor metrics",
+    )
+    all_event_brier = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_model_brier",
+        "HVA predictor metrics",
+    )
+    all_event_logloss = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_model_logloss",
+        "HVA predictor metrics",
+    )
+    all_event_auc = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_model_auc",
+        "HVA predictor metrics",
+    )
+    all_event_auprc = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_model_auprc",
+        "HVA predictor metrics",
+    )
+    all_event_rel_no_learning = require_metric(
+        metrics,
+        "l23e_event_all_tiles_heldout_event_relative_improvement_vs_no_learning",
+        "HVA predictor metrics",
+    )
+    all_event_reporting_ok = (
+        all_event_count == len(heldout_rows)
+        and math.isfinite(all_event_brier)
+        and math.isfinite(all_event_logloss)
+        and math.isfinite(all_event_auc)
+        and math.isfinite(all_event_auprc)
+        and math.isfinite(all_event_positive_fraction)
+        and math.isfinite(all_event_rel_no_learning)
+        and 0.0 <= all_event_positive_fraction <= 1.0
+    )
+    overall_ok &= print_result(
+        all_event_reporting_ok,
+        "hva_predictor_l23e_event_all_tile_reporting",
+        (
+            f"all_heldout_event_count={all_event_count:.0f} "
+            f"heldout_rows={len(heldout_rows)} "
+            f"all_heldout_event_positive_fraction={all_event_positive_fraction:.6f} "
+            f"all_heldout_event_model_brier={all_event_brier:.6f} "
+            f"all_heldout_event_model_logloss={all_event_logloss:.6f} "
+            f"all_heldout_event_model_auc={all_event_auc:.6f} "
+            f"all_heldout_event_model_auprc={all_event_auprc:.6f} "
+            f"all_heldout_event_relative_improvement_vs_no_learning={all_event_rel_no_learning:.6f}"
+        ),
+    )
+
+    pred_min = require_metric(metrics, "heldout_prediction_min_norm", "HVA predictor metrics")
+    pred_max = require_metric(metrics, "heldout_prediction_max_norm", "HVA predictor metrics")
+    bounded_ok = (
+        pred_min >= -1.0e-9
+        and pred_max <= 1.0 + 1.0e-9
+        and all(0.0 <= row.predicted_state_norm <= 1.0 for row in heldout_rows)
+        and all(math.isfinite(row.predicted_state_norm) for row in heldout_rows)
+        and all(math.isfinite(row.target_residual_z) for row in heldout_rows)
+        and all(math.isfinite(row.predicted_residual_z) for row in heldout_rows)
+        and all(math.isfinite(row.target_residual_norm) for row in heldout_rows)
+        and all(math.isfinite(row.predicted_residual_norm) for row in heldout_rows)
+        and all(row.train_residual_std_norm > 0.0 for row in heldout_rows)
+        and all(math.isfinite(row.event_window_target_state_norm) and row.event_window_target_state_norm >= 0.0 for row in heldout_rows)
+        and all(math.isfinite(row.event_threshold_norm) and row.event_threshold_norm >= 0.0 for row in heldout_rows)
+        and all(math.isfinite(row.predicted_event_prob) and 0.0 <= row.predicted_event_prob <= 1.0 for row in heldout_rows)
+        and all(row.single_frame_target_event in (0, 1) for row in heldout_rows)
+        and all(math.isfinite(row.event_error) for row in heldout_rows)
+    )
+    overall_ok &= print_result(
+        bounded_ok,
+        "hva_predictor_output_boundedness",
+        (
+            f"heldout_prediction_min_norm={pred_min:.6f} "
+            f"heldout_prediction_max_norm={pred_max:.6f} "
+            f"heldout_rows={len(heldout_rows)} residual_fields_finite=1"
+        ),
+    )
+
+    changed_weight_count = sum(row.abs_weight_sum_after > 1.0e-9 for row in weights)
+    nonzero_before_count = sum(abs(row.w_before) > 1.0e-12 for row in weights)
+    target_mean_hz = require_metric(metrics, "target_mean_hz", "HVA predictor metrics")
+    prediction_mean_hz = require_metric(metrics, "prediction_mean_hz", "HVA predictor metrics")
+    finite_predictions = all(
+        math.isfinite(row.predicted_state_norm)
+        and math.isfinite(row.target_state_norm)
+        and math.isfinite(row.error_rate_hz)
+        for row in predictions
+    )
+    weights_ok = (
+        finite_predictions
+        and changed_weight_count > 0
+        and nonzero_before_count == 0
+    )
+    overall_ok &= print_result(
+        weights_ok,
+        "hva_predictor_weights_host_update",
+        (
+            f"changed_weight_count={changed_weight_count} "
+            f"nonzero_before_count={nonzero_before_count} "
+            f"target_mean_hz={target_mean_hz:.6f} "
+            f"prediction_mean_hz={prediction_mean_hz:.6f}"
+        ),
+    )
+
+    local_radius = int(round(require_metric(metrics, "local_radius_tiles", "HVA predictor metrics")))
+    local_weights = [
+        row.abs_weight_sum_after
+        for row in weights
+        if row.manhattan_distance_tiles <= local_radius
+    ]
+    distant_weights = [
+        row.abs_weight_sum_after
+        for row in weights
+        if row.manhattan_distance_tiles > local_radius
+    ]
+    diagonal_weights = [
+        row.abs_weight_sum_after
+        for row in weights
+        if row.pre_tile_id == row.post_tile_id
+    ]
+    offdiagonal_weights = [
+        row.abs_weight_sum_after
+        for row in weights
+        if row.pre_tile_id != row.post_tile_id
+    ]
+    local_mean = mean(local_weights) if local_weights else math.nan
+    distant_mean = mean(distant_weights) if distant_weights else math.nan
+    diagonal_mean = mean(diagonal_weights) if diagonal_weights else math.nan
+    offdiagonal_mean = mean(offdiagonal_weights) if offdiagonal_weights else math.nan
+    coordinate_structure_ok = bool(
+        local_weights
+        and distant_weights
+        and diagonal_weights
+        and offdiagonal_weights
+        and all(math.isfinite(row.distance_tiles) and row.distance_tiles >= 0.0 for row in weights)
+        and local_mean >= (1.10 * distant_mean)
+        and (local_mean - distant_mean) >= max(1.0e-6, 0.05 * max(distant_mean, 1.0e-12))
+        and diagonal_mean > 0.0
+    )
+    overall_ok &= print_result(
+        coordinate_structure_ok,
+        "hva_predictor_weight_structure",
+        (
+            f"local_count={len(local_weights)} distant_count={len(distant_weights)} "
+            f"diagonal_count={len(diagonal_weights)} offdiagonal_count={len(offdiagonal_weights)} "
+            f"local_radius_tiles={local_radius} "
+            f"local_abs_weight_mean={local_mean:.6f} "
+            f"distant_abs_weight_mean={distant_mean:.6f} "
+            f"local_distant_ratio={(local_mean / distant_mean) if distant_mean > 0.0 else math.inf:.6f} "
+            f"diagonal_abs_weight_mean={diagonal_mean:.6f} "
+            f"offdiagonal_abs_weight_mean={offdiagonal_mean:.6f}"
+        ),
+    )
+
+    return overall_ok
+
+
+def validate_natural_video_event_timing(run: RunData) -> bool:
+    overall_ok = True
+    timing_enabled = run.summary.get("video_event_timing_enabled", 0.0)
+    population_rows = run.video_event_population_bin_rows
+    site_rows = run.video_event_site_bin_rows
+    expected_events = int(round(run.summary.get("video_event_frame_count", 0.0)))
+    conditions = {row.condition for row in population_rows} if population_rows is not None else set()
+    populations = {row.population for row in population_rows} if population_rows is not None else set()
+    unique_events = (
+        len({(row.condition, row.repeat_index, row.event_index) for row in population_rows})
+        if population_rows is not None
+        else 0
+    )
+    required_populations = {"l4e", "l23e", "l23pv", "l23som"}
+    artifacts_available = (
+        timing_enabled == 1.0
+        and population_rows is not None
+        and "event" in conditions
+        and required_populations.issubset(populations)
+        and expected_events > 0
+    )
+    overall_ok &= print_result(
+        artifacts_available,
+        "natural_video_event_artifacts_available",
+        (
+            f"video_event_timing_enabled={timing_enabled:.6f} "
+            f"summary_event_count={expected_events} "
+            f"population_rows={len(population_rows) if population_rows is not None else 0} "
+            f"conditions={','.join(sorted(conditions)) if conditions else 'none'} "
+            f"populations={','.join(sorted(populations)) if populations else 'none'} "
+            f"unique_condition_events={unique_events}"
+        ),
+    )
+    site_count = (
+        len({row.site_id for row in site_rows if row.site_id is not None})
+        if site_rows is not None
+        else 0
+    )
+    overall_ok &= print_result(
+        site_rows is not None and site_count > 0,
+        "natural_video_event_site_artifacts_available",
+        f"site_rows={len(site_rows) if site_rows is not None else 0} site_count={site_count}",
+    )
+    if not artifacts_available or population_rows is None:
+        return overall_ok
+
+    gray_required = run.summary.get("video_event_gray_control_count", 0.0) > 0.0
+    blank_required = run.summary.get("video_event_blank_control_count", 0.0) > 0.0
+    controls_available = (
+        (not gray_required or "gray_control" in conditions)
+        and (not blank_required or "blank_control" in conditions)
+    )
+    overall_ok &= print_result(
+        controls_available,
+        "natural_video_event_controls_available",
+        (
+            f"gray_required={1 if gray_required else 0} "
+            f"blank_required={1 if blank_required else 0} "
+            f"conditions={','.join(sorted(conditions))}"
+        ),
+    )
+
+    series = {
+        population: mean_event_bin_series(population_rows, "event", population)
+        for population in sorted(required_populations)
+    }
+    metrics = {population: event_response_metrics(pop_series) for population, pop_series in series.items()}
+    gray_matched_series = {
+        population: matched_event_minus_control_series(population_rows, population, "gray_control")
+        for population in sorted(required_populations)
+    } if "gray_control" in conditions else {}
+    causal_series = {
+        population: (
+            gray_matched_series.get(population)
+            if gray_matched_series.get(population)
+            else series[population]
+        )
+        for population in sorted(required_populations)
+    }
+    causal_metrics = {
+        population: event_response_metrics(pop_series)
+        for population, pop_series in causal_series.items()
+    }
+    causal_source = "event_minus_gray_control" if any(gray_matched_series.values()) else "event_minus_baseline"
+    l4 = metrics["l4e"]
+    bin_ms = run.summary.get("video_event_bin_ms", 0.0)
+    post_ms = run.summary.get("video_event_post_ms", 0.0)
+    l4_peak_delta = l4["post_peak"] - l4["baseline_mean"]
+    l4_onset_ok = (
+        math.isfinite(l4["onset_latency_ms"])
+        and 0.0 <= l4["onset_latency_ms"] <= max(20.0, 2.0 * bin_ms)
+        and l4_peak_delta > max(1.0e-9, l4["baseline_std"])
+    )
+    overall_ok &= print_result(
+        l4_onset_ok,
+        "natural_video_event_l4_onset_peak",
+        (
+            f"bin_ms={bin_ms:.6f} pre_bins={l4['pre_bin_count']:.0f} post_bins={l4['post_bin_count']:.0f} "
+            f"l4e_baseline_mean_hz={l4['baseline_mean']:.6f} "
+            f"l4e_post_peak_hz={l4['post_peak']:.6f} "
+            f"l4e_peak_delta_hz={l4_peak_delta:.6f} "
+            f"l4e_onset_latency_ms={l4['onset_latency_ms']:.6f} "
+            f"l4e_peak_latency_ms={l4['peak_latency_ms']:.6f}"
+        ),
+    )
+
+    target_parts = []
+    latency_ok = True
+    l4_latency_reference = causal_metrics["l4e"] if causal_source == "event_minus_gray_control" else l4
+    for population in ("l23e", "l23pv", "l23som"):
+        pop_metrics = causal_metrics[population]
+        raw_metrics = metrics[population]
+        peak_delta = pop_metrics["post_peak"] - pop_metrics["baseline_mean"]
+        pop_ok = (
+            math.isfinite(pop_metrics["onset_latency_ms"])
+            and peak_delta > 0.0
+            and math.isfinite(l4_latency_reference["onset_latency_ms"])
+            and pop_metrics["onset_latency_ms"] >= max(-bin_ms, l4_latency_reference["onset_latency_ms"] - (2.0 * bin_ms))
+            and pop_metrics["onset_latency_ms"] <= post_ms
+        )
+        latency_ok &= pop_ok
+        target_parts.append(
+            f"{population}_causal_baseline={pop_metrics['baseline_mean']:.6f} "
+            f"{population}_causal_peak={pop_metrics['post_peak']:.6f} "
+            f"{population}_causal_onset_ms={pop_metrics['onset_latency_ms']:.6f} "
+            f"{population}_causal_peak_ms={pop_metrics['peak_latency_ms']:.6f} "
+            f"{population}_raw_baseline={raw_metrics['baseline_mean']:.6f} "
+            f"{population}_raw_peak={raw_metrics['post_peak']:.6f} "
+            f"{population}_raw_onset_ms={raw_metrics['onset_latency_ms']:.6f}"
+        )
+    overall_ok &= print_result(
+        latency_ok,
+        "natural_video_event_l23_interneuron_latency_peak",
+        (
+            f"timing_source={causal_source} "
+            f"l4_reference_onset_ms={l4_latency_reference['onset_latency_ms']:.6f} "
+            + " ".join(target_parts)
+        ),
+    )
+
+    rate_safety_ok = (
+        metrics["l23e"]["post_peak"] <= 500.0
+        and metrics["l23pv"]["post_peak"] <= 1000.0
+        and metrics["l23som"]["post_peak"] <= 1000.0
+    )
+    overall_ok &= print_result(
+        rate_safety_ok,
+        "natural_video_event_rate_safety",
+        (
+            f"l23e_peak_hz={metrics['l23e']['post_peak']:.6f} "
+            f"l23pv_peak_hz={metrics['l23pv']['post_peak']:.6f} "
+            f"l23som_peak_hz={metrics['l23som']['post_peak']:.6f}"
+        ),
+    )
+
+    max_lag_ms = min(50.0, post_ms)
+    cross = {
+        population: event_best_lag_correlation(series["l4e"], series[population], max_lag_ms)
+        for population in ("l23e", "l23pv", "l23som")
+    }
+    l23e_corr = cross["l23e"]["best_corr"]
+    l23e_null = cross["l23e"]["shifted_null_corr"]
+    cross_ok = (
+        l23e_corr is not None
+        and math.isfinite(l23e_corr)
+        and l23e_corr > 0.0
+        and (
+            l23e_null is None
+            or not math.isfinite(l23e_null)
+            or l23e_corr >= (l23e_null - 0.02)
+        )
+    )
+    overall_ok &= print_result(
+        cross_ok,
+        "natural_video_event_crosscorr_null",
+        (
+            f"max_lag_ms={max_lag_ms:.6f} "
+            f"l23e_best_lag_ms={format_optional_float(cross['l23e']['best_lag_ms'])} "
+            f"l23e_best_corr={format_optional_float(cross['l23e']['best_corr'])} "
+            f"l23e_lag0_corr={format_optional_float(cross['l23e']['lag0_corr'])} "
+            f"l23e_shifted_null_corr={format_optional_float(cross['l23e']['shifted_null_corr'])} "
+            f"l23pv_best_lag_ms={format_optional_float(cross['l23pv']['best_lag_ms'])} "
+            f"l23pv_best_corr={format_optional_float(cross['l23pv']['best_corr'])} "
+            f"l23som_best_lag_ms={format_optional_float(cross['l23som']['best_lag_ms'])} "
+            f"l23som_best_corr={format_optional_float(cross['l23som']['best_corr'])}"
+        ),
+    )
+
+    if controls_available:
+        gray_l4 = event_response_metrics(mean_event_bin_series(population_rows, "gray_control", "l4e"))
+        gray_l23e = event_response_metrics(mean_event_bin_series(population_rows, "gray_control", "l23e"))
+        blank_l4 = event_response_metrics(mean_event_bin_series(population_rows, "blank_control", "l4e"))
+        blank_l23e = event_response_metrics(mean_event_bin_series(population_rows, "blank_control", "l23e"))
+        control_ok = (
+            (not blank_required or blank_l4["post_peak"] <= (1.10 * max(l4["post_peak"], 1.0e-9)))
+            and (not blank_required or blank_l23e["post_peak"] <= (1.10 * max(metrics["l23e"]["post_peak"], 1.0e-9)))
+            and (not gray_required or math.isfinite(gray_l4["post_peak"]))
+            and (not gray_required or math.isfinite(gray_l23e["post_peak"]))
+        )
+        overall_ok &= print_result(
+            control_ok,
+            "natural_video_event_gray_blank_controls",
+            (
+                f"event_l4e_peak_hz={l4['post_peak']:.6f} "
+                f"gray_l4e_peak_hz={gray_l4['post_peak']:.6f} "
+                f"blank_l4e_peak_hz={blank_l4['post_peak']:.6f} "
+                f"event_l23e_peak_hz={metrics['l23e']['post_peak']:.6f} "
+                f"gray_l23e_peak_hz={gray_l23e['post_peak']:.6f} "
+                f"blank_l23e_peak_hz={blank_l23e['post_peak']:.6f}"
+            ),
+        )
+    return overall_ok
+
+
+def validate_natural_video_physiology(run: RunData) -> bool:
+    overall_ok = True
+    video_enabled = run.summary.get("video_replay_enabled", 0.0)
+    expected_frame_count = int(round(run.summary.get("video_frame_count", 0.0)))
+    population_rows = run.video_population_rows
+    site_rows = run.video_site_rows
+    frame_rows = run.video_frame_summary_rows
+    unique_frames = (
+        len({row.frame_index for row in frame_rows})
+        if frame_rows is not None
+        else 0
+    )
+    artifacts_available = (
+        video_enabled == 1.0
+        and population_rows is not None
+        and site_rows is not None
+        and frame_rows is not None
+        and unique_frames > 0
+        and (expected_frame_count == 0 or expected_frame_count == unique_frames)
+    )
+    overall_ok &= print_result(
+        artifacts_available,
+        "natural_video_artifacts_available",
+        (
+            f"video_replay_enabled={video_enabled:.6f} "
+            f"summary_frame_count={expected_frame_count} "
+            f"population_rows={len(population_rows) if population_rows is not None else 0} "
+            f"site_rows={len(site_rows) if site_rows is not None else 0} "
+            f"frame_summary_rows={len(frame_rows) if frame_rows is not None else 0} "
+            f"unique_frames={unique_frames}"
+        ),
+    )
+    if not artifacts_available or population_rows is None or site_rows is None or frame_rows is None:
+        return overall_ok
+
+    feedback_disabled = run.summary.get("video_feedback_disabled", 0.0)
+    video_training_enabled = run.summary.get("video_training_enabled", 0.0)
+    overall_ok &= print_result(
+        feedback_disabled == 1.0 and video_training_enabled == 0.0,
+        "natural_video_feedback_disabled",
+        (
+            f"video_feedback_disabled={feedback_disabled:.6f} "
+            f"video_training_enabled={video_training_enabled:.6f}"
+        ),
+    )
+
+    population_rates = video_population_rates_by_name(population_rows)
+    site_rates = video_site_rates_by_name(site_rows)
+    required_populations = {"l4e", "l23e", "l23pv", "l23som"}
+    missing_populations = sorted(
+        population for population in required_populations
+        if population not in population_rates or population not in site_rates
+    )
+    population_available = not missing_populations
+    overall_ok &= print_result(
+        population_available,
+        "natural_video_population_artifacts_available",
+        f"missing_populations={missing_populations if missing_populations else 'none'}",
+    )
+    if not population_available:
+        return overall_ok
+
+    l4e_pop = population_rates["l4e"]
+    l23e_pop = population_rates["l23e"]
+    l23pv_pop = population_rates["l23pv"]
+    l23som_pop = population_rates["l23som"]
+    l4e_site = site_rates["l4e"]
+    l23e_site = site_rates["l23e"]
+    l23pv_site = site_rates["l23pv"]
+    l23som_site = site_rates["l23som"]
+
+    l4e_mean = mean(l4e_pop)
+    l4e_site_p99 = percentile(l4e_site, 99.0)
+    l4e_site_p95 = percentile(l4e_site, 95.0)
+    overall_ok &= print_result(
+        l4e_mean > 0.0 and l4e_site_p99 > 0.0 and l4e_site_p99 <= 500.0,
+        "natural_video_l4_responsive_bounded",
+        (
+            f"l4e_mean_rate_hz={l4e_mean:.6f} "
+            f"l4e_site_p95_hz={l4e_site_p95:.6f} "
+            f"l4e_site_p99_hz={l4e_site_p99:.6f}"
+        ),
+    )
+
+    l23e_mean = mean(l23e_pop)
+    l23e_site_p95 = percentile(l23e_site, 95.0)
+    l23e_site_p99 = percentile(l23e_site, 99.0)
+    l23e_frac_lt1 = fraction_less_than(l23e_site, 1.0)
+    overall_ok &= print_result(
+        max(l23e_pop) > 0.0
+        and l23e_site_p99 <= 100.0
+        and l23e_site_p95 <= 50.0
+        and l23e_frac_lt1 >= 0.25,
+        "natural_video_l23e_sparse_safe",
+        (
+            f"l23e_mean_rate_hz={l23e_mean:.6f} "
+            f"l23e_site_p95_hz={l23e_site_p95:.6f} "
+            f"l23e_site_p99_hz={l23e_site_p99:.6f} "
+            f"l23e_site_frac_lt1={l23e_frac_lt1:.6f}"
+        ),
+    )
+
+    l23pv_mean = mean(l23pv_pop)
+    l23som_mean = mean(l23som_pop)
+    l23pv_site_p99 = percentile(l23pv_site, 99.0)
+    l23som_site_p99 = percentile(l23som_site, 99.0)
+    overall_ok &= print_result(
+        max(l23pv_pop) > 0.0
+        and max(l23som_pop) > 0.0
+        and l23pv_site_p99 <= 200.0
+        and l23som_site_p99 <= 200.0,
+        "natural_video_interneurons_active_safe",
+        (
+            f"l23pv_mean_rate_hz={l23pv_mean:.6f} "
+            f"l23som_mean_rate_hz={l23som_mean:.6f} "
+            f"l23pv_site_p99_hz={l23pv_site_p99:.6f} "
+            f"l23som_site_p99_hz={l23som_site_p99:.6f}"
+        ),
+    )
+
+    l4e_frame_rates = [row.l4e_rate_hz for row in frame_rows]
+    l23e_frame_rates = [row.l23e_rate_hz for row in frame_rows]
+    l23pv_frame_rates = [row.l23pv_rate_hz for row in frame_rows]
+    l23som_frame_rates = [row.l23som_rate_hz for row in frame_rows]
+    drive_std_values = [row.l4e_drive_std for row in frame_rows]
+    l4e_std = standard_deviation(l4e_frame_rates)
+    l23e_std = standard_deviation(l23e_frame_rates)
+    population_dynamic = (
+        unique_frames >= 2
+        and l4e_std > 1.0e-6
+        and l23e_std > 1.0e-6
+        and max(drive_std_values) > 1.0e-6
+        and percentile(l4e_frame_rates, 99.0) <= 500.0
+        and percentile(l23e_frame_rates, 99.0) <= 100.0
+    )
+    overall_ok &= print_result(
+        population_dynamic,
+        "natural_video_population_dynamic_range",
+        (
+            f"frame_count={unique_frames} "
+            f"l4e_frame_std={l4e_std:.6f} "
+            f"l23e_frame_std={l23e_std:.6f} "
+            f"l23pv_frame_std={standard_deviation(l23pv_frame_rates):.6f} "
+            f"l23som_frame_std={standard_deviation(l23som_frame_rates):.6f} "
+            f"drive_std_max={max(drive_std_values):.6f}"
+        ),
+    )
+
+    delay_metrics = compute_video_delay_metrics(frame_rows)
+    delay_available = (
+        delay_metrics.get("frame_count", 0.0) is not None
+        and float(delay_metrics.get("frame_count", 0.0) or 0.0) >= 3.0
+        and delay_metrics.get("l23e_best_corr") is not None
+    )
+    overall_ok &= print_result(
+        delay_available,
+        "natural_video_delay_crosscorr",
+        (
+            f"frame_count={delay_metrics.get('frame_count', 0.0):.0f} "
+            f"max_lag_frames={delay_metrics.get('max_lag', 0.0):.0f} "
+            f"l23e_best_lag_frames={format_optional_float(delay_metrics.get('l23e_best_lag_frames'))} "
+            f"l23e_best_corr={format_optional_float(delay_metrics.get('l23e_best_corr'))} "
+            f"l23e_lag0_corr={format_optional_float(delay_metrics.get('l23e_lag0_corr'))} "
+            f"l23e_lag1_corr={format_optional_float(delay_metrics.get('l23e_lag1_corr'))} "
+            f"l23pv_best_lag_frames={format_optional_float(delay_metrics.get('l23pv_best_lag_frames'))} "
+            f"l23pv_best_corr={format_optional_float(delay_metrics.get('l23pv_best_corr'))} "
+            f"l23som_best_lag_frames={format_optional_float(delay_metrics.get('l23som_best_lag_frames'))} "
+            f"l23som_best_corr={format_optional_float(delay_metrics.get('l23som_best_corr'))}"
+        ),
+    )
+
+    observed_repeats = sorted({row.repeat_index for row in frame_rows})
+    summary_repeat_count = int(round(run.summary.get("video_repeat_count", float(len(observed_repeats)))))
+    if len(observed_repeats) < 2:
+        print(
+            "INFO natural_video_replay_reliability "
+            f"available=0 observed_repeat_count={len(observed_repeats)} "
+            f"summary_repeat_count={summary_repeat_count} "
+            "set_env=V1_VIDEO_REPLAY_REPEAT_COUNT>=2"
+        )
+    else:
+        l4e_reliability = pairwise_repeat_reliability(frame_rows, "l4e_rate_hz")
+        l23e_reliability = pairwise_repeat_reliability(frame_rows, "l23e_rate_hz")
+        l23pv_reliability = pairwise_repeat_reliability(frame_rows, "l23pv_rate_hz")
+        l23som_reliability = pairwise_repeat_reliability(frame_rows, "l23som_rate_hz")
+        reliability_available = l4e_reliability is not None and l23e_reliability is not None
+        overall_ok &= print_result(
+            reliability_available,
+            "natural_video_replay_reliability",
+            (
+                f"observed_repeat_count={len(observed_repeats)} "
+                f"summary_repeat_count={summary_repeat_count} "
+                f"l4e_repeat_corr={format_optional_float(l4e_reliability)} "
+                f"l23e_repeat_corr={format_optional_float(l23e_reliability)} "
+                f"l23pv_repeat_corr={format_optional_float(l23pv_reliability)} "
+                f"l23som_repeat_corr={format_optional_float(l23som_reliability)}"
+            ),
+        )
+
+    recurrent_video_metrics = compute_recurrent_video_metrics(site_rows, run.specificity_rows)
+    recurrent_video_available = (
+        recurrent_video_metrics["edge_count"] >= 10.0
+        and math.isfinite(recurrent_video_metrics["mean_corr"])
+    )
+    overall_ok &= print_result(
+        recurrent_video_available,
+        "natural_video_l23ee_recurrent_video_metrics",
+        (
+            f"edge_count={recurrent_video_metrics['edge_count']:.0f} "
+            f"mean_site_response_corr={recurrent_video_metrics['mean_corr']:.6f} "
+            f"median_site_response_corr={recurrent_video_metrics['median_corr']:.6f} "
+            f"top10_weight_mean_site_response_corr={recurrent_video_metrics['top10_weight_mean_corr']:.6f} "
+            f"low_delta_mean_site_response_corr={recurrent_video_metrics['low_delta_mean_corr']:.6f} "
+            f"same_site_fraction={recurrent_video_metrics['same_site_fraction']:.6f}"
+        ),
+    )
+    return overall_ok
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -3208,6 +6272,15 @@ def main() -> int:
                     f"orientation_context_assay_enabled="
                     f"{run.summary.get('orientation_context_assay_enabled', math.nan):.6f}"
                 )
+
+        if args.require_natural_video_physiology:
+            overall_ok &= validate_natural_video_physiology(full)
+
+        if args.require_natural_video_event_timing:
+            overall_ok &= validate_natural_video_event_timing(full)
+
+        if args.require_hva_predictor:
+            overall_ok &= validate_hva_predictor(full)
 
         if args.require_sensory_baseline_contrast_annulus:
             sensory_enabled = full.summary.get("sensory_assay_enabled", 0.0)
@@ -4522,6 +7595,73 @@ def main() -> int:
         )
 
         corr_specificity = compute_response_correlation_metrics(specificity_rows)
+        print(
+            "INFO l23ee_response_corr_specificity_all_rows "
+            f"all_row_count={int(corr_specificity['all_row_count'])} "
+            f"active_endpoint_count={int(corr_specificity['active_endpoint_count'])} "
+            f"nonzero_corr_count={int(corr_specificity['nonzero_corr_count'])} "
+            f"active_nonzero_corr_count={int(corr_specificity['active_nonzero_corr_count'])} "
+            f"active_nonzero_corr_fraction={corr_specificity['active_nonzero_corr_fraction']:.6f} "
+            f"all_low_count={int(corr_specificity['all_low_corr_count'])} "
+            f"all_high_count={int(corr_specificity['all_high_corr_count'])} "
+            f"all_low_corr_range=[{corr_specificity['all_low_corr_min_response_corr']:.6f},"
+            f"{corr_specificity['all_low_corr_max_response_corr']:.6f}] "
+            f"all_high_corr_range=[{corr_specificity['all_high_corr_min_response_corr']:.6f},"
+            f"{corr_specificity['all_high_corr_max_response_corr']:.6f}] "
+            f"all_high_mean_delta_w={corr_specificity['all_high_corr_mean_delta_w']:.6f} "
+            f"all_low_mean_delta_w={corr_specificity['all_low_corr_mean_delta_w']:.6f} "
+            f"all_high_mean_w_after={corr_specificity['all_high_corr_mean_w_after']:.6f} "
+            f"all_low_mean_w_after={corr_specificity['all_low_corr_mean_w_after']:.6f}"
+        )
+        active_corr_delta_w_mean_margin = (
+            corr_specificity["active_high_corr_mean_delta_w"] - corr_specificity["active_low_corr_mean_delta_w"]
+        )
+        active_corr_delta_w_median_margin = (
+            corr_specificity["active_high_corr_median_delta_w"] - corr_specificity["active_low_corr_median_delta_w"]
+        )
+        active_corr_w_after_mean_margin = (
+            corr_specificity["active_high_corr_mean_w_after"] - corr_specificity["active_low_corr_mean_w_after"]
+        )
+        active_corr_w_after_median_margin = (
+            corr_specificity["active_high_corr_median_w_after"] - corr_specificity["active_low_corr_median_w_after"]
+        )
+        active_corr_margin = max(
+            active_corr_delta_w_mean_margin,
+            active_corr_delta_w_median_margin,
+            active_corr_w_after_mean_margin,
+            active_corr_w_after_median_margin,
+        )
+        active_corr_margin_threshold = max(1.0e-6, 0.01 * corr_specificity["active_p95_abs_delta_w"])
+        active_corr_margin_ok = (
+            corr_specificity["active_endpoint_count"] >= corr_specificity["min_active_count"]
+            and corr_specificity["active_low_corr_count"] >= corr_specificity["active_min_count"]
+            and corr_specificity["active_high_corr_count"] >= corr_specificity["active_min_count"]
+            and corr_specificity["active_p95_abs_delta_w"] >= 1.0e-6
+            and active_corr_margin >= active_corr_margin_threshold
+        )
+        print(
+            "INFO l23ee_response_corr_specificity_active_endpoints "
+            f"active_endpoint_count={int(corr_specificity['active_endpoint_count'])} "
+            f"active_nonzero_corr_count={int(corr_specificity['active_nonzero_corr_count'])} "
+            f"active_nonzero_corr_fraction={corr_specificity['active_nonzero_corr_fraction']:.6f} "
+            f"nonzero_corr_fraction_floor={corr_specificity['nonzero_corr_fraction_floor']:.6f} "
+            f"nonzero_subset_allowed={corr_specificity['nonzero_subset_allowed']:.0f} "
+            f"active_low_count={int(corr_specificity['active_low_corr_count'])} "
+            f"active_high_count={int(corr_specificity['active_high_corr_count'])} "
+            f"active_min_count={int(corr_specificity['active_min_count'])} "
+            f"active_low_corr_range=[{corr_specificity['active_low_corr_min_response_corr']:.6f},"
+            f"{corr_specificity['active_low_corr_max_response_corr']:.6f}] "
+            f"active_high_corr_range=[{corr_specificity['active_high_corr_min_response_corr']:.6f},"
+            f"{corr_specificity['active_high_corr_max_response_corr']:.6f}] "
+            f"active_high_mean_delta_w={corr_specificity['active_high_corr_mean_delta_w']:.6f} "
+            f"active_low_mean_delta_w={corr_specificity['active_low_corr_mean_delta_w']:.6f} "
+            f"active_high_mean_w_after={corr_specificity['active_high_corr_mean_w_after']:.6f} "
+            f"active_low_mean_w_after={corr_specificity['active_low_corr_mean_w_after']:.6f} "
+            f"active_p95_abs_delta_w={corr_specificity['active_p95_abs_delta_w']:.6f} "
+            f"active_margin_threshold={active_corr_margin_threshold:.6f} "
+            f"active_best_margin={active_corr_margin:.6f} "
+            f"active_margin_ok={1 if active_corr_margin_ok else 0}"
+        )
         corr_delta_w_mean_margin = corr_specificity["high_corr_mean_delta_w"] - corr_specificity["low_corr_mean_delta_w"]
         corr_delta_w_median_margin = corr_specificity["high_corr_median_delta_w"] - corr_specificity["low_corr_median_delta_w"]
         corr_w_after_mean_margin = corr_specificity["high_corr_mean_w_after"] - corr_specificity["low_corr_mean_w_after"]
@@ -4537,17 +7677,36 @@ def main() -> int:
             corr_specificity["low_corr_count"] >= corr_specificity["min_count"]
             and corr_specificity["high_corr_count"] >= corr_specificity["min_count"]
             and corr_specificity["p95_abs_delta_w"] >= 1.0e-6
-            and corr_margin >= corr_margin_threshold,
+            and corr_margin >= corr_margin_threshold
+            and active_corr_margin_ok,
             "l23ee_response_corr_specificity",
             (
+                f"subset={corr_specificity['selected_label']} "
+                f"selected_mode_code={corr_specificity['selected_mode_code']:.0f} "
                 f"row_count={int(corr_specificity['row_count'])} "
+                f"all_row_count={int(corr_specificity['all_row_count'])} "
+                f"active_endpoint_count={int(corr_specificity['active_endpoint_count'])} "
+                f"nonzero_corr_count={int(corr_specificity['nonzero_corr_count'])} "
+                f"active_nonzero_corr_count={int(corr_specificity['active_nonzero_corr_count'])} "
+                f"active_nonzero_corr_fraction={corr_specificity['active_nonzero_corr_fraction']:.6f} "
+                f"nonzero_corr_fraction_floor={corr_specificity['nonzero_corr_fraction_floor']:.6f} "
+                f"nonzero_subset_allowed={corr_specificity['nonzero_subset_allowed']:.0f} "
                 f"low_count={int(corr_specificity['low_corr_count'])} "
                 f"high_count={int(corr_specificity['high_corr_count'])} "
                 f"min_count={int(corr_specificity['min_count'])} "
+                f"min_active_count={int(corr_specificity['min_active_count'])} "
+                f"min_nonzero_count={int(corr_specificity['min_nonzero_count'])} "
+                f"active_low_count={int(corr_specificity['active_low_corr_count'])} "
+                f"active_high_count={int(corr_specificity['active_high_corr_count'])} "
+                f"active_min_count={int(corr_specificity['active_min_count'])} "
                 f"low_corr_range=[{corr_specificity['low_corr_min_response_corr']:.6f},"
                 f"{corr_specificity['low_corr_max_response_corr']:.6f}] "
                 f"high_corr_range=[{corr_specificity['high_corr_min_response_corr']:.6f},"
                 f"{corr_specificity['high_corr_max_response_corr']:.6f}] "
+                f"active_low_corr_range=[{corr_specificity['active_low_corr_min_response_corr']:.6f},"
+                f"{corr_specificity['active_low_corr_max_response_corr']:.6f}] "
+                f"active_high_corr_range=[{corr_specificity['active_high_corr_min_response_corr']:.6f},"
+                f"{corr_specificity['active_high_corr_max_response_corr']:.6f}] "
                 f"high_mean_delta_w={corr_specificity['high_corr_mean_delta_w']:.6f} "
                 f"low_mean_delta_w={corr_specificity['low_corr_mean_delta_w']:.6f} "
                 f"high_median_delta_w={corr_specificity['high_corr_median_delta_w']:.6f} "
@@ -4558,7 +7717,11 @@ def main() -> int:
                 f"low_median_w_after={corr_specificity['low_corr_median_w_after']:.6f} "
                 f"p95_abs_delta_w={corr_specificity['p95_abs_delta_w']:.6f} "
                 f"margin_threshold={corr_margin_threshold:.6f} "
-                f"best_margin={corr_margin:.6f}"
+                f"best_margin={corr_margin:.6f} "
+                f"active_p95_abs_delta_w={corr_specificity['active_p95_abs_delta_w']:.6f} "
+                f"active_margin_threshold={active_corr_margin_threshold:.6f} "
+                f"active_best_margin={active_corr_margin:.6f} "
+                f"active_margin_ok={1 if active_corr_margin_ok else 0}"
             ),
         )
 

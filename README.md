@@ -7,6 +7,8 @@ with fixed L4 orientation-tuned drive, explicit E/I populations in `L4` and
 
 Latest detailed report:
 
+- `docs/hva_predictor_system_report.md`
+- `docs/pre_top_down_v1_biology_alignment_report.md`
 - `docs/v1_soft_prior_som_recurrence_report.md`
 - `docs/v1_l4_intersite_scaling_report.md`
 - `docs/v1_cell_responsive_coverage_report.md`
@@ -153,6 +155,17 @@ The cell-level coverage follow-up is documented in
 coverage measurement and `V1_TRAINING_EPOCHS=2`, the `40x40` L4 inter-site
 model passes strict OSI and raises L23E peak-responsive cell coverage to
 `32.2%`, while preserving L4/SOM/PV/recurrent gates.
+
+The pre-feedback higher-area predictor milestone is documented in
+`docs/hva_predictor_system_report.md`. The validated run
+`v1_hva_pred18_l23_topk_weighted_delay8_som051_256f` adds a default-off,
+predictor-only HVA sidecar that reads causal L23E history and predicts the
+future top-k L23E tile activity pattern 8 video frames ahead. It uses no
+HVA-to-V1 feedback, no L4/PV/SOM target shortcut, no future inputs, and no
+lower-V1 mutation. The final H200 validator returned `rc=0` with no `FAIL`
+lines; key held-out top-k metrics were `model_recall_at_k=0.269048`,
+`persistence_recall_at_k=0.195238`, `train_frequency_recall_at_k=0.215476`,
+and `model_chance_ratio=5.380952`.
 
 Zero-training subtype perturbation checks used `V1_L23*_GATE_NA=0.2` one at a
 time. Relative to the no-gate control, PV and SOM gates suppressed mean L2/3E
