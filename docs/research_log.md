@@ -103,6 +103,46 @@ Primary sources:
   dependence on spike timing, synaptic strength, and postsynaptic cell type.*
   Journal of Neuroscience. PubMed: https://pubmed.ncbi.nlm.nih.gov/9852584/
 
+### 5. Lower-V1 natural-video consolidation is local and train-only
+
+Biological mapping:
+The optional natural-video consolidation stage re-exposes lower V1 to present
+L4E natural-video drive before HVA predictor training. During this stage only
+local `L23E -> L23E` recurrent STDP and `L23PV/L23SOM -> L23E` inhibitory
+homeostatic plasticity may be active. The L4 map, L4 drive, and `L4E -> L23E`
+feedforward weights are frozen.
+
+Why this is in v1:
+The HVA predictor milestone failed on raw held-out L23E top-k prediction when
+repeat reliability of the lower-V1 L23E replay was low. This option targets the
+biological failure mode directly: stabilize recurrent L2/3 assemblies under
+naturalistic sensory drive while maintaining local inhibitory balance. It is
+default-off and audits that consolidation uses only the HVA train-frame prefix,
+not held-out frames, future targets, labels, or HVA feedback.
+
+Validation hooks:
+The simulator writes `<prefix>_video_consolidation_metrics.csv` with the
+train-frame range, held-out exclusion count, allowed-plasticity flags, frozen
+feedforward delta, and pre/post L23E repeat-correlation and top-5 repeat-overlap
+ceilings. The validator rejects consolidation artifacts that used held-out
+frames or changed `L4E -> L23E`.
+
+Primary sources:
+
+- Markram H, Lubke J, Frotscher M, Sakmann B. 1997. *Regulation of synaptic
+  efficacy by coincidence of postsynaptic APs and EPSPs.* Science.
+  DOI: https://doi.org/10.1126/science.275.5297.213
+- Bi GQ, Poo MM. 1998. *Synaptic modifications in cultured hippocampal neurons:
+  dependence on spike timing, synaptic strength, and postsynaptic cell type.*
+  Journal of Neuroscience. DOI:
+  https://doi.org/10.1523/JNEUROSCI.18-24-10464.1998
+- Vogels TP, Sprekeler H, Zenke F, Clopath C, Gerstner W. 2011. *Inhibitory
+  plasticity balances excitation and inhibition in sensory pathways and memory
+  networks.* Science. DOI: https://doi.org/10.1126/science.1211095
+- Turrigiano GG, Leslie KR, Desai NS, Rutherford LC, Nelson SB. 1998.
+  *Activity-dependent scaling of quantal amplitude in neocortical neurons.*
+  Nature. DOI: https://doi.org/10.1038/36103
+
 ## Assumptions
 
 - Each lattice site is treated as a scaled hypercolumn proxy rather than a full

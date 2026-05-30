@@ -30,3 +30,12 @@
   (event/hazard objectives, train-only responsive selection, causal history,
   population-state metrics) rather than substituting L4/PV/SOM targets as
   pass/fail criteria.
+- After lower-V1 video consolidation, event-timing validation must reset trial
+  dynamic state before consolidation-enabled event trials so replay or
+  consolidation membrane/synaptic transients cannot contaminate onset assays.
+- Do not present softened population metrics as satisfying a user's raw
+  exact-prediction target; explicitly separate exact raw recall from
+  population-shape diagnostics.
+- When the user asks for biological interpretation or remedy, answer the
+  biological/computational point directly first. Do not lead with validator
+  logs, task plumbing, or raw command-style summaries unless explicitly asked.

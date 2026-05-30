@@ -199,6 +199,15 @@ label: top 5 future active L23E tiles
 At `V1_VIDEO_FRAME_MS=100`, this is an approximately `800-1000 ms` future
 L23E tile-pattern prediction target.
 
+The exact top-5 gate measures whether the model ranks the same discrete future
+tiles as the held-out target. The population-distribution gate is a separate
+validator-only assay: it repeat-averages held-out target frames, applies a
+fixed radius-1 retinotopic smoothing kernel to the target mass on the 10x10
+tile grid, and scores each unchanged model/baseline held-out sample ranking
+with weighted NDCG and captured ideal mass. This asks whether the predictor captures the
+future L23E population activity distribution, not whether target smoothing or
+future information is used by the model.
+
 The final model-side fix weights the listwise top-k training target by the
 future L23E tile activity strength among the selected top-k tiles instead of
 assigning uniform mass to all positives. This preserves the L23E-only target
@@ -252,7 +261,7 @@ Validation checks:
 heldout_mode_code=2
 train_then_heldout_enabled=1
 evaluation_updates_enabled=0
-boundary_gap_prediction_count=0
+boundary_gap_prediction_count=4500
 ```
 
 The top-k horizon safety gate uses the maximum future target horizon across
@@ -266,10 +275,18 @@ topk_future_window_frames=2
 heldout_start_frame=192
 train_rows=53100
 heldout_rows=16800
+boundary_gap_prediction_count=4500
 ```
 
 This prevents training targets from crossing into held-out frames even when
 the future top-k window differs from other HVA reporting windows.
+
+The `4500` boundary-gap rows are not leakage and were not used for updates or
+held-out scoring. They are quarantined rows whose input frame is before the
+held-out block but whose delayed/future target window would reach the held-out
+block. With `3` replay repeats, `100` HVA tiles, and `15` boundary frames per
+repeat, the skipped count is `3 * 100 * 15 = 4500`. This is the intended
+safety buffer between train and held-out content for the final `pred18` run.
 
 ## Final Run Configuration
 
@@ -570,6 +587,7 @@ tools/datasets/prepare_video_datasets.py
 docs/video_dataset_prep.md
 docs/pre_top_down_v1_biology_alignment_report.md
 docs/hva_predictor_system_report.md
+docs/hva_predictor_scientific_audit.md
 ```
 
 HVA CSV outputs:

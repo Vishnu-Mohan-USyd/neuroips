@@ -22,6 +22,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - exercised only on minimal Python installs.
+    np = None
+
 
 class ValidationError(RuntimeError):
     """Raised when required outputs are missing or malformed."""
@@ -447,6 +452,7 @@ class RunData:
     video_event_site_bin_rows: list[VideoEventBinRow] | None = None
     hva_predictor_config: dict[str, float] | None = None
     hva_predictor_metrics: dict[str, float] | None = None
+    video_consolidation_metrics: dict[str, float] | None = None
     hva_predictor_rate_row_count: int | None = None
     hva_predictor_predictions: list[HVAPredictorPredictionRow] | None = None
     hva_predictor_event_tiles: list[HVAPredictorEventTileRow] | None = None
@@ -524,6 +530,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional prefix for PV-output weakening run, e.g. v1_fp_pvweak.",
     )
     parser.add_argument(
+        "--pvoff",
+        help="Optional prefix for PV-output-off ablation run used by L2/3 video reliability reporting.",
+    )
+    parser.add_argument(
         "--min-validation-sites",
         type=int,
         default=1,
@@ -581,6 +591,14 @@ def parse_args() -> argparse.Namespace:
         help="Require opt-in natural-video lower-V1 replay artifacts and bounded physiology gates.",
     )
     parser.add_argument(
+        "--require-l23-video-reliability",
+        action="store_true",
+        help=(
+            "Require artifact-only L2/3 natural-video reliability diagnostics, "
+            "raw repeat-oracle ceiling, L4 alignment, and ablation reporting."
+        ),
+    )
+    parser.add_argument(
         "--require-natural-video-event-timing",
         action="store_true",
         help="Require opt-in millisecond event-aligned natural-video timing artifacts and gates.",
@@ -589,6 +607,14 @@ def parse_args() -> argparse.Namespace:
         "--require-hva-predictor",
         action="store_true",
         help="Require default-off HVA predictor-only sidecar artifacts and isolation/prediction gates.",
+    )
+    parser.add_argument(
+        "--require-hva-population-prediction",
+        action="store_true",
+        help=(
+            "Require heldout HVA L23E population-distribution prediction gates "
+            "computed from existing top-k prediction artifacts."
+        ),
     )
     parser.add_argument(
         "--allow-responsive-osi",
@@ -1886,6 +1912,12 @@ def load_run(
         if hva_predictor_metrics_path.is_file()
         else None
     )
+    video_consolidation_metrics_path = genn_dir / f"{prefix}_video_consolidation_metrics.csv"
+    video_consolidation_metrics = (
+        parse_summary_csv(video_consolidation_metrics_path)
+        if video_consolidation_metrics_path.is_file()
+        else None
+    )
     hva_predictor_rates_path = genn_dir / f"{prefix}_hva_predictor_rates.csv"
     hva_predictor_rate_row_count = (
         count_csv_data_rows(hva_predictor_rates_path)
@@ -1945,6 +1977,7 @@ def load_run(
         video_event_site_bin_rows=video_event_site_bin_rows,
         hva_predictor_config=hva_predictor_config,
         hva_predictor_metrics=hva_predictor_metrics,
+        video_consolidation_metrics=video_consolidation_metrics,
         hva_predictor_rate_row_count=hva_predictor_rate_row_count,
         hva_predictor_predictions=hva_predictor_predictions,
         hva_predictor_event_tiles=hva_predictor_event_tiles,
@@ -1953,6 +1986,16 @@ def load_run(
         l23e_cell_tuning=l23e_cell_tuning,
         l23e_cell_tuning_multiphase=l23e_cell_tuning_multiphase,
     )
+
+
+def try_load_optional_run(genn_dir: Path, prefix: str | None, label: str) -> RunData | None:
+    if prefix is None:
+        return None
+    try:
+        return load_run(genn_dir, prefix)
+    except ValidationError as exc:
+        print(f"INFO optional_run_unavailable[{label}] prefix={prefix} error={str(exc).replace(' ', '_')}")
+        return None
 
 
 def require_summary_metric(run: RunData, metric: str) -> float:
@@ -4045,6 +4088,235 @@ def format_optional_float(value: float | None) -> str:
     return "nan" if value is None or not math.isfinite(value) else f"{value:.6f}"
 
 
+def cosine_similarity_optional(x_values: list[float], y_values: list[float]) -> float | None:
+    if len(x_values) != len(y_values) or not x_values:
+        return None
+    dot = 0.0
+    x_sq = 0.0
+    y_sq = 0.0
+    for x_value, y_value in zip(x_values, y_values):
+        dot += x_value * y_value
+        x_sq += x_value * x_value
+        y_sq += y_value * y_value
+    denominator = math.sqrt(x_sq * y_sq)
+    if denominator <= 1.0e-12:
+        return None
+    return dot / denominator
+
+
+def vector_mean(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        raise ValidationError("Cannot compute a vector mean of an empty collection.")
+    width = len(vectors[0])
+    if width == 0 or any(len(vector) != width for vector in vectors):
+        raise ValidationError("Vector mean requires aligned non-empty vectors.")
+    return [sum(vector[index] for vector in vectors) / len(vectors) for index in range(width)]
+
+
+def top_k_indices(values: list[float], k: int) -> list[int]:
+    if k <= 0 or k > len(values):
+        raise ValidationError("Top-k selection requires 0 < k <= value count.")
+    return sorted(range(len(values)), key=lambda index: (-values[index], index))[:k]
+
+
+def topk_recall(predicted: list[int], target: list[int], k: int) -> float:
+    if k <= 0:
+        raise ValidationError("Top-k recall requires k > 0.")
+    return len(set(predicted).intersection(target)) / k
+
+
+def normalized_entropy_from_counts(counts: list[int]) -> float:
+    total = sum(counts)
+    active_count = sum(1 for count in counts if count > 0)
+    if total <= 0 or active_count <= 1:
+        return 0.0
+    entropy = 0.0
+    for count in counts:
+        if count <= 0:
+            continue
+        probability = count / total
+        entropy -= probability * math.log(probability)
+    return entropy / math.log(active_count)
+
+
+def numpy_normalized_rows(matrix):
+    norms = np.linalg.norm(matrix, axis=1)
+    valid = norms > 1.0e-12
+    normalized = np.zeros_like(matrix, dtype=float)
+    if np.any(valid):
+        normalized[valid] = matrix[valid] / norms[valid, None]
+    return normalized, valid
+
+
+def numpy_pearson_optional(x_values, y_values) -> float | None:
+    if x_values.shape != y_values.shape or x_values.size < 3:
+        return None
+    x_centered = x_values - np.mean(x_values)
+    y_centered = y_values - np.mean(y_values)
+    denominator = float(np.sqrt(np.sum(x_centered * x_centered) * np.sum(y_centered * y_centered)))
+    if denominator <= 1.0e-12:
+        return None
+    return float(np.sum(x_centered * y_centered) / denominator)
+
+
+def compute_l23_video_representational_metrics_numpy(
+    vectors: dict[tuple[int, int], list[float]],
+    repeats: list[int],
+    frames: list[int],
+) -> dict[str, float] | None:
+    if np is None:
+        return None
+
+    same_sum = 0.0
+    same_count = 0
+    different_sum = 0.0
+    different_count = 0
+    for first_index, first_repeat in enumerate(repeats):
+        for second_repeat in repeats[first_index + 1:]:
+            common_frames = [
+                frame_index for frame_index in frames
+                if (first_repeat, frame_index) in vectors and (second_repeat, frame_index) in vectors
+            ]
+            if not common_frames:
+                continue
+            first_matrix = np.asarray([vectors[(first_repeat, frame_index)] for frame_index in common_frames], dtype=float)
+            second_matrix = np.asarray([vectors[(second_repeat, frame_index)] for frame_index in common_frames], dtype=float)
+            first_normalized, first_valid = numpy_normalized_rows(first_matrix)
+            second_normalized, second_valid = numpy_normalized_rows(second_matrix)
+            valid_same = first_valid & second_valid
+            if np.any(valid_same):
+                same_values = np.sum(first_normalized[valid_same] * second_normalized[valid_same], axis=1)
+                same_sum += float(np.sum(same_values))
+                same_count += int(same_values.size)
+            similarity_matrix = first_normalized @ second_normalized.T
+            valid_different = np.outer(first_valid, second_valid)
+            valid_different &= ~np.eye(len(common_frames), dtype=bool)
+            if np.any(valid_different):
+                different_values = similarity_matrix[valid_different]
+                different_sum += float(np.sum(different_values))
+                different_count += int(different_values.size)
+
+    decoded_count = 0
+    correct_count = 0
+    for repeat_index in repeats:
+        other_repeats = [other for other in repeats if other != repeat_index]
+        sample_frames = [frame_index for frame_index in frames if (repeat_index, frame_index) in vectors]
+        template_frames: list[int] = []
+        template_vectors: list[list[float]] = []
+        for template_frame in frames:
+            source_vectors = [
+                vectors[(other_repeat, template_frame)]
+                for other_repeat in other_repeats
+                if (other_repeat, template_frame) in vectors
+            ]
+            if source_vectors:
+                template_frames.append(template_frame)
+                template_vectors.append(vector_mean(source_vectors))
+        if not sample_frames or not template_frames:
+            continue
+        sample_matrix = np.asarray([vectors[(repeat_index, frame_index)] for frame_index in sample_frames], dtype=float)
+        template_matrix = np.asarray(template_vectors, dtype=float)
+        sample_normalized, sample_valid = numpy_normalized_rows(sample_matrix)
+        template_normalized, template_valid = numpy_normalized_rows(template_matrix)
+        if not np.any(template_valid):
+            continue
+        score_matrix = sample_normalized @ template_normalized.T
+        score_matrix[:, ~template_valid] = -np.inf
+        for row_index, sample_is_valid in enumerate(sample_valid):
+            if not sample_is_valid:
+                continue
+            predicted_frame = template_frames[int(np.argmax(score_matrix[row_index]))]
+            decoded_count += 1
+            correct_count += int(predicted_frame == sample_frames[row_index])
+
+    same_mean = (same_sum / same_count) if same_count else math.nan
+    different_mean = (different_sum / different_count) if different_count else math.nan
+    return {
+        "repeat_count": float(len(repeats)),
+        "frame_count": float(len(frames)),
+        "same_similarity": same_mean,
+        "different_similarity": different_mean,
+        "same_different_gap": same_mean - different_mean if math.isfinite(same_mean) and math.isfinite(different_mean) else math.nan,
+        "frame_top1_accuracy": (correct_count / decoded_count) if decoded_count else math.nan,
+        "frame_chance": 1.0 / len(frames),
+        "decoded_count": float(decoded_count),
+    }
+
+
+def compute_l23_video_l4_alignment_metrics_numpy(
+    l4_by_frame: dict[int, list[float]],
+    l23_by_frame: dict[int, list[float]],
+    frames: list[int],
+) -> dict[str, float] | None:
+    if np is None:
+        return None
+    l4_matrix = np.asarray([l4_by_frame[frame_index] for frame_index in frames], dtype=float)
+    l23_matrix = np.asarray([l23_by_frame[frame_index] for frame_index in frames], dtype=float)
+    l4_normalized, l4_valid = numpy_normalized_rows(l4_matrix)
+    l23_normalized, l23_valid = numpy_normalized_rows(l23_matrix)
+    cross_similarity = l4_normalized @ l23_normalized.T
+    valid_cross = np.outer(l4_valid, l23_valid)
+    diagonal_mask = np.eye(len(frames), dtype=bool)
+    same_values = cross_similarity[valid_cross & diagonal_mask]
+    different_values = cross_similarity[valid_cross & ~diagonal_mask]
+
+    l4_rsm = l4_normalized @ l4_normalized.T
+    l23_rsm = l23_normalized @ l23_normalized.T
+    upper_mask = np.triu(np.ones((len(frames), len(frames)), dtype=bool), k=1)
+    valid_rsm = np.outer(l4_valid, l4_valid) & np.outer(l23_valid, l23_valid) & upper_mask
+    rsm_correlation = (
+        numpy_pearson_optional(l4_rsm[valid_rsm], l23_rsm[valid_rsm])
+        if np.any(valid_rsm)
+        else None
+    )
+    temporal_shuffle_rsm_correlation: float | None = None
+    if len(frames) >= 4:
+        temporal_indices = np.roll(np.arange(len(frames)), max(1, len(frames) // 2))
+        temporal_l23_valid = l23_valid[temporal_indices]
+        temporal_l23_rsm = l23_normalized[temporal_indices] @ l23_normalized[temporal_indices].T
+        temporal_valid_rsm = np.outer(l4_valid, l4_valid) & np.outer(temporal_l23_valid, temporal_l23_valid) & upper_mask
+        temporal_shuffle_rsm_correlation = (
+            numpy_pearson_optional(l4_rsm[temporal_valid_rsm], temporal_l23_rsm[temporal_valid_rsm])
+            if np.any(temporal_valid_rsm)
+            else None
+        )
+
+    spatial_shuffle_rsm_correlation: float | None = None
+    site_count = l23_matrix.shape[1] if l23_matrix.ndim == 2 else 0
+    if site_count > 1:
+        spatial_l23_matrix = np.zeros_like(l23_matrix, dtype=float)
+        for row_index in range(l23_matrix.shape[0]):
+            spatial_l23_matrix[row_index] = np.roll(l23_matrix[row_index], (row_index % (site_count - 1)) + 1)
+        spatial_l23_normalized, spatial_l23_valid = numpy_normalized_rows(spatial_l23_matrix)
+        spatial_l23_rsm = spatial_l23_normalized @ spatial_l23_normalized.T
+        spatial_valid_rsm = np.outer(l4_valid, l4_valid) & np.outer(spatial_l23_valid, spatial_l23_valid) & upper_mask
+        spatial_shuffle_rsm_correlation = (
+            numpy_pearson_optional(l4_rsm[spatial_valid_rsm], spatial_l23_rsm[spatial_valid_rsm])
+            if np.any(spatial_valid_rsm)
+            else None
+        )
+
+    same_mean = float(np.mean(same_values)) if same_values.size else math.nan
+    different_mean = float(np.mean(different_values)) if different_values.size else math.nan
+    return {
+        "frame_count": float(len(frames)),
+        "same_similarity": same_mean,
+        "different_similarity": different_mean,
+        "same_different_gap": same_mean - different_mean if math.isfinite(same_mean) and math.isfinite(different_mean) else math.nan,
+        "rsm_correlation": rsm_correlation if rsm_correlation is not None else math.nan,
+        "temporal_shuffle_rsm_correlation": (
+            temporal_shuffle_rsm_correlation
+            if temporal_shuffle_rsm_correlation is not None
+            else math.nan
+        ),
+        "spatial_shuffle_rsm_correlation": (
+            spatial_shuffle_rsm_correlation
+            if spatial_shuffle_rsm_correlation is not None
+            else math.nan
+        ),
+    }
+
+
 def mean_frame_series(frame_rows: list[VideoFrameSummaryRow], attribute: str) -> tuple[list[int], list[float]]:
     values_by_frame: dict[int, list[float]] = {}
     for row in frame_rows:
@@ -4143,6 +4415,659 @@ def l23e_site_frame_vectors(site_rows: list[VideoSiteRateRow]) -> dict[int, list
         if all(frame_index in by_frame for frame_index in ordered_frames):
             vectors[site_id] = [mean(by_frame[frame_index]) for frame_index in ordered_frames]
     return vectors
+
+
+def video_site_vectors_by_sample(
+    site_rows: list[VideoSiteRateRow],
+    population: str,
+) -> tuple[list[int], dict[tuple[int, int], list[float]]]:
+    values_by_sample_site: dict[tuple[int, int], dict[int, list[float]]] = {}
+    site_ids: set[int] = set()
+    for row in site_rows:
+        if row.population != population:
+            continue
+        sample_key = (row.repeat_index, row.frame_index)
+        values_by_sample_site.setdefault(sample_key, {}).setdefault(row.site_id, []).append(row.rate_hz)
+        site_ids.add(row.site_id)
+    ordered_site_ids = sorted(site_ids)
+    if not ordered_site_ids:
+        raise ValidationError(f"Video site vectors require rows for population {population!r}.")
+    sample_vectors: dict[tuple[int, int], list[float]] = {}
+    for sample_key, by_site in values_by_sample_site.items():
+        sample_vectors[sample_key] = [
+            mean(by_site[site_id]) if site_id in by_site else 0.0
+            for site_id in ordered_site_ids
+        ]
+    return ordered_site_ids, sample_vectors
+
+
+def infer_video_site_grid_side(site_ids: list[int]) -> int:
+    if not site_ids:
+        raise ValidationError("Cannot infer video site grid side without site ids.")
+    site_count = max(site_ids) + 1
+    side = int(round(math.sqrt(site_count)))
+    if side * side != site_count:
+        raise ValidationError(f"Video site ids do not form a square sheet: max_site_id={max(site_ids)}.")
+    return side
+
+
+def infer_l23_video_tile_grid_side(run: RunData, site_ids: list[int]) -> int:
+    candidates = (
+        run.summary.get("hva_predictor_tile_grid_side", math.nan),
+        (run.hva_predictor_config or {}).get("tile_grid_side", math.nan),
+        (run.hva_predictor_metrics or {}).get("topk_tile_grid_side", math.nan),
+        (run.hva_predictor_metrics or {}).get("tile_grid_side", math.nan),
+    )
+    for candidate in candidates:
+        if math.isfinite(candidate) and candidate >= 1.0:
+            return int(round(candidate))
+
+    sheet_side = infer_video_site_grid_side(site_ids)
+    tile_size = run.summary.get(
+        "hva_predictor_tile_size_sites",
+        (run.hva_predictor_config or {}).get("tile_size_sites", math.nan),
+    )
+    if math.isfinite(tile_size) and tile_size >= 1.0:
+        return max(1, int(math.ceil(sheet_side / tile_size)))
+    if sheet_side % 4 == 0:
+        return max(1, sheet_side // 4)
+    raise ValidationError("Cannot infer L2/3 video tile grid side from artifacts.")
+
+
+def video_tile_vectors_by_sample(
+    run: RunData,
+    site_rows: list[VideoSiteRateRow],
+    population: str,
+) -> tuple[int, dict[tuple[int, int], list[float]]]:
+    site_ids, site_vectors = video_site_vectors_by_sample(site_rows, population)
+    sheet_side = infer_video_site_grid_side(site_ids)
+    tile_grid_side = infer_l23_video_tile_grid_side(run, site_ids)
+    if tile_grid_side < 1 or tile_grid_side > sheet_side:
+        raise ValidationError(
+            f"Invalid L2/3 video tile grid side {tile_grid_side} for sheet side {sheet_side}."
+        )
+    tile_count = tile_grid_side * tile_grid_side
+    tile_for_site: dict[int, int] = {}
+    sites_per_tile = [0 for _ in range(tile_count)]
+    for site_id in site_ids:
+        x = site_id % sheet_side
+        y = site_id // sheet_side
+        tile_x = min(tile_grid_side - 1, (x * tile_grid_side) // sheet_side)
+        tile_y = min(tile_grid_side - 1, (y * tile_grid_side) // sheet_side)
+        tile_id = (tile_y * tile_grid_side) + tile_x
+        tile_for_site[site_id] = tile_id
+        sites_per_tile[tile_id] += 1
+
+    tile_vectors: dict[tuple[int, int], list[float]] = {}
+    for sample_key, site_vector in site_vectors.items():
+        tile_vector = [0.0 for _ in range(tile_count)]
+        for site_id, rate in zip(site_ids, site_vector):
+            tile_vector[tile_for_site[site_id]] += rate
+        for tile_id, site_count in enumerate(sites_per_tile):
+            if site_count > 0:
+                tile_vector[tile_id] /= site_count
+        tile_vectors[sample_key] = tile_vector
+    return tile_grid_side, tile_vectors
+
+
+def vector_repeat_sets(vectors_by_sample: dict[tuple[int, int], list[float]]) -> tuple[list[int], list[int]]:
+    repeats = sorted({repeat_index for repeat_index, _ in vectors_by_sample})
+    frames = sorted({frame_index for _, frame_index in vectors_by_sample})
+    return repeats, frames
+
+
+def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
+    _, vectors = video_site_vectors_by_sample(site_rows, "l23e")
+    repeats, frames = vector_repeat_sets(vectors)
+    if len(repeats) < 2 or len(frames) < 3:
+        return {
+            "repeat_count": float(len(repeats)),
+            "frame_count": float(len(frames)),
+            "same_similarity": math.nan,
+            "different_similarity": math.nan,
+            "same_different_gap": math.nan,
+            "frame_top1_accuracy": math.nan,
+            "frame_chance": (1.0 / len(frames)) if frames else math.nan,
+            "decoded_count": 0.0,
+        }
+    numpy_metrics = compute_l23_video_representational_metrics_numpy(vectors, repeats, frames)
+    if numpy_metrics is not None:
+        return numpy_metrics
+
+    same_similarities: list[float] = []
+    different_similarities: list[float] = []
+    for first_index, first_repeat in enumerate(repeats):
+        for second_repeat in repeats[first_index + 1:]:
+            common_frames = [
+                frame_index for frame_index in frames
+                if (first_repeat, frame_index) in vectors and (second_repeat, frame_index) in vectors
+            ]
+            for frame_index in common_frames:
+                similarity = cosine_similarity_optional(
+                    vectors[(first_repeat, frame_index)],
+                    vectors[(second_repeat, frame_index)],
+                )
+                if similarity is not None and math.isfinite(similarity):
+                    same_similarities.append(similarity)
+            for first_frame in common_frames:
+                for second_frame in common_frames:
+                    if first_frame == second_frame:
+                        continue
+                    similarity = cosine_similarity_optional(
+                        vectors[(first_repeat, first_frame)],
+                        vectors[(second_repeat, second_frame)],
+                    )
+                    if similarity is not None and math.isfinite(similarity):
+                        different_similarities.append(similarity)
+
+    decoded_count = 0
+    correct_count = 0
+    for repeat_index in repeats:
+        other_repeats = [other for other in repeats if other != repeat_index]
+        for frame_index in frames:
+            sample = vectors.get((repeat_index, frame_index))
+            if sample is None:
+                continue
+            scores: list[tuple[float, int]] = []
+            for template_frame in frames:
+                template_vectors = [
+                    vectors[(other_repeat, template_frame)]
+                    for other_repeat in other_repeats
+                    if (other_repeat, template_frame) in vectors
+                ]
+                if not template_vectors:
+                    continue
+                similarity = cosine_similarity_optional(sample, vector_mean(template_vectors))
+                if similarity is not None and math.isfinite(similarity):
+                    scores.append((similarity, template_frame))
+            if not scores:
+                continue
+            predicted_frame = max(scores, key=lambda item: (item[0], -item[1]))[1]
+            decoded_count += 1
+            correct_count += int(predicted_frame == frame_index)
+
+    same_mean = mean(same_similarities) if same_similarities else math.nan
+    different_mean = mean(different_similarities) if different_similarities else math.nan
+    return {
+        "repeat_count": float(len(repeats)),
+        "frame_count": float(len(frames)),
+        "same_similarity": same_mean,
+        "different_similarity": different_mean,
+        "same_different_gap": same_mean - different_mean if math.isfinite(same_mean) and math.isfinite(different_mean) else math.nan,
+        "frame_top1_accuracy": (correct_count / decoded_count) if decoded_count else math.nan,
+        "frame_chance": 1.0 / len(frames),
+        "decoded_count": float(decoded_count),
+    }
+
+
+def compute_l23_video_l4_alignment_metrics(site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
+    _, l4_vectors_by_sample = video_site_vectors_by_sample(site_rows, "l4e")
+    _, l23_vectors_by_sample = video_site_vectors_by_sample(site_rows, "l23e")
+    frames = sorted({frame_index for _, frame_index in l4_vectors_by_sample}.intersection(
+        {frame_index for _, frame_index in l23_vectors_by_sample}
+    ))
+    l4_by_frame: dict[int, list[float]] = {}
+    l23_by_frame: dict[int, list[float]] = {}
+    for frame_index in frames:
+        l4_samples = [
+            vector for (repeat_index, sample_frame), vector in l4_vectors_by_sample.items()
+            if sample_frame == frame_index
+        ]
+        l23_samples = [
+            vector for (repeat_index, sample_frame), vector in l23_vectors_by_sample.items()
+            if sample_frame == frame_index
+        ]
+        if l4_samples and l23_samples:
+            l4_by_frame[frame_index] = vector_mean(l4_samples)
+            l23_by_frame[frame_index] = vector_mean(l23_samples)
+    frames = sorted(set(l4_by_frame).intersection(l23_by_frame))
+    if len(frames) < 3:
+        return {
+            "frame_count": float(len(frames)),
+            "same_similarity": math.nan,
+            "different_similarity": math.nan,
+            "same_different_gap": math.nan,
+            "rsm_correlation": math.nan,
+            "temporal_shuffle_rsm_correlation": math.nan,
+            "spatial_shuffle_rsm_correlation": math.nan,
+        }
+    numpy_metrics = compute_l23_video_l4_alignment_metrics_numpy(l4_by_frame, l23_by_frame, frames)
+    if numpy_metrics is not None:
+        return numpy_metrics
+
+    same_similarities: list[float] = []
+    different_similarities: list[float] = []
+    for l4_frame in frames:
+        for l23_frame in frames:
+            similarity = cosine_similarity_optional(l4_by_frame[l4_frame], l23_by_frame[l23_frame])
+            if similarity is None or not math.isfinite(similarity):
+                continue
+            if l4_frame == l23_frame:
+                same_similarities.append(similarity)
+            else:
+                different_similarities.append(similarity)
+
+    l4_rsm: list[float] = []
+    l23_rsm: list[float] = []
+    l23_temporal_shuffle_rsm: list[float] = []
+    l23_spatial_shuffle_rsm: list[float] = []
+    temporal_shift = max(1, len(frames) // 2)
+    temporal_frames = frames[temporal_shift:] + frames[:temporal_shift]
+    l23_spatial_shuffle_by_frame: dict[int, list[float]] = {}
+    for frame_index, frame in enumerate(frames):
+        values = l23_by_frame[frame]
+        if len(values) > 1:
+            shift = (frame_index % (len(values) - 1)) + 1
+            l23_spatial_shuffle_by_frame[frame] = values[-shift:] + values[:-shift]
+        else:
+            l23_spatial_shuffle_by_frame[frame] = list(values)
+    for index, first_frame in enumerate(frames):
+        for second_index in range(index + 1, len(frames)):
+            second_frame = frames[second_index]
+            l4_similarity = cosine_similarity_optional(l4_by_frame[first_frame], l4_by_frame[second_frame])
+            l23_similarity = cosine_similarity_optional(l23_by_frame[first_frame], l23_by_frame[second_frame])
+            first_temporal_frame = temporal_frames[index]
+            second_temporal_frame = temporal_frames[second_index]
+            l23_temporal_similarity = cosine_similarity_optional(
+                l23_by_frame[first_temporal_frame],
+                l23_by_frame[second_temporal_frame],
+            )
+            l23_spatial_similarity = cosine_similarity_optional(
+                l23_spatial_shuffle_by_frame[first_frame],
+                l23_spatial_shuffle_by_frame[second_frame],
+            )
+            if (
+                l4_similarity is not None
+                and l23_similarity is not None
+                and math.isfinite(l4_similarity)
+                and math.isfinite(l23_similarity)
+            ):
+                l4_rsm.append(l4_similarity)
+                l23_rsm.append(l23_similarity)
+                if l23_temporal_similarity is not None and math.isfinite(l23_temporal_similarity):
+                    l23_temporal_shuffle_rsm.append(l23_temporal_similarity)
+                if l23_spatial_similarity is not None and math.isfinite(l23_spatial_similarity):
+                    l23_spatial_shuffle_rsm.append(l23_spatial_similarity)
+
+    same_mean = mean(same_similarities) if same_similarities else math.nan
+    different_mean = mean(different_similarities) if different_similarities else math.nan
+    rsm_correlation = pearson_correlation_optional(l4_rsm, l23_rsm)
+    temporal_shuffle_rsm_correlation = pearson_correlation_optional(l4_rsm, l23_temporal_shuffle_rsm)
+    spatial_shuffle_rsm_correlation = pearson_correlation_optional(l4_rsm, l23_spatial_shuffle_rsm)
+    return {
+        "frame_count": float(len(frames)),
+        "same_similarity": same_mean,
+        "different_similarity": different_mean,
+        "same_different_gap": same_mean - different_mean if math.isfinite(same_mean) and math.isfinite(different_mean) else math.nan,
+        "rsm_correlation": rsm_correlation if rsm_correlation is not None else math.nan,
+        "temporal_shuffle_rsm_correlation": (
+            temporal_shuffle_rsm_correlation
+            if temporal_shuffle_rsm_correlation is not None
+            else math.nan
+        ),
+        "spatial_shuffle_rsm_correlation": (
+            spatial_shuffle_rsm_correlation
+            if spatial_shuffle_rsm_correlation is not None
+            else math.nan
+        ),
+    }
+
+
+def topk_k_for_l23_video(run: RunData, tile_count: int) -> int:
+    candidates = (
+        (run.hva_predictor_metrics or {}).get("topk_k", math.nan),
+        run.summary.get("hva_predictor_topk_k", math.nan),
+        (run.hva_predictor_config or {}).get("topk_k", math.nan),
+    )
+    for candidate in candidates:
+        if math.isfinite(candidate) and candidate >= 1.0:
+            return max(1, min(tile_count, int(round(candidate))))
+    return min(5, tile_count)
+
+
+def compute_l23_video_raw_topk_oracle_metrics(run: RunData, site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
+    tile_grid_side, tile_vectors = video_tile_vectors_by_sample(run, site_rows, "l23e")
+    tile_count = tile_grid_side * tile_grid_side
+    topk_k = topk_k_for_l23_video(run, tile_count)
+    repeats, frames = vector_repeat_sets(tile_vectors)
+    loo_recalls: list[float] = []
+    leaky_recalls: list[float] = []
+    for repeat_index in repeats:
+        other_repeats = [other for other in repeats if other != repeat_index]
+        for frame_index in frames:
+            target = tile_vectors.get((repeat_index, frame_index))
+            if target is None or sum(target) <= 0.0 or max(target) <= 0.0:
+                continue
+            target_topk = top_k_indices(target, topk_k)
+            loo_template_vectors = [
+                tile_vectors[(other_repeat, frame_index)]
+                for other_repeat in other_repeats
+                if (other_repeat, frame_index) in tile_vectors
+            ]
+            if loo_template_vectors:
+                loo_predicted = top_k_indices(vector_mean(loo_template_vectors), topk_k)
+                loo_recalls.append(topk_recall(loo_predicted, target_topk, topk_k))
+            leaky_template_vectors = [
+                tile_vectors[(template_repeat, frame_index)]
+                for template_repeat in repeats
+                if (template_repeat, frame_index) in tile_vectors
+            ]
+            if leaky_template_vectors:
+                leaky_predicted = top_k_indices(vector_mean(leaky_template_vectors), topk_k)
+                leaky_recalls.append(topk_recall(leaky_predicted, target_topk, topk_k))
+
+    return {
+        "repeat_count": float(len(repeats)),
+        "frame_count": float(len(frames)),
+        "tile_grid_side": float(tile_grid_side),
+        "tile_count": float(tile_count),
+        "topk_k": float(topk_k),
+        "loo_no_leak_oracle_recall_at_k": mean(loo_recalls) if loo_recalls else math.nan,
+        "leaky_repeat_mean_oracle_recall_at_k": mean(leaky_recalls) if leaky_recalls else math.nan,
+        "loo_sample_count": float(len(loo_recalls)),
+        "leaky_sample_count": float(len(leaky_recalls)),
+    }
+
+
+def compute_l23_video_tile_entropy_metrics(run: RunData, site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
+    tile_grid_side, tile_vectors = video_tile_vectors_by_sample(run, site_rows, "l23e")
+    tile_count = tile_grid_side * tile_grid_side
+    topk_k = topk_k_for_l23_video(run, tile_count)
+    topk_counts = [0 for _ in range(tile_count)]
+    active_counts = [0 for _ in range(tile_count)]
+    sample_active_fractions: list[float] = []
+    valid_sample_count = 0
+    for tile_vector in tile_vectors.values():
+        if sum(tile_vector) <= 0.0 or max(tile_vector) <= 0.0:
+            continue
+        valid_sample_count += 1
+        active_tile_count = 0
+        for tile_id, rate in enumerate(tile_vector):
+            if rate > 0.0:
+                active_counts[tile_id] += 1
+                active_tile_count += 1
+        sample_active_fractions.append(active_tile_count / tile_count if tile_count > 0 else math.nan)
+        for tile_id in top_k_indices(tile_vector, topk_k):
+            topk_counts[tile_id] += 1
+
+    return {
+        "tile_grid_side": float(tile_grid_side),
+        "tile_count": float(tile_count),
+        "topk_k": float(topk_k),
+        "valid_sample_count": float(valid_sample_count),
+        "topk_entropy_norm": normalized_entropy_from_counts(topk_counts),
+        "topk_occupancy_fraction": (
+            sum(1 for count in topk_counts if count > 0) / tile_count
+            if tile_count > 0
+            else math.nan
+        ),
+        "active_tile_occupancy_fraction": (
+            sum(1 for count in active_counts if count > 0) / tile_count
+            if tile_count > 0
+            else math.nan
+        ),
+        "mean_active_tile_fraction": mean(sample_active_fractions) if sample_active_fractions else math.nan,
+        "max_active_tile_fraction": max(sample_active_fractions) if sample_active_fractions else math.nan,
+    }
+
+
+def l23_video_reliability_summary_for_run(run: RunData) -> dict[str, float] | None:
+    if run.video_site_rows is None:
+        return None
+    representational = compute_l23_video_representational_metrics(run.video_site_rows)
+    oracle = compute_l23_video_raw_topk_oracle_metrics(run, run.video_site_rows)
+    entropy = compute_l23_video_tile_entropy_metrics(run, run.video_site_rows)
+    return {
+        "same_different_gap": representational["same_different_gap"],
+        "frame_top1_accuracy": representational["frame_top1_accuracy"],
+        "loo_oracle": oracle["loo_no_leak_oracle_recall_at_k"],
+        "tile_entropy_norm": entropy["topk_entropy_norm"],
+        "topk_occupancy_fraction": entropy["topk_occupancy_fraction"],
+        "mean_active_tile_fraction": entropy["mean_active_tile_fraction"],
+        "max_active_tile_fraction": entropy["max_active_tile_fraction"],
+    }
+
+
+def validate_l23_video_reliability(
+    full: RunData,
+    control: RunData,
+    somoff: RunData,
+    recoff: RunData | None,
+    pvoff: RunData | None,
+) -> bool:
+    overall_ok = True
+    site_rows = full.video_site_rows
+    frame_rows = full.video_frame_summary_rows
+    artifacts_available = site_rows is not None and frame_rows is not None
+    overall_ok &= print_result(
+        artifacts_available,
+        "l23_video_reliability_artifacts_available",
+        (
+            f"video_site_rows={len(site_rows) if site_rows is not None else 0} "
+            f"video_frame_summary_rows={len(frame_rows) if frame_rows is not None else 0}"
+        ),
+    )
+    if not artifacts_available or site_rows is None:
+        return overall_ok
+
+    representational = compute_l23_video_representational_metrics(site_rows)
+    frame_margin_threshold = max(0.10, 5.0 * representational["frame_chance"])
+    representational_ok = (
+        math.isfinite(representational["same_different_gap"])
+        and math.isfinite(representational["frame_top1_accuracy"])
+        and representational["same_different_gap"] > 0.10
+        and representational["frame_top1_accuracy"] >= frame_margin_threshold
+        and representational["decoded_count"] >= 20.0
+    )
+    overall_ok &= print_result(
+        representational_ok,
+        "l23_video_representational_validity",
+        (
+            f"repeat_count={representational['repeat_count']:.0f} "
+            f"frame_count={representational['frame_count']:.0f} "
+            f"same_similarity={representational['same_similarity']:.6f} "
+            f"different_similarity={representational['different_similarity']:.6f} "
+            f"same_different_gap={representational['same_different_gap']:.6f} "
+            f"gap_threshold=0.100000 "
+            f"frame_top1_accuracy={representational['frame_top1_accuracy']:.6f} "
+            f"frame_chance={representational['frame_chance']:.6f} "
+            f"frame_margin_threshold={frame_margin_threshold:.6f} "
+            f"decoded_count={representational['decoded_count']:.0f}"
+        ),
+    )
+
+    alignment = compute_l23_video_l4_alignment_metrics(site_rows)
+    print(
+        "INFO l23_video_l4_l23_alignment "
+        f"diagnostic_only=1 "
+        f"hard_gate=l23_video_l4_l23_geometry_alignment "
+        f"frame_count={alignment['frame_count']:.0f} "
+        f"same_l4_l23_similarity={alignment['same_similarity']:.6f} "
+        f"different_l4_l23_similarity={alignment['different_similarity']:.6f} "
+        f"same_different_gap={alignment['same_different_gap']:.6f}"
+    )
+    geometry_rsm_threshold = 0.50
+    geometry_null_margin = 0.10
+    temporal_null = alignment["temporal_shuffle_rsm_correlation"]
+    spatial_null = alignment["spatial_shuffle_rsm_correlation"]
+    geometry_ok = (
+        math.isfinite(alignment["rsm_correlation"])
+        and alignment["rsm_correlation"] >= geometry_rsm_threshold
+        and math.isfinite(temporal_null)
+        and math.isfinite(spatial_null)
+        and alignment["rsm_correlation"] >= temporal_null + geometry_null_margin
+        and alignment["rsm_correlation"] >= spatial_null + geometry_null_margin
+    )
+    overall_ok &= print_result(
+        geometry_ok,
+        "l23_video_l4_l23_geometry_alignment",
+        (
+            f"frame_count={alignment['frame_count']:.0f} "
+            f"rsm_correlation={alignment['rsm_correlation']:.6f} "
+            f"rsm_threshold={geometry_rsm_threshold:.6f} "
+            f"temporal_shuffle_rsm_correlation={temporal_null:.6f} "
+            f"spatial_shuffle_rsm_correlation={spatial_null:.6f} "
+            f"null_margin_threshold={geometry_null_margin:.6f} "
+            f"rsm_minus_temporal_shuffle={alignment['rsm_correlation'] - temporal_null:.6f} "
+            f"rsm_minus_spatial_shuffle={alignment['rsm_correlation'] - spatial_null:.6f}"
+        ),
+    )
+
+    oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows)
+    oracle_ok = (
+        math.isfinite(oracle["loo_no_leak_oracle_recall_at_k"])
+        and oracle["loo_no_leak_oracle_recall_at_k"] >= 0.35
+        and oracle["loo_sample_count"] >= 20.0
+    )
+    overall_ok &= print_result(
+        oracle_ok,
+        "l23_video_raw_topk_repeat_oracle_ceiling",
+        (
+            f"repeat_count={oracle['repeat_count']:.0f} "
+            f"frame_count={oracle['frame_count']:.0f} "
+            f"tile_grid_side={oracle['tile_grid_side']:.0f} "
+            f"tile_count={oracle['tile_count']:.0f} "
+            f"topk_k={oracle['topk_k']:.0f} "
+            f"loo_no_leak_oracle_recall_at_k={oracle['loo_no_leak_oracle_recall_at_k']:.6f} "
+            f"loo_threshold=0.350000 "
+            f"loo_sample_count={oracle['loo_sample_count']:.0f} "
+            f"leaky_repeat_mean_oracle_recall_at_k={oracle['leaky_repeat_mean_oracle_recall_at_k']:.6f} "
+            f"leaky_sample_count={oracle['leaky_sample_count']:.0f} "
+            f"uses_current_repeat_for_gate=0"
+        ),
+    )
+
+    entropy = compute_l23_video_tile_entropy_metrics(full, site_rows)
+    entropy_ok = (
+        entropy["valid_sample_count"] >= 20.0
+        and entropy["topk_entropy_norm"] >= 0.35
+        and entropy["topk_occupancy_fraction"] >= 0.20
+        and entropy["active_tile_occupancy_fraction"] >= entropy["topk_occupancy_fraction"]
+    )
+    overall_ok &= print_result(
+        entropy_ok,
+        "l23_video_tile_entropy_occupancy",
+        (
+            f"tile_grid_side={entropy['tile_grid_side']:.0f} "
+            f"tile_count={entropy['tile_count']:.0f} "
+            f"topk_k={entropy['topk_k']:.0f} "
+            f"valid_sample_count={entropy['valid_sample_count']:.0f} "
+            f"topk_entropy_norm={entropy['topk_entropy_norm']:.6f} "
+            f"entropy_threshold=0.350000 "
+            f"topk_occupancy_fraction={entropy['topk_occupancy_fraction']:.6f} "
+            f"occupancy_threshold=0.200000 "
+            f"active_tile_occupancy_fraction={entropy['active_tile_occupancy_fraction']:.6f} "
+            f"mean_active_tile_fraction={entropy['mean_active_tile_fraction']:.6f} "
+            f"max_active_tile_fraction={entropy['max_active_tile_fraction']:.6f}"
+        ),
+    )
+
+    ablation_runs: list[tuple[str, RunData | None]] = [
+        ("full", full),
+        ("control", control),
+        ("somoff", somoff),
+        ("recoff", recoff),
+        ("pvoff", pvoff),
+    ]
+    ablation_parts: list[str] = []
+    ablation_ok = True
+    full_reliability_summary = {
+        "same_different_gap": representational["same_different_gap"],
+        "frame_top1_accuracy": representational["frame_top1_accuracy"],
+        "loo_oracle": oracle["loo_no_leak_oracle_recall_at_k"],
+        "tile_entropy_norm": entropy["topk_entropy_norm"],
+        "topk_occupancy_fraction": entropy["topk_occupancy_fraction"],
+        "mean_active_tile_fraction": entropy["mean_active_tile_fraction"],
+        "max_active_tile_fraction": entropy["max_active_tile_fraction"],
+    }
+    ablation_summaries: dict[str, dict[str, float]] = {"full": full_reliability_summary}
+    for label, run in ablation_runs:
+        if run is None:
+            ablation_parts.append(f"{label}_available=0")
+            continue
+        try:
+            summary = full_reliability_summary if label == "full" else l23_video_reliability_summary_for_run(run)
+        except ValidationError as exc:
+            ablation_ok = False
+            ablation_parts.append(f"{label}_available=0 {label}_error={str(exc).replace(' ', '_')}")
+            continue
+        if summary is None:
+            ablation_parts.append(f"{label}_available=0")
+            continue
+        finite = all(math.isfinite(value) for value in summary.values())
+        ablation_ok &= finite
+        if finite:
+            ablation_summaries[label] = summary
+        ablation_parts.append(
+            f"{label}_available=1 "
+            f"{label}_same_diff_gap={summary['same_different_gap']:.6f} "
+            f"{label}_frame_top1={summary['frame_top1_accuracy']:.6f} "
+            f"{label}_loo_oracle={summary['loo_oracle']:.6f} "
+            f"{label}_entropy={summary['tile_entropy_norm']:.6f} "
+            f"{label}_occupancy={summary['topk_occupancy_fraction']:.6f} "
+            f"{label}_mean_active_tile_fraction={summary['mean_active_tile_fraction']:.6f} "
+            f"{label}_max_active_tile_fraction={summary['max_active_tile_fraction']:.6f}"
+        )
+    for label in ("control", "somoff", "recoff", "pvoff"):
+        summary = ablation_summaries.get(label)
+        if summary is None:
+            ablation_parts.append(f"{label}_directional_density_integrity=unavailable")
+            continue
+        performance_better = (
+            summary["loo_oracle"] > full_reliability_summary["loo_oracle"] + 0.03
+            or summary["frame_top1_accuracy"] > full_reliability_summary["frame_top1_accuracy"] + 0.05
+            or summary["same_different_gap"] > full_reliability_summary["same_different_gap"] + 0.05
+        )
+        # Catch near-doubling pathological densification without flagging modest control shifts.
+        massive_density_increase = (
+            summary["mean_active_tile_fraction"] > full_reliability_summary["mean_active_tile_fraction"] * 1.97
+            and summary["mean_active_tile_fraction"] > full_reliability_summary["mean_active_tile_fraction"] + 0.20
+        )
+        dense_rescue = performance_better and massive_density_increase
+        ablation_parts.append(
+            f"{label}_directional_density_integrity={0 if dense_rescue else 1} "
+            f"{label}_better_than_full={1 if performance_better else 0} "
+            f"{label}_massive_density_increase={1 if massive_density_increase else 0}"
+        )
+    overall_ok &= print_result(
+        ablation_ok,
+        "l23_video_reliability_ablation_effects",
+        (
+            " ".join(ablation_parts)
+            + " safety_caveat=separate_ablation_artifacts_descriptive_not_standalone_causal_proof"
+        ),
+    )
+
+    metrics = full.hva_predictor_metrics
+    smooth_keys = (
+        "topk_heldout_repeat_avg_smooth_model_recall_at_k",
+        "topk_heldout_repeat_avg_smooth_model_ndcg_at_k",
+        "topk_heldout_repeat_avg_smooth_model_captured_ideal_mass_at_k",
+    )
+    if metrics is None:
+        smooth_details = "hva_smoothed_metrics_available=0 hva_smoothed_metrics_unavailable_reason=missing_hva_predictor_metrics"
+    else:
+        smooth_details = (
+            "hva_smoothed_metrics_available=1 "
+            + " ".join(
+                f"{key}={metrics.get(key, math.nan):.6f}"
+                for key in smooth_keys
+            )
+        )
+    anti_cheat_ok = oracle_ok
+    overall_ok &= print_result(
+        anti_cheat_ok,
+        "l23_video_anti_cheat_separation",
+        (
+            f"raw_exact_gate=l23_video_raw_topk_repeat_oracle_ceiling "
+            f"raw_exact_gate_pass={1 if oracle_ok else 0} "
+            f"raw_exact_loo_oracle_recall_at_k={oracle['loo_no_leak_oracle_recall_at_k']:.6f} "
+            f"raw_exact_rescued_by_smoothed_population_metrics=0 "
+            f"smoothed_population_metrics_diagnostic_only=1 "
+            f"{smooth_details}"
+        ),
+    )
+    return overall_ok
 
 
 def compute_recurrent_video_metrics(
@@ -4309,7 +5234,236 @@ def event_best_lag_correlation(
     }
 
 
-def validate_hva_predictor(run: RunData) -> bool:
+_HVA_POPULATION_SMOOTH_KERNEL_R1: tuple[tuple[float, ...], ...] = (
+    (1.0, 2.0, 1.0),
+    (2.0, 4.0, 2.0),
+    (1.0, 2.0, 1.0),
+)
+
+_HVA_POPULATION_SCORERS: tuple[str, ...] = (
+    "model",
+    "persistence",
+    "train_frequency",
+    "no_learning",
+    "time_shuffle",
+    "spatial_shuffle",
+)
+
+
+def _hva_population_score(row: HVAPredictorPredictionRow, scorer: str) -> float:
+    if scorer == "model":
+        return row.topk_model_score
+    if scorer == "persistence":
+        return row.topk_persistence_score
+    if scorer == "train_frequency":
+        return row.topk_train_frequency_score
+    if scorer == "no_learning":
+        return row.topk_no_learning_score
+    if scorer == "time_shuffle":
+        return row.topk_temporal_block_shift_score
+    if scorer == "spatial_shuffle":
+        return row.topk_spatial_tile_shuffle_score
+    raise ValidationError(f"Unknown HVA population scorer: {scorer}")
+
+
+def _smooth_hva_population_target(values: list[float], grid_side: int) -> list[float]:
+    smoothed: list[float] = []
+    for tile_id in range(len(values)):
+        tile_x = tile_id % grid_side
+        tile_y = tile_id // grid_side
+        weighted_sum = 0.0
+        weight_sum = 0.0
+        for kernel_y, kernel_row in enumerate(_HVA_POPULATION_SMOOTH_KERNEL_R1):
+            offset_y = kernel_y - 1
+            source_y = tile_y + offset_y
+            if source_y < 0 or source_y >= grid_side:
+                continue
+            for kernel_x, kernel_weight in enumerate(kernel_row):
+                offset_x = kernel_x - 1
+                source_x = tile_x + offset_x
+                if source_x < 0 or source_x >= grid_side:
+                    continue
+                weighted_sum += kernel_weight * values[source_y * grid_side + source_x]
+                weight_sum += kernel_weight
+        smoothed.append(weighted_sum / weight_sum if weight_sum > 0.0 else values[tile_id])
+    return smoothed
+
+
+def _ranked_tile_ids(scores: list[float]) -> list[int]:
+    return sorted(range(len(scores)), key=lambda tile_id: (-scores[tile_id], tile_id))
+
+
+def _weighted_ndcg_at_k(relevance: list[float], scores: list[float], k: int) -> float | None:
+    if k <= 0 or not relevance:
+        return None
+    cutoff = min(k, len(relevance))
+    ideal_order = _ranked_tile_ids(relevance)
+    ideal_dcg = 0.0
+    for rank, tile_id in enumerate(ideal_order[:cutoff]):
+        ideal_dcg += relevance[tile_id] / math.log2(rank + 2.0)
+    if ideal_dcg <= 1.0e-12:
+        return None
+
+    scored_order = _ranked_tile_ids(scores)
+    dcg = 0.0
+    for rank, tile_id in enumerate(scored_order[:cutoff]):
+        dcg += relevance[tile_id] / math.log2(rank + 2.0)
+    return dcg / ideal_dcg
+
+
+def _captured_ideal_mass_at_k(relevance: list[float], scores: list[float], k: int) -> float | None:
+    if k <= 0 or not relevance:
+        return None
+    cutoff = min(k, len(relevance))
+    ideal_order = _ranked_tile_ids(relevance)
+    ideal_mass = sum(relevance[tile_id] for tile_id in ideal_order[:cutoff])
+    if ideal_mass <= 1.0e-12:
+        return None
+    scored_order = _ranked_tile_ids(scores)
+    captured_mass = sum(relevance[tile_id] for tile_id in scored_order[:cutoff])
+    return captured_mass / ideal_mass
+
+
+def _safe_metric_ratio(numerator: float, denominator: float) -> float:
+    if denominator <= 1.0e-12:
+        return math.inf if numerator > 1.0e-12 else 1.0
+    return numerator / denominator
+
+
+def compute_hva_population_prediction_metrics(
+    heldout_topk_rows: list[HVAPredictorPredictionRow],
+    tile_count_float: float,
+) -> dict[str, float]:
+    """Evaluate heldout future L23E population-distribution prediction.
+
+    This is intentionally an evaluation-only target smoothing. It repeat-averages
+    existing heldout rows by target frame and tile, smooths the target mass over a
+    fixed radius-1 retinotopic kernel, and ranks unchanged model/baseline scores.
+    """
+
+    tile_count = int(round(tile_count_float))
+    grid_side = int(round(math.sqrt(tile_count)))
+    if tile_count <= 0 or grid_side * grid_side != tile_count:
+        raise ValidationError(f"HVA population prediction requires square tile count, got {tile_count}.")
+
+    target_groups: dict[int, list[list[float]]] = {}
+    repeat_indices_by_target_frame: dict[int, set[int]] = {}
+    sample_groups: dict[tuple[int, int], dict[str, object]] = {}
+    for row in heldout_topk_rows:
+        if row.target_channel != "l23e" or row.topk_sample_valid != 1:
+            continue
+        if row.tile_id < 0 or row.tile_id >= tile_count:
+            raise ValidationError(f"HVA population prediction found invalid tile_id={row.tile_id}.")
+
+        target_group = target_groups.get(row.target_frame_index)
+        if target_group is None:
+            target_group = [[] for _ in range(tile_count)]
+            target_groups[row.target_frame_index] = target_group
+        target_group[row.tile_id].append(max(0.0, row.topk_target_value_norm))
+        repeat_indices_by_target_frame.setdefault(row.target_frame_index, set()).add(row.repeat_index)
+
+        sample_key = (row.repeat_index, row.target_frame_index)
+        sample_group = sample_groups.get(sample_key)
+        if sample_group is None:
+            sample_group = {}
+            for scorer in _HVA_POPULATION_SCORERS:
+                sample_group[scorer] = [[] for _ in range(tile_count)]
+            sample_groups[sample_key] = sample_group
+        for scorer in _HVA_POPULATION_SCORERS:
+            score_lists = sample_group[scorer]
+            if not isinstance(score_lists, list):
+                raise ValidationError("HVA population prediction internal score list error.")
+            score = _hva_population_score(row, scorer)
+            if not math.isfinite(score):
+                raise ValidationError(f"HVA population prediction found non-finite {scorer} score.")
+            score_lists[row.tile_id].append(score)
+
+    metric_lists: dict[str, list[float]] = {}
+    for scorer in _HVA_POPULATION_SCORERS:
+        for k in (5, 10):
+            metric_lists[f"{scorer}_ndcg_at{k}"] = []
+            metric_lists[f"{scorer}_captured_ideal_mass_at{k}"] = []
+
+    smoothed_target_by_frame: dict[int, list[float]] = {}
+    skipped_target_frame_count = 0
+    for target_frame_index, target_lists in target_groups.items():
+        if any(len(values) == 0 for values in target_lists):
+            skipped_target_frame_count += 1
+            continue
+        target_values = [mean(values) for values in target_lists]
+        smoothed_target = _smooth_hva_population_target(target_values, grid_side)
+        if sum(smoothed_target) <= 1.0e-12:
+            skipped_target_frame_count += 1
+            continue
+        smoothed_target_by_frame[target_frame_index] = smoothed_target
+
+    evaluated_sample_count = 0
+    skipped_sample_count = 0
+    evaluated_target_frames: set[int] = set()
+    for sample_key, sample_group in sample_groups.items():
+        target_frame_index = sample_key[1]
+        smoothed_target = smoothed_target_by_frame.get(target_frame_index)
+        if smoothed_target is None:
+            skipped_sample_count += 1
+            continue
+        scorer_values: dict[str, list[float]] = {}
+        scorer_complete = True
+        for scorer in _HVA_POPULATION_SCORERS:
+            score_lists = sample_group[scorer]
+            if not isinstance(score_lists, list) or any(len(values) == 0 for values in score_lists):
+                scorer_complete = False
+                break
+            scorer_values[scorer] = [mean(values) for values in score_lists]
+        if not scorer_complete:
+            skipped_sample_count += 1
+            continue
+
+        for scorer, scores in scorer_values.items():
+            for k in (5, 10):
+                ndcg = _weighted_ndcg_at_k(smoothed_target, scores, k)
+                captured_mass = _captured_ideal_mass_at_k(smoothed_target, scores, k)
+                if ndcg is not None:
+                    metric_lists[f"{scorer}_ndcg_at{k}"].append(ndcg)
+                if captured_mass is not None:
+                    metric_lists[f"{scorer}_captured_ideal_mass_at{k}"].append(captured_mass)
+        evaluated_sample_count += 1
+        evaluated_target_frames.add(target_frame_index)
+
+    if evaluated_sample_count <= 0:
+        raise ValidationError("HVA population prediction found no evaluable heldout samples.")
+
+    repeat_counts = [float(len(repeats)) for repeats in repeat_indices_by_target_frame.values()]
+
+    metrics: dict[str, float] = {
+        "tile_count": float(tile_count),
+        "tile_grid_side": float(grid_side),
+        "heldout_topk_row_count": float(len(heldout_topk_rows)),
+        "target_frame_count": float(len(target_groups)),
+        "evaluated_frame_count": float(len(evaluated_target_frames)),
+        "skipped_frame_count": float(skipped_target_frame_count),
+        "evaluated_sample_count": float(evaluated_sample_count),
+        "skipped_sample_count": float(skipped_sample_count),
+        "repeat_count_mean": mean(repeat_counts) if repeat_counts else 1.0,
+        "uniform_chance_captured_ideal_mass_at5": min(1.0, 5.0 / max(1.0, float(tile_count))),
+        "uniform_chance_captured_ideal_mass_at10": min(1.0, 10.0 / max(1.0, float(tile_count))),
+    }
+    for key, values in metric_lists.items():
+        if not values:
+            raise ValidationError(f"HVA population prediction could not compute {key}.")
+        metrics[key] = mean(values)
+
+    metrics["model_ndcg_at5_vs_persistence_ratio"] = _safe_metric_ratio(
+        metrics["model_ndcg_at5"],
+        metrics["persistence_ndcg_at5"],
+    )
+    metrics["model_captured_ideal_mass_at5_vs_persistence_ratio"] = _safe_metric_ratio(
+        metrics["model_captured_ideal_mass_at5"],
+        metrics["persistence_captured_ideal_mass_at5"],
+    )
+    return metrics
+
+
+def validate_hva_predictor(run: RunData, require_population_prediction: bool = False) -> bool:
     overall_ok = True
     config = run.hva_predictor_config
     metrics = run.hva_predictor_metrics
@@ -4477,6 +5631,8 @@ def validate_hva_predictor(run: RunData) -> bool:
     )
     video_training_enabled = run.summary.get("video_training_enabled", math.nan)
     video_feedback_disabled = run.summary.get("video_feedback_disabled", math.nan)
+    consolidation_summary_enabled = run.summary.get("lower_v1_video_consolidation_enabled", 0.0)
+    consolidation_summary_requested = run.summary.get("lower_v1_video_consolidation_requested", 0.0)
     isolation_ok = (
         lower_v1_frozen == 1.0
         and hva_to_v1_connections == 0.0
@@ -4492,7 +5648,7 @@ def validate_hva_predictor(run: RunData) -> bool:
         and multitask_target_fingerprint_equal == 1.0
         and multitask_target_hash_before == multitask_target_hash_after
         and multitask_target_sum_before == multitask_target_sum_after
-        and video_training_enabled == 0.0
+        and (video_training_enabled == 0.0 or consolidation_summary_enabled == 1.0)
         and video_feedback_disabled == 1.0
     )
     overall_ok &= print_result(
@@ -4514,9 +5670,112 @@ def validate_hva_predictor(run: RunData) -> bool:
             f"multitask_target_fingerprint_before={multitask_target_hash_before:.0f} "
             f"multitask_target_fingerprint_after={multitask_target_hash_after:.0f} "
             f"video_training_enabled={video_training_enabled:.6f} "
+            f"lower_v1_video_consolidation_enabled={consolidation_summary_enabled:.6f} "
             f"video_feedback_disabled={video_feedback_disabled:.6f}"
         ),
     )
+
+    consolidation_metrics = run.video_consolidation_metrics
+    if consolidation_summary_enabled == 1.0 or consolidation_metrics is not None:
+        consolidation_source = consolidation_metrics if consolidation_metrics is not None else {}
+
+        def consolidation_value(metric: str, summary_metric: str | None = None) -> float:
+            if metric in consolidation_source:
+                return consolidation_source[metric]
+            return run.summary.get(summary_metric or f"lower_v1_video_consolidation_{metric}", math.nan)
+
+        consolidation_enabled = consolidation_value("enabled")
+        consolidation_requested = consolidation_value("requested")
+        consolidation_repeat_count = consolidation_value("repeat_count")
+        consolidation_frame_start = consolidation_value("frame_start_index")
+        consolidation_frame_count = consolidation_value("frame_count")
+        consolidation_heldout_start = consolidation_value("heldout_start_frame")
+        consolidation_heldout_excluded = consolidation_value("heldout_excluded_frame_count")
+        consolidation_heldout_used = consolidation_value("heldout_frames_used")
+        consolidation_present_only = consolidation_value("present_frame_drive_only")
+        consolidation_future_target = consolidation_value("future_frame_target_used")
+        consolidation_label_target = consolidation_value("target_label_used")
+        consolidation_pre_hva = consolidation_value("pre_hva_stage")
+        consolidation_ff_plasticity = consolidation_value("feedforward_l4_l23_plasticity_enabled")
+        consolidation_hva_feedback = consolidation_value("hva_feedback_enabled")
+        consolidation_pre_trials = consolidation_value("pre_eval_trial_count")
+        consolidation_trials = consolidation_value("consolidation_trial_count")
+        consolidation_post_trials = consolidation_value("post_eval_trial_count")
+        consolidation_pre_corr = consolidation_value("pre_l23e_repeat_corr")
+        consolidation_post_corr = consolidation_value("post_l23e_repeat_corr")
+        consolidation_pre_top5 = consolidation_value("pre_l23e_repeat_top5_overlap")
+        consolidation_post_top5 = consolidation_value("post_l23e_repeat_top5_overlap")
+        consolidation_l4_delta = consolidation_value("l4_l23_weight_delta_max")
+        consolidation_l23ee_delta = consolidation_value("l23ee_weight_delta_max")
+        consolidation_l23pv_delta = consolidation_value("l23pv_weight_delta_max")
+        consolidation_l23som_delta = consolidation_value("l23som_weight_delta_max")
+        video_repeat_count = run.summary.get("video_repeat_count", math.nan)
+        consolidation_trial_counts_ok = (
+            math.isfinite(video_repeat_count)
+            and math.isfinite(consolidation_repeat_count)
+            and abs(consolidation_pre_trials - (consolidation_frame_count * video_repeat_count)) <= 1.0e-6
+            and abs(consolidation_post_trials - (consolidation_frame_count * video_repeat_count)) <= 1.0e-6
+            and abs(consolidation_trials - (consolidation_frame_count * consolidation_repeat_count)) <= 1.0e-6
+        )
+
+        consolidation_audit_ok = (
+            consolidation_summary_requested == 1.0
+            and consolidation_summary_enabled == 1.0
+            and consolidation_requested == 1.0
+            and consolidation_enabled == 1.0
+            and consolidation_frame_start == 0.0
+            and consolidation_frame_count > 0.0
+            and consolidation_heldout_start >= consolidation_frame_count
+            and consolidation_heldout_excluded > 0.0
+            and consolidation_heldout_used == 0.0
+            and consolidation_present_only == 1.0
+            and consolidation_future_target == 0.0
+            and consolidation_label_target == 0.0
+            and consolidation_pre_hva == 1.0
+            and consolidation_ff_plasticity == 0.0
+            and consolidation_hva_feedback == 0.0
+            and consolidation_pre_trials > 0.0
+            and consolidation_trials > 0.0
+            and consolidation_post_trials > 0.0
+            and consolidation_trial_counts_ok
+            and math.isfinite(consolidation_pre_corr)
+            and math.isfinite(consolidation_post_corr)
+            and math.isfinite(consolidation_pre_top5)
+            and math.isfinite(consolidation_post_top5)
+            and consolidation_l4_delta <= 1.0e-12
+            and math.isfinite(consolidation_l23ee_delta)
+            and math.isfinite(consolidation_l23pv_delta)
+            and math.isfinite(consolidation_l23som_delta)
+        )
+        overall_ok &= print_result(
+            consolidation_audit_ok,
+            "hva_predictor_lower_v1_video_consolidation_audit",
+            (
+                f"requested={consolidation_requested:.6f} enabled={consolidation_enabled:.6f} "
+                f"frame_start_index={consolidation_frame_start:.0f} "
+                f"frame_count={consolidation_frame_count:.0f} "
+                f"heldout_start_frame={consolidation_heldout_start:.0f} "
+                f"heldout_excluded_frame_count={consolidation_heldout_excluded:.0f} "
+                f"heldout_frames_used={consolidation_heldout_used:.0f} "
+                f"present_frame_drive_only={consolidation_present_only:.0f} "
+                f"future_frame_target_used={consolidation_future_target:.0f} "
+                f"target_label_used={consolidation_label_target:.0f} "
+                f"pre_hva_stage={consolidation_pre_hva:.6f} "
+                f"feedforward_l4_l23_plasticity_enabled={consolidation_ff_plasticity:.6f} "
+                f"hva_feedback_enabled={consolidation_hva_feedback:.6f} "
+                f"pre_eval_trials={consolidation_pre_trials:.0f} "
+                f"consolidation_trials={consolidation_trials:.0f} "
+                f"post_eval_trials={consolidation_post_trials:.0f} "
+                f"pre_l23e_repeat_corr={consolidation_pre_corr:.6f} "
+                f"post_l23e_repeat_corr={consolidation_post_corr:.6f} "
+                f"pre_l23e_repeat_top5_overlap={consolidation_pre_top5:.6f} "
+                f"post_l23e_repeat_top5_overlap={consolidation_post_top5:.6f} "
+                f"l4_l23_weight_delta_max={consolidation_l4_delta:.6e} "
+                f"l23ee_weight_delta_max={consolidation_l23ee_delta:.6e} "
+                f"l23pv_weight_delta_max={consolidation_l23pv_delta:.6e} "
+                f"l23som_weight_delta_max={consolidation_l23som_delta:.6e}"
+            ),
+        )
 
     prediction_count = require_metric(metrics, "prediction_count", "HVA predictor metrics")
     sample_count = require_metric(metrics, "sample_count", "HVA predictor metrics")
@@ -4604,6 +5863,68 @@ def validate_hva_predictor(run: RunData) -> bool:
         "local_context_summary_feature_count",
         "HVA predictor metrics",
     )
+    directional_context_enabled = require_metric(
+        metrics,
+        "directional_context_feature_enabled",
+        "HVA predictor metrics",
+    )
+    directional_context_radius = require_metric(
+        metrics,
+        "directional_context_radius_tiles",
+        "HVA predictor metrics",
+    )
+    directional_context_count = require_metric(
+        metrics,
+        "directional_context_feature_count",
+        "HVA predictor metrics",
+    )
+    directional_context_l23e_only = require_metric(
+        metrics,
+        "directional_context_l23e_only",
+        "HVA predictor metrics",
+    )
+    directional_context_future_lookahead = require_metric(
+        metrics,
+        "directional_context_future_lookahead_frames",
+        "HVA predictor metrics",
+    )
+    sequence_state_enabled = metrics.get("sequence_state_enabled", 0.0)
+    sequence_state_dim = metrics.get("sequence_state_dim", 0.0)
+    sequence_state_feature_count = metrics.get("sequence_state_feature_count", 0.0)
+    sequence_state_leak = metrics.get("sequence_state_leak", 0.0)
+    sequence_state_input_scale = metrics.get("sequence_state_input_scale", 0.0)
+    sequence_state_neighbor_scale = metrics.get("sequence_state_neighbor_scale", 0.0)
+    sequence_state_neighbor_radius = metrics.get("sequence_state_neighbor_radius_tiles", 0.0)
+    sequence_state_l23e_only = metrics.get("sequence_state_l23e_only", 1.0)
+    sequence_state_future_lookahead = metrics.get("sequence_state_future_lookahead_frames", 0.0)
+    topk_sequence_state_feature_enabled = metrics.get("topk_sequence_state_feature_enabled", 0.0)
+    residual_event_sequence_state_feature_enabled = metrics.get(
+        "residual_event_sequence_state_feature_enabled",
+        0.0,
+    )
+    topk_repeat_avg_target_enabled = metrics.get("topk_repeat_avg_target_enabled", 0.0)
+    topk_repeat_avg_target_train_only = metrics.get("topk_repeat_avg_target_train_only", 1.0)
+    topk_repeat_avg_target_frame_count = metrics.get("topk_repeat_avg_target_frame_count", 0.0)
+    topk_repeat_avg_target_sample_count = metrics.get("topk_repeat_avg_target_sample_count", 0.0)
+    topk_target_smooth_radius = metrics.get("topk_target_smooth_radius_tiles", 0.0)
+    topk_target_smoothing_enabled = metrics.get("topk_target_smoothing_enabled", 0.0)
+    topk_target_smoothing_kernel_code = metrics.get("topk_target_smoothing_kernel_code", 0.0)
+    topk_target_smoothing_target_only = metrics.get("topk_target_smoothing_target_only", 1.0)
+    topk_target_smoothing_input_feature_enabled = metrics.get(
+        "topk_target_smoothing_input_feature_enabled",
+        0.0,
+    )
+    topk_target_smoothing_train_repeat_avg_only = metrics.get(
+        "topk_target_smoothing_train_repeat_avg_only",
+        0.0,
+    )
+    topk_target_smoothing_eval_repeat_avg_only = metrics.get(
+        "topk_target_smoothing_eval_repeat_avg_only",
+        1.0,
+    )
+    topk_frequency_balance_enabled = metrics.get("topk_frequency_balance_enabled", 0.0)
+    topk_frequency_balance_train_only = metrics.get("topk_frequency_balance_train_only", 1.0)
+    topk_frequency_balance_floor = metrics.get("topk_frequency_balance_floor", 0.0)
     local_context_l23e_only = require_metric(metrics, "local_context_l23e_only", "HVA predictor metrics")
     feature_non_l23_inputs = require_metric(metrics, "feature_uses_non_l23_inputs", "HVA predictor metrics")
     feature_future_leakage = require_metric(metrics, "feature_future_leakage_enabled", "HVA predictor metrics")
@@ -4682,6 +6003,7 @@ def validate_hva_predictor(run: RunData) -> bool:
         require_metric(metrics, "residual_weight_abs_derivative", "HVA predictor metrics"),
         require_metric(metrics, "residual_weight_abs_lag", "HVA predictor metrics"),
         require_metric(metrics, "residual_weight_abs_context", "HVA predictor metrics"),
+        metrics.get("residual_weight_abs_sequence", 0.0),
     ]
     event_group_values = [
         require_metric(metrics, "event_weight_abs_current", "HVA predictor metrics"),
@@ -4689,8 +6011,95 @@ def validate_hva_predictor(run: RunData) -> bool:
         require_metric(metrics, "event_weight_abs_derivative", "HVA predictor metrics"),
         require_metric(metrics, "event_weight_abs_lag", "HVA predictor metrics"),
         require_metric(metrics, "event_weight_abs_context", "HVA predictor metrics"),
+        metrics.get("event_weight_abs_sequence", 0.0),
     ]
-    expected_feature_count = base_feature_count + lag_history_frame_count + local_context_summary_count
+    topk_sequence_weight_abs = metrics.get("topk_weight_abs_sequence", 0.0)
+    expected_feature_count = (
+        base_feature_count
+        + lag_history_frame_count
+        + local_context_summary_count
+        + directional_context_count
+        + sequence_state_feature_count
+    )
+    directional_context_ok = (
+        directional_context_l23e_only == 1.0
+        and directional_context_future_lookahead == 0.0
+        and (
+            (
+                directional_context_enabled == 1.0
+                and directional_context_radius == local_context_radius
+                and directional_context_count >= (6.0 * (lag_history_frame_count + 1.0))
+            )
+            or (
+                directional_context_enabled == 0.0
+                and directional_context_radius == 0.0
+                and directional_context_count == 0.0
+            )
+        )
+    )
+    sequence_state_ok = (
+        sequence_state_l23e_only == 1.0
+        and sequence_state_future_lookahead == 0.0
+        and residual_event_sequence_state_feature_enabled == 0.0
+        and (
+            (
+                sequence_state_enabled == 1.0
+                and sequence_state_dim >= 1.0
+                and sequence_state_feature_count == sequence_state_dim
+                and topk_sequence_state_feature_enabled == 1.0
+                and 0.0 <= sequence_state_leak <= 1.0
+                and sequence_state_input_scale >= 0.0
+                and sequence_state_neighbor_scale >= 0.0
+                and sequence_state_neighbor_radius == 1.0
+                and topk_sequence_weight_abs > 0.0
+            )
+            or (
+                sequence_state_enabled == 0.0
+                and sequence_state_feature_count == 0.0
+                and topk_sequence_state_feature_enabled == 0.0
+            )
+        )
+    )
+    repeat_avg_target_ok = (
+        topk_repeat_avg_target_train_only == 1.0
+        and (
+            (
+                topk_repeat_avg_target_enabled == 1.0
+                and topk_repeat_avg_target_frame_count > 0.0
+                and topk_repeat_avg_target_sample_count >= topk_repeat_avg_target_frame_count
+            )
+            or (
+                topk_repeat_avg_target_enabled == 0.0
+                and topk_repeat_avg_target_frame_count == 0.0
+                and topk_repeat_avg_target_sample_count == 0.0
+            )
+        )
+    )
+    frequency_balance_ok = (
+        topk_frequency_balance_train_only == 1.0
+        and (
+            topk_frequency_balance_enabled == 0.0
+            or (topk_frequency_balance_floor > 0.0 and topk_frequency_balance_floor <= 1.0)
+        )
+    )
+    target_smoothing_ok = (
+        topk_target_smoothing_target_only == 1.0
+        and topk_target_smoothing_input_feature_enabled == 0.0
+        and topk_target_smoothing_eval_repeat_avg_only == 1.0
+        and (
+            (
+                topk_target_smoothing_enabled == 0.0
+                and topk_target_smooth_radius == 0.0
+            )
+            or (
+                topk_target_smoothing_enabled == 1.0
+                and topk_target_smooth_radius == 1.0
+                and topk_target_smoothing_kernel_code == 121242121.0
+                and topk_target_smoothing_train_repeat_avg_only == 1.0
+                and topk_repeat_avg_target_enabled == 1.0
+            )
+        )
+    )
     lag_context_feature_ok = (
         feature_count >= expected_feature_count
         and base_feature_count >= 5.0
@@ -4702,6 +6111,8 @@ def validate_hva_predictor(run: RunData) -> bool:
         and local_context_radius >= 1.0
         and local_context_summary_count >= (3.0 * (lag_history_frame_count + 1.0))
         and local_context_l23e_only == 1.0
+        and directional_context_ok
+        and sequence_state_ok
         and feature_non_l23_inputs == 0.0
         and feature_future_leakage == 0.0
         and past_only_lookahead == 0.0
@@ -4721,8 +6132,50 @@ def validate_hva_predictor(run: RunData) -> bool:
             f"local_context_radius_tiles={local_context_radius:.0f} "
             f"local_context_summary_feature_count={local_context_summary_count:.0f} "
             f"local_context_l23e_only={local_context_l23e_only:.0f} "
+            f"directional_context_feature_enabled={directional_context_enabled:.0f} "
+            f"directional_context_radius_tiles={directional_context_radius:.0f} "
+            f"directional_context_feature_count={directional_context_count:.0f} "
+            f"directional_context_l23e_only={directional_context_l23e_only:.0f} "
+            f"directional_context_future_lookahead_frames={directional_context_future_lookahead:.0f} "
+            f"sequence_state_enabled={sequence_state_enabled:.0f} "
+            f"sequence_state_dim={sequence_state_dim:.0f} "
+            f"sequence_state_feature_count={sequence_state_feature_count:.0f} "
+            f"sequence_state_l23e_only={sequence_state_l23e_only:.0f} "
+            f"sequence_state_future_lookahead_frames={sequence_state_future_lookahead:.0f} "
             f"feature_uses_non_l23_inputs={feature_non_l23_inputs:.0f} "
             f"feature_future_leakage_enabled={feature_future_leakage:.0f}"
+        ),
+    )
+    overall_ok &= print_result(
+        sequence_state_ok and repeat_avg_target_ok and frequency_balance_ok and target_smoothing_ok,
+        "hva_predictor_sequence_state_target_audit",
+        (
+            f"sequence_state_enabled={sequence_state_enabled:.0f} "
+            f"sequence_state_dim={sequence_state_dim:.0f} "
+            f"sequence_state_leak={sequence_state_leak:.6f} "
+            f"sequence_state_input_scale={sequence_state_input_scale:.6f} "
+            f"sequence_state_neighbor_scale={sequence_state_neighbor_scale:.6f} "
+            f"sequence_state_neighbor_radius_tiles={sequence_state_neighbor_radius:.0f} "
+            f"topk_sequence_state_feature_enabled={topk_sequence_state_feature_enabled:.0f} "
+            f"residual_event_sequence_state_feature_enabled={residual_event_sequence_state_feature_enabled:.0f} "
+            f"topk_weight_abs_sequence={topk_sequence_weight_abs:.6f} "
+            f"topk_repeat_avg_target_enabled={topk_repeat_avg_target_enabled:.0f} "
+            f"topk_repeat_avg_target_train_only={topk_repeat_avg_target_train_only:.0f} "
+            f"topk_repeat_avg_target_frame_count={topk_repeat_avg_target_frame_count:.0f} "
+            f"topk_repeat_avg_target_sample_count={topk_repeat_avg_target_sample_count:.0f} "
+            f"topk_target_smoothing_enabled={topk_target_smoothing_enabled:.0f} "
+            f"topk_target_smooth_radius_tiles={topk_target_smooth_radius:.0f} "
+            f"topk_target_smoothing_kernel_code={topk_target_smoothing_kernel_code:.0f} "
+            f"topk_target_smoothing_target_only={topk_target_smoothing_target_only:.0f} "
+            f"topk_target_smoothing_input_feature_enabled="
+            f"{topk_target_smoothing_input_feature_enabled:.0f} "
+            f"topk_target_smoothing_train_repeat_avg_only="
+            f"{topk_target_smoothing_train_repeat_avg_only:.0f} "
+            f"topk_target_smoothing_eval_repeat_avg_only="
+            f"{topk_target_smoothing_eval_repeat_avg_only:.0f} "
+            f"topk_frequency_balance_enabled={topk_frequency_balance_enabled:.0f} "
+            f"topk_frequency_balance_train_only={topk_frequency_balance_train_only:.0f} "
+            f"topk_frequency_balance_floor={topk_frequency_balance_floor:.6f}"
         ),
     )
     conditioning_ok = (
@@ -4802,11 +6255,14 @@ def validate_hva_predictor(run: RunData) -> bool:
         f"residual_derivative={residual_group_values[2]:.6f} "
         f"residual_lag={residual_group_values[3]:.6f} "
         f"residual_context={residual_group_values[4]:.6f} "
+        f"residual_sequence={residual_group_values[5]:.6f} "
         f"event_current={event_group_values[0]:.6f} "
         f"event_trace={event_group_values[1]:.6f} "
         f"event_derivative={event_group_values[2]:.6f} "
         f"event_lag={event_group_values[3]:.6f} "
-        f"event_context={event_group_values[4]:.6f}"
+        f"event_context={event_group_values[4]:.6f} "
+        f"event_sequence={event_group_values[5]:.6f} "
+        f"topk_sequence={topk_sequence_weight_abs:.6f}"
     )
     learning_signal_ok = (
         prediction_count >= 16.0
@@ -4923,6 +6379,12 @@ def validate_hva_predictor(run: RunData) -> bool:
             f"feature_channel_count={feature_count:.0f} "
             f"lag_history_frame_count={lag_history_frame_count:.0f} "
             f"local_context_radius_tiles={local_context_radius:.0f} "
+            f"sequence_state_enabled={sequence_state_enabled:.0f} "
+            f"sequence_state_dim={sequence_state_dim:.0f} "
+            f"topk_repeat_avg_target_enabled={topk_repeat_avg_target_enabled:.0f} "
+            f"topk_target_smooth_radius_tiles={topk_target_smooth_radius:.0f} "
+            f"topk_target_smoothing_target_only={topk_target_smoothing_target_only:.0f} "
+            f"topk_frequency_balance_enabled={topk_frequency_balance_enabled:.0f} "
             f"feature_standardization_train_only={feature_standardization_train_only:.0f} "
             f"residual_learning_rate={residual_learning_rate:.6f} "
             f"event_learning_rate={event_learning_rate:.6f} "
@@ -5035,6 +6497,43 @@ def validate_hva_predictor(run: RunData) -> bool:
         metrics,
         "topk_heldout_spatial_tile_shuffle_retained_fraction",
         "HVA predictor metrics",
+    )
+    repeat_avg_recall = metrics.get("topk_heldout_repeat_avg_model_recall_at_k", 0.0)
+    repeat_avg_persistence_recall = metrics.get("topk_heldout_repeat_avg_persistence_recall_at_k", 0.0)
+    repeat_avg_train_freq_recall = metrics.get("topk_heldout_repeat_avg_train_frequency_recall_at_k", 0.0)
+    smooth_recall = metrics.get("topk_heldout_repeat_avg_smooth_model_recall_at_k", 0.0)
+    smooth_persistence_recall = metrics.get("topk_heldout_repeat_avg_smooth_persistence_recall_at_k", 0.0)
+    smooth_train_freq_recall = metrics.get("topk_heldout_repeat_avg_smooth_train_frequency_recall_at_k", 0.0)
+    smooth_ndcg = metrics.get("topk_heldout_repeat_avg_smooth_model_ndcg_at_k", 0.0)
+    smooth_persistence_ndcg = metrics.get("topk_heldout_repeat_avg_smooth_persistence_ndcg_at_k", 0.0)
+    smooth_train_freq_ndcg = metrics.get("topk_heldout_repeat_avg_smooth_train_frequency_ndcg_at_k", 0.0)
+    smooth_mass = metrics.get("topk_heldout_repeat_avg_smooth_model_captured_ideal_mass_at_k", 0.0)
+    smooth_persistence_mass = metrics.get(
+        "topk_heldout_repeat_avg_smooth_persistence_captured_ideal_mass_at_k",
+        0.0,
+    )
+    smooth_train_freq_mass = metrics.get(
+        "topk_heldout_repeat_avg_smooth_train_frequency_captured_ideal_mass_at_k",
+        0.0,
+    )
+    print(
+        "INFO hva_predictor_denoised_topk_metrics "
+        f"raw_model_recall_at_k={topk_model_recall:.6f} "
+        f"raw_persistence_recall_at_k={topk_persistence_recall:.6f} "
+        f"raw_train_frequency_recall_at_k={topk_train_frequency_recall:.6f} "
+        f"repeat_avg_model_recall_at_k={repeat_avg_recall:.6f} "
+        f"repeat_avg_persistence_recall_at_k={repeat_avg_persistence_recall:.6f} "
+        f"repeat_avg_train_frequency_recall_at_k={repeat_avg_train_freq_recall:.6f} "
+        f"repeat_avg_smooth_model_recall_at_k={smooth_recall:.6f} "
+        f"repeat_avg_smooth_persistence_recall_at_k={smooth_persistence_recall:.6f} "
+        f"repeat_avg_smooth_train_frequency_recall_at_k={smooth_train_freq_recall:.6f} "
+        f"repeat_avg_smooth_model_ndcg_at_k={smooth_ndcg:.6f} "
+        f"repeat_avg_smooth_persistence_ndcg_at_k={smooth_persistence_ndcg:.6f} "
+        f"repeat_avg_smooth_train_frequency_ndcg_at_k={smooth_train_freq_ndcg:.6f} "
+        f"repeat_avg_smooth_model_captured_ideal_mass_at_k={smooth_mass:.6f} "
+        f"repeat_avg_smooth_persistence_captured_ideal_mass_at_k={smooth_persistence_mass:.6f} "
+        f"repeat_avg_smooth_train_frequency_captured_ideal_mass_at_k={smooth_train_freq_mass:.6f} "
+        f"target_smooth_radius_tiles={topk_target_smooth_radius:.0f}"
     )
     topk_weight_l1 = require_metric(metrics, "topk_weight_l1", "HVA predictor metrics")
     topk_weight_max_abs = require_metric(metrics, "topk_weight_max_abs", "HVA predictor metrics")
@@ -5168,6 +6667,7 @@ def validate_hva_predictor(run: RunData) -> bool:
             f"topk_local_readout_enabled={topk_local_readout:.0f} "
             f"topk_dense_all_to_all_readout_enabled={topk_dense_readout:.0f} "
             f"topk_local_radius_tiles={topk_local_radius:.0f} "
+            f"residual_event_local_radius_tiles={local_radius_for_topk:.0f} "
             f"topk_active_readout_pair_fraction={topk_active_pair_fraction:.6f} "
             f"active_readout_pair_fraction={active_pair_fraction:.6f} "
             f"topk_local_pair_count={topk_local_pair_count:.0f} "
@@ -5253,6 +6753,78 @@ def validate_hva_predictor(run: RunData) -> bool:
             f"prediction_fields_ok={1 if topk_prediction_fields_ok else 0}"
         ),
     )
+
+    if require_population_prediction:
+        population_metrics = compute_hva_population_prediction_metrics(
+            heldout_topk_rows,
+            tile_count,
+        )
+        population_ok = (
+            topk_prediction_fields_ok
+            and topk_horizon_safety_ok
+            and topk_locality_ok
+            and topk_target_l23e_only == 1.0
+            and topk_input_l23e_only == 1.0
+            and topk_feedback_enabled == 0.0
+            and feature_non_l23_inputs == 0.0
+            and feature_future_leakage == 0.0
+            and population_metrics["tile_grid_side"] == 10.0
+            and population_metrics["model_ndcg_at5"] >= 0.70
+            and population_metrics["model_captured_ideal_mass_at5"] >= 0.70
+            and population_metrics["model_ndcg_at5_vs_persistence_ratio"] >= 1.20
+            and population_metrics["model_captured_ideal_mass_at5_vs_persistence_ratio"] >= 1.20
+        )
+        overall_ok &= print_result(
+            population_ok,
+            "hva_population_prediction_repeat_avg_smooth",
+            (
+                f"heldout_topk_rows={population_metrics['heldout_topk_row_count']:.0f} "
+                f"target_frame_count={population_metrics['target_frame_count']:.0f} "
+                f"evaluated_frame_count={population_metrics['evaluated_frame_count']:.0f} "
+                f"skipped_frame_count={population_metrics['skipped_frame_count']:.0f} "
+                f"evaluated_sample_count={population_metrics['evaluated_sample_count']:.0f} "
+                f"skipped_sample_count={population_metrics['skipped_sample_count']:.0f} "
+                f"repeat_count_mean={population_metrics['repeat_count_mean']:.6f} "
+                f"tile_grid_side={population_metrics['tile_grid_side']:.0f} "
+                f"smoothing_kernel=radius1_121242121_normalized "
+                f"target_repeat_averaged=1 score_repeat_averaged=0 "
+                f"target_smoothing_evaluation_only=1 "
+                f"model_ndcg_at5={population_metrics['model_ndcg_at5']:.6f} "
+                f"persistence_ndcg_at5={population_metrics['persistence_ndcg_at5']:.6f} "
+                f"train_frequency_ndcg_at5={population_metrics['train_frequency_ndcg_at5']:.6f} "
+                f"no_learning_ndcg_at5={population_metrics['no_learning_ndcg_at5']:.6f} "
+                f"time_shuffle_ndcg_at5={population_metrics['time_shuffle_ndcg_at5']:.6f} "
+                f"spatial_shuffle_ndcg_at5={population_metrics['spatial_shuffle_ndcg_at5']:.6f} "
+                f"model_captured_ideal_mass_at5="
+                f"{population_metrics['model_captured_ideal_mass_at5']:.6f} "
+                f"persistence_captured_ideal_mass_at5="
+                f"{population_metrics['persistence_captured_ideal_mass_at5']:.6f} "
+                f"train_frequency_captured_ideal_mass_at5="
+                f"{population_metrics['train_frequency_captured_ideal_mass_at5']:.6f} "
+                f"no_learning_captured_ideal_mass_at5="
+                f"{population_metrics['no_learning_captured_ideal_mass_at5']:.6f} "
+                f"time_shuffle_captured_ideal_mass_at5="
+                f"{population_metrics['time_shuffle_captured_ideal_mass_at5']:.6f} "
+                f"spatial_shuffle_captured_ideal_mass_at5="
+                f"{population_metrics['spatial_shuffle_captured_ideal_mass_at5']:.6f} "
+                f"model_ndcg_at5_vs_persistence_ratio="
+                f"{population_metrics['model_ndcg_at5_vs_persistence_ratio']:.6f} "
+                f"model_captured_ideal_mass_at5_vs_persistence_ratio="
+                f"{population_metrics['model_captured_ideal_mass_at5_vs_persistence_ratio']:.6f} "
+                f"model_ndcg_at10={population_metrics['model_ndcg_at10']:.6f} "
+                f"persistence_ndcg_at10={population_metrics['persistence_ndcg_at10']:.6f} "
+                f"model_captured_ideal_mass_at10="
+                f"{population_metrics['model_captured_ideal_mass_at10']:.6f} "
+                f"persistence_captured_ideal_mass_at10="
+                f"{population_metrics['persistence_captured_ideal_mass_at10']:.6f} "
+                f"uniform_chance_captured_ideal_mass_at5="
+                f"{population_metrics['uniform_chance_captured_ideal_mass_at5']:.6f} "
+                f"topk_target_channel_l23e_only={topk_target_l23e_only:.0f} "
+                f"topk_input_channel_l23e_only={topk_input_l23e_only:.0f} "
+                f"feature_uses_non_l23_inputs={feature_non_l23_inputs:.0f} "
+                f"feature_future_leakage_enabled={feature_future_leakage:.0f}"
+            ),
+        )
 
     model_mse = require_metric(metrics, "heldout_model_mse_norm", "HVA predictor metrics")
     model_raw_mse = require_metric(metrics, "heldout_model_raw_mse_norm", "HVA predictor metrics")
@@ -6033,12 +7605,14 @@ def validate_natural_video_physiology(run: RunData) -> bool:
 
     feedback_disabled = run.summary.get("video_feedback_disabled", 0.0)
     video_training_enabled = run.summary.get("video_training_enabled", 0.0)
+    consolidation_enabled = run.summary.get("lower_v1_video_consolidation_enabled", 0.0)
     overall_ok &= print_result(
-        feedback_disabled == 1.0 and video_training_enabled == 0.0,
+        feedback_disabled == 1.0 and (video_training_enabled == 0.0 or consolidation_enabled == 1.0),
         "natural_video_feedback_disabled",
         (
             f"video_feedback_disabled={feedback_disabled:.6f} "
-            f"video_training_enabled={video_training_enabled:.6f}"
+            f"video_training_enabled={video_training_enabled:.6f} "
+            f"lower_v1_video_consolidation_enabled={consolidation_enabled:.6f}"
         ),
     )
 
@@ -6235,6 +7809,16 @@ def main() -> int:
         control = load_run(args.genn_dir, args.control)
         somoff = load_run(args.genn_dir, args.somoff, require_size_tuning=True)
         pvweak = load_run(args.genn_dir, args.pvweak) if args.require_pv_gain_normalization else None
+        video_recoff = (
+            try_load_optional_run(args.genn_dir, args.recoff, "recoff")
+            if args.require_l23_video_reliability
+            else None
+        )
+        video_pvoff = (
+            try_load_optional_run(args.genn_dir, args.pvoff, "pvoff")
+            if args.require_l23_video_reliability
+            else None
+        )
 
         overall_ok = True
         l23e_osi_metrics_by_label = {
@@ -6276,11 +7860,23 @@ def main() -> int:
         if args.require_natural_video_physiology:
             overall_ok &= validate_natural_video_physiology(full)
 
+        if args.require_l23_video_reliability:
+            overall_ok &= validate_l23_video_reliability(
+                full,
+                control,
+                somoff,
+                video_recoff,
+                video_pvoff,
+            )
+
         if args.require_natural_video_event_timing:
             overall_ok &= validate_natural_video_event_timing(full)
 
-        if args.require_hva_predictor:
-            overall_ok &= validate_hva_predictor(full)
+        if args.require_hva_predictor or args.require_hva_population_prediction:
+            overall_ok &= validate_hva_predictor(
+                full,
+                require_population_prediction=args.require_hva_population_prediction,
+            )
 
         if args.require_sensory_baseline_contrast_annulus:
             sensory_enabled = full.summary.get("sensory_assay_enabled", 0.0)
