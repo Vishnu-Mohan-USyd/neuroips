@@ -39,3 +39,6 @@
 - When the user asks for biological interpretation or remedy, answer the
   biological/computational point directly first. Do not lead with validator
   logs, task plumbing, or raw command-style summaries unless explicitly asked.
+- For the next lower-V1 readiness milestone, L2/3 natural-video decodability
+  below 0.6 is not acceptable. Do not present sub-0.6 improvements as success;
+  improve the L2/3 representation itself while preserving biological gates.

@@ -396,10 +396,10 @@ constexpr char kDefaultOutputPrefix[] = "/scratch/proj/v1_snn_l4_l23/genn/v1_exp
 constexpr unsigned int kDefaultOrientationCount = 12;
 constexpr double kDefaultTrialMs = 250.0;
 constexpr double kDefaultSettleMs = 50.0;
-constexpr unsigned int kDefaultTrainingEpochs = 1;
+constexpr unsigned int kDefaultTrainingEpochs = 2;
 constexpr unsigned int kDefaultRecurrentConsolidationEpochs = 3;
-constexpr double kDefaultStdpAplus = 0.0001;
-constexpr double kDefaultStdpAminus = 0.0000875;
+constexpr double kDefaultStdpAplus = 0.00012;
+constexpr double kDefaultStdpAminus = 0.000105;
 constexpr unsigned int kDefaultL23EEPlasticityEnabled = 1;
 constexpr double kDefaultL23EEStdpAplus = 0.000100;
 constexpr double kDefaultL23EEStdpAminus = 0.000100;
@@ -409,7 +409,7 @@ constexpr double kDefaultL23PVHomeostaticEta = 0.000020;
 constexpr double kDefaultL23SOMHomeostaticEta = 0.000050;
 constexpr double kDefaultL23PVHomeostaticTargetHz = 25.0;
 constexpr double kDefaultL23SOMHomeostaticTargetHz = 5.0;
-constexpr double kDefaultL23PVGate = 0.0;
+constexpr double kDefaultL23PVGate = 0.01;
 constexpr double kDefaultL23SOMGate = 0.18;
 constexpr double kDefaultL23VIPGate = 0.0;
 constexpr double kDefaultL23SOMOutputScale = 1.0;
@@ -417,7 +417,7 @@ constexpr double kDefaultL23SOMContextOutputScale = 1.0;
 constexpr double kDefaultL23PVContextOutputScale = 1.0;
 constexpr double kDefaultL23EEContextOutputScale = 1.0;
 constexpr unsigned int kDefaultL23ESOMBroadRecruitmentRadius = 6;
-constexpr double kDefaultL23ESOMBroadRecruitmentWeightScale = 0.05;
+constexpr double kDefaultL23ESOMBroadRecruitmentWeightScale = 0.054;
 constexpr double kDefaultCenterStimulusRadiusSites = 2.0;
 constexpr double kDefaultBroadStimulusRadiusSites = 3.0;
 constexpr char kDefaultSizeTuningRadiiSites[] = "0.5,1,2,3,4,6";
@@ -431,7 +431,9 @@ constexpr double kDefaultVideoEventGrayCurrent = -1.0;
 constexpr unsigned int kDefaultVideoEventRepeatCount = 1;
 constexpr unsigned int kDefaultVideoEventControlCount = 4;
 constexpr unsigned int kDefaultVideoConsolidationRepeatCount = 1;
-constexpr double kDefaultVideoPVReliabilityOutputScale = 0.965;
+constexpr double kDefaultVideoPVReliabilityOutputScale = 0.975;
+constexpr double kDefaultVideoSOMReliabilityOutputScale = 0.90;
+constexpr double kDefaultVideoFFReliabilityOutputScale = 1.10;
 constexpr unsigned int kDefaultHVAPredictorTileSizeSites = 4;
 constexpr unsigned int kDefaultHVAPredictorDelayFrames = 1;
 constexpr double kDefaultHVAPredictorTraceTauFrames = 2.0;
@@ -474,7 +476,7 @@ constexpr double kHVAPredictorEventRateFloor = 1.0e-4;
 constexpr double kHVAPredictorFastTraceTauMs = 50.0;
 constexpr double kHVAPredictorMediumTraceTauMs = 150.0;
 constexpr double kHVAPredictorSlowTraceTauMs = 500.0;
-constexpr unsigned int kDefaultRecurrentOnlyConsolidationEpochs = 18;
+constexpr unsigned int kDefaultRecurrentOnlyConsolidationEpochs = 27;
 constexpr char kTrainingGratingModeLegacy[] = "legacy";
 constexpr char kTrainingGratingModePhaseDrift[] = "phase_drift";
 constexpr double kDefaultL4L23OrientationNeutralProbabilityScale = 1.27;
@@ -656,6 +658,16 @@ struct VideoConsolidationConfig {
 };
 
 struct VideoPVReliabilityConfig {
+    bool enabled = false;
+    double output_scale = 1.0;
+};
+
+struct VideoSOMReliabilityConfig {
+    bool enabled = false;
+    double output_scale = 1.0;
+};
+
+struct VideoFFReliabilityConfig {
     bool enabled = false;
     double output_scale = 1.0;
 };
@@ -1424,7 +1436,7 @@ L4IntersiteConfig getL4IntersiteConfig()
 L23ESOMBroadRecruitmentConfig getL23ESOMBroadRecruitmentConfig()
 {
     L23ESOMBroadRecruitmentConfig config;
-    config.enabled = getEnvUnsignedOrDefault("V1_L23E_SOM_BROAD_RECRUIT_ENABLE", 0u) != 0u;
+    config.enabled = getEnvUnsignedOrDefault("V1_L23E_SOM_BROAD_RECRUIT_ENABLE", 1u) != 0u;
     config.radius = getEnvUnsignedOrDefault(
         "V1_L23E_SOM_BROAD_RECRUIT_RADIUS",
         kDefaultL23ESOMBroadRecruitmentRadius);
@@ -1584,6 +1596,54 @@ VideoPVReliabilityConfig getVideoPVReliabilityConfig(const VideoReplayConfig &vi
        || config.output_scale > 1.0) {
         throw std::runtime_error(
             "V1_VIDEO_PV_RELIABILITY_OUTPUT_SCALE must be finite and in [0.80, 1.0].");
+    }
+    return config;
+}
+
+VideoSOMReliabilityConfig getVideoSOMReliabilityConfig(const VideoReplayConfig &video_config)
+{
+    VideoSOMReliabilityConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_SOM_RELIABILITY_TUNING_ENABLE", 1u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.output_scale = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_SOM_RELIABILITY_OUTPUT_SCALE",
+            kDefaultVideoSOMReliabilityOutputScale)
+        : 1.0;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.output_scale)
+       || config.output_scale < 0.80
+       || config.output_scale > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_SOM_RELIABILITY_OUTPUT_SCALE must be finite and in [0.80, 1.0].");
+    }
+    return config;
+}
+
+VideoFFReliabilityConfig getVideoFFReliabilityConfig(const VideoReplayConfig &video_config)
+{
+    VideoFFReliabilityConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_FF_RELIABILITY_TUNING_ENABLE", 1u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.output_scale = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L4E_L23E_OUTPUT_SCALE",
+            kDefaultVideoFFReliabilityOutputScale)
+        : 1.0;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.output_scale)
+       || config.output_scale < 1.0
+       || config.output_scale > 1.20) {
+        throw std::runtime_error(
+            "V1_VIDEO_L4E_L23E_OUTPUT_SCALE must be finite and in [1.0, 1.20].");
     }
     return config;
 }
@@ -7755,6 +7815,8 @@ void writeSummaryFiles(
     const SensoryAssayConfig &sensory_assay_config,
     const VideoReplayConfig &video_replay_config,
     const VideoPVReliabilityConfig &video_pv_reliability_config,
+    const VideoSOMReliabilityConfig &video_som_reliability_config,
+    const VideoFFReliabilityConfig &video_ff_reliability_config,
     const VideoEventTimingConfig &video_event_timing_config,
     const VideoConsolidationConfig &video_consolidation_config,
     const VideoConsolidationMetrics &video_consolidation_metrics,
@@ -7854,6 +7916,27 @@ void writeSummaryFiles(
     csv << "video_pv_reliability_weight_density_modified,0.000000\n";
     csv << "video_pv_reliability_target_label_used,0.000000\n";
     csv << "video_pv_reliability_future_frame_used,0.000000\n";
+    csv << "video_som_reliability_tuning_enabled,"
+        << (video_som_reliability_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_som_reliability_output_scale,"
+        << video_som_reliability_config.output_scale << "\n";
+    csv << "video_som_reliability_l23som_to_l23e_only,"
+        << (video_som_reliability_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_som_reliability_pv_modified,0.000000\n";
+    csv << "video_som_reliability_som_to_som_modified,0.000000\n";
+    csv << "video_som_reliability_weight_density_modified,0.000000\n";
+    csv << "video_som_reliability_target_label_used,0.000000\n";
+    csv << "video_som_reliability_future_frame_used,0.000000\n";
+    csv << "video_ff_reliability_tuning_enabled,"
+        << (video_ff_reliability_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_reliability_l4e_l23e_output_scale,"
+        << video_ff_reliability_config.output_scale << "\n";
+    csv << "video_ff_reliability_l4e_to_l23e_only,"
+        << (video_ff_reliability_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_reliability_inhibitory_modified,0.000000\n";
+    csv << "video_ff_reliability_weight_density_modified,0.000000\n";
+    csv << "video_ff_reliability_target_label_used,0.000000\n";
+    csv << "video_ff_reliability_future_frame_used,0.000000\n";
     csv << "video_event_timing_enabled," << (video_event_timing_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "video_event_frame_count," << video_event_timing_config.effective_event_count << "\n";
     csv << "video_event_repeat_count," << video_event_timing_config.repeat_count << "\n";
@@ -8118,6 +8201,27 @@ void writeSummaryFiles(
     text << "video_pv_reliability_weight_density_modified=0\n";
     text << "video_pv_reliability_target_label_used=0\n";
     text << "video_pv_reliability_future_frame_used=0\n";
+    text << "video_som_reliability_tuning_enabled="
+         << (video_som_reliability_config.enabled ? 1 : 0) << "\n";
+    text << "video_som_reliability_output_scale="
+         << video_som_reliability_config.output_scale << "\n";
+    text << "video_som_reliability_l23som_to_l23e_only="
+         << (video_som_reliability_config.enabled ? 1 : 0) << "\n";
+    text << "video_som_reliability_pv_modified=0\n";
+    text << "video_som_reliability_som_to_som_modified=0\n";
+    text << "video_som_reliability_weight_density_modified=0\n";
+    text << "video_som_reliability_target_label_used=0\n";
+    text << "video_som_reliability_future_frame_used=0\n";
+    text << "video_ff_reliability_tuning_enabled="
+         << (video_ff_reliability_config.enabled ? 1 : 0) << "\n";
+    text << "video_ff_reliability_l4e_l23e_output_scale="
+         << video_ff_reliability_config.output_scale << "\n";
+    text << "video_ff_reliability_l4e_to_l23e_only="
+         << (video_ff_reliability_config.enabled ? 1 : 0) << "\n";
+    text << "video_ff_reliability_inhibitory_modified=0\n";
+    text << "video_ff_reliability_weight_density_modified=0\n";
+    text << "video_ff_reliability_target_label_used=0\n";
+    text << "video_ff_reliability_future_frame_used=0\n";
     text << "video_event_timing_enabled="
          << (video_event_timing_config.enabled ? 1 : 0) << "\n";
     text << "video_event_frame_count=" << video_event_timing_config.effective_event_count << "\n";
@@ -8697,6 +8801,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const VideoReplayConfig video_replay_config = getVideoReplayConfig();
     const VideoPVReliabilityConfig video_pv_reliability_config =
         getVideoPVReliabilityConfig(video_replay_config);
+    const VideoSOMReliabilityConfig video_som_reliability_config =
+        getVideoSOMReliabilityConfig(video_replay_config);
+    const VideoFFReliabilityConfig video_ff_reliability_config =
+        getVideoFFReliabilityConfig(video_replay_config);
     const VideoEventTimingConfig video_event_timing_config =
         getVideoEventTimingConfig(video_replay_config);
     const HVAPredictorConfig hva_predictor_config =
@@ -9303,6 +9411,16 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             && !recurrent_learning
             && !inhibitory_learning
             && video_pv_reliability_config.output_scale != 1.0;
+        const bool apply_som_reliability_scale =
+            video_som_reliability_config.enabled
+            && !recurrent_learning
+            && !inhibitory_learning
+            && video_som_reliability_config.output_scale != 1.0;
+        const bool apply_ff_reliability_scale =
+            video_ff_reliability_config.enabled
+            && !recurrent_learning
+            && !inhibitory_learning
+            && video_ff_reliability_config.output_scale != 1.0;
         std::vector<float> l23pv_to_l23e_weights_before_reliability_scale;
         if(apply_pv_reliability_scale) {
             // Non-plastic video replay can use a transient PV gain reduction without
@@ -9313,6 +9431,26 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 runtime,
                 l23pv_to_l23e,
                 video_pv_reliability_config.output_scale);
+        }
+        std::vector<float> l23som_to_l23e_weights_before_reliability_scale;
+        if(apply_som_reliability_scale) {
+            // Keep the SOM reliability rebalance transient and pathway-specific.
+            l23som_to_l23e_weights_before_reliability_scale =
+                copyWeights(runtime, l23som_to_l23e);
+            scaleSynapseWeights(
+                runtime,
+                l23som_to_l23e,
+                video_som_reliability_config.output_scale);
+        }
+        std::vector<float> l4e_to_l23e_weights_before_reliability_scale;
+        if(apply_ff_reliability_scale) {
+            // Feedforward replay gain is uniform and transient; trained weights are restored.
+            l4e_to_l23e_weights_before_reliability_scale =
+                copyWeights(runtime, l4e_to_l23e);
+            scaleSynapseWeights(
+                runtime,
+                l4e_to_l23e,
+                video_ff_reliability_config.output_scale);
         }
 
         const std::size_t frame_size = v1_genn::kNumL4E;
@@ -9355,6 +9493,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 runtime,
                 l23pv_to_l23e,
                 l23pv_to_l23e_weights_before_reliability_scale);
+        }
+        if(apply_som_reliability_scale) {
+            setSynapseWeights(
+                runtime,
+                l23som_to_l23e,
+                l23som_to_l23e_weights_before_reliability_scale);
+        }
+        if(apply_ff_reliability_scale) {
+            setSynapseWeights(
+                runtime,
+                l4e_to_l23e,
+                l4e_to_l23e_weights_before_reliability_scale);
         }
     };
 
@@ -10288,6 +10438,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         sensory_assay_config,
         video_replay_config,
         video_pv_reliability_config,
+        video_som_reliability_config,
+        video_ff_reliability_config,
         video_event_timing_config,
         video_consolidation_config,
         video_consolidation_metrics,

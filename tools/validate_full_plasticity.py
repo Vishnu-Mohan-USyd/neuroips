@@ -599,6 +599,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--l23-video-min-frame-top1-accuracy",
+        type=float,
+        default=None,
+        help=(
+            "Optional stricter minimum frame-top1 accuracy for the "
+            "l23_video_representational_validity gate. Defaults to the "
+            "historical chance-margin threshold when omitted."
+        ),
+    )
+    parser.add_argument(
         "--require-natural-video-event-timing",
         action="store_true",
         help="Require opt-in millisecond event-aligned natural-video timing artifacts and gates.",
@@ -4834,6 +4844,7 @@ def validate_l23_video_reliability(
     somoff: RunData,
     recoff: RunData | None,
     pvoff: RunData | None,
+    min_frame_top1_accuracy: float | None = None,
 ) -> bool:
     overall_ok = True
     site_rows = full.video_site_rows
@@ -4851,7 +4862,10 @@ def validate_l23_video_reliability(
         return overall_ok
 
     representational = compute_l23_video_representational_metrics(site_rows)
-    frame_margin_threshold = max(0.10, 5.0 * representational["frame_chance"])
+    historical_frame_margin_threshold = max(0.10, 5.0 * representational["frame_chance"])
+    frame_margin_threshold = historical_frame_margin_threshold
+    if min_frame_top1_accuracy is not None:
+        frame_margin_threshold = max(frame_margin_threshold, min_frame_top1_accuracy)
     representational_ok = (
         math.isfinite(representational["same_different_gap"])
         and math.isfinite(representational["frame_top1_accuracy"])
@@ -4872,6 +4886,8 @@ def validate_l23_video_reliability(
             f"frame_top1_accuracy={representational['frame_top1_accuracy']:.6f} "
             f"frame_chance={representational['frame_chance']:.6f} "
             f"frame_margin_threshold={frame_margin_threshold:.6f} "
+            f"historical_frame_margin_threshold={historical_frame_margin_threshold:.6f} "
+            f"configured_min_frame_top1_accuracy={format_optional_float(min_frame_top1_accuracy)} "
             f"decoded_count={representational['decoded_count']:.0f}"
         ),
     )
@@ -7798,6 +7814,13 @@ def main() -> int:
             raise ValidationError("--responsive-rate-threshold-hz must be non-negative.")
         if args.cell_responsive_threshold_hz < 0.0:
             raise ValidationError("--cell-responsive-threshold-hz must be non-negative.")
+        if args.l23_video_min_frame_top1_accuracy is not None:
+            if not 0.0 <= args.l23_video_min_frame_top1_accuracy <= 1.0:
+                raise ValidationError("--l23-video-min-frame-top1-accuracy must be in [0, 1].")
+            if not args.require_l23_video_reliability:
+                raise ValidationError(
+                    "--l23-video-min-frame-top1-accuracy requires --require-l23-video-reliability."
+                )
         if args.require_pv_gain_normalization and not args.pvweak:
             raise ValidationError("--require-pv-gain-normalization requires --pvweak PREFIX.")
         full = load_run(
@@ -7867,6 +7890,7 @@ def main() -> int:
                 somoff,
                 video_recoff,
                 video_pvoff,
+                min_frame_top1_accuracy=args.l23_video_min_frame_top1_accuracy,
             )
 
         if args.require_natural_video_event_timing:
