@@ -4249,6 +4249,9 @@ def compute_l23_video_representational_metrics_numpy(
 
     decoded_count = 0
     correct_count = 0
+    top5_count = 0
+    rank_sum = 0.0
+    rank_count = 0
     for repeat_index in repeats:
         other_repeats = [other for other in repeats if other != repeat_index]
         sample_frames = [frame_index for frame_index in frames if (repeat_index, frame_index) in vectors]
@@ -4273,12 +4276,23 @@ def compute_l23_video_representational_metrics_numpy(
             continue
         score_matrix = sample_normalized @ template_normalized.T
         score_matrix[:, ~template_valid] = -np.inf
+        template_frame_to_col = {template_frame: col for col, template_frame in enumerate(template_frames)}
         for row_index, sample_is_valid in enumerate(sample_valid):
             if not sample_is_valid:
                 continue
             predicted_frame = template_frames[int(np.argmax(score_matrix[row_index]))]
             decoded_count += 1
             correct_count += int(predicted_frame == sample_frames[row_index])
+            true_col = template_frame_to_col.get(sample_frames[row_index])
+            if true_col is None:
+                continue
+            true_score = float(score_matrix[row_index, true_col])
+            if not math.isfinite(true_score):
+                continue
+            rank = 1 + int(np.sum(score_matrix[row_index] > true_score))
+            rank_sum += float(rank)
+            rank_count += 1
+            top5_count += int(rank <= 5)
 
     same_mean = (same_sum / same_count) if same_count else math.nan
     different_mean = (different_sum / different_count) if different_count else math.nan
@@ -4289,6 +4303,8 @@ def compute_l23_video_representational_metrics_numpy(
         "different_similarity": different_mean,
         "same_different_gap": same_mean - different_mean if math.isfinite(same_mean) and math.isfinite(different_mean) else math.nan,
         "frame_top1_accuracy": (correct_count / decoded_count) if decoded_count else math.nan,
+        "frame_top5_accuracy": (top5_count / rank_count) if rank_count else math.nan,
+        "frame_mean_rank": (rank_sum / rank_count) if rank_count else math.nan,
         "frame_chance": 1.0 / len(frames),
         "decoded_count": float(decoded_count),
     }
@@ -4578,6 +4594,8 @@ def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]
             "different_similarity": math.nan,
             "same_different_gap": math.nan,
             "frame_top1_accuracy": math.nan,
+            "frame_top5_accuracy": math.nan,
+            "frame_mean_rank": math.nan,
             "frame_chance": (1.0 / len(frames)) if frames else math.nan,
             "decoded_count": 0.0,
         }
@@ -4613,6 +4631,9 @@ def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]
 
     decoded_count = 0
     correct_count = 0
+    top5_count = 0
+    rank_sum = 0.0
+    rank_count = 0
     for repeat_index in repeats:
         other_repeats = [other for other in repeats if other != repeat_index]
         for frame_index in frames:
@@ -4636,6 +4657,13 @@ def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]
             predicted_frame = max(scores, key=lambda item: (item[0], -item[1]))[1]
             decoded_count += 1
             correct_count += int(predicted_frame == frame_index)
+            true_scores = [score for score, template_frame in scores if template_frame == frame_index]
+            if true_scores:
+                true_score = true_scores[0]
+                rank = 1 + sum(1 for score, _ in scores if score > true_score)
+                rank_sum += float(rank)
+                rank_count += 1
+                top5_count += int(rank <= 5)
 
     same_mean = mean(same_similarities) if same_similarities else math.nan
     different_mean = mean(different_similarities) if different_similarities else math.nan
@@ -4646,6 +4674,8 @@ def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]
         "different_similarity": different_mean,
         "same_different_gap": same_mean - different_mean if math.isfinite(same_mean) and math.isfinite(different_mean) else math.nan,
         "frame_top1_accuracy": (correct_count / decoded_count) if decoded_count else math.nan,
+        "frame_top5_accuracy": (top5_count / rank_count) if rank_count else math.nan,
+        "frame_mean_rank": (rank_sum / rank_count) if rank_count else math.nan,
         "frame_chance": 1.0 / len(frames),
         "decoded_count": float(decoded_count),
     }
@@ -4871,6 +4901,8 @@ def l23_video_reliability_summary_for_run(run: RunData) -> dict[str, float] | No
     return {
         "same_different_gap": representational["same_different_gap"],
         "frame_top1_accuracy": representational["frame_top1_accuracy"],
+        "frame_top5_accuracy": representational["frame_top5_accuracy"],
+        "frame_mean_rank": representational["frame_mean_rank"],
         "loo_oracle": oracle["loo_no_leak_oracle_recall_at_k"],
         "tile_entropy_norm": entropy["topk_entropy_norm"],
         "topk_occupancy_fraction": entropy["topk_occupancy_fraction"],
@@ -4925,6 +4957,8 @@ def validate_l23_video_reliability(
             f"same_different_gap={representational['same_different_gap']:.6f} "
             f"gap_threshold=0.100000 "
             f"frame_top1_accuracy={representational['frame_top1_accuracy']:.6f} "
+            f"frame_top5_accuracy={representational['frame_top5_accuracy']:.6f} "
+            f"frame_mean_rank={representational['frame_mean_rank']:.6f} "
             f"frame_chance={representational['frame_chance']:.6f} "
             f"frame_margin_threshold={frame_margin_threshold:.6f} "
             f"historical_frame_margin_threshold={historical_frame_margin_threshold:.6f} "
