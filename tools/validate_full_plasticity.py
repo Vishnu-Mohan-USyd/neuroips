@@ -609,6 +609,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-emergent-ff-gain",
+        action="store_true",
+        help=(
+            "Require opt-in emergent L4E->L23E feedforward-gain audit: "
+            "no transient eval FF replay gain, causal video FF STDP exposure, "
+            "and nonzero video-exposure L4E->L23E weight deltas."
+        ),
+    )
+    parser.add_argument(
         "--require-natural-video-event-timing",
         action="store_true",
         help="Require opt-in millisecond event-aligned natural-video timing artifacts and gates.",
@@ -2015,6 +2024,38 @@ def require_summary_metric(run: RunData, metric: str) -> float:
     if not math.isfinite(value):
         raise ValidationError(f"Non-finite summary metric {metric!r} in prefix {run.prefix}")
     return value
+
+
+def optional_summary_metric(run: RunData, metric: str) -> float | None:
+    if metric not in run.summary:
+        return None
+    value = run.summary[metric]
+    if not math.isfinite(value):
+        raise ValidationError(f"Non-finite summary metric {metric!r} in prefix {run.prefix}")
+    return value
+
+
+def first_summary_metric(run: RunData, metrics: tuple[str, ...]) -> tuple[str | None, float | None]:
+    for metric in metrics:
+        value = optional_summary_metric(run, metric)
+        if value is not None:
+            return metric, value
+    return None, None
+
+
+def summary_metric_values(run: RunData, metrics: tuple[str, ...]) -> list[tuple[str, float]]:
+    values: list[tuple[str, float]] = []
+    for metric in metrics:
+        value = optional_summary_metric(run, metric)
+        if value is not None:
+            values.append((metric, value))
+    return values
+
+
+def format_metric_values(values: list[tuple[str, float]]) -> str:
+    if not values:
+        return "missing"
+    return "|".join(f"{metric}:{value:.6f}" for metric, value in values)
 
 
 def require_metric(metrics: dict[str, float], metric: str, source: str) -> float:
@@ -5086,6 +5127,352 @@ def validate_l23_video_reliability(
     return overall_ok
 
 
+def validate_emergent_ff_gain(run: RunData) -> bool:
+    """Validate that video FF gain is learned, not a transient eval-time scale."""
+
+    overall_ok = True
+    video_replay_enabled = optional_summary_metric(run, "video_replay_enabled")
+    ff_tuning_enabled = optional_summary_metric(run, "video_ff_reliability_tuning_enabled")
+    ff_output_scale = optional_summary_metric(run, "video_ff_reliability_l4e_l23e_output_scale")
+    frozen_eval_ok = (
+        video_replay_enabled == 1.0
+        and (
+            ff_tuning_enabled == 0.0
+            or (ff_output_scale is not None and abs(ff_output_scale - 1.0) <= 1.0e-9)
+        )
+    )
+    overall_ok &= print_result(
+        frozen_eval_ok,
+        "l23_video_ff_eval_no_transient_gain",
+        (
+            f"video_replay_enabled={format_optional_float(video_replay_enabled)} "
+            f"video_ff_reliability_tuning_enabled={format_optional_float(ff_tuning_enabled)} "
+            f"video_ff_reliability_l4e_l23e_output_scale={format_optional_float(ff_output_scale)} "
+            "required_tuning_disabled_or_scale_one=1"
+        ),
+    )
+
+    video_ff_stdp_enabled = optional_summary_metric(run, "video_ff_stdp_enabled")
+    present_only_values = summary_metric_values(
+        run,
+        (
+            "video_ff_stdp_present_frame_drive_only",
+            "video_ff_homeostatic_scaling_present_frame_drive_only",
+            "video_ff_homeostatic_present_frame_drive_only",
+            "video_ff_present_frame_drive_only",
+        ),
+    )
+    future_frame_used_values = summary_metric_values(
+        run,
+        (
+            "video_ff_stdp_future_frame_used",
+            "video_ff_homeostatic_scaling_future_frame_used",
+            "video_ff_homeostatic_future_frame_used",
+            "video_ff_future_frame_used",
+        ),
+    )
+    target_label_used_values = summary_metric_values(
+        run,
+        (
+            "video_ff_stdp_target_label_used",
+            "video_ff_homeostatic_scaling_target_label_used",
+            "video_ff_homeostatic_target_label_used",
+            "video_ff_target_label_used",
+        ),
+    )
+    heldout_frames_used_values = summary_metric_values(
+        run,
+        (
+            "video_ff_stdp_heldout_frames_used",
+            "video_ff_homeostatic_scaling_heldout_frames_used",
+            "video_ff_homeostatic_heldout_frames_used",
+            "video_ff_heldout_frames_used",
+        ),
+    )
+    hva_feedback_enabled_values = summary_metric_values(
+        run,
+        (
+            "video_ff_stdp_hva_feedback_enabled",
+            "video_ff_homeostatic_scaling_hva_feedback_enabled",
+            "video_ff_homeostatic_hva_feedback_enabled",
+            "video_ff_hva_feedback_enabled",
+        ),
+    )
+    optional_false_flags_ok = all(
+        value == 0.0
+        for _, value in (
+            future_frame_used_values
+            + target_label_used_values
+            + heldout_frames_used_values
+            + hva_feedback_enabled_values
+        )
+    )
+    present_only_ok = all(value == 1.0 for _, value in present_only_values)
+    exposure_audit_ok = (
+        video_ff_stdp_enabled == 1.0
+        and present_only_ok
+        and optional_false_flags_ok
+    )
+    overall_ok &= print_result(
+        exposure_audit_ok,
+        "l23_video_ff_plastic_exposure_audit",
+        (
+            f"video_ff_stdp_enabled={format_optional_float(video_ff_stdp_enabled)} "
+            f"video_ff_present_frame_drive_only_values={format_metric_values(present_only_values)} "
+            f"video_ff_future_frame_used_values={format_metric_values(future_frame_used_values)} "
+            f"video_ff_target_label_used_values={format_metric_values(target_label_used_values)} "
+            f"video_ff_heldout_frames_used_values={format_metric_values(heldout_frames_used_values)} "
+            f"video_ff_hva_feedback_enabled_values={format_metric_values(hva_feedback_enabled_values)}"
+        ),
+    )
+
+    min_active_count = 100.0
+    min_changed_fraction = 0.01
+    min_p95_abs_delta = 1.0e-6
+    min_max_abs_delta = 1.0e-6
+
+    def read_ff_delta_evidence(
+        label: str,
+        *,
+        active_aliases: tuple[str, ...],
+        changed_aliases: tuple[str, ...],
+        p95_aliases: tuple[str, ...],
+        max_aliases: tuple[str, ...],
+        mean_aliases: tuple[str, ...],
+        gain_aliases: tuple[str, ...],
+    ) -> dict[str, float | str | None]:
+        active_metric, active_count = first_summary_metric(run, active_aliases)
+        changed_metric, changed_fraction = first_summary_metric(run, changed_aliases)
+        p95_metric, p95_abs_delta = first_summary_metric(run, p95_aliases)
+        max_metric, max_abs_delta = first_summary_metric(run, max_aliases)
+        mean_metric, mean_delta = first_summary_metric(run, mean_aliases)
+        gain_metric, mean_gain_ratio = first_summary_metric(run, gain_aliases)
+        direction_ok = (
+            (mean_gain_ratio is not None and mean_gain_ratio > 1.0)
+            or (mean_delta is not None and mean_delta > 0.0)
+        )
+        metrics_present = all(value is not None for value in (changed_fraction, p95_abs_delta, max_abs_delta))
+        active_ok = active_count is None or active_count >= min_active_count
+        thresholds_ok = (
+            metrics_present
+            and changed_fraction is not None
+            and p95_abs_delta is not None
+            and max_abs_delta is not None
+            and active_ok
+            and changed_fraction >= min_changed_fraction
+            and p95_abs_delta >= min_p95_abs_delta
+            and max_abs_delta >= min_max_abs_delta
+        )
+        return {
+            "label": label,
+            "active_metric": active_metric,
+            "active_count": active_count,
+            "changed_metric": changed_metric,
+            "changed_fraction": changed_fraction,
+            "p95_metric": p95_metric,
+            "p95_abs_delta": p95_abs_delta,
+            "max_metric": max_metric,
+            "max_abs_delta": max_abs_delta,
+            "mean_metric": mean_metric,
+            "mean_delta": mean_delta,
+            "gain_metric": gain_metric,
+            "mean_gain_ratio": mean_gain_ratio,
+            "direction_ok": 1.0 if direction_ok else 0.0,
+            "thresholds_ok": 1.0 if thresholds_ok else 0.0,
+        }
+
+    stdp_evidence = read_ff_delta_evidence(
+        "stdp",
+        active_aliases=(
+            "video_ff_stdp_l4_l23_active_count",
+            "video_ff_stdp_l4e_l23e_active_count",
+            "video_ff_stdp_active_edge_count",
+        ),
+        changed_aliases=(
+            "video_ff_stdp_l4_l23_changed_frac",
+            "video_ff_stdp_l4e_l23e_changed_frac",
+            "feedforward_l4_l23_changed_frac",
+        ),
+        p95_aliases=(
+            "video_ff_stdp_l4_l23_p95_abs_delta",
+            "video_ff_stdp_l4e_l23e_p95_abs_delta",
+            "feedforward_l4_l23_p95_abs_delta",
+        ),
+        max_aliases=(
+            "video_ff_stdp_l4_l23_max_abs_delta",
+            "video_ff_stdp_l4e_l23e_max_abs_delta",
+            "feedforward_l4_l23_max_abs_delta",
+        ),
+        mean_aliases=(
+            "video_ff_stdp_l4_l23_mean_delta",
+            "video_ff_stdp_l4e_l23e_mean_delta",
+            "feedforward_l4_l23_mean_delta",
+        ),
+        gain_aliases=(
+            "video_ff_stdp_l4_l23_mean_gain_ratio",
+            "video_ff_stdp_l4e_l23e_mean_gain_ratio",
+            "feedforward_l4_l23_mean_gain_ratio",
+        ),
+    )
+    homeostatic_evidence = read_ff_delta_evidence(
+        "homeostatic",
+        active_aliases=(
+            "video_ff_homeostatic_scaling_active_edge_count",
+            "video_ff_homeostatic_scaling_active_count",
+            "video_ff_homeostatic_scaling_l4_l23_active_count",
+            "video_ff_homeostatic_l4_l23_active_count",
+            "video_ff_homeostatic_active_edge_count",
+            "video_ff_homeostatic_active_count",
+        ),
+        changed_aliases=(
+            "video_ff_homeostatic_scaling_changed_frac",
+            "video_ff_homeostatic_scaling_l4_l23_changed_frac",
+            "video_ff_homeostatic_l4_l23_changed_frac",
+            "video_ff_homeostatic_changed_frac",
+        ),
+        p95_aliases=(
+            "video_ff_homeostatic_scaling_p95_abs_delta",
+            "video_ff_homeostatic_scaling_l4_l23_p95_abs_delta",
+            "video_ff_homeostatic_l4_l23_p95_abs_delta",
+            "video_ff_homeostatic_p95_abs_delta",
+        ),
+        max_aliases=(
+            "video_ff_homeostatic_scaling_max_abs_delta",
+            "video_ff_homeostatic_scaling_l4_l23_max_abs_delta",
+            "video_ff_homeostatic_l4_l23_max_abs_delta",
+            "video_ff_homeostatic_max_abs_delta",
+        ),
+        mean_aliases=(
+            "video_ff_homeostatic_scaling_mean_delta",
+            "video_ff_homeostatic_scaling_l4_l23_mean_delta",
+            "video_ff_homeostatic_l4_l23_mean_delta",
+            "video_ff_homeostatic_mean_delta",
+        ),
+        gain_aliases=(
+            "video_ff_homeostatic_scaling_mean_gain_ratio",
+            "video_ff_homeostatic_scaling_l4_l23_mean_gain_ratio",
+            "video_ff_homeostatic_l4_l23_mean_gain_ratio",
+            "video_ff_homeostatic_mean_gain_ratio",
+        ),
+    )
+    combined_evidence = read_ff_delta_evidence(
+        "combined",
+        active_aliases=(
+            "video_ff_post_exposure_l4_l23_active_count",
+            "video_ff_post_exposure_active_count",
+            "video_ff_combined_l4_l23_active_count",
+            "video_ff_total_l4_l23_active_count",
+            "video_ff_l4_l23_weight_delta_active_count",
+            "video_ff_l4e_l23e_weight_delta_active_count",
+            "video_ff_l4_l23_active_count",
+            "video_ff_l4e_l23e_active_count",
+            "video_ff_exposure_weight_delta_active_count",
+        ),
+        changed_aliases=(
+            "video_ff_post_exposure_l4_l23_changed_frac",
+            "video_ff_post_exposure_changed_frac",
+            "video_ff_combined_l4_l23_changed_frac",
+            "video_ff_total_l4_l23_changed_frac",
+            "video_ff_l4_l23_weight_delta_changed_frac",
+            "video_ff_l4e_l23e_weight_delta_changed_frac",
+            "video_ff_l4_l23_changed_frac",
+            "video_ff_l4e_l23e_changed_frac",
+            "video_ff_exposure_weight_delta_changed_frac",
+        ),
+        p95_aliases=(
+            "video_ff_post_exposure_l4_l23_p95_abs_delta",
+            "video_ff_post_exposure_p95_abs_delta",
+            "video_ff_combined_l4_l23_p95_abs_delta",
+            "video_ff_total_l4_l23_p95_abs_delta",
+            "video_ff_l4_l23_weight_delta_p95_abs",
+            "video_ff_l4_l23_weight_delta_p95_abs_delta",
+            "video_ff_l4e_l23e_weight_delta_p95_abs",
+            "video_ff_l4e_l23e_weight_delta_p95_abs_delta",
+            "video_ff_l4_l23_p95_abs_delta",
+            "video_ff_l4e_l23e_p95_abs_delta",
+            "video_ff_exposure_weight_delta_p95_abs",
+        ),
+        max_aliases=(
+            "video_ff_post_exposure_l4_l23_max_abs_delta",
+            "video_ff_post_exposure_max_abs_delta",
+            "video_ff_combined_l4_l23_max_abs_delta",
+            "video_ff_total_l4_l23_max_abs_delta",
+            "video_ff_l4_l23_weight_delta_max_abs",
+            "video_ff_l4_l23_weight_delta_max_abs_delta",
+            "video_ff_l4e_l23e_weight_delta_max_abs",
+            "video_ff_l4e_l23e_weight_delta_max_abs_delta",
+            "video_ff_l4_l23_max_abs_delta",
+            "video_ff_l4e_l23e_max_abs_delta",
+            "video_ff_exposure_weight_delta_max_abs",
+        ),
+        mean_aliases=(
+            "video_ff_post_exposure_l4_l23_mean_delta",
+            "video_ff_post_exposure_mean_delta",
+            "video_ff_combined_l4_l23_mean_delta",
+            "video_ff_total_l4_l23_mean_delta",
+            "video_ff_l4_l23_weight_delta_mean",
+            "video_ff_l4_l23_weight_delta_mean_delta",
+            "video_ff_l4e_l23e_weight_delta_mean",
+            "video_ff_l4e_l23e_weight_delta_mean_delta",
+            "video_ff_l4_l23_mean_delta",
+            "video_ff_l4e_l23e_mean_delta",
+            "video_ff_exposure_weight_delta_mean",
+        ),
+        gain_aliases=(
+            "video_ff_post_exposure_l4_l23_mean_gain_ratio",
+            "video_ff_post_exposure_mean_gain_ratio",
+            "video_ff_combined_l4_l23_mean_gain_ratio",
+            "video_ff_total_l4_l23_mean_gain_ratio",
+            "video_ff_l4_l23_weight_mean_gain_ratio",
+            "video_ff_l4e_l23e_weight_mean_gain_ratio",
+            "video_ff_l4_l23_mean_gain_ratio",
+            "video_ff_l4e_l23e_mean_gain_ratio",
+            "video_ff_exposure_mean_gain_ratio",
+        ),
+    )
+
+    evidence_sources = (combined_evidence, homeostatic_evidence, stdp_evidence)
+    positive_sources = [
+        evidence
+        for evidence in evidence_sources
+        if evidence["thresholds_ok"] == 1.0 and evidence["direction_ok"] == 1.0
+    ]
+    selected_evidence = positive_sources[0] if positive_sources else evidence_sources[0]
+    learned_gain_direction_ok = bool(positive_sources)
+    weight_delta_ok = learned_gain_direction_ok
+    overall_ok &= print_result(
+        weight_delta_ok,
+        "l23_video_ff_learned_gain",
+        (
+            f"learned_gain_source={selected_evidence['label']} "
+            f"active_metric={selected_evidence['active_metric'] or 'missing'} "
+            f"active_count={format_optional_float(selected_evidence['active_count'])} "
+            f"min_active_count={min_active_count:.0f} "
+            f"changed_fraction_metric={selected_evidence['changed_metric'] or 'missing'} "
+            f"changed_fraction={format_optional_float(selected_evidence['changed_fraction'])} "
+            f"min_changed_fraction={min_changed_fraction:.6f} "
+            f"p95_abs_delta_metric={selected_evidence['p95_metric'] or 'missing'} "
+            f"p95_abs_delta={format_optional_float(selected_evidence['p95_abs_delta'])} "
+            f"min_p95_abs_delta={min_p95_abs_delta:.6e} "
+            f"max_abs_delta_metric={selected_evidence['max_metric'] or 'missing'} "
+            f"max_abs_delta={format_optional_float(selected_evidence['max_abs_delta'])} "
+            f"min_max_abs_delta={min_max_abs_delta:.6e} "
+            f"mean_delta_metric={selected_evidence['mean_metric'] or 'missing'} "
+            f"mean_delta={format_optional_float(selected_evidence['mean_delta'])} "
+            f"mean_gain_ratio_metric={selected_evidence['gain_metric'] or 'missing'} "
+            f"mean_gain_ratio={format_optional_float(selected_evidence['mean_gain_ratio'])} "
+            f"stdp_mean_delta={format_optional_float(stdp_evidence['mean_delta'])} "
+            f"stdp_mean_gain_ratio={format_optional_float(stdp_evidence['mean_gain_ratio'])} "
+            f"homeostatic_mean_delta={format_optional_float(homeostatic_evidence['mean_delta'])} "
+            f"homeostatic_mean_gain_ratio={format_optional_float(homeostatic_evidence['mean_gain_ratio'])} "
+            f"combined_mean_delta={format_optional_float(combined_evidence['mean_delta'])} "
+            f"combined_mean_gain_ratio={format_optional_float(combined_evidence['mean_gain_ratio'])} "
+            f"learned_gain_direction_ok={int(learned_gain_direction_ok)}"
+        ),
+    )
+    return overall_ok
+
+
 def compute_recurrent_video_metrics(
     site_rows: list[VideoSiteRateRow],
     specificity_rows: list[SpecificityRow] | None,
@@ -7892,6 +8279,9 @@ def main() -> int:
                 video_pvoff,
                 min_frame_top1_accuracy=args.l23_video_min_frame_top1_accuracy,
             )
+
+        if args.require_emergent_ff_gain:
+            overall_ok &= validate_emergent_ff_gain(full)
 
         if args.require_natural_video_event_timing:
             overall_ok &= validate_natural_video_event_timing(full)

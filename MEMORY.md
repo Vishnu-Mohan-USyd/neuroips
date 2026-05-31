@@ -42,3 +42,7 @@
 - For the next lower-V1 readiness milestone, L2/3 natural-video decodability
   below 0.6 is not acceptable. Do not present sub-0.6 improvements as success;
   improve the L2/3 representation itself while preserving biological gates.
+- For this two-layer sensory V1 model, do not call ordinary video exposure or
+  frozen evaluation "replay" or "consolidation" in user-facing explanations.
+  Use "natural-video plastic exposure" and "frozen natural-video evaluation"
+  unless a real hippocampal/replay mechanism is explicitly implemented.

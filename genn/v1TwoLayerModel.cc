@@ -433,7 +433,8 @@ constexpr unsigned int kDefaultVideoEventControlCount = 4;
 constexpr unsigned int kDefaultVideoConsolidationRepeatCount = 1;
 constexpr double kDefaultVideoPVReliabilityOutputScale = 0.975;
 constexpr double kDefaultVideoSOMReliabilityOutputScale = 0.90;
-constexpr double kDefaultVideoFFReliabilityOutputScale = 1.10;
+constexpr double kDefaultVideoFFReliabilityOutputScale = 1.0;
+constexpr double kDefaultVideoFFHomeostaticScale = 1.20;
 constexpr unsigned int kDefaultHVAPredictorTileSizeSites = 4;
 constexpr unsigned int kDefaultHVAPredictorDelayFrames = 1;
 constexpr double kDefaultHVAPredictorTraceTauFrames = 2.0;
@@ -672,6 +673,17 @@ struct VideoFFReliabilityConfig {
     double output_scale = 1.0;
 };
 
+struct VideoFFStdpConfig {
+    bool enabled = false;
+    double aplus = 0.0;
+    double aminus = 0.0;
+};
+
+struct VideoFFHomeostaticScalingConfig {
+    bool enabled = false;
+    double scale = 1.0;
+};
+
 struct HVAPredictorConfig {
     bool enabled = false;
     unsigned int tile_size_sites = kDefaultHVAPredictorTileSizeSites;
@@ -862,6 +874,15 @@ struct VideoConsolidationMetrics {
     double l23ee_weight_delta_max = 0.0;
     double l23pv_weight_delta_max = 0.0;
     double l23som_weight_delta_max = 0.0;
+};
+
+struct WeightDeltaMetrics {
+    std::size_t active_edge_count = 0u;
+    double changed_frac = 0.0;
+    double mean_delta = 0.0;
+    double p95_abs_delta = 0.0;
+    double max_abs_delta = 0.0;
+    double mean_gain_ratio = 1.0;
 };
 
 struct HVAPredictorRateRow {
@@ -1628,7 +1649,7 @@ VideoFFReliabilityConfig getVideoFFReliabilityConfig(const VideoReplayConfig &vi
 {
     VideoFFReliabilityConfig config;
     const bool enable_requested =
-        getEnvUnsignedOrDefault("V1_VIDEO_FF_RELIABILITY_TUNING_ENABLE", 1u) != 0u;
+        getEnvUnsignedOrDefault("V1_VIDEO_FF_RELIABILITY_TUNING_ENABLE", 0u) != 0u;
     config.enabled = video_config.enabled && enable_requested;
     config.output_scale = config.enabled
         ? getEnvDoubleOrDefault(
@@ -1644,6 +1665,56 @@ VideoFFReliabilityConfig getVideoFFReliabilityConfig(const VideoReplayConfig &vi
        || config.output_scale > 1.20) {
         throw std::runtime_error(
             "V1_VIDEO_L4E_L23E_OUTPUT_SCALE must be finite and in [1.0, 1.20].");
+    }
+    return config;
+}
+
+VideoFFStdpConfig getVideoFFStdpConfig(
+    const VideoReplayConfig &video_config,
+    double default_aplus,
+    double default_aminus)
+{
+    VideoFFStdpConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_FF_STDP_ENABLE", 1u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.aplus = config.enabled
+        ? getEnvDoubleOrDefault("V1_VIDEO_FF_STDP_APLUS", default_aplus)
+        : 0.0;
+    config.aminus = config.enabled
+        ? getEnvDoubleOrDefault("V1_VIDEO_FF_STDP_AMINUS", default_aminus)
+        : 0.0;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(config.aplus < 0.0 || config.aminus < 0.0) {
+        throw std::runtime_error("V1_VIDEO_FF_STDP_APLUS and V1_VIDEO_FF_STDP_AMINUS must be non-negative.");
+    }
+    return config;
+}
+
+VideoFFHomeostaticScalingConfig getVideoFFHomeostaticScalingConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoFFHomeostaticScalingConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_FF_HOMEOSTATIC_SCALING_ENABLE", 1u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.scale = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_FF_HOMEOSTATIC_SCALE",
+            kDefaultVideoFFHomeostaticScale)
+        : 1.0;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.scale)
+       || config.scale < 1.0
+       || config.scale > 1.20) {
+        throw std::runtime_error(
+            "V1_VIDEO_FF_HOMEOSTATIC_SCALE must be finite and in [1.0, 1.20].");
     }
     return config;
 }
@@ -2639,6 +2710,77 @@ double maxAbsDifference(const std::vector<float> &before, const std::vector<floa
         delta = std::max(delta, std::fabs(static_cast<double>(after[i]) - static_cast<double>(before[i])));
     }
     return delta;
+}
+
+WeightDeltaMetrics computeWeightDeltaMetrics(
+    const std::vector<float> &before,
+    const std::vector<float> &after)
+{
+    if(before.size() != after.size()) {
+        throw std::runtime_error("Weight delta metrics require vectors with matching sizes.");
+    }
+    WeightDeltaMetrics metrics;
+    if(before.empty()) {
+        return metrics;
+    }
+
+    std::vector<double> abs_deltas;
+    abs_deltas.reserve(before.size());
+    double before_sum = 0.0;
+    double after_sum = 0.0;
+    double delta_sum = 0.0;
+    std::size_t changed_count = 0u;
+    for(std::size_t i = 0; i < before.size(); i++) {
+        const double before_weight = static_cast<double>(before[i]);
+        const double after_weight = static_cast<double>(after[i]);
+        const double delta = after_weight - before_weight;
+        const double abs_delta = std::fabs(delta);
+        if(std::fabs(before_weight) > 1.0e-12) {
+            metrics.active_edge_count++;
+        }
+        before_sum += before_weight;
+        after_sum += after_weight;
+        delta_sum += delta;
+        abs_deltas.push_back(abs_delta);
+        if(abs_delta > 1.0e-12) {
+            changed_count++;
+        }
+        metrics.max_abs_delta = std::max(metrics.max_abs_delta, abs_delta);
+    }
+
+    std::sort(abs_deltas.begin(), abs_deltas.end());
+    const std::size_t p95_index = static_cast<std::size_t>(
+        std::ceil(0.95 * static_cast<double>(abs_deltas.size()))) - 1u;
+    metrics.changed_frac = static_cast<double>(changed_count) / static_cast<double>(before.size());
+    metrics.mean_delta = delta_sum / static_cast<double>(before.size());
+    metrics.p95_abs_delta = abs_deltas[std::min(p95_index, abs_deltas.size() - 1u)];
+    metrics.mean_gain_ratio = (std::fabs(before_sum) > 1.0e-12) ? (after_sum / before_sum) : 1.0;
+    return metrics;
+}
+
+WeightDeltaMetrics scaleActiveSynapseWeightsClamped(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    double scale,
+    double wmin,
+    double wmax)
+{
+    if(!std::isfinite(scale) || !std::isfinite(wmin) || !std::isfinite(wmax) || wmin > wmax) {
+        throw std::runtime_error("Invalid clamped synapse scaling parameters.");
+    }
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    std::vector<float> after = before;
+    for(float &weight : after) {
+        if(std::fabs(static_cast<double>(weight)) <= 1.0e-12) {
+            continue;
+        }
+        const double scaled = std::min(
+            wmax,
+            std::max(wmin, static_cast<double>(weight) * scale));
+        weight = static_cast<float>(scaled);
+    }
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
 }
 
 double giniCoefficient(std::vector<double> values)
@@ -7552,7 +7694,13 @@ void writeMetricRow(std::ofstream &output, const std::string &metric, double val
 void writeVideoConsolidationMetricsCsv(
     const std::string &path,
     const VideoConsolidationConfig &config,
-    const VideoConsolidationMetrics &metrics)
+    const VideoConsolidationMetrics &metrics,
+    bool video_ff_stdp_active,
+    const VideoFFStdpConfig &video_ff_stdp_config,
+    const WeightDeltaMetrics &video_ff_stdp_l4_l23_delta_metrics,
+    bool video_ff_homeostatic_scaling_active,
+    const VideoFFHomeostaticScalingConfig &video_ff_homeostatic_scaling_config,
+    const WeightDeltaMetrics &video_ff_homeostatic_scaling_l4_l23_delta_metrics)
 {
     std::ofstream output(path.c_str());
     if(!output) {
@@ -7573,7 +7721,49 @@ void writeVideoConsolidationMetricsCsv(
     writeMetricRow(output, "target_label_used", 0.0);
     writeMetricRow(output, "l23ee_plasticity_enabled", config.l23ee_plasticity_enabled ? 1.0 : 0.0);
     writeMetricRow(output, "inhibitory_homeostasis_enabled", config.inhibitory_homeostasis_enabled ? 1.0 : 0.0);
-    writeMetricRow(output, "feedforward_l4_l23_plasticity_enabled", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_plasticity_enabled", video_ff_stdp_active ? 1.0 : 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_stdp_aplus", video_ff_stdp_config.aplus);
+    writeMetricRow(output, "feedforward_l4_l23_stdp_aminus", video_ff_stdp_config.aminus);
+    writeMetricRow(output, "feedforward_l4_l23_changed_frac", video_ff_stdp_l4_l23_delta_metrics.changed_frac);
+    writeMetricRow(output, "feedforward_l4_l23_mean_delta", video_ff_stdp_l4_l23_delta_metrics.mean_delta);
+    writeMetricRow(output, "feedforward_l4_l23_p95_abs_delta", video_ff_stdp_l4_l23_delta_metrics.p95_abs_delta);
+    writeMetricRow(output, "feedforward_l4_l23_max_abs_delta", video_ff_stdp_l4_l23_delta_metrics.max_abs_delta);
+    writeMetricRow(output, "feedforward_l4_l23_mean_gain_ratio", video_ff_stdp_l4_l23_delta_metrics.mean_gain_ratio);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_enabled",
+        video_ff_homeostatic_scaling_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_scale",
+        video_ff_homeostatic_scaling_config.scale);
+    writeMetricRow(output, "feedforward_l4_l23_homeostatic_scaling_future_frame_used", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_homeostatic_scaling_target_label_used", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_homeostatic_scaling_heldout_frames_used", 0.0);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_active_edge_count",
+        static_cast<double>(video_ff_homeostatic_scaling_l4_l23_delta_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_changed_frac",
+        video_ff_homeostatic_scaling_l4_l23_delta_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_mean_delta",
+        video_ff_homeostatic_scaling_l4_l23_delta_metrics.mean_delta);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_p95_abs_delta",
+        video_ff_homeostatic_scaling_l4_l23_delta_metrics.p95_abs_delta);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_max_abs_delta",
+        video_ff_homeostatic_scaling_l4_l23_delta_metrics.max_abs_delta);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_homeostatic_scaling_mean_gain_ratio",
+        video_ff_homeostatic_scaling_l4_l23_delta_metrics.mean_gain_ratio);
     writeMetricRow(output, "hva_feedback_enabled", 0.0);
     writeMetricRow(output, "pre_hva_stage", config.enabled ? 1.0 : 0.0);
     writeMetricRow(output, "pre_eval_trial_count", static_cast<double>(metrics.pre_eval_trial_count));
@@ -7817,6 +8007,10 @@ void writeSummaryFiles(
     const VideoPVReliabilityConfig &video_pv_reliability_config,
     const VideoSOMReliabilityConfig &video_som_reliability_config,
     const VideoFFReliabilityConfig &video_ff_reliability_config,
+    const VideoFFStdpConfig &video_ff_stdp_config,
+    const WeightDeltaMetrics &video_ff_stdp_l4_l23_delta_metrics,
+    const VideoFFHomeostaticScalingConfig &video_ff_homeostatic_scaling_config,
+    const WeightDeltaMetrics &video_ff_homeostatic_scaling_l4_l23_delta_metrics,
     const VideoEventTimingConfig &video_event_timing_config,
     const VideoConsolidationConfig &video_consolidation_config,
     const VideoConsolidationMetrics &video_consolidation_metrics,
@@ -7825,6 +8019,13 @@ void writeSummaryFiles(
     const L23ESOMBroadRecruitmentConfig &l23e_som_broad_recruitment_config)
 {
     const double l23_osi_delta = post.l23_median_osi - baseline.l23_median_osi;
+    const bool video_ff_stdp_active =
+        video_ff_stdp_config.enabled
+        && video_consolidation_config.enabled
+        && video_consolidation_config.l23ee_plasticity_enabled
+        && video_consolidation_config.inhibitory_homeostasis_enabled;
+    const bool video_ff_homeostatic_scaling_active =
+        video_ff_homeostatic_scaling_config.enabled && video_consolidation_config.enabled;
     const bool feedforward_orientation_prior_enabled = (l4_l23_orientation_config.bias_strength > 0.0);
     const bool neutral_density_match_active =
         l4_l23_orientation_config.neutral_density_match_enabled
@@ -7906,6 +8107,41 @@ void writeSummaryFiles(
     csv << "video_frame_ms," << video_replay_config.frame_ms << "\n";
     csv << "video_feedback_disabled," << (video_replay_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "video_training_enabled," << (video_consolidation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_stdp_enabled," << (video_ff_stdp_active ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_stdp_aplus," << video_ff_stdp_config.aplus << "\n";
+    csv << "video_ff_stdp_aminus," << video_ff_stdp_config.aminus << "\n";
+    csv << "video_ff_stdp_future_frame_used,0.000000\n";
+    csv << "video_ff_stdp_target_label_used,0.000000\n";
+    csv << "video_ff_stdp_heldout_frames_used,0.000000\n";
+    csv << "video_ff_stdp_l4_l23_changed_frac,"
+        << video_ff_stdp_l4_l23_delta_metrics.changed_frac << "\n";
+    csv << "video_ff_stdp_l4_l23_mean_delta,"
+        << video_ff_stdp_l4_l23_delta_metrics.mean_delta << "\n";
+    csv << "video_ff_stdp_l4_l23_p95_abs_delta,"
+        << video_ff_stdp_l4_l23_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_ff_stdp_l4_l23_max_abs_delta,"
+        << video_ff_stdp_l4_l23_delta_metrics.max_abs_delta << "\n";
+    csv << "video_ff_stdp_l4_l23_mean_gain_ratio,"
+        << video_ff_stdp_l4_l23_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_ff_homeostatic_scaling_enabled,"
+        << (video_ff_homeostatic_scaling_active ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_homeostatic_scaling_scale,"
+        << video_ff_homeostatic_scaling_config.scale << "\n";
+    csv << "video_ff_homeostatic_scaling_future_frame_used,0.000000\n";
+    csv << "video_ff_homeostatic_scaling_target_label_used,0.000000\n";
+    csv << "video_ff_homeostatic_scaling_heldout_frames_used,0.000000\n";
+    csv << "video_ff_homeostatic_scaling_active_edge_count,"
+        << video_ff_homeostatic_scaling_l4_l23_delta_metrics.active_edge_count << "\n";
+    csv << "video_ff_homeostatic_scaling_changed_frac,"
+        << video_ff_homeostatic_scaling_l4_l23_delta_metrics.changed_frac << "\n";
+    csv << "video_ff_homeostatic_scaling_mean_delta,"
+        << video_ff_homeostatic_scaling_l4_l23_delta_metrics.mean_delta << "\n";
+    csv << "video_ff_homeostatic_scaling_p95_abs_delta,"
+        << video_ff_homeostatic_scaling_l4_l23_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_ff_homeostatic_scaling_max_abs_delta,"
+        << video_ff_homeostatic_scaling_l4_l23_delta_metrics.max_abs_delta << "\n";
+    csv << "video_ff_homeostatic_scaling_mean_gain_ratio,"
+        << video_ff_homeostatic_scaling_l4_l23_delta_metrics.mean_gain_ratio << "\n";
     csv << "video_pv_reliability_tuning_enabled,"
         << (video_pv_reliability_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "video_pv_reliability_output_scale,"
@@ -7972,7 +8208,8 @@ void writeSummaryFiles(
         << (video_consolidation_config.l23ee_plasticity_enabled ? 1.0 : 0.0) << "\n";
     csv << "lower_v1_video_consolidation_inhibitory_homeostasis_enabled,"
         << (video_consolidation_config.inhibitory_homeostasis_enabled ? 1.0 : 0.0) << "\n";
-    csv << "lower_v1_video_consolidation_feedforward_l4_l23_plasticity_enabled,0.000000\n";
+    csv << "lower_v1_video_consolidation_feedforward_l4_l23_plasticity_enabled,"
+        << (video_ff_stdp_active ? 1.0 : 0.0) << "\n";
     csv << "lower_v1_video_consolidation_hva_feedback_enabled,0.000000\n";
     csv << "lower_v1_video_consolidation_pre_hva_stage,"
         << (video_consolidation_config.enabled ? 1.0 : 0.0) << "\n";
@@ -8191,6 +8428,41 @@ void writeSummaryFiles(
     text << "video_feedback_disabled="
          << (video_replay_config.enabled ? 1 : 0) << "\n";
     text << "video_training_enabled=" << (video_consolidation_config.enabled ? 1 : 0) << "\n";
+    text << "video_ff_stdp_enabled=" << (video_ff_stdp_active ? 1 : 0) << "\n";
+    text << "video_ff_stdp_aplus=" << video_ff_stdp_config.aplus << "\n";
+    text << "video_ff_stdp_aminus=" << video_ff_stdp_config.aminus << "\n";
+    text << "video_ff_stdp_future_frame_used=0\n";
+    text << "video_ff_stdp_target_label_used=0\n";
+    text << "video_ff_stdp_heldout_frames_used=0\n";
+    text << "video_ff_stdp_l4_l23_changed_frac="
+         << video_ff_stdp_l4_l23_delta_metrics.changed_frac << "\n";
+    text << "video_ff_stdp_l4_l23_mean_delta="
+         << video_ff_stdp_l4_l23_delta_metrics.mean_delta << "\n";
+    text << "video_ff_stdp_l4_l23_p95_abs_delta="
+         << video_ff_stdp_l4_l23_delta_metrics.p95_abs_delta << "\n";
+    text << "video_ff_stdp_l4_l23_max_abs_delta="
+         << video_ff_stdp_l4_l23_delta_metrics.max_abs_delta << "\n";
+    text << "video_ff_stdp_l4_l23_mean_gain_ratio="
+         << video_ff_stdp_l4_l23_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_ff_homeostatic_scaling_enabled="
+         << (video_ff_homeostatic_scaling_active ? 1 : 0) << "\n";
+    text << "video_ff_homeostatic_scaling_scale="
+         << video_ff_homeostatic_scaling_config.scale << "\n";
+    text << "video_ff_homeostatic_scaling_future_frame_used=0\n";
+    text << "video_ff_homeostatic_scaling_target_label_used=0\n";
+    text << "video_ff_homeostatic_scaling_heldout_frames_used=0\n";
+    text << "video_ff_homeostatic_scaling_active_edge_count="
+         << video_ff_homeostatic_scaling_l4_l23_delta_metrics.active_edge_count << "\n";
+    text << "video_ff_homeostatic_scaling_changed_frac="
+         << video_ff_homeostatic_scaling_l4_l23_delta_metrics.changed_frac << "\n";
+    text << "video_ff_homeostatic_scaling_mean_delta="
+         << video_ff_homeostatic_scaling_l4_l23_delta_metrics.mean_delta << "\n";
+    text << "video_ff_homeostatic_scaling_p95_abs_delta="
+         << video_ff_homeostatic_scaling_l4_l23_delta_metrics.p95_abs_delta << "\n";
+    text << "video_ff_homeostatic_scaling_max_abs_delta="
+         << video_ff_homeostatic_scaling_l4_l23_delta_metrics.max_abs_delta << "\n";
+    text << "video_ff_homeostatic_scaling_mean_gain_ratio="
+         << video_ff_homeostatic_scaling_l4_l23_delta_metrics.mean_gain_ratio << "\n";
     text << "video_pv_reliability_tuning_enabled="
          << (video_pv_reliability_config.enabled ? 1 : 0) << "\n";
     text << "video_pv_reliability_output_scale="
@@ -8805,6 +9077,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         getVideoSOMReliabilityConfig(video_replay_config);
     const VideoFFReliabilityConfig video_ff_reliability_config =
         getVideoFFReliabilityConfig(video_replay_config);
+    const VideoFFStdpConfig video_ff_stdp_config =
+        getVideoFFStdpConfig(video_replay_config, stdp_aplus, stdp_aminus);
+    const VideoFFHomeostaticScalingConfig video_ff_homeostatic_scaling_config =
+        getVideoFFHomeostaticScalingConfig(video_replay_config);
     const VideoEventTimingConfig video_event_timing_config =
         getVideoEventTimingConfig(video_replay_config);
     const HVAPredictorConfig hva_predictor_config =
@@ -9385,8 +9661,16 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         if(frame_count == 0u || frame_start_index + frame_count > video_replay_config.effective_frame_count) {
             throw std::runtime_error("Video block frame range is outside the loaded drive frames.");
         }
-        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
-        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        const bool video_ff_stdp_active =
+            video_ff_stdp_config.enabled && recurrent_learning && inhibitory_learning;
+        runtime.setDynamicParamValue(
+            l4e_to_l23e,
+            "Aplus",
+            video_ff_stdp_active ? video_ff_stdp_config.aplus : 0.0);
+        runtime.setDynamicParamValue(
+            l4e_to_l23e,
+            "Aminus",
+            video_ff_stdp_active ? video_ff_stdp_config.aminus : 0.0);
         runtime.setDynamicParamValue(
             l23e_to_l23e,
             "Aplus",
@@ -9800,9 +10084,21 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         scaleSynapseWeights(runtime, l23e_to_l23e, l23ee_context_output_scale);
     }
     runSweep("recurrence_context", &recurrence_context_trials, false, false, false, 0u, -1.0);
+    const bool video_ff_homeostatic_scaling_active =
+        video_ff_homeostatic_scaling_config.enabled && video_consolidation_config.enabled;
+    WeightDeltaMetrics video_ff_homeostatic_scaling_l4_l23_delta_metrics;
     if(video_consolidation_config.enabled) {
         runVideoPreConsolidationReplay();
         runVideoConsolidation();
+        if(video_ff_homeostatic_scaling_active) {
+            video_ff_homeostatic_scaling_l4_l23_delta_metrics =
+                scaleActiveSynapseWeightsClamped(
+                    runtime,
+                    l4e_to_l23e,
+                    video_ff_homeostatic_scaling_config.scale,
+                    kStdpWeightMin,
+                    kStdpWeightMax);
+        }
     }
     runVideoReplay();
     std::vector<float> l4_l23_weights_after_video_consolidation;
@@ -9943,6 +10239,15 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_consolidation_config.enabled
             ? maxAbsDifference(l23som_weights_after, l23som_weights_after_video_consolidation)
             : 0.0;
+    const bool video_ff_stdp_active =
+        video_ff_stdp_config.enabled
+        && video_consolidation_config.enabled
+        && video_consolidation_config.l23ee_plasticity_enabled
+        && video_consolidation_config.inhibitory_homeostasis_enabled;
+    const WeightDeltaMetrics video_ff_stdp_l4_l23_delta_metrics =
+        video_ff_stdp_active
+            ? computeWeightDeltaMetrics(weights_after, l4_l23_weights_after_video_consolidation)
+            : WeightDeltaMetrics{};
     const VideoConsolidationMetrics video_consolidation_metrics = computeVideoConsolidationMetrics(
         video_consolidation_config,
         video_replay_config,
@@ -10340,7 +10645,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         writeVideoConsolidationMetricsCsv(
             output_prefix + "_video_consolidation_metrics.csv",
             video_consolidation_config,
-            video_consolidation_metrics);
+            video_consolidation_metrics,
+            video_ff_stdp_active,
+            video_ff_stdp_config,
+            video_ff_stdp_l4_l23_delta_metrics,
+            video_ff_homeostatic_scaling_active,
+            video_ff_homeostatic_scaling_config,
+            video_ff_homeostatic_scaling_l4_l23_delta_metrics);
     }
     if(video_event_timing_config.enabled) {
         writeVideoEventPopulationBinsCsv(
@@ -10440,6 +10751,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_pv_reliability_config,
         video_som_reliability_config,
         video_ff_reliability_config,
+        video_ff_stdp_config,
+        video_ff_stdp_l4_l23_delta_metrics,
+        video_ff_homeostatic_scaling_config,
+        video_ff_homeostatic_scaling_l4_l23_delta_metrics,
         video_event_timing_config,
         video_consolidation_config,
         video_consolidation_metrics,
