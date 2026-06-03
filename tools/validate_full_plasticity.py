@@ -18,7 +18,7 @@ import csv
 import math
 import random
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -432,6 +432,7 @@ class PostSiteMetric:
 class RunData:
     """All parsed artifacts for one experiment prefix."""
 
+    genn_dir: Path
     prefix: str
     summary: dict[str, float]
     context_rows: dict[tuple[str, str], ContextRow]
@@ -441,6 +442,14 @@ class RunData:
     l23e_post_sites: list[PostSiteMetric]
     weights: dict[str, tuple[WeightSeries, WeightSeries]]
     vip_weight_files: list[Path]
+    final_post_video_site_rates: dict[str, list[float]] | None = None
+    final_post_video_l4_sites: list[PostSiteMetric] | None = None
+    final_post_video_l23e_sites: list[PostSiteMetric] | None = None
+    final_post_video_l23e_cell_tuning: dict[int, CellTuningRow] | None = None
+    final_post_video_l23e_cell_tuning_multiphase: dict[int, MultiPhaseCellTuningRow] | None = None
+    final_post_video_context_rows: dict[tuple[str, str], ContextRow] | None = None
+    final_post_video_context_rows_by_site: dict[int, dict[tuple[str, str], ContextRow]] | None = None
+    final_post_video_size_tuning_rows: list[SizeTuningRow] | None = None
     size_tuning_rows: list[SizeTuningRow] | None = None
     orientation_context_rows: list[OrientationContextRow] | None = None
     blank_baseline_rows: list[BlankBaselineRow] | None = None
@@ -599,6 +608,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-l23-activity-reliability",
+        action="store_true",
+        help=(
+            "Require strict raw L2/3 natural-video activity stability gates: "
+            "raw top-k repeat oracle, repeat correlation, and bounded active-tile density."
+        ),
+    )
+    parser.add_argument(
         "--l23-video-min-frame-top1-accuracy",
         type=float,
         default=None,
@@ -609,12 +626,50 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--l23-video-min-raw-oracle-at-k",
+        type=float,
+        default=0.45,
+        help="Minimum no-leak raw L2/3 top-k repeat-oracle recall when activity reliability is required.",
+    )
+    parser.add_argument(
+        "--l23-video-min-raw-oracle-ceiling-fraction",
+        type=float,
+        default=0.75,
+        help="Minimum no-leak raw oracle divided by leaky repeat-oracle ceiling.",
+    )
+    parser.add_argument(
+        "--l23-video-min-l23e-repeat-corr",
+        type=float,
+        default=0.35,
+        help="Minimum L23E repeat correlation for natural-video frame activity.",
+    )
+    parser.add_argument(
+        "--l23-video-max-mean-active-tile-fraction",
+        type=float,
+        default=0.65,
+        help="Maximum mean fraction of active L23E video tiles per sample.",
+    )
+    parser.add_argument(
+        "--l23-video-max-sample-active-tile-fraction",
+        type=float,
+        default=0.80,
+        help="Maximum per-sample fraction of active L23E video tiles.",
+    )
+    parser.add_argument(
         "--require-emergent-ff-gain",
         action="store_true",
         help=(
             "Require opt-in emergent L4E->L23E feedforward-gain audit: "
             "no transient eval FF replay gain, causal video FF STDP exposure, "
             "and nonzero video-exposure L4E->L23E weight deltas."
+        ),
+    )
+    parser.add_argument(
+        "--require-event-driven-ff-plasticity",
+        action="store_true",
+        help=(
+            "Require event-driven local L4E->L23E trace plasticity during video exposure "
+            "and reject windowed spike-count-only coactivity rules."
         ),
     )
     parser.add_argument(
@@ -1858,6 +1913,39 @@ def load_run(
     )
     l4_post_site_path = genn_dir / f"{prefix}_post_l4_sites.csv"
     l4_post_sites = parse_post_site_metrics_csv(l4_post_site_path) if l4_post_site_path.is_file() else None
+    final_post_video_site_paths = {
+        population: genn_dir / f"{prefix}_final_post_video_{population}_sites.csv"
+        for population in ("l23", "l23pv", "l23som")
+    }
+    final_post_video_site_rates = (
+        {
+            "l23e": parse_site_rates_csv(final_post_video_site_paths["l23"]),
+            "l23pv": parse_site_rates_csv(final_post_video_site_paths["l23pv"]),
+            "l23som": parse_site_rates_csv(final_post_video_site_paths["l23som"]),
+        }
+        if all(path.is_file() for path in final_post_video_site_paths.values())
+        else None
+    )
+    final_post_video_l4_path = genn_dir / f"{prefix}_final_post_video_l4_sites.csv"
+    final_post_video_l4_sites = (
+        parse_post_site_metrics_csv(final_post_video_l4_path)
+        if final_post_video_l4_path.is_file()
+        else None
+    )
+    final_post_video_l23_path = genn_dir / f"{prefix}_final_post_video_l23_sites.csv"
+    final_post_video_l23e_sites = (
+        parse_post_site_metrics_csv(final_post_video_l23_path)
+        if final_post_video_l23_path.is_file()
+        else None
+    )
+    final_post_video_context_path = genn_dir / f"{prefix}_final_post_video_som_context_validation.csv"
+    if final_post_video_context_path.is_file():
+        final_post_video_context_rows, final_post_video_context_rows_by_site = parse_context_csv(
+            final_post_video_context_path
+        )
+    else:
+        final_post_video_context_rows = None
+        final_post_video_context_rows_by_site = None
 
     weights: dict[str, tuple[WeightSeries, WeightSeries]] = {}
     for spec in WEIGHT_SPECS:
@@ -1869,6 +1957,12 @@ def load_run(
     size_tuning_rows = (
         parse_size_tuning_csv(require_file(genn_dir / f"{prefix}_size_tuning.csv"))
         if require_size_tuning
+        else None
+    )
+    final_post_video_size_tuning_path = genn_dir / f"{prefix}_final_post_video_size_tuning.csv"
+    final_post_video_size_tuning_rows = (
+        parse_size_tuning_csv(final_post_video_size_tuning_path)
+        if final_post_video_size_tuning_path.is_file()
         else None
     )
     orientation_context_path = genn_dir / f"{prefix}_l23_orientation_context_suppression.csv"
@@ -1974,8 +2068,23 @@ def load_run(
         if multiphase_cell_tuning_path.is_file()
         else None
     )
+    final_post_video_cell_tuning_path = genn_dir / f"{prefix}_final_post_video_l23e_cell_tuning.csv"
+    final_post_video_l23e_cell_tuning = (
+        parse_cell_tuning_csv(final_post_video_cell_tuning_path)
+        if final_post_video_cell_tuning_path.is_file()
+        else None
+    )
+    final_post_video_multiphase_cell_tuning_path = (
+        genn_dir / f"{prefix}_final_post_video_l23e_cell_tuning_multiphase.csv"
+    )
+    final_post_video_l23e_cell_tuning_multiphase = (
+        parse_multiphase_cell_tuning_csv(final_post_video_multiphase_cell_tuning_path)
+        if final_post_video_multiphase_cell_tuning_path.is_file()
+        else None
+    )
 
     return RunData(
+        genn_dir=genn_dir,
         prefix=prefix,
         summary=summary,
         context_rows=context_rows,
@@ -1985,6 +2094,14 @@ def load_run(
         l23e_post_sites=l23e_post_sites,
         weights=weights,
         vip_weight_files=vip_weight_files,
+        final_post_video_site_rates=final_post_video_site_rates,
+        final_post_video_l4_sites=final_post_video_l4_sites,
+        final_post_video_l23e_sites=final_post_video_l23e_sites,
+        final_post_video_l23e_cell_tuning=final_post_video_l23e_cell_tuning,
+        final_post_video_l23e_cell_tuning_multiphase=final_post_video_l23e_cell_tuning_multiphase,
+        final_post_video_context_rows=final_post_video_context_rows,
+        final_post_video_context_rows_by_site=final_post_video_context_rows_by_site,
+        final_post_video_size_tuning_rows=final_post_video_size_tuning_rows,
         size_tuning_rows=size_tuning_rows,
         orientation_context_rows=orientation_context_rows,
         blank_baseline_rows=blank_baseline_rows,
@@ -2024,6 +2141,89 @@ def require_summary_metric(run: RunData, metric: str) -> float:
     if not math.isfinite(value):
         raise ValidationError(f"Non-finite summary metric {metric!r} in prefix {run.prefix}")
     return value
+
+
+def final_post_video_orientation_missing(run: RunData) -> list[str]:
+    missing: list[str] = []
+    if run.final_post_video_site_rates is None:
+        missing.append(f"{run.prefix}_final_post_video_l23/l23pv/l23som_sites.csv")
+    if run.final_post_video_l4_sites is None:
+        missing.append(f"{run.prefix}_final_post_video_l4_sites.csv")
+    if run.final_post_video_l23e_sites is None:
+        missing.append(f"{run.prefix}_final_post_video_l23_sites.csv")
+    if run.final_post_video_l23e_cell_tuning is None:
+        missing.append(f"{run.prefix}_final_post_video_l23e_cell_tuning.csv")
+    if run.final_post_video_l23e_cell_tuning_multiphase is None:
+        missing.append(f"{run.prefix}_final_post_video_l23e_cell_tuning_multiphase.csv")
+    return missing
+
+
+def final_post_video_som_missing(run: RunData) -> list[str]:
+    missing: list[str] = []
+    if run.final_post_video_context_rows is None or run.final_post_video_context_rows_by_site is None:
+        missing.append(f"{run.prefix}_final_post_video_som_context_validation.csv")
+    if run.final_post_video_size_tuning_rows is None:
+        missing.append(f"{run.prefix}_final_post_video_size_tuning.csv")
+    return missing
+
+
+def with_final_post_video_som_artifacts(run: RunData) -> RunData:
+    if (
+        run.final_post_video_context_rows is None
+        or run.final_post_video_context_rows_by_site is None
+        or run.final_post_video_size_tuning_rows is None
+    ):
+        raise ValidationError(f"Final post-video SOM/context artifacts are missing for prefix {run.prefix}")
+    return replace(
+        run,
+        context_rows=run.final_post_video_context_rows,
+        context_rows_by_site=run.final_post_video_context_rows_by_site,
+        size_tuning_rows=run.final_post_video_size_tuning_rows,
+    )
+
+
+def print_final_post_video_reference_info(run: RunData) -> None:
+    pre_single = (
+        compute_cell_responsive_metrics(run.l23e_cell_tuning, 5.0)
+        if run.l23e_cell_tuning is not None
+        else None
+    )
+    pre_multi = (
+        compute_multiphase_cell_responsive_metrics(run.l23e_cell_tuning_multiphase, 5.0)
+        if run.l23e_cell_tuning_multiphase is not None
+        else None
+    )
+    final_single = (
+        compute_cell_responsive_metrics(run.final_post_video_l23e_cell_tuning, 5.0)
+        if run.final_post_video_l23e_cell_tuning is not None
+        else None
+    )
+    final_multi = (
+        compute_multiphase_cell_responsive_metrics(
+            run.final_post_video_l23e_cell_tuning_multiphase,
+            5.0,
+        )
+        if run.final_post_video_l23e_cell_tuning_multiphase is not None
+        else None
+    )
+    print(
+        "INFO final_post_video_orientation_reference "
+        f"pre_post_l23_median_osi={run.summary.get('post_l23_median_osi', math.nan):.6f} "
+        f"final_post_video_l23_median_osi="
+        f"{run.summary.get('final_post_video_l23_median_osi', math.nan):.6f} "
+        f"pre_single_site_fraction="
+        f"{format_optional_float(pre_single.responsive_site_fraction if pre_single is not None else None)} "
+        f"final_single_site_fraction="
+        f"{format_optional_float(final_single.responsive_site_fraction if final_single is not None else None)} "
+        f"pre_multiphase_ge1="
+        f"{format_optional_float(pre_multi.responsive_site_fraction_ge1 if pre_multi is not None else None)} "
+        f"final_multiphase_ge1="
+        f"{format_optional_float(final_multi.responsive_site_fraction_ge1 if final_multi is not None else None)} "
+        f"pre_multiphase_ge2="
+        f"{format_optional_float(pre_multi.responsive_site_fraction_ge2 if pre_multi is not None else None)} "
+        f"final_multiphase_ge2="
+        f"{format_optional_float(final_multi.responsive_site_fraction_ge2 if final_multi is not None else None)}"
+    )
 
 
 def optional_summary_metric(run: RunData, metric: str) -> float | None:
@@ -5161,6 +5361,340 @@ def validate_l23_video_reliability(
     return overall_ok
 
 
+def validate_l23_activity_reliability(
+    full: RunData,
+    min_frame_top1_accuracy: float | None,
+    min_raw_oracle_at_k: float,
+    min_raw_oracle_ceiling_fraction: float,
+    min_l23e_repeat_corr: float,
+    max_mean_active_tile_fraction: float,
+    max_sample_active_tile_fraction: float,
+) -> bool:
+    overall_ok = True
+    site_rows = full.video_site_rows
+    frame_rows = full.video_frame_summary_rows
+    artifacts_available = site_rows is not None and frame_rows is not None
+    overall_ok &= print_result(
+        artifacts_available,
+        "l23_activity_reliability_artifacts_available",
+        (
+            f"video_site_rows={len(site_rows) if site_rows is not None else 0} "
+            f"video_frame_summary_rows={len(frame_rows) if frame_rows is not None else 0}"
+        ),
+    )
+    if not artifacts_available or site_rows is None or frame_rows is None:
+        return overall_ok
+
+    representational = compute_l23_video_representational_metrics(site_rows)
+    historical_frame_margin_threshold = max(0.10, 5.0 * representational["frame_chance"])
+    frame_margin_threshold = historical_frame_margin_threshold
+    if min_frame_top1_accuracy is not None:
+        frame_margin_threshold = max(frame_margin_threshold, min_frame_top1_accuracy)
+    frame_gate_ok = (
+        math.isfinite(representational["frame_top1_accuracy"])
+        and representational["frame_top1_accuracy"] >= frame_margin_threshold
+        and representational["decoded_count"] >= 20.0
+    )
+    overall_ok &= print_result(
+        frame_gate_ok,
+        "l23_activity_reliability_frame_decoding_gate",
+        (
+            f"frame_top1_accuracy={representational['frame_top1_accuracy']:.6f} "
+            f"frame_top5_accuracy={representational['frame_top5_accuracy']:.6f} "
+            f"frame_mean_rank={representational['frame_mean_rank']:.6f} "
+            f"frame_chance={representational['frame_chance']:.6f} "
+            f"frame_margin_threshold={frame_margin_threshold:.6f} "
+            f"configured_min_frame_top1_accuracy={format_optional_float(min_frame_top1_accuracy)} "
+            f"decoded_count={representational['decoded_count']:.0f}"
+        ),
+    )
+
+    oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows)
+    raw_oracle = oracle["loo_no_leak_oracle_recall_at_k"]
+    leaky_oracle = oracle["leaky_repeat_mean_oracle_recall_at_k"]
+    raw_oracle_ceiling_fraction = (
+        raw_oracle / leaky_oracle
+        if math.isfinite(raw_oracle) and math.isfinite(leaky_oracle) and leaky_oracle > 0.0
+        else math.nan
+    )
+    entropy = compute_l23_video_tile_entropy_metrics(full, site_rows)
+    l23e_repeat_corr = pairwise_repeat_reliability(frame_rows, "l23e_rate_hz")
+    activity_ok = (
+        math.isfinite(raw_oracle)
+        and raw_oracle >= min_raw_oracle_at_k
+        and math.isfinite(raw_oracle_ceiling_fraction)
+        and raw_oracle_ceiling_fraction >= min_raw_oracle_ceiling_fraction
+        and l23e_repeat_corr is not None
+        and math.isfinite(l23e_repeat_corr)
+        and l23e_repeat_corr >= min_l23e_repeat_corr
+        and math.isfinite(entropy["mean_active_tile_fraction"])
+        and entropy["mean_active_tile_fraction"] <= max_mean_active_tile_fraction
+        and math.isfinite(entropy["max_active_tile_fraction"])
+        and entropy["max_active_tile_fraction"] <= max_sample_active_tile_fraction
+        and oracle["loo_sample_count"] >= 20.0
+        and entropy["valid_sample_count"] >= 20.0
+    )
+    overall_ok &= print_result(
+        activity_ok,
+        "l23_activity_raw_topk_repeat_stability",
+        (
+            f"repeat_count={oracle['repeat_count']:.0f} "
+            f"frame_count={oracle['frame_count']:.0f} "
+            f"tile_grid_side={oracle['tile_grid_side']:.0f} "
+            f"tile_count={oracle['tile_count']:.0f} "
+            f"topk_k={oracle['topk_k']:.0f} "
+            f"raw_oracle_at_k={raw_oracle:.6f} "
+            f"min_raw_oracle_at_k={min_raw_oracle_at_k:.6f} "
+            f"leaky_repeat_mean_oracle_recall_at_k={leaky_oracle:.6f} "
+            f"raw_oracle_ceiling_fraction={raw_oracle_ceiling_fraction:.6f} "
+            f"min_raw_oracle_ceiling_fraction={min_raw_oracle_ceiling_fraction:.6f} "
+            f"l23e_repeat_corr={format_optional_float(l23e_repeat_corr)} "
+            f"min_l23e_repeat_corr={min_l23e_repeat_corr:.6f} "
+            f"mean_active_tile_fraction={entropy['mean_active_tile_fraction']:.6f} "
+            f"max_mean_active_tile_fraction={max_mean_active_tile_fraction:.6f} "
+            f"max_sample_active_tile_fraction={entropy['max_active_tile_fraction']:.6f} "
+            f"allowed_max_sample_active_tile_fraction={max_sample_active_tile_fraction:.6f} "
+            f"loo_sample_count={oracle['loo_sample_count']:.0f} "
+            f"valid_sample_count={entropy['valid_sample_count']:.0f}"
+        ),
+    )
+
+    metrics = full.hva_predictor_metrics
+    if metrics is None:
+        smooth_details = "hva_smoothed_metrics_available=0 hva_smoothed_metrics_unavailable_reason=missing_hva_predictor_metrics"
+    else:
+        smooth_details = (
+            "hva_smoothed_metrics_available=1 "
+            f"topk_heldout_repeat_avg_smooth_model_recall_at_k="
+            f"{metrics.get('topk_heldout_repeat_avg_smooth_model_recall_at_k', math.nan):.6f}"
+        )
+    overall_ok &= print_result(
+        activity_ok,
+        "l23_activity_anti_cheat_separation",
+        (
+            "raw_exact_gate=l23_activity_raw_topk_repeat_stability "
+            f"raw_exact_gate_pass={1 if activity_ok else 0} "
+            f"raw_exact_oracle_at_k={raw_oracle:.6f} "
+            "raw_exact_rescued_by_frame_decoding_or_smoothed_population_metrics=0 "
+            "frame_decoding_and_smoothed_population_metrics_diagnostic_only=1 "
+            f"{smooth_details}"
+        ),
+    )
+    return overall_ok
+
+
+def parse_video_ff_event_trace_edges_csv(path: Path) -> list[dict[str, float]]:
+    required_columns = {
+        "pre_l4e_id",
+        "post_l23e_id",
+        "distance_sites",
+        "w_before",
+        "w_after",
+        "delta_w",
+        "pre_before_post_event_count",
+        "post_before_pre_event_count",
+        "event_causal_score",
+        "shuffle_causal_score",
+        "pre_rate_hz",
+        "post_rate_hz",
+    }
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            raise ValidationError(f"Missing event-trace edge audit header in {path}")
+        missing = required_columns.difference(reader.fieldnames)
+        if missing:
+            raise ValidationError(f"Missing event-trace edge audit columns in {path}: {sorted(missing)}")
+        rows: list[dict[str, float]] = []
+        for row_number, row in enumerate(reader, start=2):
+            parsed: dict[str, float] = {}
+            for column in required_columns:
+                raw = row.get(column)
+                if raw is None:
+                    raise ValidationError(f"Missing value in {path} row {row_number} column {column}")
+                parsed[column] = parse_float(raw, path, row_number, column)
+            rows.append(parsed)
+    return rows
+
+
+def validate_event_driven_ff_plasticity(run: RunData) -> bool:
+    """Require local event-trace FF plasticity, not host-side windowed count updates."""
+
+    overall_ok = True
+
+    def event_metric(name: str) -> float | None:
+        summary_value = optional_summary_metric(run, f"video_ff_event_trace_{name}")
+        if summary_value is not None:
+            return summary_value
+        if run.video_consolidation_metrics is None:
+            return None
+        return run.video_consolidation_metrics.get(f"feedforward_l4_l23_event_trace_{name}")
+
+    enabled = event_metric("enabled")
+    tau_pre_ms = event_metric("tau_pre_ms")
+    tau_post_ms = event_metric("tau_post_ms")
+    tau_rate_ms = event_metric("tau_rate_ms")
+    hetero_minus = event_metric("hetero_minus")
+    post_target_hz = event_metric("post_target_hz")
+    application_count = event_metric("application_count")
+    active_edge_count = event_metric("active_edge_count")
+    changed_frac = event_metric("changed_frac")
+    mean_delta = event_metric("mean_delta")
+    p95_abs_delta = event_metric("p95_abs_delta")
+    max_abs_delta = event_metric("max_abs_delta")
+    mean_gain_ratio = event_metric("mean_gain_ratio")
+    local_only = event_metric("local_only")
+    windowed_count_only = event_metric("windowed_count_only")
+    future_frame_used = event_metric("future_frame_used")
+    target_label_used = event_metric("target_label_used")
+    heldout_frames_used = event_metric("heldout_frames_used")
+    hva_feedback_enabled = event_metric("hva_feedback_enabled")
+
+    summary_ok = (
+        enabled == 1.0
+        and tau_pre_ms is not None
+        and 15.0 <= tau_pre_ms <= 25.0
+        and tau_post_ms is not None
+        and 30.0 <= tau_post_ms <= 50.0
+        and tau_rate_ms is not None
+        and 1000.0 <= tau_rate_ms <= 5000.0
+        and hetero_minus is not None
+        and hetero_minus > 0.0
+        and post_target_hz is not None
+        and post_target_hz >= 0.0
+        and application_count is not None
+        and application_count > 0.0
+        and active_edge_count is not None
+        and active_edge_count >= 100.0
+        and changed_frac is not None
+        and changed_frac >= 0.01
+        and p95_abs_delta is not None
+        and p95_abs_delta > 1.0e-6
+        and max_abs_delta is not None
+        and max_abs_delta > 1.0e-6
+    )
+    overall_ok &= print_result(
+        summary_ok,
+        "event_driven_ff_plasticity_summary",
+        (
+            f"enabled={format_optional_float(enabled)} "
+            f"tau_pre_ms={format_optional_float(tau_pre_ms)} "
+            f"tau_post_ms={format_optional_float(tau_post_ms)} "
+            f"tau_rate_ms={format_optional_float(tau_rate_ms)} "
+            f"hetero_minus={format_optional_float(hetero_minus)} "
+            f"post_target_hz={format_optional_float(post_target_hz)} "
+            f"application_count={format_optional_float(application_count)} "
+            f"active_edge_count={format_optional_float(active_edge_count)} "
+            f"changed_frac={format_optional_float(changed_frac)} "
+            f"mean_delta={format_optional_float(mean_delta)} "
+            f"p95_abs_delta={format_optional_float(p95_abs_delta)} "
+            f"max_abs_delta={format_optional_float(max_abs_delta)} "
+            f"mean_gain_ratio={format_optional_float(mean_gain_ratio)}"
+        ),
+    )
+
+    no_cheat_ok = (
+        local_only == 1.0
+        and windowed_count_only == 0.0
+        and future_frame_used == 0.0
+        and target_label_used == 0.0
+        and heldout_frames_used == 0.0
+        and hva_feedback_enabled == 0.0
+    )
+    overall_ok &= print_result(
+        no_cheat_ok,
+        "event_driven_ff_plasticity_no_cheat",
+        (
+            f"local_only={format_optional_float(local_only)} "
+            f"windowed_count_only={format_optional_float(windowed_count_only)} "
+            f"future_frame_used={format_optional_float(future_frame_used)} "
+            f"target_label_used={format_optional_float(target_label_used)} "
+            f"heldout_frames_used={format_optional_float(heldout_frames_used)} "
+            f"hva_feedback_enabled={format_optional_float(hva_feedback_enabled)}"
+        ),
+    )
+
+    coactivity_enabled = optional_summary_metric(run, "video_ff_coactivity_competition_enabled")
+    weight_only_enabled = optional_summary_metric(run, "video_ff_heterosynaptic_competition_enabled")
+    legacy_disabled_ok = (
+        (coactivity_enabled is None or coactivity_enabled == 0.0)
+        and (weight_only_enabled is None or weight_only_enabled == 0.0)
+    )
+    overall_ok &= print_result(
+        legacy_disabled_ok,
+        "event_driven_ff_plasticity_no_windowed_counts",
+        (
+            f"video_ff_coactivity_competition_enabled={format_optional_float(coactivity_enabled)} "
+            f"video_ff_heterosynaptic_competition_enabled={format_optional_float(weight_only_enabled)} "
+            "required_old_windowed_and_weight_only_paths_disabled=1"
+        ),
+    )
+
+    mass_post_count = event_metric("incoming_mass_post_count")
+    mass_min_ratio = event_metric("incoming_mass_min_ratio")
+    mass_mean_ratio = event_metric("incoming_mass_mean_ratio")
+    mass_max_ratio = event_metric("incoming_mass_max_ratio")
+    mass_p95_abs_log_ratio = event_metric("incoming_mass_p95_abs_log_ratio")
+    mass_ok = (
+        mass_post_count is not None
+        and mass_post_count >= 100.0
+        and mass_min_ratio is not None
+        and mass_min_ratio >= 0.75
+        and mass_mean_ratio is not None
+        and 0.85 <= mass_mean_ratio <= 1.15
+        and mass_max_ratio is not None
+        and mass_max_ratio <= 1.25
+        and mass_p95_abs_log_ratio is not None
+        and mass_p95_abs_log_ratio <= math.log(1.25)
+    )
+    overall_ok &= print_result(
+        mass_ok,
+        "event_driven_ff_plasticity_incoming_mass",
+        (
+            f"post_count={format_optional_float(mass_post_count)} "
+            f"min_ratio={format_optional_float(mass_min_ratio)} "
+            f"mean_ratio={format_optional_float(mass_mean_ratio)} "
+            f"max_ratio={format_optional_float(mass_max_ratio)} "
+            f"p95_abs_log_ratio={format_optional_float(mass_p95_abs_log_ratio)}"
+        ),
+    )
+
+    edge_path = run.genn_dir / f"{run.prefix}_video_ff_event_trace_edges.csv"
+    rows = parse_video_ff_event_trace_edges_csv(require_file(edge_path))
+    positive_rows = [
+        row
+        for row in rows
+        if row["delta_w"] > 0.0
+        and math.isfinite(row["event_causal_score"])
+        and math.isfinite(row["shuffle_causal_score"])
+    ]
+    mean_event_score = mean([row["event_causal_score"] for row in positive_rows]) if positive_rows else math.nan
+    mean_shuffle_score = mean([row["shuffle_causal_score"] for row in positive_rows]) if positive_rows else math.nan
+    mean_positive_delta = mean([row["delta_w"] for row in positive_rows]) if positive_rows else math.nan
+    edge_ok = (
+        len(rows) >= 128
+        and len(positive_rows) >= 20
+        and math.isfinite(mean_event_score)
+        and math.isfinite(mean_shuffle_score)
+        and mean_event_score > mean_shuffle_score
+    )
+    overall_ok &= print_result(
+        edge_ok,
+        "event_driven_ff_plasticity_edge_audit",
+        (
+            f"edge_csv={edge_path} "
+            f"rows={len(rows)} "
+            f"positive_delta_rows={len(positive_rows)} "
+            f"mean_positive_delta={mean_positive_delta:.6f} "
+            f"mean_event_causal_score={mean_event_score:.6f} "
+            f"mean_shuffle_causal_score={mean_shuffle_score:.6f} "
+            "required_event_score_gt_shuffle=1"
+        ),
+    )
+
+    return overall_ok
+
+
 def validate_emergent_ff_gain(run: RunData) -> bool:
     """Validate that video FF gain is learned, not a transient eval-time scale."""
 
@@ -8238,10 +8772,30 @@ def main() -> int:
         if args.l23_video_min_frame_top1_accuracy is not None:
             if not 0.0 <= args.l23_video_min_frame_top1_accuracy <= 1.0:
                 raise ValidationError("--l23-video-min-frame-top1-accuracy must be in [0, 1].")
-            if not args.require_l23_video_reliability:
+            if not (args.require_l23_video_reliability or args.require_l23_activity_reliability):
                 raise ValidationError(
-                    "--l23-video-min-frame-top1-accuracy requires --require-l23-video-reliability."
+                    "--l23-video-min-frame-top1-accuracy requires --require-l23-video-reliability "
+                    "or --require-l23-activity-reliability."
                 )
+        for flag_name, value in (
+            ("--l23-video-min-raw-oracle-at-k", args.l23_video_min_raw_oracle_at_k),
+            (
+                "--l23-video-min-raw-oracle-ceiling-fraction",
+                args.l23_video_min_raw_oracle_ceiling_fraction,
+            ),
+            (
+                "--l23-video-max-mean-active-tile-fraction",
+                args.l23_video_max_mean_active_tile_fraction,
+            ),
+            (
+                "--l23-video-max-sample-active-tile-fraction",
+                args.l23_video_max_sample_active_tile_fraction,
+            ),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValidationError(f"{flag_name} must be in [0, 1].")
+        if not -1.0 <= args.l23_video_min_l23e_repeat_corr <= 1.0:
+            raise ValidationError("--l23-video-min-l23e-repeat-corr must be in [-1, 1].")
         if args.require_pv_gain_normalization and not args.pvweak:
             raise ValidationError("--require-pv-gain-normalization requires --pvweak PREFIX.")
         full = load_run(
@@ -8265,6 +8819,71 @@ def main() -> int:
         )
 
         overall_ok = True
+        final_post_video_missing = final_post_video_orientation_missing(full)
+        use_final_post_video_orientation = (
+            args.require_event_driven_ff_plasticity
+            and not final_post_video_missing
+        )
+        final_post_video_som_artifact_missing = final_post_video_som_missing(full)
+        use_final_post_video_som = (
+            args.require_event_driven_ff_plasticity
+            and not final_post_video_som_artifact_missing
+        )
+        som_validation_full = (
+            with_final_post_video_som_artifacts(full)
+            if use_final_post_video_som
+            else full
+        )
+        som_validation_source = (
+            "final_post_video" if use_final_post_video_som else "post"
+        )
+        if args.require_event_driven_ff_plasticity:
+            overall_ok &= print_result(
+                not final_post_video_missing,
+                "final_post_video_orientation_artifacts_available",
+                (
+                    f"source={'final_post_video' if not final_post_video_missing else 'post'} "
+                    f"summary_enabled={full.summary.get('final_post_video_assay_enabled', math.nan):.6f} "
+                    f"missing={','.join(final_post_video_missing) if final_post_video_missing else 'none'}"
+                ),
+            )
+            print_final_post_video_reference_info(full)
+            overall_ok &= print_result(
+                not final_post_video_som_artifact_missing,
+                "final_post_video_som_artifacts_available",
+                (
+                    f"source={som_validation_source} "
+                    f"missing={','.join(final_post_video_som_artifact_missing) if final_post_video_som_artifact_missing else 'none'}"
+                ),
+            )
+        validation_l23e_post_sites = (
+            full.final_post_video_l23e_sites
+            if use_final_post_video_orientation and full.final_post_video_l23e_sites is not None
+            else full.l23e_post_sites
+        )
+        validation_l4_post_sites = (
+            full.final_post_video_l4_sites
+            if use_final_post_video_orientation and full.final_post_video_l4_sites is not None
+            else full.l4_post_sites
+        )
+        validation_post_site_rates = (
+            full.final_post_video_site_rates
+            if use_final_post_video_orientation and full.final_post_video_site_rates is not None
+            else full.post_site_rates
+        )
+        validation_l23e_cell_tuning = (
+            full.final_post_video_l23e_cell_tuning
+            if use_final_post_video_orientation
+            else full.l23e_cell_tuning
+        )
+        validation_l23e_cell_tuning_multiphase = (
+            full.final_post_video_l23e_cell_tuning_multiphase
+            if use_final_post_video_orientation
+            else full.l23e_cell_tuning_multiphase
+        )
+        orientation_validation_source = (
+            "final_post_video" if use_final_post_video_orientation else "post"
+        )
         l23e_osi_metrics_by_label = {
             run_label: compute_l23e_osi_site_metrics(
                 run.l23e_post_sites,
@@ -8314,8 +8933,22 @@ def main() -> int:
                 min_frame_top1_accuracy=args.l23_video_min_frame_top1_accuracy,
             )
 
+        if args.require_l23_activity_reliability:
+            overall_ok &= validate_l23_activity_reliability(
+                full,
+                min_frame_top1_accuracy=args.l23_video_min_frame_top1_accuracy,
+                min_raw_oracle_at_k=args.l23_video_min_raw_oracle_at_k,
+                min_raw_oracle_ceiling_fraction=args.l23_video_min_raw_oracle_ceiling_fraction,
+                min_l23e_repeat_corr=args.l23_video_min_l23e_repeat_corr,
+                max_mean_active_tile_fraction=args.l23_video_max_mean_active_tile_fraction,
+                max_sample_active_tile_fraction=args.l23_video_max_sample_active_tile_fraction,
+            )
+
         if args.require_emergent_ff_gain:
             overall_ok &= validate_emergent_ff_gain(full)
+
+        if args.require_event_driven_ff_plasticity:
+            overall_ok &= validate_event_driven_ff_plasticity(full)
 
         if args.require_natural_video_event_timing:
             overall_ok &= validate_natural_video_event_timing(full)
@@ -8555,17 +9188,22 @@ def main() -> int:
 
         if args.require_responsiveness_sparsity:
             missing_artifacts: list[str] = []
-            if full.l23e_cell_tuning is None:
-                missing_artifacts.append(f"{full.prefix}_l23e_cell_tuning.csv")
-            if full.l23e_cell_tuning_multiphase is None:
-                missing_artifacts.append(f"{full.prefix}_l23e_cell_tuning_multiphase.csv")
+            if validation_l23e_cell_tuning is None:
+                missing_artifacts.append(
+                    f"{full.prefix}_{orientation_validation_source}_l23e_cell_tuning.csv"
+                )
+            if validation_l23e_cell_tuning_multiphase is None:
+                missing_artifacts.append(
+                    f"{full.prefix}_{orientation_validation_source}_l23e_cell_tuning_multiphase.csv"
+                )
             artifacts_available = not missing_artifacts
             overall_ok &= print_result(
                 artifacts_available,
                 "responsiveness_artifacts_available",
                 (
-                    f"full_cell_tuning={int(full.l23e_cell_tuning is not None)} "
-                    f"full_multiphase_tuning={int(full.l23e_cell_tuning_multiphase is not None)} "
+                    f"source={orientation_validation_source} "
+                    f"full_cell_tuning={int(validation_l23e_cell_tuning is not None)} "
+                    f"full_multiphase_tuning={int(validation_l23e_cell_tuning_multiphase is not None)} "
                     f"missing={','.join(missing_artifacts) if missing_artifacts else 'none'}"
                 ),
             )
@@ -8583,24 +9221,25 @@ def main() -> int:
                 )
 
             if artifacts_available:
-                assert full.l23e_cell_tuning is not None
-                assert full.l23e_cell_tuning_multiphase is not None
-                single_5hz = compute_cell_responsive_metrics(full.l23e_cell_tuning, 5.0)
-                single_10hz = compute_cell_responsive_metrics(full.l23e_cell_tuning, 10.0)
+                assert validation_l23e_cell_tuning is not None
+                assert validation_l23e_cell_tuning_multiphase is not None
+                single_5hz = compute_cell_responsive_metrics(validation_l23e_cell_tuning, 5.0)
+                single_10hz = compute_cell_responsive_metrics(validation_l23e_cell_tuning, 10.0)
                 multiphase_5hz = compute_multiphase_cell_responsive_metrics(
-                    full.l23e_cell_tuning_multiphase,
+                    validation_l23e_cell_tuning_multiphase,
                     5.0,
                 )
                 multiphase_10hz = compute_multiphase_cell_responsive_metrics(
-                    full.l23e_cell_tuning_multiphase,
+                    validation_l23e_cell_tuning_multiphase,
                     10.0,
                 )
                 phase_mean_peak_values = [
                     max(row.phase_mean_rates_by_deg.values())
-                    for row in full.l23e_cell_tuning_multiphase.values()
+                    for row in validation_l23e_cell_tuning_multiphase.values()
                 ]
                 print(
                     "INFO phase_mean_responsiveness "
+                    f"source={orientation_validation_source} "
                     f"cell_count={len(phase_mean_peak_values)} "
                     f"peak_ge5_fraction={fraction_at_least(phase_mean_peak_values, 5.0):.6f} "
                     f"peak_ge10_fraction={fraction_at_least(phase_mean_peak_values, 10.0):.6f} "
@@ -8608,6 +9247,7 @@ def main() -> int:
                 )
                 print(
                     "INFO l23e_cell_peak10_responsiveness "
+                    f"source={orientation_validation_source} "
                     f"peak_ge10_fraction={single_10hz.responsive_fraction:.6f} "
                     f"peak_ge10_cells={single_10hz.responsive_cells} "
                     f"total_cells={single_10hz.total_cells}"
@@ -8617,6 +9257,7 @@ def main() -> int:
                     0.10 <= single_5hz.responsive_fraction <= 0.45,
                     "l23e_cell_sparse_responsiveness",
                     (
+                        f"source={orientation_validation_source} "
                         f"peak_ge5_fraction={single_5hz.responsive_fraction:.6f} "
                         f"peak_ge5_bounds=[0.100000,0.450000] "
                         f"peak_ge10_fraction={single_10hz.responsive_fraction:.6f} "
@@ -8635,6 +9276,7 @@ def main() -> int:
                     and multiphase_osi_ok,
                     "l23e_cell_multiphase_sparse_responsiveness",
                     (
+                        f"source={orientation_validation_source} "
                         f"peak_any_phase_ge5_fraction={multiphase_5hz.responsive_fraction:.6f} "
                         f"peak_any_phase_ge5_bounds=[0.150000,0.550000] "
                         f"peak_any_phase_ge10_fraction={multiphase_10hz.responsive_fraction:.6f} "
@@ -8650,6 +9292,7 @@ def main() -> int:
                     and single_5hz.responsive_site_fraction >= 0.70,
                     "l23e_responsive_site_coverage",
                     (
+                        f"source={orientation_validation_source} "
                         f"multiphase_sites_ge1_fraction="
                         f"{multiphase_5hz.responsive_site_fraction_ge1:.6f} "
                         f"multiphase_sites_ge2_fraction="
@@ -8660,12 +9303,13 @@ def main() -> int:
                     ),
                 )
 
-                full_l23e_rate_metrics = compute_rate_metrics(full.post_site_rates["l23e"])
+                full_l23e_rate_metrics = compute_rate_metrics(validation_post_site_rates["l23e"])
                 overall_ok &= print_result(
                     full_l23e_rate_metrics.frac_below_1hz >= 0.85
                     and full_l23e_rate_metrics.p99_hz <= 5.0,
                     "l23e_population_sparse_rates",
                     (
+                        f"source={orientation_validation_source} "
                         f"frac_lt1={full_l23e_rate_metrics.frac_below_1hz:.6f} "
                         f"frac_lt1_min=0.850000 "
                         f"p99={full_l23e_rate_metrics.p99_hz:.6f} "
@@ -8674,8 +9318,8 @@ def main() -> int:
                 )
 
                 spatial_balance = responsiveness_spatial_balance_metrics(
-                    full.l23e_cell_tuning_multiphase,
-                    full.l23e_post_sites,
+                    validation_l23e_cell_tuning_multiphase,
+                    validation_l23e_post_sites,
                     5.0,
                 )
                 overall_ok &= print_result(
@@ -8686,6 +9330,7 @@ def main() -> int:
                     and spatial_balance["min_quadrant_site_fraction"] >= 0.10,
                     "l23e_spatial_coverage_balance",
                     (
+                        f"source={orientation_validation_source} "
                         f"responsive_sites={int(spatial_balance['responsive_site_count'])} "
                         f"responsive_cells={int(spatial_balance['responsive_cell_count'])} "
                         f"min_quadrant_site_fraction="
@@ -8714,20 +9359,26 @@ def main() -> int:
                 "somoff": args.genn_dir / f"{args.somoff}_l4_intersite_diagnostics.csv",
             }
             missing_scaling_artifacts: list[str] = []
-            if full.l4_post_sites is None:
-                missing_scaling_artifacts.append(f"{full.prefix}_post_l4_sites.csv")
+            if validation_l4_post_sites is None:
+                missing_scaling_artifacts.append(f"{full.prefix}_{orientation_validation_source}_l4_sites.csv")
             if control.l4_post_sites is None:
                 missing_scaling_artifacts.append(f"{control.prefix}_post_l4_sites.csv")
-            if not post_site_preferences_available(full.l4_post_sites):
-                missing_scaling_artifacts.append(f"{full.prefix}_post_l4_sites.csv:map_pref/measured_pref")
+            if not post_site_preferences_available(validation_l4_post_sites):
+                missing_scaling_artifacts.append(
+                    f"{full.prefix}_{orientation_validation_source}_l4_sites.csv:map_pref/measured_pref"
+                )
             if not post_site_preferences_available(control.l4_post_sites):
                 missing_scaling_artifacts.append(f"{control.prefix}_post_l4_sites.csv:map_pref/measured_pref")
-            if not post_site_preferences_available(full.l23e_post_sites):
-                missing_scaling_artifacts.append(f"{full.prefix}_post_l23_sites.csv:map_pref/measured_pref")
+            if not post_site_preferences_available(validation_l23e_post_sites):
+                missing_scaling_artifacts.append(
+                    f"{full.prefix}_{orientation_validation_source}_l23_sites.csv:map_pref/measured_pref"
+                )
             if not post_site_preferences_available(control.l23e_post_sites):
                 missing_scaling_artifacts.append(f"{control.prefix}_post_l23_sites.csv:map_pref/measured_pref")
-            if full.l23e_cell_tuning_multiphase is None:
-                missing_scaling_artifacts.append(f"{full.prefix}_l23e_cell_tuning_multiphase.csv")
+            if validation_l23e_cell_tuning_multiphase is None:
+                missing_scaling_artifacts.append(
+                    f"{full.prefix}_{orientation_validation_source}_l23e_cell_tuning_multiphase.csv"
+                )
             for label, path in l4is_paths.items():
                 if not path.is_file():
                     missing_scaling_artifacts.append(f"{label}:{path.name}")
@@ -8740,18 +9391,23 @@ def main() -> int:
             )
 
             if scaling_artifacts_available:
-                assert full.l4_post_sites is not None
+                assert validation_l4_post_sites is not None
                 assert control.l4_post_sites is not None
-                assert full.l23e_cell_tuning_multiphase is not None
+                assert validation_l23e_cell_tuning_multiphase is not None
                 full_l4_intersite_for_scaling = load_l4_intersite_metrics(args.genn_dir, args.full)
                 control_l4_intersite_for_scaling = load_l4_intersite_metrics(args.genn_dir, args.control)
                 somoff_l4_intersite_for_scaling = load_l4_intersite_metrics(args.genn_dir, args.somoff)
 
-                l4_map = compute_l4_map_consistency_metrics(full.l4_post_sites)
+                l4_map = compute_l4_map_consistency_metrics(validation_l4_post_sites)
                 l4is_post_map_error = full_l4_intersite_for_scaling.get("post_l4_map_error_deg_median", math.nan)
                 l4is_baseline_map_error = full_l4_intersite_for_scaling.get(
                     "baseline_l4_map_error_deg_median",
                     math.nan,
+                )
+                summary_l4_map_metric = (
+                    "final_post_video_l4_map_error_deg_median"
+                    if use_final_post_video_orientation
+                    else "post_l4_map_error_deg_median"
                 )
                 overall_ok &= print_result(
                     l4_map["active_fraction"] >= 0.95
@@ -8759,22 +9415,23 @@ def main() -> int:
                     and l4_map["p90_error_deg"] <= 10.0,
                     "scaling_l4_map_consistency",
                     (
+                        f"source={orientation_validation_source} "
                         f"active_sites={int(l4_map['active_sites'])} "
                         f"total_sites={int(l4_map['total_sites'])} "
                         f"active_fraction={l4_map['active_fraction']:.6f} "
                         f"median_map_error_deg={l4_map['median_error_deg']:.6f} "
                         f"p90_map_error_deg={l4_map['p90_error_deg']:.6f} "
                         f"summary_post_l4_map_error_deg="
-                        f"{require_summary_metric(full, 'post_l4_map_error_deg_median'):.6f} "
+                        f"{require_summary_metric(full, summary_l4_map_metric):.6f} "
                         f"l4is_post_l4_map_error_deg={l4is_post_map_error:.6f} "
                         f"l4is_baseline_l4_map_error_deg={l4is_baseline_map_error:.6f}"
                     ),
                 )
 
                 l23_l4_map = compute_l23_l4_map_consistency_metrics(
-                    full.l23e_post_sites,
-                    full.l4_post_sites,
-                    full.l23e_cell_tuning_multiphase,
+                    validation_l23e_post_sites,
+                    validation_l4_post_sites,
+                    validation_l23e_cell_tuning_multiphase,
                 )
                 active_site_map_ok = (
                     l23_l4_map["active_site_count"] > 0.0
@@ -8788,6 +9445,7 @@ def main() -> int:
                     active_site_map_ok or cell10_map_ok,
                     "scaling_l23_l4_map_consistency",
                     (
+                        f"source={orientation_validation_source} "
                         f"active_site_count={int(l23_l4_map['active_site_count'])} "
                         f"active_site_median_delta_deg="
                         f"{l23_l4_map['active_site_median_delta_deg']:.6f} "
@@ -8802,13 +9460,13 @@ def main() -> int:
                 )
 
                 tile5 = compute_tile_orientation_metrics(
-                    full.l23e_cell_tuning_multiphase,
-                    full.l23e_post_sites,
+                    validation_l23e_cell_tuning_multiphase,
+                    validation_l23e_post_sites,
                     5.0,
                 )
                 tile10 = compute_tile_orientation_metrics(
-                    full.l23e_cell_tuning_multiphase,
-                    full.l23e_post_sites,
+                    validation_l23e_cell_tuning_multiphase,
+                    validation_l23e_post_sites,
                     10.0,
                 )
                 overall_ok &= print_result(
@@ -8817,6 +9475,7 @@ def main() -> int:
                     and tile5["bin_gate_pass"] == 1.0,
                     "scaling_tile_orientation_coverage",
                     (
+                        f"source={orientation_validation_source} "
                         f"threshold_hz={tile5['threshold_hz']:.6f} "
                         f"responsive_cells={int(tile5['responsive_cells'])} "
                         f"nonempty_tiles={int(tile5['nonempty_tile_count'])} "
@@ -8835,6 +9494,7 @@ def main() -> int:
                     and tile5["min_entropy"] >= 0.55,
                     "scaling_tile_orientation_entropy",
                     (
+                        f"source={orientation_validation_source} "
                         f"threshold5_median_entropy={tile5['median_entropy']:.6f} "
                         f"threshold5_min_entropy={tile5['min_entropy']:.6f} "
                         f"threshold10_responsive_cells={int(tile10['responsive_cells'])} "
@@ -8844,8 +9504,8 @@ def main() -> int:
                 )
 
                 edge_quadrants = compute_edge_quadrant_balance_metrics(
-                    full.l23e_cell_tuning_multiphase,
-                    full.l23e_post_sites,
+                    validation_l23e_cell_tuning_multiphase,
+                    validation_l23e_post_sites,
                     5.0,
                 )
                 overall_ok &= print_result(
@@ -8854,6 +9514,7 @@ def main() -> int:
                     and edge_quadrants["min_quadrant_cell_fraction"] >= 0.10,
                     "scaling_edge_quadrant_balance",
                     (
+                        f"source={orientation_validation_source} "
                         f"responsive_cells={int(edge_quadrants['responsive_cells'])} "
                         f"responsive_sites={int(edge_quadrants['responsive_sites'])} "
                         f"responsive_edge_sites={int(edge_quadrants['responsive_edge_sites'])} "
@@ -9279,14 +9940,26 @@ def main() -> int:
                 ),
             )
 
-        full_post_osi = require_summary_metric(full, "post_l23_median_osi")
+        full_post_osi_metric = (
+            "final_post_video_l23_median_osi"
+            if use_final_post_video_orientation
+            else "post_l23_median_osi"
+        )
+        full_post_osi = require_summary_metric(full, full_post_osi_metric)
+        pre_video_full_post_osi = require_summary_metric(full, "post_l23_median_osi")
         control_post_osi = require_summary_metric(control, "post_l23_median_osi")
         osi_delta = full_post_osi - control_post_osi
         strict_osi_ok = full_post_osi >= 0.70 and osi_delta >= 0.10
         printed_strict_osi_ok = print_result(
             strict_osi_ok,
             "osi",
-            f"full_post={full_post_osi:.6f} control_post={control_post_osi:.6f} delta={osi_delta:.6f}",
+            (
+                f"source={orientation_validation_source} "
+                f"full_post={full_post_osi:.6f} "
+                f"control_post={control_post_osi:.6f} "
+                f"delta={osi_delta:.6f} "
+                f"pre_video_full_post={pre_video_full_post_osi:.6f}"
+            ),
         )
         if strict_osi_ok or not args.allow_responsive_osi:
             overall_ok &= printed_strict_osi_ok
@@ -9348,18 +10021,33 @@ def main() -> int:
                     ),
                 )
 
-        preferred_by_site, preferred_rates_by_site = preferred_center_orientations(full)
+        preferred_by_site, preferred_rates_by_site = preferred_center_orientations(som_validation_full)
         primary_validation_site_id = next(iter(preferred_by_site))
         pref_deg = preferred_by_site[primary_validation_site_id]
         full_center_pref_rate = mean(list(preferred_rates_by_site.values()))
         full_min_center_pref_rate = min(preferred_rates_by_site.values())
-        full_context = compute_context_metrics(full, preferred_by_site)
+        full_context = compute_context_metrics(som_validation_full, preferred_by_site)
         somoff_context = compute_context_metrics(somoff, preferred_by_site)
+        if use_final_post_video_som:
+            pre_video_preferred_by_site, pre_video_preferred_rates_by_site = preferred_center_orientations(full)
+            pre_video_context = compute_context_metrics(full, pre_video_preferred_by_site)
+            print(
+                "INFO final_post_video_som_reference "
+                f"pre_mean_center_pref_l23e_hz={mean(list(pre_video_preferred_rates_by_site.values())):.6f} "
+                f"final_mean_center_pref_l23e_hz={full_center_pref_rate:.6f} "
+                f"pre_mean_bsi={pre_video_context['mean_bsi']:.6f} "
+                f"final_mean_bsi={full_context['mean_bsi']:.6f} "
+                f"pre_min_center_som_hz={pre_video_context['min_center_som_hz']:.6f} "
+                f"final_min_center_som_hz={full_context['min_center_som_hz']:.6f} "
+                f"pre_min_broad_som_hz={pre_video_context['min_broad_som_hz']:.6f} "
+                f"final_min_broad_som_hz={full_context['min_broad_som_hz']:.6f}"
+            )
 
         overall_ok &= print_result(
             full_center_pref_rate >= 5.0,
             "som_center_pref",
             (
+                f"source={som_validation_source} "
                 f"validation_sites={int(full_context['validation_site_count'])} "
                 f"primary_site={primary_validation_site_id} "
                 f"preferred_deg={pref_deg:.1f} "
@@ -9371,6 +10059,7 @@ def main() -> int:
             full_context["min_center_som_hz"] > 0.0 and full_context["min_broad_som_hz"] > 0.0,
             "som_sanity",
             (
+                f"source={som_validation_source} "
                 f"driven_center_threshold_hz={full_context['driven_center_threshold_hz']:.6f} "
                 f"validation_sites={int(full_context['validation_site_count'])} "
                 f"relevant_orientations={int(full_context['relevant_orientation_count'])} "
@@ -9382,6 +10071,7 @@ def main() -> int:
             full_context["mean_bsi"] >= 0.20,
             "som_full",
             (
+                f"source={som_validation_source} "
                 f"mean_bsi={full_context['mean_bsi']:.6f} "
                 f"driven_center_threshold_hz={full_context['driven_center_threshold_hz']:.6f} "
                 f"validation_sites={int(full_context['validation_site_count'])} "
@@ -9393,6 +10083,7 @@ def main() -> int:
             or (somoff_context["mean_bsi"] <= (0.5 * full_context["mean_bsi"])),
             "som_somoff",
             (
+                f"source={som_validation_source} "
                 f"full_mean_bsi={full_context['mean_bsi']:.6f} "
                 f"somoff_mean_bsi={somoff_context['mean_bsi']:.6f} "
                 f"delta={(full_context['mean_bsi'] - somoff_context['mean_bsi']):.6f}"
@@ -9408,6 +10099,7 @@ def main() -> int:
             print(f"INFO som_mean_bsi_summary {' '.join(summary_mean_bsi_details)}")
         print(
             "INFO som_preferred_bsi "
+            f"source={som_validation_source} "
             f"preferred_deg={pref_deg:.1f} "
             f"primary_site={primary_validation_site_id} "
             f"full_preferred_bsi={full_context['preferred_bsi']:.6f} "
@@ -9415,15 +10107,27 @@ def main() -> int:
         )
         print(
             "INFO som_driven_threshold "
+            f"source={som_validation_source} "
             f"full_threshold_hz={full_context['driven_center_threshold_hz']:.6f} "
             f"somoff_threshold_hz={somoff_context['driven_center_threshold_hz']:.6f}"
         )
 
-        full_size = compute_size_tuning_metrics(full)
+        full_size = compute_size_tuning_metrics(som_validation_full)
         somoff_size = compute_size_tuning_metrics(
             somoff,
             selected_orientations=full_size["selected_orientations_by_site"],
         )
+        if use_final_post_video_som:
+            pre_video_size = compute_size_tuning_metrics(full)
+            print(
+                "INFO final_post_video_size_reference "
+                f"pre_peak_rate={pre_video_size['l23e']['peak_rate']:.6f} "
+                f"final_peak_rate={full_size['l23e']['peak_rate']:.6f} "
+                f"pre_suppression={pre_video_size['l23e']['suppression']:.6f} "
+                f"final_suppression={full_size['l23e']['suppression']:.6f} "
+                f"pre_l23som_peak_rate={pre_video_size['l23som']['peak_rate']:.6f} "
+                f"final_l23som_peak_rate={full_size['l23som']['peak_rate']:.6f}"
+            )
         full_l23e_size = full_size["l23e"]
         full_l4e_size = full_size["l4e"]
         somoff_l23e_size = somoff_size["l23e"]
@@ -9485,12 +10189,36 @@ def main() -> int:
 
         if args.require_som_size_surround:
             som_size_surround = compute_som_size_surround_metrics(
-                full,
+                som_validation_full,
                 somoff,
                 full_size,
                 somoff_size,
                 full_context,
             )
+            if use_final_post_video_som:
+                pre_video_size = compute_size_tuning_metrics(full)
+                pre_video_somoff_size = compute_size_tuning_metrics(
+                    somoff,
+                    selected_orientations=pre_video_size["selected_orientations_by_site"],
+                )
+                pre_video_preferred_by_site, _ = preferred_center_orientations(full)
+                pre_video_context = compute_context_metrics(full, pre_video_preferred_by_site)
+                pre_video_som_size_surround = compute_som_size_surround_metrics(
+                    full,
+                    somoff,
+                    pre_video_size,
+                    pre_video_somoff_size,
+                    pre_video_context,
+                )
+                print(
+                    "INFO final_post_video_som_recruitment_reference "
+                    f"pre_som_large_or_broad_rate={pre_video_som_size_surround['som_large_or_broad_rate']:.6f} "
+                    f"final_som_large_or_broad_rate={som_size_surround['som_large_or_broad_rate']:.6f} "
+                    f"pre_som_center_or_peak_rate={pre_video_som_size_surround['som_center_or_peak_rate']:.6f} "
+                    f"final_som_center_or_peak_rate={som_size_surround['som_center_or_peak_rate']:.6f} "
+                    f"pre_som_recruitment_index={pre_video_som_size_surround['som_recruitment_index']:.6f} "
+                    f"final_som_recruitment_index={som_size_surround['som_recruitment_index']:.6f}"
+                )
             peak_index = int(full_l23e_size["peak_index"])
             overall_ok &= print_result(
                 som_size_surround["peak_l23e_rate"] >= 1.0
@@ -9500,6 +10228,7 @@ def main() -> int:
                 and som_size_surround["site_curve_pass_fraction"] >= 0.50,
                 "som_size_curve_shape",
                 (
+                    f"source={som_validation_source} "
                     f"validation_sites={int(som_size_surround['site_count'])} "
                     f"peak_radius={som_size_surround['peak_radius']:.6f} "
                     f"small_l23e_rate={som_size_surround['small_l23e_rate']:.6f} "
@@ -9516,6 +10245,7 @@ def main() -> int:
                 som_size_surround["l23e_l4_suppression_delta"] >= 0.05,
                 "som_size_l4_vs_l23e",
                 (
+                    f"source={som_validation_source} "
                     f"l23e_suppression={som_size_surround['l23e_suppression']:.6f} "
                     f"l4e_suppression={som_size_surround['l4_suppression']:.6f} "
                     f"delta={som_size_surround['l23e_l4_suppression_delta']:.6f} "
@@ -9531,6 +10261,7 @@ def main() -> int:
                 ),
                 "som_size_som_recruitment",
                 (
+                    f"source={som_validation_source} "
                     f"small_som_rate={som_size_surround['small_som_rate']:.6f} "
                     f"peak_som_rate={som_size_surround['peak_som_rate']:.6f} "
                     f"large_som_rate={som_size_surround['large_som_rate']:.6f} "
@@ -9549,6 +10280,7 @@ def main() -> int:
                 ),
                 "som_size_somoff_site_rescue",
                 (
+                    f"source={som_validation_source} "
                     f"site_rescue_fraction={som_size_surround['site_rescue_fraction']:.6f} "
                     f"full_large_l23e_rate={som_size_surround['large_l23e_rate']:.6f} "
                     f"somoff_large_l23e_rate={som_size_surround['somoff_large_l23e_rate']:.6f} "

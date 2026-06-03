@@ -46,3 +46,8 @@
   frozen evaluation "replay" or "consolidation" in user-facing explanations.
   Use "natural-video plastic exposure" and "frozen natural-video evaluation"
   unless a real hippocampal/replay mechanism is explicitly implemented.
+- Do not conflate frame decoding with exact L2/3 activity prediction. Frame
+  top-k asks whether stimulus identity is recoverable from the population;
+  raw activity top-k asks whether the same L2/3 sites/tiles win across repeats.
+  For the activity-reliability milestone, optimize and report raw top-k oracle
+  / repeat stability first, with frame decoding only as a companion metric.
