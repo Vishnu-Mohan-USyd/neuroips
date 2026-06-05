@@ -5417,11 +5417,15 @@ def validate_l23_activity_reliability(
         if math.isfinite(raw_oracle) and math.isfinite(leaky_oracle) and leaky_oracle > 0.0
         else math.nan
     )
+    expected_topk_k = 5
+    topk_k = oracle["topk_k"]
+    topk_k_ok = math.isfinite(topk_k) and topk_k.is_integer() and int(topk_k) == expected_topk_k
     entropy = compute_l23_video_tile_entropy_metrics(full, site_rows)
     l23e_repeat_corr = pairwise_repeat_reliability(frame_rows, "l23e_rate_hz")
     activity_ok = (
         math.isfinite(raw_oracle)
         and raw_oracle >= min_raw_oracle_at_k
+        and topk_k_ok
         and math.isfinite(raw_oracle_ceiling_fraction)
         and raw_oracle_ceiling_fraction >= min_raw_oracle_ceiling_fraction
         and l23e_repeat_corr is not None
@@ -5443,6 +5447,7 @@ def validate_l23_activity_reliability(
             f"tile_grid_side={oracle['tile_grid_side']:.0f} "
             f"tile_count={oracle['tile_count']:.0f} "
             f"topk_k={oracle['topk_k']:.0f} "
+            f"expected_topk_k={expected_topk_k} "
             f"raw_oracle_at_k={raw_oracle:.6f} "
             f"min_raw_oracle_at_k={min_raw_oracle_at_k:.6f} "
             f"leaky_repeat_mean_oracle_recall_at_k={leaky_oracle:.6f} "
@@ -5456,6 +5461,21 @@ def validate_l23_activity_reliability(
             f"allowed_max_sample_active_tile_fraction={max_sample_active_tile_fraction:.6f} "
             f"loo_sample_count={oracle['loo_sample_count']:.0f} "
             f"valid_sample_count={entropy['valid_sample_count']:.0f}"
+        ),
+    )
+
+    milestone_ok = activity_ok and topk_k_ok and min_raw_oracle_at_k >= 0.60
+    overall_ok &= print_result(
+        milestone_ok,
+        "raw_oracle_0p6_milestone",
+        (
+            f"raw_oracle_at_k={raw_oracle:.6f} "
+            "threshold=0.600000 "
+            f"min_raw_oracle_at_k={min_raw_oracle_at_k:.6f} "
+            f"topk_k={topk_k:.0f} "
+            f"expected_topk_k={expected_topk_k} "
+            f"repeat_count={oracle['repeat_count']:.0f} "
+            f"sample_count={oracle['loo_sample_count']:.0f}"
         ),
     )
 
