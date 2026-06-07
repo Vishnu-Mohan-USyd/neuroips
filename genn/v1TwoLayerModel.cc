@@ -25,8 +25,9 @@ public:
     DECLARE_SNIPPET(V1LIF);
 
     SET_SIM_CODE(
+        "AdaptCurrent *= AdaptDecay;\n"
         "if (RefracTime <= 0.0) {\n"
-        "  scalar alpha = ((Isyn + Ioffset + Iext) * Rmembrane) + Vrest;\n"
+        "  scalar alpha = ((Isyn + Ioffset + Iext - AdaptCurrent) * Rmembrane) + Vrest;\n"
         "  V = alpha - (ExpTC * (alpha - V));\n"
         "}\n"
         "else {\n"
@@ -38,6 +39,7 @@ public:
     SET_RESET_CODE(
         "V = Vreset;\n"
         "RefracTime = TauRefrac;\n"
+        "AdaptCurrent += AdaptSpike;\n"
         "SpikeCount += 1.0;\n");
 
     SET_PARAMS({
@@ -47,18 +49,25 @@ public:
         "Vreset",
         "Vthresh",
         "Ioffset",
-        "TauRefrac"
+        "TauRefrac",
+        "TauAdapt",
+        "AdaptSpike"
     });
 
     SET_DERIVED_PARAMS({
         {"ExpTC", [](const GeNN::ParamValues &pars, double dt) { return std::exp(-dt / pars.at("TauM").cast<double>()); }},
-        {"Rmembrane", [](const GeNN::ParamValues &pars, double) { return pars.at("TauM").cast<double>() / pars.at("C").cast<double>(); }}
+        {"Rmembrane", [](const GeNN::ParamValues &pars, double) { return pars.at("TauM").cast<double>() / pars.at("C").cast<double>(); }},
+        {"AdaptDecay", [](const GeNN::ParamValues &pars, double dt) {
+            const double tau_adapt = pars.at("TauAdapt").cast<double>();
+            return (tau_adapt > 0.0) ? std::exp(-dt / tau_adapt) : 0.0;
+        }}
     });
 
     SET_VARS({
         {"V", "scalar"},
         {"RefracTime", "scalar"},
         {"Iext", "scalar"},
+        {"AdaptCurrent", "scalar"},
         {"SpikeCount", "scalar"}
     });
 
@@ -129,6 +138,8 @@ public:
         "TailGateEnable",
         "TailGateHz",
         "TailGateTau",
+        "BoundaryGateEnable",
+        "PotentiationOnly",
         "Wmin",
         "Wmax"
     });
@@ -141,7 +152,7 @@ public:
 
     SET_VARS({{"g", "scalar"}});
     SET_PRE_VARS({{"preTrace", "scalar"}});
-    SET_POST_VARS({{"postTrace", "scalar"}, {"postRateTrace", "scalar"}});
+    SET_POST_VARS({{"postTrace", "scalar"}, {"postRateTrace", "scalar"}, {"postBoundaryGate", "scalar"}});
 
     SET_PRE_DYNAMICS_CODE("preTrace *= PreDecay;\n");
     SET_POST_DYNAMICS_CODE(
@@ -157,14 +168,18 @@ public:
         "addToPost(g);\n"
         "const scalar targetTrace = (TargetHz * TauPost) / 1000.0;\n"
         "const scalar tailGateTrace = (TailGateHz * TailGateTau) / 1000.0;\n"
-        "const scalar effectiveEta = ((TailGateEnable < 0.5) || (postRateTrace > tailGateTrace)) ? Eta : 0.0;\n"
-        "const scalar newWeight = g - (effectiveEta * (postTrace - targetTrace));\n"
+        "const scalar tailEta = ((TailGateEnable < 0.5) || (postRateTrace > tailGateTrace)) ? Eta : 0.0;\n"
+        "const scalar boundaryEta = (BoundaryGateEnable < 0.5) ? tailEta : (tailEta * postBoundaryGate);\n"
+        "const scalar homeostaticTerm = postTrace - targetTrace;\n"
+        "const scalar potentiationTerm = (PotentiationOnly > 0.5) ? fmax(0.0, homeostaticTerm) : homeostaticTerm;\n"
+        "const scalar newWeight = g - (boundaryEta * potentiationTerm);\n"
         "g = fmin(Wmax, fmax(Wmin, newWeight));\n");
 
     SET_POST_SPIKE_SYN_CODE(
         "const scalar tailGateTrace = (TailGateHz * TailGateTau) / 1000.0;\n"
-        "const scalar effectiveEta = ((TailGateEnable < 0.5) || (postRateTrace > tailGateTrace)) ? Eta : 0.0;\n"
-        "const scalar newWeight = g - (effectiveEta * preTrace);\n"
+        "const scalar tailEta = ((TailGateEnable < 0.5) || (postRateTrace > tailGateTrace)) ? Eta : 0.0;\n"
+        "const scalar boundaryEta = (BoundaryGateEnable < 0.5) ? tailEta : (tailEta * postBoundaryGate);\n"
+        "const scalar newWeight = g - (boundaryEta * preTrace);\n"
         "g = fmin(Wmax, fmax(Wmin, newWeight));\n");
 };
 IMPLEMENT_SNIPPET(HomeostaticInhibitory);
@@ -178,13 +193,19 @@ public:
         "const unsigned int preX = preSite % preSide;\n"
         "const unsigned int preY = preSite / preSide;\n"
         "for(int dy = -(int)radius; dy <= (int)radius; dy++) {\n"
-        "    const int postY = (int)preY + dy;\n"
-        "    if(postY < 0 || postY >= (int)postSide) {\n"
+        "    int postY = (int)preY + dy;\n"
+        "    if(periodic != 0u) {\n"
+        "        postY = (postY + (int)postSide) % (int)postSide;\n"
+        "    }\n"
+        "    else if(postY < 0 || postY >= (int)postSide) {\n"
         "        continue;\n"
         "    }\n"
         "    for(int dx = -(int)radius; dx <= (int)radius; dx++) {\n"
-        "        const int postX = (int)preX + dx;\n"
-        "        if(postX < 0 || postX >= (int)postSide) {\n"
+        "        int postX = (int)preX + dx;\n"
+        "        if(periodic != 0u) {\n"
+        "            postX = (postX + (int)postSide) % (int)postSide;\n"
+        "        }\n"
+        "        else if(postX < 0 || postX >= (int)postSide) {\n"
         "            continue;\n"
         "        }\n"
         "        const unsigned int postSite = ((unsigned int)postY * postSide) + (unsigned int)postX;\n"
@@ -204,7 +225,8 @@ public:
         {"postSide", "unsigned int"},
         {"postNeuronsPerSite", "unsigned int"},
         {"radius", "unsigned int"},
-        {"excludeSelf", "unsigned int"}
+        {"excludeSelf", "unsigned int"},
+        {"periodic", "unsigned int"}
     });
 
     SET_CALC_MAX_ROW_LENGTH_FUNC(
@@ -234,13 +256,19 @@ public:
         "const unsigned int preX = preSite % preSide;\n"
         "const unsigned int preY = preSite / preSide;\n"
         "for(int dy = -(int)radius; dy <= (int)radius; dy++) {\n"
-        "    const int postY = (int)preY + dy;\n"
-        "    if(postY < 0 || postY >= (int)postSide) {\n"
+        "    int postY = (int)preY + dy;\n"
+        "    if(periodic != 0u) {\n"
+        "        postY = (postY + (int)postSide) % (int)postSide;\n"
+        "    }\n"
+        "    else if(postY < 0 || postY >= (int)postSide) {\n"
         "        continue;\n"
         "    }\n"
         "    for(int dx = -(int)radius; dx <= (int)radius; dx++) {\n"
-        "        const int postX = (int)preX + dx;\n"
-        "        if(postX < 0 || postX >= (int)postSide) {\n"
+        "        int postX = (int)preX + dx;\n"
+        "        if(periodic != 0u) {\n"
+        "            postX = (postX + (int)postSide) % (int)postSide;\n"
+        "        }\n"
+        "        else if(postX < 0 || postX >= (int)postSide) {\n"
         "            continue;\n"
         "        }\n"
         "        const unsigned int postSite = ((unsigned int)postY * postSide) + (unsigned int)postX;\n"
@@ -258,7 +286,8 @@ public:
         {"preNeuronsPerSite", "unsigned int"},
         {"postSide", "unsigned int"},
         {"postNeuronsPerSite", "unsigned int"},
-        {"radius", "unsigned int"}
+        {"radius", "unsigned int"},
+        {"periodic", "unsigned int"}
     });
 
     SET_CALC_MAX_ROW_LENGTH_FUNC(
@@ -288,13 +317,19 @@ public:
         "const unsigned int preX = preSite % preSide;\n"
         "const unsigned int preY = preSite / preSide;\n"
         "for(int dy = -(int)radius; dy <= (int)radius; dy++) {\n"
-        "    const int postY = (int)preY + dy;\n"
-        "    if(postY < 0 || postY >= (int)postSide) {\n"
+        "    int postY = (int)preY + dy;\n"
+        "    if(periodic != 0u) {\n"
+        "        postY = (postY + (int)postSide) % (int)postSide;\n"
+        "    }\n"
+        "    else if(postY < 0 || postY >= (int)postSide) {\n"
         "        continue;\n"
         "    }\n"
         "    for(int dx = -(int)radius; dx <= (int)radius; dx++) {\n"
-        "        const int postX = (int)preX + dx;\n"
-        "        if(postX < 0 || postX >= (int)postSide) {\n"
+        "        int postX = (int)preX + dx;\n"
+        "        if(periodic != 0u) {\n"
+        "            postX = (postX + (int)postSide) % (int)postSide;\n"
+        "        }\n"
+        "        else if(postX < 0 || postX >= (int)postSide) {\n"
         "            continue;\n"
         "        }\n"
         "        const scalar distanceSq = (scalar)((dx * dx) + (dy * dy));\n"
@@ -324,7 +359,8 @@ public:
         {"radius", "unsigned int"},
         {"excludeSelf", "unsigned int"},
         {"peakProbability", "scalar"},
-        {"distanceSigmaSq", "scalar"}
+        {"distanceSigmaSq", "scalar"},
+        {"periodic", "unsigned int"}
     });
 
     SET_CALC_MAX_ROW_LENGTH_FUNC(
@@ -366,13 +402,19 @@ public:
         "    }\n"
         "}\n"
         "for(int dy = -(int)radius; dy <= (int)radius; dy++) {\n"
-        "    const int postY = (int)preY + dy;\n"
-        "    if(postY < 0 || postY >= (int)postSide) {\n"
+        "    int postY = (int)preY + dy;\n"
+        "    if(periodic != 0u) {\n"
+        "        postY = (postY + (int)postSide) % (int)postSide;\n"
+        "    }\n"
+        "    else if(postY < 0 || postY >= (int)postSide) {\n"
         "        continue;\n"
         "    }\n"
         "    for(int dx = -(int)radius; dx <= (int)radius; dx++) {\n"
-        "        const int postX = (int)preX + dx;\n"
-        "        if(postX < 0 || postX >= (int)postSide) {\n"
+        "        int postX = (int)preX + dx;\n"
+        "        if(periodic != 0u) {\n"
+        "            postX = (postX + (int)postSide) % (int)postSide;\n"
+        "        }\n"
+        "        else if(postX < 0 || postX >= (int)postSide) {\n"
         "            continue;\n"
         "        }\n"
         "        const unsigned int postSite = ((unsigned int)postY * postSide) + (unsigned int)postX;\n"
@@ -434,7 +476,8 @@ public:
         {"minProbability", "scalar"},
         {"biasStrength", "scalar"},
         {"neutralDensityScale", "scalar"},
-        {"distancePenalty", "scalar"}
+        {"distancePenalty", "scalar"},
+        {"periodic", "unsigned int"}
     });
 
     SET_CALC_MAX_ROW_LENGTH_FUNC(
@@ -483,6 +526,10 @@ constexpr double kDefaultL23PVContextOutputScale = 1.0;
 constexpr double kDefaultL23EEContextOutputScale = 1.0;
 constexpr unsigned int kDefaultL23ESOMBroadRecruitmentRadius = 6;
 constexpr double kDefaultL23ESOMBroadRecruitmentWeightScale = 0.054;
+constexpr double kDefaultL23WithinSiteCompetitionEPVScale = 0.25;
+constexpr double kDefaultL23WithinSiteCompetitionPVEScale = 0.25;
+constexpr unsigned int kDefaultL23OutputAssemblyCellsPerSite = 4;
+constexpr char kDefaultL23OutputAssemblyPopulationName[] = "l23e_output";
 constexpr double kDefaultCenterStimulusRadiusSites = 2.0;
 constexpr double kDefaultBroadStimulusRadiusSites = 3.0;
 constexpr char kDefaultSizeTuningRadiiSites[] = "0.5,1,2,3,4,6";
@@ -504,6 +551,19 @@ constexpr double kDefaultVideoFFHeterosynapticCompetitionStrength = 0.25;
 constexpr unsigned int kDefaultVideoFFHeterosynapticCompetitionIntervalFrames = 64;
 constexpr double kDefaultVideoFFCoactivityCompetitionLearningRate = 1.0e-6;
 constexpr unsigned int kDefaultVideoFFCoactivityCompetitionIntervalFrames = 64;
+constexpr double kDefaultVideoFFBCMCompetitionStrength = 0.25;
+constexpr double kDefaultVideoFFBCMCompetitionMassMinRatio = 0.80;
+constexpr double kDefaultVideoFFBCMCompetitionMassMaxRatio = 1.20;
+constexpr double kDefaultVideoL23EPVRecruitmentStrength = 0.25;
+constexpr double kDefaultVideoL23EPVRecruitmentMassMaxRatio = 1.20;
+constexpr double kDefaultVideoL4EL23PVRecruitmentStrength = 0.25;
+constexpr double kDefaultVideoL4EL23PVRecruitmentMassMaxRatio = 1.20;
+constexpr double kDefaultVideoL4EL23PVRecruitmentTopFrac = 0.20;
+constexpr double kDefaultVideoL23EIntrinsicHomeostasisTargetHz = 1.0;
+constexpr double kDefaultVideoL23EIntrinsicHomeostasisStrengthNaPerHz = 0.001;
+constexpr double kDefaultVideoL23EIntrinsicHomeostasisMaxSuppressionNa = 0.050;
+constexpr double kDefaultVideoL23PushPullInhibitionStrength = 0.04;
+constexpr double kDefaultVideoL23PushPullInhibitionMinPostSpikes = 1.0;
 constexpr double kDefaultVideoFFEventTraceTauPreMs = 20.0;
 constexpr double kDefaultVideoFFEventTraceTauPostMs = 40.0;
 constexpr double kDefaultVideoFFEventTraceTauRateMs = 2000.0;
@@ -682,10 +742,53 @@ struct L4IntersiteConfig {
     double l4pv_to_l4e_scale = v1_genn::kL4IntersiteWeightScale;
 };
 
+struct PeriodicLocalGeometryConfig {
+    bool global_enabled = false;
+    bool l4_intersite_enabled = false;
+    bool l4_l23_enabled = false;
+    bool l23_recurrent_enabled = false;
+    bool inhibitory_enabled = false;
+    bool l23pv_to_l23e_enabled = false;
+
+    bool anyEnabled() const
+    {
+        return l4_intersite_enabled
+            || l4_l23_enabled
+            || l23_recurrent_enabled
+            || inhibitory_enabled
+            || l23pv_to_l23e_enabled;
+    }
+};
+
+struct BoundaryRingPVCompensationConfig {
+    bool enabled = false;
+    unsigned int inner_distance = 1u;
+    unsigned int outer_distance = 2u;
+    double pv_to_l23e_scale = 1.15;
+};
+
+struct BoundaryRingPVCompensationMetrics {
+    std::size_t total_synapses = 0u;
+    std::size_t targeted_synapses = 0u;
+    double targeted_fraction = 0.0;
+};
+
 struct L23ESOMBroadRecruitmentConfig {
     bool enabled = false;
     unsigned int radius = kDefaultL23ESOMBroadRecruitmentRadius;
     double weight_scale = kDefaultL23ESOMBroadRecruitmentWeightScale;
+};
+
+struct L23WithinSiteCompetitionConfig {
+    bool enabled = false;
+    double e_pv_scale = kDefaultL23WithinSiteCompetitionEPVScale;
+    double pv_e_scale = kDefaultL23WithinSiteCompetitionPVEScale;
+};
+
+struct L23OutputAssemblyConfig {
+    bool enabled = false;
+    unsigned int cells_per_site = kDefaultL23OutputAssemblyCellsPerSite;
+    std::string population_name = kDefaultL23OutputAssemblyPopulationName;
 };
 
 struct TrainingGratingConfig {
@@ -704,6 +807,12 @@ struct L4L23OrientationConfig {
 struct L23EELognormalInitConfig {
     bool enabled = false;
     double sigma = 0.37;
+};
+
+struct L23EAdaptationConfig {
+    bool enabled = false;
+    double tau_ms = 0.0;
+    double spike_na = 0.0;
 };
 
 struct OrientationContextAssayConfig {
@@ -748,10 +857,12 @@ struct VideoConsolidationConfig {
     bool requested = false;
     bool enabled = false;
     unsigned int repeat_count = kDefaultVideoConsolidationRepeatCount;
+    double heldout_fraction = kDefaultHVAPredictorHeldoutFraction;
     unsigned int frame_start_index = 0;
     unsigned int frame_count = 0;
     unsigned int heldout_start_frame = 0;
     unsigned int heldout_excluded_frame_count = 0;
+    bool heldout_split_uses_hva_predictor = false;
     bool l23ee_plasticity_enabled = true;
     bool inhibitory_homeostasis_enabled = true;
 };
@@ -760,6 +871,8 @@ struct VideoRecurrentOnlyConsolidationConfig {
     bool requested = false;
     bool enabled = false;
     unsigned int pass_count = 0;
+    double l23ee_stdp_aplus = kDefaultL23EEStdpAplus;
+    double l23ee_stdp_aminus = kDefaultL23EEStdpAminus;
 };
 
 struct VideoPVReliabilityConfig {
@@ -800,6 +913,57 @@ struct VideoFFCoactivityCompetitionConfig {
     unsigned int interval_frames = kDefaultVideoFFCoactivityCompetitionIntervalFrames;
 };
 
+struct VideoFFBCMCompetitionConfig {
+    bool enabled = false;
+    double strength = 0.0;
+    double mass_min_ratio = kDefaultVideoFFBCMCompetitionMassMinRatio;
+    double mass_max_ratio = kDefaultVideoFFBCMCompetitionMassMaxRatio;
+};
+
+struct VideoL23EPVRecruitmentConfig {
+    bool enabled = false;
+    double strength = 0.0;
+    double mass_max_ratio = kDefaultVideoL23EPVRecruitmentMassMaxRatio;
+};
+
+struct VideoL4EL23PVRecruitmentConfig {
+    bool enabled = false;
+    double strength = 0.0;
+    double mass_max_ratio = kDefaultVideoL4EL23PVRecruitmentMassMaxRatio;
+    double top_frac = kDefaultVideoL4EL23PVRecruitmentTopFrac;
+};
+
+struct VideoL23EIntrinsicHomeostasisConfig {
+    bool enabled = false;
+    double target_hz = kDefaultVideoL23EIntrinsicHomeostasisTargetHz;
+    double strength_na_per_hz = kDefaultVideoL23EIntrinsicHomeostasisStrengthNaPerHz;
+    double max_suppression_na = kDefaultVideoL23EIntrinsicHomeostasisMaxSuppressionNa;
+};
+
+struct VideoL23PushPullInhibitionConfig {
+    bool enabled = false;
+    double strength = 0.0;
+    double min_post_spikes = kDefaultVideoL23PushPullInhibitionMinPostSpikes;
+};
+
+struct PushPullInhibitionMetrics {
+    unsigned int active_post_cell_count = 0;
+    unsigned int targeted_post_cell_count = 0;
+    double targeted_post_cell_frac = 0.0;
+    double mean_weak_support_gate = 0.0;
+    double max_weak_support_gate = 0.0;
+};
+
+struct IntrinsicHomeostasisMetrics {
+    unsigned int cell_count = 0;
+    unsigned int changed_count = 0;
+    double changed_frac = 0.0;
+    double mean_adjustment_na = 0.0;
+    double max_abs_adjustment_na = 0.0;
+    double mean_rate_hz = 0.0;
+    double max_rate_hz = 0.0;
+};
+
 struct VideoFFEventTraceConfig {
     bool enabled = false;
     double tau_pre_ms = kDefaultVideoFFEventTraceTauPreMs;
@@ -817,8 +981,15 @@ struct PostVideoInhibitoryStabilizationConfig {
     unsigned int sweep_count = 1;
     double eta_scale = 1.0;
     double second_eta_scale = 1.0;
+    double pv_eta_scale = 1.0;
+    double som_eta_scale = 1.0;
+    double pv_target_hz = 0.0;
+    bool pv_potentiation_only = false;
+    bool som_potentiation_only = false;
     bool tail_gate_enabled = false;
     double tail_gate_hz = kDefaultPostVideoInhibitoryStabilizationTailGateHz;
+    bool boundary_extra_enabled = false;
+    unsigned int boundary_extra_max_distance = 1u;
 };
 
 struct IncomingMassRatioMetrics {
@@ -1024,10 +1195,21 @@ struct VideoConsolidationMetrics {
 struct WeightDeltaMetrics {
     std::size_t active_edge_count = 0u;
     double changed_frac = 0.0;
+    double positive_edge_frac = 0.0;
+    double negative_edge_frac = 0.0;
     double mean_delta = 0.0;
     double p95_abs_delta = 0.0;
+    double p95_changed_abs_delta = 0.0;
     double max_abs_delta = 0.0;
     double mean_gain_ratio = 1.0;
+};
+
+struct ActivityScoreMetrics {
+    std::size_t active_edge_count = 0u;
+    std::size_t positive_edge_count = 0u;
+    double positive_frac = 0.0;
+    double mean_score = 0.0;
+    double max_score = 0.0;
 };
 
 struct HVAPredictorRateRow {
@@ -1141,7 +1323,11 @@ L4L23OrientationConfig getL4L23OrientationConfig();
 L23EELognormalInitConfig getL23EELognormalInitConfig();
 double getOrientationSoftBiasStrength();
 
-GeNN::ParamValues makeLIFParameters(const v1_genn::LIFParameters &params)
+L23EAdaptationConfig getL23EAdaptationConfig();
+
+GeNN::ParamValues makeLIFParameters(
+    const v1_genn::LIFParameters &params,
+    const L23EAdaptationConfig &adaptation_config = L23EAdaptationConfig{})
 {
     return {
         {"C", params.c},
@@ -1151,6 +1337,8 @@ GeNN::ParamValues makeLIFParameters(const v1_genn::LIFParameters &params)
         {"Vthresh", params.v_thresh_mv},
         {"Ioffset", params.i_offset_na},
         {"TauRefrac", params.tau_refrac_ms},
+        {"TauAdapt", adaptation_config.enabled ? adaptation_config.tau_ms : 0.0},
+        {"AdaptSpike", adaptation_config.enabled ? adaptation_config.spike_na : 0.0},
     };
 }
 
@@ -1160,6 +1348,7 @@ GeNN::VarValues makeLIFVariables(const v1_genn::LIFParameters &params, const GeN
         {"V", params.v_rest_mv},
         {"RefracTime", 0.0},
         {"Iext", external_drive},
+        {"AdaptCurrent", 0.0},
         {"SpikeCount", 0.0},
     };
 }
@@ -1168,7 +1357,8 @@ GeNN::ParamValues makePatchParameters(
     unsigned int pre_neurons_per_site,
     unsigned int post_neurons_per_site,
     unsigned int radius,
-    bool exclude_self)
+    bool exclude_self,
+    bool periodic_geometry_enabled)
 {
     return {
         {"preSide", v1_genn::kSheetSide},
@@ -1177,13 +1367,15 @@ GeNN::ParamValues makePatchParameters(
         {"postNeuronsPerSite", post_neurons_per_site},
         {"radius", radius},
         {"excludeSelf", exclude_self ? 1u : 0u},
+        {"periodic", periodic_geometry_enabled ? 1u : 0u},
     };
 }
 
 GeNN::ParamValues makeIntersitePatchParameters(
     unsigned int pre_neurons_per_site,
     unsigned int post_neurons_per_site,
-    unsigned int radius)
+    unsigned int radius,
+    bool periodic_geometry_enabled)
 {
     return {
         {"preSide", v1_genn::kSheetSide},
@@ -1191,13 +1383,15 @@ GeNN::ParamValues makeIntersitePatchParameters(
         {"postSide", v1_genn::kSheetSide},
         {"postNeuronsPerSite", post_neurons_per_site},
         {"radius", radius},
+        {"periodic", periodic_geometry_enabled ? 1u : 0u},
     };
 }
 
 GeNN::ParamValues makeOrientationBiasedPatchParameters(
     unsigned int pre_neurons_per_site,
     unsigned int post_neurons_per_site,
-    unsigned int radius)
+    unsigned int radius,
+    bool periodic_geometry_enabled)
 {
     const L4L23OrientationConfig config = getL4L23OrientationConfig();
     return {
@@ -1211,6 +1405,7 @@ GeNN::ParamValues makeOrientationBiasedPatchParameters(
         {"neutralDensityScale", (config.neutral_density_match_enabled && config.bias_strength == 0.0)
             ? config.neutral_probability_scale : 0.0},
         {"distancePenalty", v1_genn::kOrientationDistancePenalty},
+        {"periodic", periodic_geometry_enabled ? 1u : 0u},
     };
 }
 
@@ -1220,7 +1415,8 @@ GeNN::ParamValues makeSparseDistancePatchParameters(
     unsigned int radius,
     bool exclude_self,
     double peak_probability,
-    double distance_sigma_sq)
+    double distance_sigma_sq,
+    bool periodic_geometry_enabled)
 {
     return {
         {"preSide", v1_genn::kSheetSide},
@@ -1231,6 +1427,7 @@ GeNN::ParamValues makeSparseDistancePatchParameters(
         {"excludeSelf", exclude_self ? 1u : 0u},
         {"peakProbability", peak_probability},
         {"distanceSigmaSq", distance_sigma_sq},
+        {"periodic", periodic_geometry_enabled ? 1u : 0u},
     };
 }
 
@@ -1244,6 +1441,8 @@ GeNN::ParamValues makeHomeostaticInhibitoryParameters(double target_hz, double w
         {"TailGateEnable", 0.0},
         {"TailGateHz", kDefaultPostVideoInhibitoryStabilizationTailGateHz},
         {"TailGateTau", kDefaultPostVideoInhibitoryStabilizationTailGateTauMs},
+        {"BoundaryGateEnable", 0.0},
+        {"PotentiationOnly", 0.0},
         {"Wmin", wmin},
         {"Wmax", wmax},
     };
@@ -1412,13 +1611,15 @@ GeNN::SynapseGroup *addHomeostaticInhibitoryProjection(
             weight_params,
             {{"g", initial_weight}},
             {{"preTrace", 0.0}},
-            {{"postTrace", 0.0}, {"postRateTrace", 0.0}}),
+            {{"postTrace", 0.0}, {"postRateTrace", 0.0}, {"postBoundaryGate", 1.0}}),
         GeNN::initPostsynaptic<GeNN::PostsynapticModels::ExpCurr>({{"tau", tau_ms}}),
         GeNN::initConnectivity<LocalPatch>(patch_params));
     synapse_group->setWUParamDynamic("Eta", true);
     synapse_group->setWUParamDynamic("TargetHz", true);
     synapse_group->setWUParamDynamic("TailGateEnable", true);
     synapse_group->setWUParamDynamic("TailGateHz", true);
+    synapse_group->setWUParamDynamic("BoundaryGateEnable", true);
+    synapse_group->setWUParamDynamic("PotentiationOnly", true);
     return synapse_group;
 }
 
@@ -1530,6 +1731,25 @@ std::vector<unsigned int> getEnvUnsignedListOrEmpty(const char *name)
     return values;
 }
 
+L23EAdaptationConfig getL23EAdaptationConfig()
+{
+    L23EAdaptationConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_L23E_ADAPTATION_ENABLE", 0u) != 0u;
+    config.tau_ms = config.enabled
+        ? getEnvDoubleOrDefault("V1_L23E_ADAPT_TAU_MS", 250.0)
+        : 0.0;
+    config.spike_na = config.enabled
+        ? getEnvDoubleOrDefault("V1_L23E_ADAPT_SPIKE_NA", 0.005)
+        : 0.0;
+    if(!std::isfinite(config.tau_ms) || config.tau_ms < 0.0) {
+        throw std::runtime_error("V1_L23E_ADAPT_TAU_MS must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.spike_na) || config.spike_na < 0.0) {
+        throw std::runtime_error("V1_L23E_ADAPT_SPIKE_NA must be finite and non-negative.");
+    }
+    return config;
+}
+
 double getOrientationSoftBiasStrength()
 {
     const char *strict_env = std::getenv("V1_L4_L23_ORIENTATION_BIAS_STRENGTH");
@@ -1566,6 +1786,71 @@ L23EELognormalInitConfig getL23EELognormalInitConfig()
     config.sigma = getEnvDoubleOrDefault("V1_L23EE_LOGNORMAL_SIGMA", config.sigma);
     if(config.sigma < 0.0) {
         throw std::runtime_error("V1_L23EE_LOGNORMAL_SIGMA must be non-negative.");
+    }
+    return config;
+}
+
+double getL4EToL23PVWeightScale()
+{
+    const double scale = getEnvDoubleOrDefault("V1_L4E_TO_L23PV_WEIGHT_SCALE", 1.0);
+    if(!std::isfinite(scale) || scale <= 0.0 || scale > 3.0) {
+        throw std::runtime_error("V1_L4E_TO_L23PV_WEIGHT_SCALE must be finite and in (0, 3].");
+    }
+    return scale;
+}
+
+PeriodicLocalGeometryConfig getPeriodicLocalGeometryConfig()
+{
+    PeriodicLocalGeometryConfig config;
+    config.global_enabled =
+        getEnvUnsignedOrDefault("V1_PERIODIC_LOCAL_GEOMETRY_ENABLE", 0u) != 0u;
+    const unsigned int global_default = config.global_enabled ? 1u : 0u;
+    config.l4_intersite_enabled = getEnvUnsignedOrDefault(
+        "V1_PERIODIC_L4_INTERSITE_GEOMETRY_ENABLE",
+        global_default) != 0u;
+    config.l4_l23_enabled = getEnvUnsignedOrDefault(
+        "V1_PERIODIC_L4_L23_GEOMETRY_ENABLE",
+        global_default) != 0u;
+    config.l23_recurrent_enabled = getEnvUnsignedOrDefault(
+        "V1_PERIODIC_L23_RECURRENT_GEOMETRY_ENABLE",
+        global_default) != 0u;
+    config.inhibitory_enabled = getEnvUnsignedOrDefault(
+        "V1_PERIODIC_INHIBITORY_GEOMETRY_ENABLE",
+        global_default) != 0u;
+    config.l23pv_to_l23e_enabled = getEnvUnsignedOrDefault(
+        "V1_PERIODIC_L23PV_TO_L23E_GEOMETRY_ENABLE",
+        config.inhibitory_enabled ? 1u : 0u) != 0u;
+    return config;
+}
+
+BoundaryRingPVCompensationConfig getBoundaryRingPVCompensationConfig()
+{
+    BoundaryRingPVCompensationConfig config;
+    config.enabled = getEnvUnsignedOrDefault(
+        "V1_BOUNDARY_RING_PV_COMPENSATION_ENABLE",
+        0u) != 0u;
+    config.inner_distance = getEnvUnsignedOrDefault(
+        "V1_BOUNDARY_RING_PV_COMPENSATION_INNER_DISTANCE",
+        config.inner_distance);
+    config.outer_distance = getEnvUnsignedOrDefault(
+        "V1_BOUNDARY_RING_PV_COMPENSATION_OUTER_DISTANCE",
+        config.outer_distance);
+    config.pv_to_l23e_scale = getEnvDoubleOrDefault(
+        "V1_BOUNDARY_RING_PV_COMPENSATION_PV_TO_L23E_SCALE",
+        config.pv_to_l23e_scale);
+    if(config.inner_distance > config.outer_distance) {
+        throw std::runtime_error(
+            "V1_BOUNDARY_RING_PV_COMPENSATION_INNER_DISTANCE must be <= OUTER_DISTANCE.");
+    }
+    if(config.outer_distance >= v1_genn::kSheetSide) {
+        throw std::runtime_error(
+            "V1_BOUNDARY_RING_PV_COMPENSATION_OUTER_DISTANCE must be < V1_SHEET_SIDE.");
+    }
+    if(!std::isfinite(config.pv_to_l23e_scale)
+       || config.pv_to_l23e_scale < 1.0
+       || config.pv_to_l23e_scale > 3.0) {
+        throw std::runtime_error(
+            "V1_BOUNDARY_RING_PV_COMPENSATION_PV_TO_L23E_SCALE must be finite and in [1, 3].");
     }
     return config;
 }
@@ -1633,6 +1918,70 @@ L23ESOMBroadRecruitmentConfig getL23ESOMBroadRecruitmentConfig()
     }
     if(config.enabled && config.weight_scale == 0.0) {
         throw std::runtime_error("V1_L23E_SOM_BROAD_RECRUIT_WEIGHT_SCALE must be positive when enabled.");
+    }
+    return config;
+}
+
+L23WithinSiteCompetitionConfig getL23WithinSiteCompetitionConfig()
+{
+    L23WithinSiteCompetitionConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_L23_WITHIN_SITE_COMPETITION_ENABLE", 0u) != 0u;
+    config.e_pv_scale = getEnvDoubleOrDefault(
+        "V1_L23_WITHIN_SITE_COMPETITION_E_PV_SCALE",
+        kDefaultL23WithinSiteCompetitionEPVScale);
+    config.pv_e_scale = getEnvDoubleOrDefault(
+        "V1_L23_WITHIN_SITE_COMPETITION_PV_E_SCALE",
+        kDefaultL23WithinSiteCompetitionPVEScale);
+    if(!std::isfinite(config.e_pv_scale)
+       || !std::isfinite(config.pv_e_scale)
+       || config.e_pv_scale < 0.0
+       || config.e_pv_scale > 3.0
+       || config.pv_e_scale < 0.0
+       || config.pv_e_scale > 3.0) {
+        throw std::runtime_error("V1_L23_WITHIN_SITE_COMPETITION scales must be finite and in [0, 3].");
+    }
+    if(config.enabled && config.e_pv_scale == 0.0 && config.pv_e_scale == 0.0) {
+        throw std::runtime_error("At least one L2/3 within-site competition scale must be positive when enabled.");
+    }
+    return config;
+}
+
+bool isSafePopulationName(const std::string &name)
+{
+    if(name.empty()) {
+        return false;
+    }
+    for(char ch : name) {
+        const bool is_digit = (ch >= '0' && ch <= '9');
+        const bool is_upper = (ch >= 'A' && ch <= 'Z');
+        const bool is_lower = (ch >= 'a' && ch <= 'z');
+        if(!(is_digit || is_upper || is_lower || ch == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+L23OutputAssemblyConfig getL23OutputAssemblyConfig()
+{
+    L23OutputAssemblyConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_L23_OUTPUT_ASSEMBLY_ENABLE", 0u) != 0u;
+    config.cells_per_site = getEnvUnsignedOrDefault(
+        "V1_L23_OUTPUT_ASSEMBLY_CELLS_PER_SITE",
+        kDefaultL23OutputAssemblyCellsPerSite);
+    config.population_name = getEnvOrDefault(
+        "V1_L23_OUTPUT_ASSEMBLY_POPULATION_NAME",
+        kDefaultL23OutputAssemblyPopulationName);
+    if(config.cells_per_site == 0u || config.cells_per_site > v1_genn::kL23EPerSite) {
+        throw std::runtime_error("V1_L23_OUTPUT_ASSEMBLY_CELLS_PER_SITE must be in [1, kL23EPerSite].");
+    }
+    if(!isSafePopulationName(config.population_name)
+       || config.population_name == "l4e"
+       || config.population_name == "l23e"
+       || config.population_name == "l23pv"
+       || config.population_name == "l23som") {
+        throw std::runtime_error(
+            "V1_L23_OUTPUT_ASSEMBLY_POPULATION_NAME must be a distinct [A-Za-z0-9_] CSV population name.");
     }
     return config;
 }
@@ -1772,9 +2121,9 @@ VideoPVReliabilityConfig getVideoPVReliabilityConfig(const VideoReplayConfig &vi
     }
     if(!std::isfinite(config.output_scale)
        || config.output_scale < 0.80
-       || config.output_scale > 1.0) {
+       || config.output_scale > 1.05) {
         throw std::runtime_error(
-            "V1_VIDEO_PV_RELIABILITY_OUTPUT_SCALE must be finite and in [0.80, 1.0].");
+            "V1_VIDEO_PV_RELIABILITY_OUTPUT_SCALE must be finite and in [0.80, 1.05].");
     }
     return config;
 }
@@ -1868,11 +2217,14 @@ VideoFFHomeostaticScalingConfig getVideoFFHomeostaticScalingConfig(
     if(!config.enabled) {
         return config;
     }
+    // Expanded diagnostic range: bounded projection-wide L4E->L23E scaling,
+    // not a claim of fully cell-local biological homeostasis. Downstream
+    // no-pileup, sparsity, OSI, and recurrent gates must still pass.
     if(!std::isfinite(config.scale)
        || config.scale < 1.0
-       || config.scale > 1.20) {
+       || config.scale > 1.50) {
         throw std::runtime_error(
-            "V1_VIDEO_FF_HOMEOSTATIC_SCALE must be finite and in [1.0, 1.20].");
+            "V1_VIDEO_FF_HOMEOSTATIC_SCALE must be finite and in [1.0, 1.50].");
     }
     return config;
 }
@@ -1945,6 +2297,213 @@ VideoFFCoactivityCompetitionConfig getVideoFFCoactivityCompetitionConfig(
     return config;
 }
 
+VideoFFBCMCompetitionConfig getVideoFFBCMCompetitionConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoFFBCMCompetitionConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_FF_BCM_COMPETITION_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.strength = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_FF_BCM_COMPETITION_STRENGTH",
+            kDefaultVideoFFBCMCompetitionStrength)
+        : 0.0;
+    config.mass_min_ratio = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_FF_BCM_COMPETITION_MASS_MIN_RATIO",
+            kDefaultVideoFFBCMCompetitionMassMinRatio)
+        : kDefaultVideoFFBCMCompetitionMassMinRatio;
+    config.mass_max_ratio = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_FF_BCM_COMPETITION_MASS_MAX_RATIO",
+            kDefaultVideoFFBCMCompetitionMassMaxRatio)
+        : kDefaultVideoFFBCMCompetitionMassMaxRatio;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.strength)
+       || config.strength < 0.0
+       || config.strength > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_FF_BCM_COMPETITION_STRENGTH must be finite and in [0.0, 1.0].");
+    }
+    if(!std::isfinite(config.mass_min_ratio)
+       || !std::isfinite(config.mass_max_ratio)
+       || config.mass_min_ratio <= 0.0
+       || config.mass_min_ratio > 1.0
+       || config.mass_max_ratio < 1.0
+       || config.mass_max_ratio > 2.0
+       || config.mass_min_ratio > config.mass_max_ratio) {
+        throw std::runtime_error(
+            "V1_VIDEO_FF_BCM_COMPETITION mass ratios must satisfy 0 < min <= 1 <= max <= 2.");
+    }
+    return config;
+}
+
+VideoL23EPVRecruitmentConfig getVideoL23EPVRecruitmentConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoL23EPVRecruitmentConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_L23E_PV_RECRUITMENT_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.strength = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23E_PV_RECRUITMENT_STRENGTH",
+            kDefaultVideoL23EPVRecruitmentStrength)
+        : 0.0;
+    config.mass_max_ratio = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23E_PV_RECRUITMENT_MASS_MAX_RATIO",
+            kDefaultVideoL23EPVRecruitmentMassMaxRatio)
+        : kDefaultVideoL23EPVRecruitmentMassMaxRatio;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.strength)
+       || config.strength < 0.0
+       || config.strength > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23E_PV_RECRUITMENT_STRENGTH must be finite and in [0.0, 1.0].");
+    }
+    if(!std::isfinite(config.mass_max_ratio)
+       || config.mass_max_ratio < 1.0
+       || config.mass_max_ratio > 3.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23E_PV_RECRUITMENT_MASS_MAX_RATIO must be finite and in [1.0, 3.0].");
+    }
+    return config;
+}
+
+VideoL4EL23PVRecruitmentConfig getVideoL4EL23PVRecruitmentConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoL4EL23PVRecruitmentConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_L4E_L23PV_RECRUITMENT_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.strength = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L4E_L23PV_RECRUITMENT_STRENGTH",
+            kDefaultVideoL4EL23PVRecruitmentStrength)
+        : 0.0;
+    config.mass_max_ratio = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L4E_L23PV_RECRUITMENT_MASS_MAX_RATIO",
+            kDefaultVideoL4EL23PVRecruitmentMassMaxRatio)
+        : kDefaultVideoL4EL23PVRecruitmentMassMaxRatio;
+    config.top_frac = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L4E_L23PV_RECRUITMENT_TOP_FRAC",
+            kDefaultVideoL4EL23PVRecruitmentTopFrac)
+        : kDefaultVideoL4EL23PVRecruitmentTopFrac;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.strength)
+       || config.strength < 0.0
+       || config.strength > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L4E_L23PV_RECRUITMENT_STRENGTH must be finite and in [0.0, 1.0].");
+    }
+    if(!std::isfinite(config.mass_max_ratio)
+       || config.mass_max_ratio < 1.0
+       || config.mass_max_ratio > 3.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L4E_L23PV_RECRUITMENT_MASS_MAX_RATIO must be finite and in [1.0, 3.0].");
+    }
+    if(!std::isfinite(config.top_frac)
+       || config.top_frac <= 0.0
+       || config.top_frac > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L4E_L23PV_RECRUITMENT_TOP_FRAC must be finite and in (0.0, 1.0].");
+    }
+    return config;
+}
+
+VideoL23EIntrinsicHomeostasisConfig getVideoL23EIntrinsicHomeostasisConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoL23EIntrinsicHomeostasisConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.target_hz = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_TARGET_HZ",
+            kDefaultVideoL23EIntrinsicHomeostasisTargetHz)
+        : kDefaultVideoL23EIntrinsicHomeostasisTargetHz;
+    config.strength_na_per_hz = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_STRENGTH_NA_PER_HZ",
+            kDefaultVideoL23EIntrinsicHomeostasisStrengthNaPerHz)
+        : kDefaultVideoL23EIntrinsicHomeostasisStrengthNaPerHz;
+    config.max_suppression_na = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_MAX_SUPPRESSION_NA",
+            kDefaultVideoL23EIntrinsicHomeostasisMaxSuppressionNa)
+        : kDefaultVideoL23EIntrinsicHomeostasisMaxSuppressionNa;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.target_hz) || config.target_hz < 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_TARGET_HZ must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.strength_na_per_hz)
+       || config.strength_na_per_hz < 0.0
+       || config.strength_na_per_hz > 0.10) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_STRENGTH_NA_PER_HZ must be finite and in [0.0, 0.10].");
+    }
+    if(!std::isfinite(config.max_suppression_na)
+       || config.max_suppression_na < 0.0
+       || config.max_suppression_na > 0.50) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23E_INTRINSIC_HOMEOSTASIS_MAX_SUPPRESSION_NA must be finite and in [0.0, 0.50].");
+    }
+    return config;
+}
+
+VideoL23PushPullInhibitionConfig getVideoL23PushPullInhibitionConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoL23PushPullInhibitionConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_L23_PUSH_PULL_INHIBITION_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.strength = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23_PUSH_PULL_INHIBITION_STRENGTH",
+            kDefaultVideoL23PushPullInhibitionStrength)
+        : 0.0;
+    config.min_post_spikes = config.enabled
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23_PUSH_PULL_INHIBITION_MIN_POST_SPIKES",
+            kDefaultVideoL23PushPullInhibitionMinPostSpikes)
+        : kDefaultVideoL23PushPullInhibitionMinPostSpikes;
+
+    if(!config.enabled) {
+        return config;
+    }
+    if(!std::isfinite(config.strength)
+       || config.strength < 0.0
+       || config.strength > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23_PUSH_PULL_INHIBITION_STRENGTH must be finite and in [0.0, 1.0].");
+    }
+    if(!std::isfinite(config.min_post_spikes) || config.min_post_spikes < 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23_PUSH_PULL_INHIBITION_MIN_POST_SPIKES must be finite and non-negative.");
+    }
+    return config;
+}
+
 VideoFFEventTraceConfig getVideoFFEventTraceConfig(const VideoReplayConfig &video_config)
 {
     VideoFFEventTraceConfig config;
@@ -2008,7 +2567,8 @@ VideoFFEventTraceConfig getVideoFFEventTraceConfig(const VideoReplayConfig &vide
 }
 
 PostVideoInhibitoryStabilizationConfig getPostVideoInhibitoryStabilizationConfig(
-    const VideoReplayConfig &video_config)
+    const VideoReplayConfig &video_config,
+    double default_pv_target_hz)
 {
     PostVideoInhibitoryStabilizationConfig config;
     const bool enable_requested =
@@ -2025,6 +2585,23 @@ PostVideoInhibitoryStabilizationConfig getPostVideoInhibitoryStabilizationConfig
             "V1_POST_VIDEO_INHIBITORY_STABILIZATION_SECOND_ETA_SCALE",
             config.eta_scale)
         : config.eta_scale;
+    config.pv_eta_scale = config.enabled
+        ? getEnvDoubleOrDefault("V1_POST_VIDEO_INHIBITORY_STABILIZATION_PV_ETA_SCALE", 1.0)
+        : 1.0;
+    config.som_eta_scale = config.enabled
+        ? getEnvDoubleOrDefault("V1_POST_VIDEO_INHIBITORY_STABILIZATION_SOM_ETA_SCALE", 1.0)
+        : 1.0;
+    config.pv_target_hz = config.enabled
+        ? getEnvDoubleOrDefault("V1_POST_VIDEO_INHIBITORY_STABILIZATION_PV_TARGET_HZ", default_pv_target_hz)
+        : default_pv_target_hz;
+    config.pv_potentiation_only = config.enabled
+        && (getEnvUnsignedOrDefault(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_PV_POTENTIATION_ONLY",
+            0u) != 0u);
+    config.som_potentiation_only = config.enabled
+        && (getEnvUnsignedOrDefault(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_SOM_POTENTIATION_ONLY",
+            0u) != 0u);
     config.tail_gate_enabled = config.enabled
         && (getEnvUnsignedOrDefault(
             "V1_POST_VIDEO_INHIBITORY_STABILIZATION_TAIL_GATE_ENABLE",
@@ -2034,6 +2611,23 @@ PostVideoInhibitoryStabilizationConfig getPostVideoInhibitoryStabilizationConfig
             "V1_POST_VIDEO_INHIBITORY_STABILIZATION_TAIL_GATE_HZ",
             kDefaultPostVideoInhibitoryStabilizationTailGateHz)
         : kDefaultPostVideoInhibitoryStabilizationTailGateHz;
+    const unsigned int legacy_boundary_gate_enable =
+        getEnvUnsignedOrDefault(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_BOUNDARY_GATE_ENABLE",
+            0u);
+    config.boundary_extra_enabled = config.enabled
+        && (getEnvUnsignedOrDefault(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_BOUNDARY_EXTRA_ENABLE",
+            legacy_boundary_gate_enable) != 0u);
+    const unsigned int legacy_boundary_gate_max_distance =
+        getEnvUnsignedOrDefault(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_BOUNDARY_GATE_MAX_DISTANCE",
+            1u);
+    config.boundary_extra_max_distance = config.boundary_extra_enabled
+        ? getEnvUnsignedOrDefault(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_BOUNDARY_EXTRA_MAX_DISTANCE",
+            legacy_boundary_gate_max_distance)
+        : 1u;
 
     if(!config.enabled) {
         return config;
@@ -2051,10 +2645,26 @@ PostVideoInhibitoryStabilizationConfig getPostVideoInhibitoryStabilizationConfig
         throw std::runtime_error(
             "V1_POST_VIDEO_INHIBITORY_STABILIZATION_SECOND_ETA_SCALE must be finite and in [0.0, 1.0].");
     }
+    if(!std::isfinite(config.pv_eta_scale) || config.pv_eta_scale < 0.0) {
+        throw std::runtime_error(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_PV_ETA_SCALE must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.som_eta_scale) || config.som_eta_scale < 0.0) {
+        throw std::runtime_error(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_SOM_ETA_SCALE must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.pv_target_hz) || config.pv_target_hz < 0.0) {
+        throw std::runtime_error(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_PV_TARGET_HZ must be finite and non-negative.");
+    }
     if(config.tail_gate_enabled
        && (!std::isfinite(config.tail_gate_hz) || config.tail_gate_hz < 0.0)) {
         throw std::runtime_error(
             "V1_POST_VIDEO_INHIBITORY_STABILIZATION_TAIL_GATE_HZ must be finite and non-negative.");
+    }
+    if(config.boundary_extra_enabled && config.boundary_extra_max_distance >= v1_genn::kSheetSide) {
+        throw std::runtime_error(
+            "V1_POST_VIDEO_INHIBITORY_STABILIZATION_BOUNDARY_EXTRA_MAX_DISTANCE must be smaller than V1_SHEET_SIDE.");
     }
     return config;
 }
@@ -2361,6 +2971,22 @@ unsigned int hvaPredictorHeldoutStartFrame(
     return video_config.effective_frame_count - heldout_frames;
 }
 
+unsigned int videoConsolidationHeldoutStartFrame(
+    const VideoReplayConfig &video_config,
+    const VideoConsolidationConfig &config)
+{
+    if(video_config.effective_frame_count <= 1u) {
+        throw std::runtime_error("Video consolidation requires at least two video frames for train and held-out blocks.");
+    }
+    const unsigned int requested_heldout_frames = std::max(
+        1u,
+        static_cast<unsigned int>(std::ceil(
+            static_cast<double>(video_config.effective_frame_count) * config.heldout_fraction)));
+    const unsigned int max_heldout_frames = video_config.effective_frame_count - 1u;
+    const unsigned int heldout_frames = std::max(1u, std::min(requested_heldout_frames, max_heldout_frames));
+    return video_config.effective_frame_count - heldout_frames;
+}
+
 VideoConsolidationConfig getVideoConsolidationConfig(
     const VideoReplayConfig &video_config,
     const HVAPredictorConfig &hva_predictor_config)
@@ -2370,6 +2996,13 @@ VideoConsolidationConfig getVideoConsolidationConfig(
     config.repeat_count = getEnvUnsignedOrDefault(
         "V1_VIDEO_CONSOLIDATION_REPEAT_COUNT",
         kDefaultVideoConsolidationRepeatCount);
+    const bool consolidation_heldout_override =
+        std::getenv("V1_VIDEO_CONSOLIDATION_HELDOUT_FRACTION") != nullptr;
+    config.heldout_fraction = getEnvDoubleOrDefault(
+        "V1_VIDEO_CONSOLIDATION_HELDOUT_FRACTION",
+        hva_predictor_config.enabled
+            ? hva_predictor_config.heldout_fraction
+            : kDefaultHVAPredictorHeldoutFraction);
     config.l23ee_plasticity_enabled =
         getEnvUnsignedOrDefault("V1_VIDEO_CONSOLIDATION_L23EE_STDP_ENABLE", 1u) != 0u;
     config.inhibitory_homeostasis_enabled =
@@ -2384,17 +3017,19 @@ VideoConsolidationConfig getVideoConsolidationConfig(
     if(config.repeat_count == 0u) {
         throw std::runtime_error("V1_VIDEO_CONSOLIDATION_REPEAT_COUNT must be at least 1 when enabled.");
     }
-    // Consolidation is explicitly a pre-HVA lower-V1 stage; control/somoff/recoff
-    // jobs that do not train HVA skip it even if the env is inherited.
-    if(!hva_predictor_config.enabled) {
-        return config;
-    }
     if(!config.l23ee_plasticity_enabled && !config.inhibitory_homeostasis_enabled) {
         throw std::runtime_error(
             "Video consolidation needs L23E->L23E plasticity and/or inhibitory homeostasis enabled.");
     }
+    if(config.heldout_fraction <= 0.0 || config.heldout_fraction >= 1.0 || !std::isfinite(config.heldout_fraction)) {
+        throw std::runtime_error("V1_VIDEO_CONSOLIDATION_HELDOUT_FRACTION must be finite and in (0, 1).");
+    }
 
-    config.heldout_start_frame = hvaPredictorHeldoutStartFrame(video_config, hva_predictor_config);
+    config.heldout_split_uses_hva_predictor =
+        hva_predictor_config.enabled && !consolidation_heldout_override;
+    config.heldout_start_frame = config.heldout_split_uses_hva_predictor
+        ? hvaPredictorHeldoutStartFrame(video_config, hva_predictor_config)
+        : videoConsolidationHeldoutStartFrame(video_config, config);
     config.frame_start_index = 0u;
     config.frame_count = config.heldout_start_frame;
     config.heldout_excluded_frame_count = video_config.effective_frame_count - config.heldout_start_frame;
@@ -2408,7 +3043,9 @@ VideoConsolidationConfig getVideoConsolidationConfig(
 
 VideoRecurrentOnlyConsolidationConfig getVideoRecurrentOnlyConsolidationConfig(
     const VideoReplayConfig &video_config,
-    const VideoConsolidationConfig &video_consolidation_config)
+    const VideoConsolidationConfig &video_consolidation_config,
+    double l23ee_stdp_aplus,
+    double l23ee_stdp_aminus)
 {
     VideoRecurrentOnlyConsolidationConfig config;
     config.requested =
@@ -2416,6 +3053,12 @@ VideoRecurrentOnlyConsolidationConfig getVideoRecurrentOnlyConsolidationConfig(
     config.pass_count = config.requested
         ? getEnvUnsignedOrDefault("V1_VIDEO_RECURRENT_ONLY_CONSOLIDATION_PASSES", 1u)
         : 0u;
+    config.l23ee_stdp_aplus = getEnvDoubleOrDefault(
+        "V1_VIDEO_RECURRENT_ONLY_L23EE_STDP_APLUS",
+        l23ee_stdp_aplus);
+    config.l23ee_stdp_aminus = getEnvDoubleOrDefault(
+        "V1_VIDEO_RECURRENT_ONLY_L23EE_STDP_AMINUS",
+        l23ee_stdp_aminus);
 
     if(!config.requested) {
         return config;
@@ -2430,6 +3073,10 @@ VideoRecurrentOnlyConsolidationConfig getVideoRecurrentOnlyConsolidationConfig(
     }
     if(config.pass_count == 0u) {
         throw std::runtime_error("V1_VIDEO_RECURRENT_ONLY_CONSOLIDATION_PASSES must be at least 1 when enabled.");
+    }
+    if(config.l23ee_stdp_aplus < 0.0 || config.l23ee_stdp_aminus < 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_RECURRENT_ONLY_L23EE_STDP_APLUS and V1_VIDEO_RECURRENT_ONLY_L23EE_STDP_AMINUS must be non-negative.");
     }
 
     config.enabled = true;
@@ -2827,6 +3474,7 @@ void resetNeuronTrialState(
 {
     fillRuntimeArray(requireArray(runtime, group, "V"), params.v_rest_mv);
     fillRuntimeArray(requireArray(runtime, group, "RefracTime"), 0.0);
+    fillRuntimeArray(requireArray(runtime, group, "AdaptCurrent"), 0.0);
 }
 
 void resetHomeostaticTraceState(
@@ -2881,7 +3529,88 @@ double deterministicConnectionUnit(unsigned int pre_id, unsigned int post_id);
 double softOrientationConnectionProbability(double similarity, unsigned int manhattan_distance, double bias_strength);
 double orientationNeutralConnectionProbability(unsigned int manhattan_distance, double probability_scale);
 
-std::vector<std::pair<unsigned int, unsigned int>> buildL4EToL23EConnectivity()
+int wrappedCoordinate(int coordinate, unsigned int side)
+{
+    const int signed_side = static_cast<int>(side);
+    int wrapped = coordinate % signed_side;
+    if(wrapped < 0) {
+        wrapped += signed_side;
+    }
+    return wrapped;
+}
+
+double localGeometryDelta(unsigned int first, unsigned int second, bool periodic_geometry_enabled)
+{
+    const double direct = std::fabs(static_cast<double>(first) - static_cast<double>(second));
+    if(!periodic_geometry_enabled) {
+        return direct;
+    }
+    return std::min(direct, static_cast<double>(v1_genn::kSheetSide) - direct);
+}
+
+double localGeometryDistanceSites(
+    unsigned int pre_site,
+    unsigned int post_site,
+    bool periodic_geometry_enabled)
+{
+    const auto pre_xy = v1_genn::siteIndexToXY(pre_site);
+    const auto post_xy = v1_genn::siteIndexToXY(post_site);
+    const double dx = localGeometryDelta(pre_xy.first, post_xy.first, periodic_geometry_enabled);
+    const double dy = localGeometryDelta(pre_xy.second, post_xy.second, periodic_geometry_enabled);
+    return std::sqrt((dx * dx) + (dy * dy));
+}
+
+double localGeometryChebyshevDistanceSites(
+    unsigned int pre_site,
+    unsigned int post_site,
+    bool periodic_geometry_enabled)
+{
+    const auto pre_xy = v1_genn::siteIndexToXY(pre_site);
+    const auto post_xy = v1_genn::siteIndexToXY(post_site);
+    const double dx = localGeometryDelta(pre_xy.first, post_xy.first, periodic_geometry_enabled);
+    const double dy = localGeometryDelta(pre_xy.second, post_xy.second, periodic_geometry_enabled);
+    return std::max(dx, dy);
+}
+
+unsigned int finiteBoundaryDistanceSites(unsigned int site)
+{
+    const auto xy = v1_genn::siteIndexToXY(site);
+    const unsigned int max_index = v1_genn::kSheetSide - 1u;
+    return std::min(
+        std::min(xy.first, max_index - xy.first),
+        std::min(xy.second, max_index - xy.second));
+}
+
+unsigned int setHomeostaticBoundaryGate(
+    GeNN::Runtime::Runtime &runtime,
+    const GeNN::SynapseGroup &group,
+    unsigned int expected_post_count,
+    bool enabled,
+    unsigned int max_distance_sites)
+{
+    GeNN::Runtime::ArrayBase &array = requireArray(runtime, group, "postBoundaryGate");
+    if(array.getCount() != expected_post_count) {
+        throw std::runtime_error(
+            "Homeostatic boundary-gate post array has unexpected size for group '"
+            + group.getName() + "'.");
+    }
+    float *values = array.getHostPointer<float>();
+    unsigned int target_count = 0u;
+    for(unsigned int post_id = 0; post_id < expected_post_count; post_id++) {
+        const unsigned int post_site = post_id / v1_genn::kL23EPerSite;
+        const bool targeted =
+            enabled && (finiteBoundaryDistanceSites(post_site) <= max_distance_sites);
+        values[post_id] = (!enabled || targeted) ? 1.0f : 0.0f;
+        if(targeted) {
+            target_count++;
+        }
+    }
+    array.pushToDevice();
+    return target_count;
+}
+
+std::vector<std::pair<unsigned int, unsigned int>> buildL4EToL23EConnectivity(
+    bool periodic_geometry_enabled)
 {
     std::vector<std::pair<unsigned int, unsigned int>> edges;
     edges.reserve(
@@ -2900,14 +3629,20 @@ std::vector<std::pair<unsigned int, unsigned int>> buildL4EToL23EConnectivity()
             use_neutral_density_match ? 0.0 : v1_genn::sitePreferredOrientationFromIndex(pre_site);
 
         for(int dy = -static_cast<int>(v1_genn::kFeedforwardRadius); dy <= static_cast<int>(v1_genn::kFeedforwardRadius); dy++) {
-            const int post_y = static_cast<int>(pre_y) + dy;
-            if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
+            int post_y = static_cast<int>(pre_y) + dy;
+            if(periodic_geometry_enabled) {
+                post_y = wrappedCoordinate(post_y, v1_genn::kSheetSide);
+            }
+            else if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
                 continue;
             }
 
             for(int dx = -static_cast<int>(v1_genn::kFeedforwardRadius); dx <= static_cast<int>(v1_genn::kFeedforwardRadius); dx++) {
-                const int post_x = static_cast<int>(pre_x) + dx;
-                if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
+                int post_x = static_cast<int>(pre_x) + dx;
+                if(periodic_geometry_enabled) {
+                    post_x = wrappedCoordinate(post_x, v1_genn::kSheetSide);
+                }
+                else if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
                     continue;
                 }
 
@@ -2948,7 +3683,8 @@ std::vector<std::pair<unsigned int, unsigned int>> buildLocalPatchConnectivity(
     unsigned int pre_neurons_per_site,
     unsigned int post_neurons_per_site,
     unsigned int radius,
-    bool exclude_self)
+    bool exclude_self,
+    bool periodic_geometry_enabled)
 {
     std::vector<std::pair<unsigned int, unsigned int>> edges;
     edges.reserve(
@@ -2963,14 +3699,20 @@ std::vector<std::pair<unsigned int, unsigned int>> buildLocalPatchConnectivity(
         const unsigned int pre_y = pre_site / v1_genn::kSheetSide;
 
         for(int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); dy++) {
-            const int post_y = static_cast<int>(pre_y) + dy;
-            if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
+            int post_y = static_cast<int>(pre_y) + dy;
+            if(periodic_geometry_enabled) {
+                post_y = wrappedCoordinate(post_y, v1_genn::kSheetSide);
+            }
+            else if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
                 continue;
             }
 
             for(int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); dx++) {
-                const int post_x = static_cast<int>(pre_x) + dx;
-                if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
+                int post_x = static_cast<int>(pre_x) + dx;
+                if(periodic_geometry_enabled) {
+                    post_x = wrappedCoordinate(post_x, v1_genn::kSheetSide);
+                }
+                else if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
                     continue;
                 }
 
@@ -2994,7 +3736,8 @@ std::vector<std::pair<unsigned int, unsigned int>> buildLocalPatchConnectivity(
 std::vector<std::pair<unsigned int, unsigned int>> buildLocalIntersiteConnectivity(
     unsigned int pre_neurons_per_site,
     unsigned int post_neurons_per_site,
-    unsigned int radius)
+    unsigned int radius,
+    bool periodic_geometry_enabled)
 {
     std::vector<std::pair<unsigned int, unsigned int>> edges;
     edges.reserve(
@@ -3009,14 +3752,20 @@ std::vector<std::pair<unsigned int, unsigned int>> buildLocalIntersiteConnectivi
         const unsigned int pre_y = pre_site / v1_genn::kSheetSide;
 
         for(int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); dy++) {
-            const int post_y = static_cast<int>(pre_y) + dy;
-            if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
+            int post_y = static_cast<int>(pre_y) + dy;
+            if(periodic_geometry_enabled) {
+                post_y = wrappedCoordinate(post_y, v1_genn::kSheetSide);
+            }
+            else if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
                 continue;
             }
 
             for(int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); dx++) {
-                const int post_x = static_cast<int>(pre_x) + dx;
-                if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
+                int post_x = static_cast<int>(pre_x) + dx;
+                if(periodic_geometry_enabled) {
+                    post_x = wrappedCoordinate(post_x, v1_genn::kSheetSide);
+                }
+                else if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
                     continue;
                 }
 
@@ -3041,7 +3790,8 @@ ConnectivityStats summarizeConnectivity(
     const std::vector<std::pair<unsigned int, unsigned int>> &edges,
     unsigned int pre_neurons_per_site,
     unsigned int post_neurons_per_site,
-    unsigned int radius)
+    unsigned int radius,
+    bool periodic_geometry_enabled)
 {
     ConnectivityStats stats;
     stats.edge_count = edges.size();
@@ -3055,12 +3805,9 @@ ConnectivityStats summarizeConnectivity(
     for(const auto &edge : edges) {
         const unsigned int pre_site = edge.first / pre_neurons_per_site;
         const unsigned int post_site = edge.second / post_neurons_per_site;
-        const auto pre_xy = v1_genn::siteIndexToXY(pre_site);
-        const auto post_xy = v1_genn::siteIndexToXY(post_site);
-        const double dx = static_cast<double>(pre_xy.first) - static_cast<double>(post_xy.first);
-        const double dy = static_cast<double>(pre_xy.second) - static_cast<double>(post_xy.second);
-        const double distance = std::sqrt((dx * dx) + (dy * dy));
-        const double chebyshev_distance = std::max(std::fabs(dx), std::fabs(dy));
+        const double distance = localGeometryDistanceSites(pre_site, post_site, periodic_geometry_enabled);
+        const double chebyshev_distance =
+            localGeometryChebyshevDistanceSites(pre_site, post_site, periodic_geometry_enabled);
         distance_sum += distance;
         stats.max_distance_sites = std::max(stats.max_distance_sites, distance);
         if(pre_site == post_site) {
@@ -3091,7 +3838,8 @@ std::vector<std::pair<unsigned int, unsigned int>> buildSparseDistanceConnectivi
     unsigned int radius,
     bool exclude_self,
     double peak_probability,
-    double distance_sigma_sq)
+    double distance_sigma_sq,
+    bool periodic_geometry_enabled)
 {
     std::vector<std::pair<unsigned int, unsigned int>> edges;
     edges.reserve(
@@ -3105,14 +3853,20 @@ std::vector<std::pair<unsigned int, unsigned int>> buildSparseDistanceConnectivi
         const unsigned int pre_y = pre_site / v1_genn::kSheetSide;
 
         for(int dy = -static_cast<int>(radius); dy <= static_cast<int>(radius); dy++) {
-            const int post_y = static_cast<int>(pre_y) + dy;
-            if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
+            int post_y = static_cast<int>(pre_y) + dy;
+            if(periodic_geometry_enabled) {
+                post_y = wrappedCoordinate(post_y, v1_genn::kSheetSide);
+            }
+            else if(post_y < 0 || post_y >= static_cast<int>(v1_genn::kSheetSide)) {
                 continue;
             }
 
             for(int dx = -static_cast<int>(radius); dx <= static_cast<int>(radius); dx++) {
-                const int post_x = static_cast<int>(pre_x) + dx;
-                if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
+                int post_x = static_cast<int>(pre_x) + dx;
+                if(periodic_geometry_enabled) {
+                    post_x = wrappedCoordinate(post_x, v1_genn::kSheetSide);
+                }
+                else if(post_x < 0 || post_x >= static_cast<int>(v1_genn::kSheetSide)) {
                     continue;
                 }
 
@@ -3154,6 +3908,58 @@ void scaleSynapseWeights(GeNN::Runtime::Runtime &runtime, GeNN::SynapseGroup &sy
         weights[i] = static_cast<float>(weights[i] * scale);
     }
     weight_array.pushToDevice();
+}
+
+BoundaryRingPVCompensationMetrics applyBoundaryRingPVCompensation(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const BoundaryRingPVCompensationConfig &config)
+{
+    BoundaryRingPVCompensationMetrics metrics;
+    GeNN::Runtime::ArrayBase &weight_array = requireArray(runtime, synapse_group, "g");
+    metrics.total_synapses = weight_array.getCount();
+    if(!config.enabled || edges.empty()) {
+        return metrics;
+    }
+    if((weight_array.getCount() % v1_genn::kNumL23PV) != 0u) {
+        throw std::runtime_error("Boundary-ring PV compensation expected row-major L23PV sparse weights.");
+    }
+    const std::size_t max_row_length = weight_array.getCount() / v1_genn::kNumL23PV;
+
+    weight_array.pullFromDevice();
+    float *weights = weight_array.getHostPointer<float>();
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("Boundary-ring PV compensation exceeded sparse row capacity.");
+        }
+        const std::size_t synapse_index =
+            (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        row_active_index++;
+
+        const unsigned int post_site = post_id / v1_genn::kL23EPerSite;
+        const unsigned int boundary_distance = finiteBoundaryDistanceSites(post_site);
+        if(boundary_distance < config.inner_distance || boundary_distance > config.outer_distance) {
+            continue;
+        }
+        weights[synapse_index] = static_cast<float>(
+            static_cast<double>(weights[synapse_index]) * config.pv_to_l23e_scale);
+        metrics.targeted_synapses++;
+    }
+    if(metrics.total_synapses > 0u) {
+        metrics.targeted_fraction =
+            static_cast<double>(metrics.targeted_synapses) / static_cast<double>(metrics.total_synapses);
+    }
+    weight_array.pushToDevice();
+    return metrics;
 }
 
 void setSynapseWeights(
@@ -3223,10 +4029,13 @@ WeightDeltaMetrics computeWeightDeltaMetrics(
 
     std::vector<double> abs_deltas;
     abs_deltas.reserve(before.size());
+    std::vector<double> changed_abs_deltas;
     double before_sum = 0.0;
     double after_sum = 0.0;
     double delta_sum = 0.0;
     std::size_t changed_count = 0u;
+    std::size_t positive_delta_count = 0u;
+    std::size_t negative_delta_count = 0u;
     for(std::size_t i = 0; i < before.size(); i++) {
         const double before_weight = static_cast<double>(before[i]);
         const double after_weight = static_cast<double>(after[i]);
@@ -3241,6 +4050,13 @@ WeightDeltaMetrics computeWeightDeltaMetrics(
         abs_deltas.push_back(abs_delta);
         if(abs_delta > 1.0e-12) {
             changed_count++;
+            changed_abs_deltas.push_back(abs_delta);
+        }
+        if(delta > 1.0e-12) {
+            positive_delta_count++;
+        }
+        else if(delta < -1.0e-12) {
+            negative_delta_count++;
         }
         metrics.max_abs_delta = std::max(metrics.max_abs_delta, abs_delta);
     }
@@ -3251,6 +4067,18 @@ WeightDeltaMetrics computeWeightDeltaMetrics(
     metrics.changed_frac = static_cast<double>(changed_count) / static_cast<double>(before.size());
     metrics.mean_delta = delta_sum / static_cast<double>(before.size());
     metrics.p95_abs_delta = abs_deltas[std::min(p95_index, abs_deltas.size() - 1u)];
+    if(!changed_abs_deltas.empty()) {
+        std::sort(changed_abs_deltas.begin(), changed_abs_deltas.end());
+        const std::size_t changed_p95_index = static_cast<std::size_t>(
+            std::ceil(0.95 * static_cast<double>(changed_abs_deltas.size()))) - 1u;
+        metrics.p95_changed_abs_delta =
+            changed_abs_deltas[std::min(changed_p95_index, changed_abs_deltas.size() - 1u)];
+    }
+    const double edge_denominator = metrics.active_edge_count > 0u
+        ? static_cast<double>(metrics.active_edge_count)
+        : static_cast<double>(before.size());
+    metrics.positive_edge_frac = static_cast<double>(positive_delta_count) / edge_denominator;
+    metrics.negative_edge_frac = static_cast<double>(negative_delta_count) / edge_denominator;
     metrics.mean_gain_ratio = (std::fabs(before_sum) > 1.0e-12) ? (after_sum / before_sum) : 1.0;
     return metrics;
 }
@@ -3490,6 +4318,920 @@ WeightDeltaMetrics applyCoactivityGatedFFCompetition(
 
     setSynapseWeights(runtime, synapse_group, after);
     return computeWeightDeltaMetrics(before, after);
+}
+
+void accumulateFFBCMActivityScores(
+    std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &pre_spike_counts,
+    const std::vector<double> &post_spike_counts)
+{
+    if(pre_spike_counts.size() != v1_genn::kNumL4E
+       || post_spike_counts.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("BCM FF activity score received unexpected activity vector sizes.");
+    }
+    if(activity_scores.empty() || edges.empty()) {
+        return;
+    }
+    if((activity_scores.size() % v1_genn::kNumL4E) != 0u) {
+        throw std::runtime_error("BCM FF activity score expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / v1_genn::kNumL4E;
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL4E || post_id >= v1_genn::kNumL23E) {
+            throw std::runtime_error("BCM FF activity score edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("BCM FF activity score exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        activity_scores[slot] += pre_spike_counts[pre_id] * post_spike_counts[post_id];
+        row_active_index++;
+    }
+}
+
+ActivityScoreMetrics summarizeFFBCMActivityScores(
+    const std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges)
+{
+    ActivityScoreMetrics metrics;
+    if(activity_scores.empty() || edges.empty()) {
+        return metrics;
+    }
+    if((activity_scores.size() % v1_genn::kNumL4E) != 0u) {
+        throw std::runtime_error("BCM FF activity score summary expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / v1_genn::kNumL4E;
+    double score_sum = 0.0;
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        if(pre_id >= v1_genn::kNumL4E || edge.second >= v1_genn::kNumL23E) {
+            throw std::runtime_error("BCM FF activity score summary edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("BCM FF activity score summary exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        const double score = activity_scores[slot];
+        metrics.active_edge_count++;
+        if(score > 0.0) {
+            metrics.positive_edge_count++;
+        }
+        score_sum += score;
+        metrics.max_score = std::max(metrics.max_score, score);
+        row_active_index++;
+    }
+    if(metrics.active_edge_count > 0u) {
+        metrics.positive_frac =
+            static_cast<double>(metrics.positive_edge_count) / static_cast<double>(metrics.active_edge_count);
+        metrics.mean_score = score_sum / static_cast<double>(metrics.active_edge_count);
+    }
+    return metrics;
+}
+
+WeightDeltaMetrics applyLocalPostSynapticBCMFFCompetition(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &activity_scores,
+    double strength,
+    double wmin,
+    double wmax)
+{
+    if(!std::isfinite(strength)
+       || !std::isfinite(wmin)
+       || !std::isfinite(wmax)
+       || strength < 0.0
+       || wmin > wmax) {
+        throw std::runtime_error("Invalid local BCM FF competition parameters.");
+    }
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    if(activity_scores.size() != before.size()) {
+        throw std::runtime_error("Local BCM FF competition activity/current weights have mismatched sizes.");
+    }
+    if(before.empty() || edges.empty() || strength <= 0.0) {
+        return WeightDeltaMetrics{};
+    }
+    if((before.size() % v1_genn::kNumL4E) != 0u) {
+        throw std::runtime_error("Local BCM FF competition expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = before.size() / v1_genn::kNumL4E;
+    std::vector<std::vector<std::size_t>> incoming_by_post(v1_genn::kNumL23E);
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL4E || post_id >= v1_genn::kNumL23E) {
+            throw std::runtime_error("Local BCM FF competition edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("Local BCM FF competition exceeded sparse row capacity.");
+        }
+        incoming_by_post[post_id].push_back((static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index);
+        row_active_index++;
+    }
+
+    std::vector<float> after = before;
+    std::vector<double> proposals;
+    std::vector<double> coactivity_scores;
+    for(const std::vector<std::size_t> &incoming : incoming_by_post) {
+        if(incoming.size() < 2u) {
+            continue;
+        }
+        double original_sum = 0.0;
+        double coactivity_sum = 0.0;
+        coactivity_scores.clear();
+        coactivity_scores.reserve(incoming.size());
+        for(std::size_t synapse_index : incoming) {
+            const double weight = static_cast<double>(before[synapse_index]);
+            const double coactivity_score = std::max(0.0, activity_scores[synapse_index]);
+            original_sum += weight;
+            coactivity_sum += coactivity_score;
+            coactivity_scores.push_back(coactivity_score);
+        }
+        if(original_sum <= 1.0e-12 || coactivity_sum <= 1.0e-12) {
+            continue;
+        }
+
+        const double local_mean_fraction = 1.0 / static_cast<double>(incoming.size());
+        proposals.clear();
+        proposals.reserve(incoming.size());
+        double proposal_min = std::numeric_limits<double>::infinity();
+        double proposal_max = -std::numeric_limits<double>::infinity();
+        for(std::size_t i = 0; i < incoming.size(); i++) {
+            // Local covariance-like competition: same-frame L4/L2/3
+            // coactivity above the postsynaptic afferent mean is preserved or
+            // strengthened; weak/non-coactive afferents carry compensating LTD.
+            const double coactivity_fraction = coactivity_scores[i] / coactivity_sum;
+            const double proposal =
+                static_cast<double>(before[incoming[i]])
+                + (strength * original_sum * (coactivity_fraction - local_mean_fraction));
+            proposals.push_back(proposal);
+            proposal_min = std::min(proposal_min, proposal);
+            proposal_max = std::max(proposal_max, proposal);
+        }
+
+        double lo = wmin - proposal_max - 1.0e-12;
+        double hi = wmax - proposal_min + 1.0e-12;
+        for(unsigned int iter = 0; iter < 48u; iter++) {
+            const double mid = 0.5 * (lo + hi);
+            double projected_sum = 0.0;
+            for(double proposal : proposals) {
+                projected_sum += std::min(wmax, std::max(wmin, proposal + mid));
+            }
+            if(projected_sum < original_sum) {
+                lo = mid;
+            }
+            else {
+                hi = mid;
+            }
+        }
+
+        const double lambda = 0.5 * (lo + hi);
+        for(std::size_t i = 0; i < incoming.size(); i++) {
+            after[incoming[i]] = static_cast<float>(
+                std::min(wmax, std::max(wmin, proposals[i] + lambda)));
+        }
+    }
+
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
+}
+
+void accumulateL23EPVRecruitmentActivityScores(
+    std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &pre_spike_counts,
+    const std::vector<double> &post_spike_counts)
+{
+    if(pre_spike_counts.size() != v1_genn::kNumL23E
+       || post_spike_counts.size() != v1_genn::kNumL23PV) {
+        throw std::runtime_error("L23E->PV recruitment activity score received unexpected activity vector sizes.");
+    }
+    if(activity_scores.empty() || edges.empty()) {
+        return;
+    }
+    if((activity_scores.size() % v1_genn::kNumL23E) != 0u) {
+        throw std::runtime_error("L23E->PV recruitment activity score expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / v1_genn::kNumL23E;
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL23E || post_id >= v1_genn::kNumL23PV) {
+            throw std::runtime_error("L23E->PV recruitment activity score edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23E->PV recruitment activity score exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        activity_scores[slot] += pre_spike_counts[pre_id] * post_spike_counts[post_id];
+        row_active_index++;
+    }
+}
+
+ActivityScoreMetrics summarizeL23EPVRecruitmentActivityScores(
+    const std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges)
+{
+    ActivityScoreMetrics metrics;
+    if(activity_scores.empty() || edges.empty()) {
+        return metrics;
+    }
+    if((activity_scores.size() % v1_genn::kNumL23E) != 0u) {
+        throw std::runtime_error("L23E->PV recruitment activity score summary expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / v1_genn::kNumL23E;
+    double score_sum = 0.0;
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        if(pre_id >= v1_genn::kNumL23E || edge.second >= v1_genn::kNumL23PV) {
+            throw std::runtime_error("L23E->PV recruitment activity score summary edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23E->PV recruitment activity score summary exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        const double score = activity_scores[slot];
+        metrics.active_edge_count++;
+        if(score > 0.0) {
+            metrics.positive_edge_count++;
+        }
+        score_sum += score;
+        metrics.max_score = std::max(metrics.max_score, score);
+        row_active_index++;
+    }
+    if(metrics.active_edge_count > 0u) {
+        metrics.positive_frac =
+            static_cast<double>(metrics.positive_edge_count) / static_cast<double>(metrics.active_edge_count);
+        metrics.mean_score = score_sum / static_cast<double>(metrics.active_edge_count);
+    }
+    return metrics;
+}
+
+WeightDeltaMetrics applyLocalPostSynapticL23EPVRecruitment(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &activity_scores,
+    double strength,
+    double mass_max_ratio,
+    double wmin,
+    double wmax)
+{
+    if(!std::isfinite(strength)
+       || !std::isfinite(mass_max_ratio)
+       || !std::isfinite(wmin)
+       || !std::isfinite(wmax)
+       || strength < 0.0
+       || mass_max_ratio < 1.0
+       || wmin > wmax) {
+        throw std::runtime_error("Invalid L23E->PV recruitment parameters.");
+    }
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    if(activity_scores.size() != before.size()) {
+        throw std::runtime_error("L23E->PV recruitment activity/current weights have mismatched sizes.");
+    }
+    if(before.empty() || edges.empty() || strength <= 0.0) {
+        return WeightDeltaMetrics{};
+    }
+    if((before.size() % v1_genn::kNumL23E) != 0u) {
+        throw std::runtime_error("L23E->PV recruitment expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = before.size() / v1_genn::kNumL23E;
+    std::vector<std::vector<std::size_t>> incoming_by_post(v1_genn::kNumL23PV);
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL23E || post_id >= v1_genn::kNumL23PV) {
+            throw std::runtime_error("L23E->PV recruitment edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23E->PV recruitment exceeded sparse row capacity.");
+        }
+        incoming_by_post[post_id].push_back((static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index);
+        row_active_index++;
+    }
+
+    std::vector<float> after = before;
+    std::vector<double> proposals;
+    for(const std::vector<std::size_t> &incoming : incoming_by_post) {
+        if(incoming.empty()) {
+            continue;
+        }
+        double original_sum = 0.0;
+        double coactivity_sum = 0.0;
+        for(std::size_t synapse_index : incoming) {
+            original_sum += static_cast<double>(before[synapse_index]);
+            coactivity_sum += std::max(0.0, activity_scores[synapse_index]);
+        }
+        if(original_sum <= 1.0e-12 || coactivity_sum <= 1.0e-12) {
+            continue;
+        }
+
+        proposals.clear();
+        proposals.reserve(incoming.size());
+        double proposal_sum = 0.0;
+        for(std::size_t synapse_index : incoming) {
+            const double coactivity_fraction =
+                std::max(0.0, activity_scores[synapse_index]) / coactivity_sum;
+            const double proposal = std::min(
+                wmax,
+                std::max(
+                    wmin,
+                    static_cast<double>(before[synapse_index])
+                    + (strength * original_sum * coactivity_fraction)));
+            proposals.push_back(proposal);
+            proposal_sum += proposal;
+        }
+
+        const double max_sum = original_sum * mass_max_ratio;
+        double increment_scale = 1.0;
+        if(proposal_sum > max_sum) {
+            const double proposal_increment = std::max(0.0, proposal_sum - original_sum);
+            const double allowed_increment = std::max(0.0, max_sum - original_sum);
+            increment_scale = (proposal_increment > 1.0e-12)
+                ? (allowed_increment / proposal_increment)
+                : 0.0;
+        }
+        for(std::size_t i = 0; i < incoming.size(); i++) {
+            const double before_weight = static_cast<double>(before[incoming[i]]);
+            const double bounded = before_weight + (increment_scale * (proposals[i] - before_weight));
+            after[incoming[i]] = static_cast<float>(std::min(wmax, std::max(wmin, bounded)));
+        }
+    }
+
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
+}
+
+WeightDeltaMetrics applyLocalPostSynapticExcitatoryRecruitment(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &activity_scores,
+    std::size_t pre_count,
+    std::size_t post_count,
+    double strength,
+    double mass_max_ratio,
+    double top_frac,
+    double wmin,
+    double wmax,
+    const char *label)
+{
+    if(!std::isfinite(strength)
+       || !std::isfinite(mass_max_ratio)
+       || !std::isfinite(wmin)
+       || !std::isfinite(wmax)
+       || strength < 0.0
+       || mass_max_ratio < 1.0
+       || !std::isfinite(top_frac)
+       || top_frac <= 0.0
+       || top_frac > 1.0
+       || wmin < 0.0
+       || wmin > wmax) {
+        throw std::runtime_error(std::string(label) + " received invalid excitatory recruitment parameters.");
+    }
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    if(activity_scores.size() != before.size()) {
+        throw std::runtime_error(std::string(label) + " activity/current weights have mismatched sizes.");
+    }
+    if(before.empty() || edges.empty() || strength <= 0.0) {
+        return WeightDeltaMetrics{};
+    }
+    if((before.size() % pre_count) != 0u) {
+        throw std::runtime_error(std::string(label) + " expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = before.size() / pre_count;
+    std::vector<std::vector<std::size_t>> incoming_by_post(post_count);
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pre_count || post_id >= post_count) {
+            throw std::runtime_error(std::string(label) + " edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error(std::string(label) + " exceeded sparse row capacity.");
+        }
+        incoming_by_post[post_id].push_back((static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index);
+        row_active_index++;
+    }
+
+    std::vector<float> after = before;
+    std::vector<std::pair<double, std::size_t>> scored_slots;
+    std::vector<unsigned char> selected;
+    for(const std::vector<std::size_t> &incoming : incoming_by_post) {
+        if(incoming.empty()) {
+            continue;
+        }
+        double original_sum = 0.0;
+        scored_slots.clear();
+        for(std::size_t local_index = 0; local_index < incoming.size(); local_index++) {
+            const std::size_t synapse_index = incoming[local_index];
+            original_sum += std::max(0.0, static_cast<double>(before[synapse_index]));
+            const double score = std::max(0.0, activity_scores[synapse_index]);
+            if(score > 0.0) {
+                scored_slots.push_back({score, local_index});
+            }
+        }
+        if(original_sum <= 1.0e-12 || scored_slots.empty()) {
+            continue;
+        }
+
+        std::sort(
+            scored_slots.begin(),
+            scored_slots.end(),
+            [](const auto &lhs, const auto &rhs) {
+                if(lhs.first == rhs.first) {
+                    return lhs.second < rhs.second;
+                }
+                return lhs.first > rhs.first;
+            });
+        const std::size_t selected_count = std::min<std::size_t>(
+            scored_slots.size(),
+            std::max<std::size_t>(
+                1u,
+                static_cast<std::size_t>(
+                    std::ceil(top_frac * static_cast<double>(scored_slots.size())))));
+        selected.assign(incoming.size(), 0u);
+        double selected_score_sum = 0.0;
+        for(std::size_t i = 0; i < selected_count; i++) {
+            selected[scored_slots[i].second] = 1u;
+            selected_score_sum += scored_slots[i].first;
+        }
+        if(selected_score_sum <= 1.0e-12) {
+            continue;
+        }
+
+        double actual_increment_sum = 0.0;
+        const double requested_increment_sum = strength * original_sum;
+        for(std::size_t i = 0; i < selected_count; i++) {
+            const std::size_t local_index = scored_slots[i].second;
+            const std::size_t synapse_index = incoming[local_index];
+            const double score_fraction = scored_slots[i].first / selected_score_sum;
+            const double before_weight = static_cast<double>(before[synapse_index]);
+            const double proposed = std::min(
+                wmax,
+                std::max(wmin, before_weight + (requested_increment_sum * score_fraction)));
+            after[synapse_index] = static_cast<float>(proposed);
+            actual_increment_sum += std::max(0.0, proposed - before_weight);
+        }
+        if(actual_increment_sum <= 1.0e-12) {
+            continue;
+        }
+
+        double nonselected_depression_capacity = 0.0;
+        for(std::size_t local_index = 0; local_index < incoming.size(); local_index++) {
+            if(selected[local_index] != 0u) {
+                continue;
+            }
+            const std::size_t synapse_index = incoming[local_index];
+            nonselected_depression_capacity += std::max(
+                0.0,
+                static_cast<double>(after[synapse_index]) - wmin);
+        }
+        const double compensation = std::min(actual_increment_sum, nonselected_depression_capacity);
+        if(compensation > 1.0e-12 && nonselected_depression_capacity > 1.0e-12) {
+            for(std::size_t local_index = 0; local_index < incoming.size(); local_index++) {
+                if(selected[local_index] != 0u) {
+                    continue;
+                }
+                const std::size_t synapse_index = incoming[local_index];
+                const double before_depression = static_cast<double>(after[synapse_index]);
+                const double capacity = std::max(0.0, before_depression - wmin);
+                const double depression = compensation * (capacity / nonselected_depression_capacity);
+                after[synapse_index] = static_cast<float>(
+                    std::max(wmin, before_depression - depression));
+            }
+        }
+
+        double final_sum = 0.0;
+        for(std::size_t synapse_index : incoming) {
+            final_sum += std::max(0.0, static_cast<double>(after[synapse_index]));
+        }
+        const double max_sum = original_sum * mass_max_ratio;
+        if(final_sum > max_sum) {
+            double selected_positive_delta_sum = 0.0;
+            for(std::size_t local_index = 0; local_index < incoming.size(); local_index++) {
+                if(selected[local_index] == 0u) {
+                    continue;
+                }
+                const std::size_t synapse_index = incoming[local_index];
+                selected_positive_delta_sum += std::max(
+                    0.0,
+                    static_cast<double>(after[synapse_index])
+                    - static_cast<double>(before[synapse_index]));
+            }
+            const double excess = final_sum - max_sum;
+            if(selected_positive_delta_sum > 1.0e-12) {
+                for(std::size_t local_index = 0; local_index < incoming.size(); local_index++) {
+                    if(selected[local_index] == 0u) {
+                        continue;
+                    }
+                    const std::size_t synapse_index = incoming[local_index];
+                    const double positive_delta = std::max(
+                        0.0,
+                        static_cast<double>(after[synapse_index])
+                        - static_cast<double>(before[synapse_index]));
+                    const double reduction = std::min(
+                        positive_delta,
+                        excess * (positive_delta / selected_positive_delta_sum));
+                    after[synapse_index] = static_cast<float>(
+                        std::max(wmin, static_cast<double>(after[synapse_index]) - reduction));
+                }
+            }
+        }
+    }
+
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
+}
+
+void accumulateSparseActivityScores(
+    std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &pre_spike_counts,
+    const std::vector<double> &post_spike_counts,
+    std::size_t pre_count,
+    std::size_t post_count,
+    const char *label)
+{
+    if(pre_spike_counts.size() != pre_count || post_spike_counts.size() != post_count) {
+        throw std::runtime_error(std::string(label) + " activity score received unexpected activity vector sizes.");
+    }
+    if(activity_scores.empty() || edges.empty()) {
+        return;
+    }
+    if((activity_scores.size() % pre_count) != 0u) {
+        throw std::runtime_error(std::string(label) + " activity score expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / pre_count;
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pre_count || post_id >= post_count) {
+            throw std::runtime_error(std::string(label) + " activity score edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error(std::string(label) + " activity score exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        activity_scores[slot] += pre_spike_counts[pre_id] * post_spike_counts[post_id];
+        row_active_index++;
+    }
+}
+
+ActivityScoreMetrics summarizeSparseActivityScores(
+    const std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    std::size_t pre_count,
+    std::size_t post_count,
+    const char *label)
+{
+    ActivityScoreMetrics metrics;
+    if(activity_scores.empty() || edges.empty()) {
+        return metrics;
+    }
+    if((activity_scores.size() % pre_count) != 0u) {
+        throw std::runtime_error(std::string(label) + " activity score summary expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / pre_count;
+    double score_sum = 0.0;
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pre_count || post_id >= post_count) {
+            throw std::runtime_error(std::string(label) + " activity score summary edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error(std::string(label) + " activity score summary exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        const double score = activity_scores[slot];
+        metrics.active_edge_count++;
+        if(score > 0.0) {
+            metrics.positive_edge_count++;
+        }
+        score_sum += score;
+        metrics.max_score = std::max(metrics.max_score, score);
+        row_active_index++;
+    }
+    if(metrics.active_edge_count > 0u) {
+        metrics.positive_frac =
+            static_cast<double>(metrics.positive_edge_count) / static_cast<double>(metrics.active_edge_count);
+        metrics.mean_score = score_sum / static_cast<double>(metrics.active_edge_count);
+    }
+    return metrics;
+}
+
+std::vector<double> computePostSynapticSupportScores(
+    const std::vector<double> &activity_scores,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    std::size_t pre_count,
+    std::size_t post_count,
+    const char *label)
+{
+    std::vector<double> support_by_post(post_count, 0.0);
+    if(activity_scores.empty() || edges.empty()) {
+        return support_by_post;
+    }
+    if((activity_scores.size() % pre_count) != 0u) {
+        throw std::runtime_error(std::string(label) + " support expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = activity_scores.size() / pre_count;
+    std::vector<unsigned int> afferent_count_by_post(post_count, 0u);
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pre_count || post_id >= post_count) {
+            throw std::runtime_error(std::string(label) + " support edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error(std::string(label) + " support exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        support_by_post[post_id] += std::max(0.0, activity_scores[slot]);
+        afferent_count_by_post[post_id]++;
+        row_active_index++;
+    }
+    for(unsigned int post_id = 0; post_id < post_count; post_id++) {
+        if(afferent_count_by_post[post_id] > 0u) {
+            support_by_post[post_id] /= static_cast<double>(afferent_count_by_post[post_id]);
+        }
+    }
+    return support_by_post;
+}
+
+PushPullInhibitionMetrics computePushPullWeakSupportGates(
+    const std::vector<double> &post_spike_counts,
+    const std::vector<double> &feedforward_support_scores,
+    const VideoL23PushPullInhibitionConfig &config,
+    std::vector<double> &weak_support_gate_by_post)
+{
+    if(post_spike_counts.size() != v1_genn::kNumL23E
+       || feedforward_support_scores.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("Push-pull inhibition received unexpected L23E support vector sizes.");
+    }
+    weak_support_gate_by_post.assign(v1_genn::kNumL23E, 0.0);
+
+    PushPullInhibitionMetrics metrics;
+    double gate_sum = 0.0;
+    for(unsigned int post_id = 0; post_id < v1_genn::kNumL23E; post_id++) {
+        const double post_spikes = post_spike_counts[post_id];
+        if(post_spikes < config.min_post_spikes) {
+            continue;
+        }
+        metrics.active_post_cell_count++;
+        const double feedforward_support = std::max(0.0, feedforward_support_scores[post_id]);
+        const double weak_gate = post_spikes / (post_spikes + feedforward_support + 1.0e-12);
+        weak_support_gate_by_post[post_id] = weak_gate;
+        gate_sum += weak_gate;
+        metrics.max_weak_support_gate = std::max(metrics.max_weak_support_gate, weak_gate);
+        if(weak_gate > 1.0e-12) {
+            metrics.targeted_post_cell_count++;
+        }
+    }
+    if(metrics.active_post_cell_count > 0u) {
+        metrics.targeted_post_cell_frac =
+            static_cast<double>(metrics.targeted_post_cell_count)
+            / static_cast<double>(metrics.active_post_cell_count);
+        metrics.mean_weak_support_gate =
+            gate_sum / static_cast<double>(metrics.active_post_cell_count);
+    }
+    return metrics;
+}
+
+WeightDeltaMetrics applyLocalPushPullInhibition(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &inhibitory_activity_scores,
+    const std::vector<double> &weak_support_gate_by_post,
+    std::size_t pre_count,
+    std::size_t post_count,
+    double strength,
+    double wmin,
+    double wmax,
+    const char *label)
+{
+    if(weak_support_gate_by_post.size() != post_count) {
+        throw std::runtime_error(std::string(label) + " weak support gate size mismatch.");
+    }
+    if(!std::isfinite(strength)
+       || !std::isfinite(wmin)
+       || !std::isfinite(wmax)
+       || strength < 0.0
+       || wmin > wmax
+       || wmax > 0.0) {
+        throw std::runtime_error(std::string(label) + " received invalid inhibitory push-pull parameters.");
+    }
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    if(inhibitory_activity_scores.size() != before.size()) {
+        throw std::runtime_error(std::string(label) + " activity/current weights have mismatched sizes.");
+    }
+    if(before.empty() || edges.empty() || strength <= 0.0) {
+        return WeightDeltaMetrics{};
+    }
+    if((before.size() % pre_count) != 0u) {
+        throw std::runtime_error(std::string(label) + " expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = before.size() / pre_count;
+    std::vector<std::vector<std::size_t>> incoming_by_post(post_count);
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pre_count || post_id >= post_count) {
+            throw std::runtime_error(std::string(label) + " edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error(std::string(label) + " exceeded sparse row capacity.");
+        }
+        incoming_by_post[post_id].push_back((static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index);
+        row_active_index++;
+    }
+
+    std::vector<float> after = before;
+    for(unsigned int post_id = 0; post_id < post_count; post_id++) {
+        const double weak_gate = weak_support_gate_by_post[post_id];
+        if(weak_gate <= 0.0 || incoming_by_post[post_id].empty()) {
+            continue;
+        }
+        double coactivity_sum = 0.0;
+        double inhibitory_abs_sum = 0.0;
+        for(std::size_t synapse_index : incoming_by_post[post_id]) {
+            coactivity_sum += std::max(0.0, inhibitory_activity_scores[synapse_index]);
+            inhibitory_abs_sum += std::fabs(static_cast<double>(before[synapse_index]));
+        }
+        if(coactivity_sum <= 1.0e-12 || inhibitory_abs_sum <= 1.0e-12) {
+            continue;
+        }
+        const double uniform_fraction =
+            1.0 / static_cast<double>(incoming_by_post[post_id].size());
+        for(std::size_t synapse_index : incoming_by_post[post_id]) {
+            const double coactivity_fraction = (
+                std::max(0.0, inhibitory_activity_scores[synapse_index]) / coactivity_sum);
+            const double local_fraction =
+                (0.75 * uniform_fraction) + (0.25 * coactivity_fraction);
+            const double potentiation = strength * weak_gate * inhibitory_abs_sum * local_fraction;
+            const double proposed = static_cast<double>(before[synapse_index]) - potentiation;
+            after[synapse_index] = static_cast<float>(std::min(wmax, std::max(wmin, proposed)));
+        }
+    }
+
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
+}
+
+IntrinsicHomeostasisMetrics applyL23EIntrinsicHomeostasis(
+    GeNN::Runtime::Runtime &runtime,
+    const GeNN::NeuronGroup &group,
+    const std::vector<double> &spike_counts_before,
+    double duration_s,
+    const VideoL23EIntrinsicHomeostasisConfig &config)
+{
+    if(spike_counts_before.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("L23E intrinsic homeostasis received unexpected baseline count size.");
+    }
+    if(!std::isfinite(duration_s) || duration_s <= 0.0) {
+        throw std::runtime_error("L23E intrinsic homeostasis requires positive exposure duration.");
+    }
+    if(!std::isfinite(config.target_hz)
+       || !std::isfinite(config.strength_na_per_hz)
+       || !std::isfinite(config.max_suppression_na)
+       || config.target_hz < 0.0
+       || config.strength_na_per_hz < 0.0
+       || config.max_suppression_na < 0.0) {
+        throw std::runtime_error("Invalid L23E intrinsic homeostasis config.");
+    }
+
+    const std::vector<double> spike_counts_after =
+        copyNeuronScalarState(runtime, group, "SpikeCount", v1_genn::kNumL23E);
+    const std::vector<double> exposure_spikes =
+        nonnegativeStateDelta(spike_counts_after, spike_counts_before);
+    GeNN::Runtime::ArrayBase &iext_array = requireArray(runtime, group, "Iext");
+    if(iext_array.getCount() != v1_genn::kNumL23E) {
+        throw std::runtime_error("L23E intrinsic homeostasis Iext array has unexpected size.");
+    }
+    iext_array.pullFromDevice();
+    float *iext = iext_array.getHostPointer<float>();
+
+    IntrinsicHomeostasisMetrics metrics;
+    metrics.cell_count = v1_genn::kNumL23E;
+    double adjustment_sum = 0.0;
+    double rate_sum = 0.0;
+    const double min_iext = -config.max_suppression_na;
+    for(unsigned int neuron_id = 0; neuron_id < v1_genn::kNumL23E; neuron_id++) {
+        const double rate_hz = exposure_spikes[neuron_id] / duration_s;
+        rate_sum += rate_hz;
+        metrics.max_rate_hz = std::max(metrics.max_rate_hz, rate_hz);
+
+        const double excess_hz = std::max(0.0, rate_hz - config.target_hz);
+        const double desired_suppression = std::min(
+            config.max_suppression_na,
+            config.strength_na_per_hz * excess_hz);
+        const double before_iext = static_cast<double>(iext[neuron_id]);
+        const double after_iext = std::min(
+            0.0,
+            std::max(min_iext, before_iext - desired_suppression));
+        const double adjustment = after_iext - before_iext;
+        if(std::fabs(adjustment) > 1.0e-12) {
+            metrics.changed_count++;
+        }
+        adjustment_sum += adjustment;
+        metrics.max_abs_adjustment_na =
+            std::max(metrics.max_abs_adjustment_na, std::fabs(adjustment));
+        iext[neuron_id] = static_cast<float>(after_iext);
+    }
+    iext_array.pushToDevice();
+
+    metrics.changed_frac = metrics.cell_count > 0u
+        ? static_cast<double>(metrics.changed_count) / static_cast<double>(metrics.cell_count)
+        : 0.0;
+    metrics.mean_adjustment_na = metrics.cell_count > 0u
+        ? adjustment_sum / static_cast<double>(metrics.cell_count)
+        : 0.0;
+    metrics.mean_rate_hz = metrics.cell_count > 0u
+        ? rate_sum / static_cast<double>(metrics.cell_count)
+        : 0.0;
+    return metrics;
 }
 
 double percentile(std::vector<double> values, double percent)
@@ -3920,6 +5662,165 @@ std::vector<double> countNeuronSpikesForTrials(
     return counts;
 }
 
+std::vector<unsigned char> selectL23OutputAssemblyMask(
+    const std::vector<double> &trial_cell_counts,
+    const L23OutputAssemblyConfig &config)
+{
+    if(!config.enabled) {
+        return {};
+    }
+    if(trial_cell_counts.size() % v1_genn::kNumL23E != 0u) {
+        throw std::runtime_error("L23 output assembly training cell-count vector has unexpected size.");
+    }
+    std::vector<double> cell_counts(v1_genn::kNumL23E, 0.0);
+    const std::size_t trial_count = trial_cell_counts.size() / v1_genn::kNumL23E;
+    for(std::size_t trial_index = 0; trial_index < trial_count; trial_index++) {
+        for(unsigned int cell_id = 0; cell_id < v1_genn::kNumL23E; cell_id++) {
+            cell_counts[cell_id] += trial_cell_counts[(trial_index * v1_genn::kNumL23E) + cell_id];
+        }
+    }
+
+    std::vector<unsigned char> mask(v1_genn::kNumL23E, 0u);
+    for(unsigned int site_id = 0; site_id < v1_genn::kSiteCount; site_id++) {
+        std::vector<unsigned int> local_cells(v1_genn::kL23EPerSite);
+        for(unsigned int local_id = 0; local_id < v1_genn::kL23EPerSite; local_id++) {
+            local_cells[local_id] = (site_id * v1_genn::kL23EPerSite) + local_id;
+        }
+        std::sort(
+            local_cells.begin(),
+            local_cells.end(),
+            [&](unsigned int lhs, unsigned int rhs) {
+                if(cell_counts[lhs] == cell_counts[rhs]) {
+                    return lhs < rhs;
+                }
+                return cell_counts[lhs] > cell_counts[rhs];
+            });
+        for(unsigned int index = 0; index < config.cells_per_site; index++) {
+            mask[local_cells[index]] = 1u;
+        }
+    }
+    return mask;
+}
+
+template <typename SpikeBatch>
+std::vector<double> countMaskedL23ESiteSpikesForTrials(
+    const SpikeBatch &batch,
+    const std::vector<TrialWindow> &trials,
+    const std::vector<unsigned char> &mask)
+{
+    if(mask.empty()) {
+        return {};
+    }
+    if(mask.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("L23 output assembly mask has unexpected size.");
+    }
+    std::vector<double> counts(static_cast<std::size_t>(trials.size()) * v1_genn::kSiteCount, 0.0);
+    if(trials.empty()) {
+        return counts;
+    }
+
+    const auto &spike_times = batch.first;
+    const auto &spike_ids = batch.second;
+    if(spike_times.size() != spike_ids.size()) {
+        throw std::runtime_error("Recorded spike times and ids do not have matching lengths.");
+    }
+
+    std::size_t trial_index = 0u;
+    for(std::size_t i = 0; i < spike_times.size() && trial_index < trials.size(); i++) {
+        const double spike_time = static_cast<double>(spike_times[i]);
+        while(trial_index < trials.size() && spike_time >= trials[trial_index].end_ms) {
+            trial_index++;
+        }
+        if(trial_index >= trials.size()) {
+            break;
+        }
+
+        const TrialWindow &trial = trials[trial_index];
+        if(spike_time < trial.measure_start_ms || spike_time >= trial.end_ms) {
+            continue;
+        }
+        const unsigned int neuron_id = static_cast<unsigned int>(spike_ids[i]);
+        if(neuron_id >= v1_genn::kNumL23E) {
+            throw std::runtime_error("Recorded L23E spike id exceeds neuron count.");
+        }
+        if(mask[neuron_id] != 0u) {
+            const unsigned int site_id = neuron_id / v1_genn::kL23EPerSite;
+            counts[(trial_index * v1_genn::kSiteCount) + site_id] += 1.0;
+        }
+    }
+    return counts;
+}
+
+std::vector<double> maskedPopulationRatesFromSiteCounts(
+    const std::vector<double> &site_counts,
+    const std::vector<TrialWindow> &trials,
+    unsigned int selected_cells_per_site)
+{
+    if(site_counts.empty()) {
+        return {};
+    }
+    if(site_counts.size() != static_cast<std::size_t>(trials.size()) * v1_genn::kSiteCount) {
+        throw std::runtime_error("L23 output assembly site-count vector has unexpected size.");
+    }
+    if(selected_cells_per_site == 0u) {
+        throw std::runtime_error("L23 output assembly selected cell count must be positive.");
+    }
+    std::vector<double> rates(trials.size(), 0.0);
+    const double selected_neuron_count =
+        static_cast<double>(selected_cells_per_site) * static_cast<double>(v1_genn::kSiteCount);
+    for(std::size_t trial_index = 0; trial_index < trials.size(); trial_index++) {
+        const double measurement_duration_s =
+            (trials[trial_index].end_ms - trials[trial_index].measure_start_ms) / 1000.0;
+        if(measurement_duration_s <= 0.0) {
+            throw std::runtime_error("Trial measurement duration must be positive.");
+        }
+        double spike_count = 0.0;
+        for(unsigned int site_id = 0; site_id < v1_genn::kSiteCount; site_id++) {
+            spike_count += site_counts[(trial_index * v1_genn::kSiteCount) + site_id];
+        }
+        rates[trial_index] = spike_count / (measurement_duration_s * selected_neuron_count);
+    }
+    return rates;
+}
+
+std::vector<CellTuningMetrics> filterCellTuningByMask(
+    const std::vector<CellTuningMetrics> &metrics,
+    const std::vector<unsigned char> &mask)
+{
+    if(mask.empty()) {
+        return {};
+    }
+    if(metrics.size() != mask.size()) {
+        throw std::runtime_error("L23 output assembly cell-tuning mask size mismatch.");
+    }
+    std::vector<CellTuningMetrics> selected;
+    for(std::size_t cell_id = 0; cell_id < metrics.size(); cell_id++) {
+        if(mask[cell_id] != 0u) {
+            selected.push_back(metrics[cell_id]);
+        }
+    }
+    return selected;
+}
+
+std::vector<MultiPhaseCellTuningMetrics> filterMultiPhaseCellTuningByMask(
+    const std::vector<MultiPhaseCellTuningMetrics> &metrics,
+    const std::vector<unsigned char> &mask)
+{
+    if(mask.empty()) {
+        return {};
+    }
+    if(metrics.size() != mask.size()) {
+        throw std::runtime_error("L23 output assembly multiphase cell-tuning mask size mismatch.");
+    }
+    std::vector<MultiPhaseCellTuningMetrics> selected;
+    for(std::size_t cell_id = 0; cell_id < metrics.size(); cell_id++) {
+        if(mask[cell_id] != 0u) {
+            selected.push_back(metrics[cell_id]);
+        }
+    }
+    return selected;
+}
+
 template <typename SpikeBatch>
 std::vector<double> countNeuronSpikesInWindow(
     const SpikeBatch &batch,
@@ -4050,7 +5951,8 @@ void writeVideoFFEventTraceEdgesCsv(
     const std::vector<std::pair<unsigned int, unsigned int>> &edges,
     const L4SpikeBatch &l4e_spikes,
     const L23SpikeBatch &l23e_spikes,
-    const std::vector<TrialWindow> &video_consolidation_trials)
+    const std::vector<TrialWindow> &video_consolidation_trials,
+    bool periodic_geometry_enabled)
 {
     std::ofstream output(path.c_str());
     if(!output) {
@@ -4158,13 +6060,9 @@ void writeVideoFFEventTraceEdgesCsv(
             countAndScoreCausalPairs(shuffle_pre_times, post_times, config.tau_pre_ms);
         const unsigned int pre_site = pre_id / v1_genn::kL4EPerSite;
         const unsigned int post_site = post_id / v1_genn::kL23EPerSite;
-        const auto pre_xy = v1_genn::siteIndexToXY(pre_site);
-        const auto post_xy = v1_genn::siteIndexToXY(post_site);
-        const double dx = static_cast<double>(pre_xy.first) - static_cast<double>(post_xy.first);
-        const double dy = static_cast<double>(pre_xy.second) - static_cast<double>(post_xy.second);
         output << pre_id << ","
                << post_id << ","
-               << std::sqrt((dx * dx) + (dy * dy)) << ","
+               << localGeometryDistanceSites(pre_site, post_site, periodic_geometry_enabled) << ","
                << static_cast<double>(weights_before[candidate.slot]) << ","
                << static_cast<double>(weights_after[candidate.slot]) << ","
                << candidate.delta << ","
@@ -8287,7 +10185,9 @@ void writeVideoPopulationRatesCsv(
     const std::vector<double> &l4e_rates,
     const std::vector<double> &l23e_rates,
     const std::vector<double> &l23pv_rates,
-    const std::vector<double> &l23som_rates)
+    const std::vector<double> &l23som_rates,
+    const L23OutputAssemblyConfig &l23_output_assembly_config,
+    const std::vector<double> &l23_output_rates)
 {
     std::ofstream output(path.c_str());
     if(!output) {
@@ -8312,6 +10212,9 @@ void writeVideoPopulationRatesCsv(
     writeRows("l23e", l23e_rates);
     writeRows("l23pv", l23pv_rates);
     writeRows("l23som", l23som_rates);
+    if(l23_output_assembly_config.enabled) {
+        writeRows(l23_output_assembly_config.population_name, l23_output_rates);
+    }
 }
 
 void writeVideoSiteRatesCsv(
@@ -8321,7 +10224,9 @@ void writeVideoSiteRatesCsv(
     const std::vector<double> &l4e_counts,
     const std::vector<double> &l23e_counts,
     const std::vector<double> &l23pv_counts,
-    const std::vector<double> &l23som_counts)
+    const std::vector<double> &l23som_counts,
+    const L23OutputAssemblyConfig &l23_output_assembly_config,
+    const std::vector<double> &l23_output_counts)
 {
     if(records.size() != video_trials.size()) {
         throw std::runtime_error("Video frame records and trial windows do not align.");
@@ -8351,6 +10256,12 @@ void writeVideoSiteRatesCsv(
     writeRows("l23e", l23e_counts, v1_genn::kL23EPerSite);
     writeRows("l23pv", l23pv_counts, v1_genn::kL23PVPerSite);
     writeRows("l23som", l23som_counts, v1_genn::kL23SOMPerSite);
+    if(l23_output_assembly_config.enabled) {
+        writeRows(
+            l23_output_assembly_config.population_name,
+            l23_output_counts,
+            l23_output_assembly_config.cells_per_site);
+    }
 }
 
 void writeVideoFrameSummaryCsv(
@@ -8359,7 +10270,9 @@ void writeVideoFrameSummaryCsv(
     const std::vector<double> &l4e_rates,
     const std::vector<double> &l23e_rates,
     const std::vector<double> &l23pv_rates,
-    const std::vector<double> &l23som_rates)
+    const std::vector<double> &l23som_rates,
+    const L23OutputAssemblyConfig &l23_output_assembly_config,
+    const std::vector<double> &l23_output_rates)
 {
     std::ofstream output(path.c_str());
     if(!output) {
@@ -8369,10 +10282,17 @@ void writeVideoFrameSummaryCsv(
        || l23pv_rates.size() != records.size() || l23som_rates.size() != records.size()) {
         throw std::runtime_error("Video frame summary rate vectors do not match frame records.");
     }
+    if(l23_output_assembly_config.enabled && l23_output_rates.size() != records.size()) {
+        throw std::runtime_error("Video frame summary L23 output rate vector does not match frame records.");
+    }
 
     output << std::fixed << std::setprecision(6);
     output << "repeat_index,frame_index,frame_start_ms,frame_end_ms"
-           << ",l4e_rate_hz,l23e_rate_hz,l23pv_rate_hz,l23som_rate_hz"
+           << ",l4e_rate_hz,l23e_rate_hz,l23pv_rate_hz,l23som_rate_hz";
+    if(l23_output_assembly_config.enabled) {
+        output << "," << l23_output_assembly_config.population_name << "_rate_hz";
+    }
+    output
            << ",l4e_drive_min,l4e_drive_mean,l4e_drive_max,l4e_drive_std\n";
     for(std::size_t i = 0; i < records.size(); i++) {
         output << records[i].repeat_index << ","
@@ -8382,7 +10302,11 @@ void writeVideoFrameSummaryCsv(
                << l4e_rates[i] << ","
                << l23e_rates[i] << ","
                << l23pv_rates[i] << ","
-               << l23som_rates[i] << ","
+               << l23som_rates[i];
+        if(l23_output_assembly_config.enabled) {
+            output << "," << l23_output_rates[i];
+        }
+        output << ","
                << records[i].drive_min << ","
                << records[i].drive_mean << ","
                << records[i].drive_max << ","
@@ -8842,6 +10766,40 @@ void writeVideoConsolidationMetricsCsv(
     const VideoFFCoactivityCompetitionConfig &video_ff_coactivity_competition_config,
     unsigned int video_ff_coactivity_competition_application_count,
     const WeightDeltaMetrics &video_ff_coactivity_competition_l4_l23_delta_metrics,
+    bool video_ff_bcm_competition_active,
+    const VideoFFBCMCompetitionConfig &video_ff_bcm_competition_config,
+    unsigned int video_ff_bcm_competition_application_count,
+    unsigned int video_ff_bcm_competition_activity_window_count,
+    const WeightDeltaMetrics &video_ff_bcm_competition_l4_l23_delta_metrics,
+    const ActivityScoreMetrics &video_ff_bcm_competition_activity_score_metrics,
+    const IncomingMassRatioMetrics &video_ff_bcm_competition_incoming_mass_metrics,
+    bool video_l23e_pv_recruitment_active,
+    const VideoL23EPVRecruitmentConfig &video_l23e_pv_recruitment_config,
+    unsigned int video_l23e_pv_recruitment_application_count,
+    unsigned int video_l23e_pv_recruitment_activity_window_count,
+    const WeightDeltaMetrics &video_l23e_pv_recruitment_delta_metrics,
+    const ActivityScoreMetrics &video_l23e_pv_recruitment_activity_score_metrics,
+    bool video_l4e_l23pv_recruitment_active,
+    const VideoL4EL23PVRecruitmentConfig &video_l4e_l23pv_recruitment_config,
+    unsigned int video_l4e_l23pv_recruitment_application_count,
+    unsigned int video_l4e_l23pv_recruitment_activity_window_count,
+    const WeightDeltaMetrics &video_l4e_l23pv_recruitment_delta_metrics,
+    const ActivityScoreMetrics &video_l4e_l23pv_recruitment_activity_score_metrics,
+    bool video_l23e_intrinsic_homeostasis_active,
+    const VideoL23EIntrinsicHomeostasisConfig &video_l23e_intrinsic_homeostasis_config,
+    unsigned int video_l23e_intrinsic_homeostasis_application_count,
+    unsigned int video_l23e_intrinsic_homeostasis_calibration_window_count,
+    const IntrinsicHomeostasisMetrics &video_l23e_intrinsic_homeostasis_metrics,
+    bool video_l23_push_pull_inhibition_active,
+    const VideoL23PushPullInhibitionConfig &video_l23_push_pull_inhibition_config,
+    unsigned int video_l23_push_pull_application_count,
+    unsigned int video_l23_push_pull_activity_window_count,
+    const PushPullInhibitionMetrics &video_l23_push_pull_inhibition_metrics,
+    const ActivityScoreMetrics &video_l23_push_pull_ff_activity_score_metrics,
+    const ActivityScoreMetrics &video_l23_push_pull_pv_activity_score_metrics,
+    const ActivityScoreMetrics &video_l23_push_pull_som_activity_score_metrics,
+    const WeightDeltaMetrics &video_l23_push_pull_pv_delta_metrics,
+    const WeightDeltaMetrics &video_l23_push_pull_som_delta_metrics,
     bool video_ff_event_trace_active,
     const VideoFFEventTraceConfig &video_ff_event_trace_config,
     unsigned int video_ff_event_trace_application_count,
@@ -9002,6 +10960,425 @@ void writeVideoConsolidationMetricsCsv(
         video_ff_coactivity_competition_l4_l23_delta_metrics.mean_gain_ratio);
     writeMetricRow(
         output,
+        "feedforward_l4_l23_bcm_competition_enabled",
+        video_ff_bcm_competition_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_strength",
+        video_ff_bcm_competition_config.strength);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_application_count",
+        static_cast<double>(video_ff_bcm_competition_application_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_score_used",
+        video_ff_bcm_competition_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_window_count",
+        static_cast<double>(video_ff_bcm_competition_activity_window_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_score_active_edge_count",
+        static_cast<double>(video_ff_bcm_competition_activity_score_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_score_positive_edge_count",
+        static_cast<double>(video_ff_bcm_competition_activity_score_metrics.positive_edge_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_score_positive_frac",
+        video_ff_bcm_competition_activity_score_metrics.positive_frac);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_score_mean",
+        video_ff_bcm_competition_activity_score_metrics.mean_score);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_activity_score_max",
+        video_ff_bcm_competition_activity_score_metrics.max_score);
+    writeMetricRow(output, "feedforward_l4_l23_bcm_competition_local_postsynaptic_only", 1.0);
+    writeMetricRow(output, "feedforward_l4_l23_bcm_competition_future_frame_used", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_bcm_competition_target_label_used", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_bcm_competition_orientation_label_used", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_bcm_competition_heldout_frames_used", 0.0);
+    writeMetricRow(output, "feedforward_l4_l23_bcm_competition_hva_feedback_enabled", 0.0);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_active_edge_count",
+        static_cast<double>(video_ff_bcm_competition_l4_l23_delta_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_changed_frac",
+        video_ff_bcm_competition_l4_l23_delta_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_mean_delta",
+        video_ff_bcm_competition_l4_l23_delta_metrics.mean_delta);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_p95_abs_delta",
+        video_ff_bcm_competition_l4_l23_delta_metrics.p95_abs_delta);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_max_abs_delta",
+        video_ff_bcm_competition_l4_l23_delta_metrics.max_abs_delta);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_mean_gain_ratio",
+        video_ff_bcm_competition_l4_l23_delta_metrics.mean_gain_ratio);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_incoming_mass_post_count",
+        static_cast<double>(video_ff_bcm_competition_incoming_mass_metrics.post_count));
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_incoming_mass_min_ratio",
+        video_ff_bcm_competition_incoming_mass_metrics.min_ratio);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_incoming_mass_mean_ratio",
+        video_ff_bcm_competition_incoming_mass_metrics.mean_ratio);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_incoming_mass_max_ratio",
+        video_ff_bcm_competition_incoming_mass_metrics.max_ratio);
+    writeMetricRow(
+        output,
+        "feedforward_l4_l23_bcm_competition_incoming_mass_p95_abs_log_ratio",
+        video_ff_bcm_competition_incoming_mass_metrics.p95_abs_log_ratio);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_enabled",
+        video_l23e_pv_recruitment_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_strength",
+        video_l23e_pv_recruitment_config.strength);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_mass_max_ratio",
+        video_l23e_pv_recruitment_config.mass_max_ratio);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_application_count",
+        static_cast<double>(video_l23e_pv_recruitment_application_count));
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_score_used",
+        video_l23e_pv_recruitment_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_window_count",
+        static_cast<double>(video_l23e_pv_recruitment_activity_window_count));
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_score_active_edge_count",
+        static_cast<double>(video_l23e_pv_recruitment_activity_score_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_score_positive_edge_count",
+        static_cast<double>(video_l23e_pv_recruitment_activity_score_metrics.positive_edge_count));
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_score_positive_frac",
+        video_l23e_pv_recruitment_activity_score_metrics.positive_frac);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_score_mean",
+        video_l23e_pv_recruitment_activity_score_metrics.mean_score);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_activity_score_max",
+        video_l23e_pv_recruitment_activity_score_metrics.max_score);
+    writeMetricRow(output, "l23e_l23pv_recruitment_local_postsynaptic_only", 1.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_future_frame_used", 0.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_target_label_used", 0.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_orientation_label_used", 0.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_heldout_frames_used", 0.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_hva_feedback_enabled", 0.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_validation_target_used", 0.0);
+    writeMetricRow(output, "l23e_l23pv_recruitment_global_normalization_used", 0.0);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_active_edge_count",
+        static_cast<double>(video_l23e_pv_recruitment_delta_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_changed_frac",
+        video_l23e_pv_recruitment_delta_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_mean_delta",
+        video_l23e_pv_recruitment_delta_metrics.mean_delta);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_p95_abs_delta",
+        video_l23e_pv_recruitment_delta_metrics.p95_abs_delta);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_max_abs_delta",
+        video_l23e_pv_recruitment_delta_metrics.max_abs_delta);
+    writeMetricRow(
+        output,
+        "l23e_l23pv_recruitment_mean_gain_ratio",
+        video_l23e_pv_recruitment_delta_metrics.mean_gain_ratio);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_enabled",
+        video_l4e_l23pv_recruitment_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_strength",
+        video_l4e_l23pv_recruitment_config.strength);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_mass_max_ratio",
+        video_l4e_l23pv_recruitment_config.mass_max_ratio);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_top_frac",
+        video_l4e_l23pv_recruitment_config.top_frac);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_application_count",
+        static_cast<double>(video_l4e_l23pv_recruitment_application_count));
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_score_used",
+        video_l4e_l23pv_recruitment_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_window_count",
+        static_cast<double>(video_l4e_l23pv_recruitment_activity_window_count));
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_score_active_edge_count",
+        static_cast<double>(video_l4e_l23pv_recruitment_activity_score_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_score_positive_edge_count",
+        static_cast<double>(video_l4e_l23pv_recruitment_activity_score_metrics.positive_edge_count));
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_score_positive_frac",
+        video_l4e_l23pv_recruitment_activity_score_metrics.positive_frac);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_score_mean",
+        video_l4e_l23pv_recruitment_activity_score_metrics.mean_score);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_activity_score_max",
+        video_l4e_l23pv_recruitment_activity_score_metrics.max_score);
+    writeMetricRow(output, "l4e_l23pv_recruitment_local_postsynaptic_only", 1.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_current_frame_activity_only", 1.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_future_frame_used", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_target_label_used", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_orientation_label_used", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_heldout_frames_used", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_hva_feedback_enabled", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_validation_target_used", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_global_normalization_used", 0.0);
+    writeMetricRow(output, "l4e_l23pv_recruitment_excitatory_positive_only", 1.0);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_active_edge_count",
+        static_cast<double>(video_l4e_l23pv_recruitment_delta_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_changed_frac",
+        video_l4e_l23pv_recruitment_delta_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_positive_edge_frac",
+        video_l4e_l23pv_recruitment_delta_metrics.positive_edge_frac);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_negative_edge_frac",
+        video_l4e_l23pv_recruitment_delta_metrics.negative_edge_frac);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_mean_delta",
+        video_l4e_l23pv_recruitment_delta_metrics.mean_delta);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_p95_abs_delta",
+        video_l4e_l23pv_recruitment_delta_metrics.p95_abs_delta);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_p95_changed_abs_delta",
+        video_l4e_l23pv_recruitment_delta_metrics.p95_changed_abs_delta);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_max_abs_delta",
+        video_l4e_l23pv_recruitment_delta_metrics.max_abs_delta);
+    writeMetricRow(
+        output,
+        "l4e_l23pv_recruitment_mean_gain_ratio",
+        video_l4e_l23pv_recruitment_delta_metrics.mean_gain_ratio);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_enabled",
+        video_l23e_intrinsic_homeostasis_active ? 1.0 : 0.0);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_target_hz",
+        video_l23e_intrinsic_homeostasis_config.target_hz);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_strength_na_per_hz",
+        video_l23e_intrinsic_homeostasis_config.strength_na_per_hz);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_max_suppression_na",
+        video_l23e_intrinsic_homeostasis_config.max_suppression_na);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_application_count",
+        static_cast<double>(video_l23e_intrinsic_homeostasis_application_count));
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_calibration_window_count",
+        static_cast<double>(video_l23e_intrinsic_homeostasis_calibration_window_count));
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_cell_count",
+        static_cast<double>(video_l23e_intrinsic_homeostasis_metrics.cell_count));
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_changed_frac",
+        video_l23e_intrinsic_homeostasis_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_mean_adjustment_na",
+        video_l23e_intrinsic_homeostasis_metrics.mean_adjustment_na);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_max_abs_adjustment_na",
+        video_l23e_intrinsic_homeostasis_metrics.max_abs_adjustment_na);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_mean_observed_rate_hz",
+        video_l23e_intrinsic_homeostasis_metrics.mean_rate_hz);
+    writeMetricRow(
+        output,
+        "l23e_intrinsic_homeostasis_max_observed_rate_hz",
+        video_l23e_intrinsic_homeostasis_metrics.max_rate_hz);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_l23e_only", 1.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_cell_local_only", 1.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_future_frame_used", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_target_label_used", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_orientation_label_used", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_heldout_frames_used", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_hva_feedback_enabled", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_validation_target_used", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_global_normalization_used", 0.0);
+    writeMetricRow(output, "l23e_intrinsic_homeostasis_underactive_boost_enabled", 0.0);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_enabled",
+        video_l23_push_pull_inhibition_active ? 1.0 : 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_strength", video_l23_push_pull_inhibition_config.strength);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_min_post_spikes",
+        video_l23_push_pull_inhibition_config.min_post_spikes);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_application_count",
+        static_cast<double>(video_l23_push_pull_application_count));
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_activity_window_count",
+        static_cast<double>(video_l23_push_pull_activity_window_count));
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_active_post_cell_count",
+        static_cast<double>(video_l23_push_pull_inhibition_metrics.active_post_cell_count));
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_targeted_post_cell_count",
+        static_cast<double>(video_l23_push_pull_inhibition_metrics.targeted_post_cell_count));
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_targeted_post_cell_frac",
+        video_l23_push_pull_inhibition_metrics.targeted_post_cell_frac);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_mean_weak_support_gate",
+        video_l23_push_pull_inhibition_metrics.mean_weak_support_gate);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_max_weak_support_gate",
+        video_l23_push_pull_inhibition_metrics.max_weak_support_gate);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_ff_activity_score_positive_frac",
+        video_l23_push_pull_ff_activity_score_metrics.positive_frac);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_pv_activity_score_positive_frac",
+        video_l23_push_pull_pv_activity_score_metrics.positive_frac);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_som_activity_score_positive_frac",
+        video_l23_push_pull_som_activity_score_metrics.positive_frac);
+    writeMetricRow(output, "l23_push_pull_inhibition_local_postsynaptic_only", 1.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_current_frame_activity_only", 1.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_feedforward_support_per_afferent", 1.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_raw_support_sum_gate_used", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_local_pool_spread_enabled", 1.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_future_frame_used", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_target_label_used", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_orientation_label_used", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_heldout_frames_used", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_hva_feedback_enabled", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_validation_target_used", 0.0);
+    writeMetricRow(output, "l23_push_pull_inhibition_global_normalization_used", 0.0);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23pv_to_l23e_active_edge_count",
+        static_cast<double>(video_l23_push_pull_pv_delta_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23pv_to_l23e_changed_frac",
+        video_l23_push_pull_pv_delta_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23pv_to_l23e_mean_delta",
+        video_l23_push_pull_pv_delta_metrics.mean_delta);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23pv_to_l23e_p95_abs_delta",
+        video_l23_push_pull_pv_delta_metrics.p95_abs_delta);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23pv_to_l23e_p95_changed_abs_delta",
+        video_l23_push_pull_pv_delta_metrics.p95_changed_abs_delta);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23som_to_l23e_active_edge_count",
+        static_cast<double>(video_l23_push_pull_som_delta_metrics.active_edge_count));
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23som_to_l23e_changed_frac",
+        video_l23_push_pull_som_delta_metrics.changed_frac);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23som_to_l23e_mean_delta",
+        video_l23_push_pull_som_delta_metrics.mean_delta);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23som_to_l23e_p95_abs_delta",
+        video_l23_push_pull_som_delta_metrics.p95_abs_delta);
+    writeMetricRow(
+        output,
+        "l23_push_pull_inhibition_l23som_to_l23e_p95_changed_abs_delta",
+        video_l23_push_pull_som_delta_metrics.p95_changed_abs_delta);
+    writeMetricRow(
+        output,
         "feedforward_l4_l23_event_trace_enabled",
         video_ff_event_trace_active ? 1.0 : 0.0);
     writeMetricRow(output, "feedforward_l4_l23_event_trace_tau_pre_ms", video_ff_event_trace_config.tau_pre_ms);
@@ -9089,6 +11466,7 @@ void writeVideoConsolidationMetricsCsv(
 void writeL4IntersiteDiagnosticsCsv(
     const std::string &path,
     const L4IntersiteConfig &config,
+    const PeriodicLocalGeometryConfig &periodic_local_geometry_config,
     const std::vector<double> &radii_sites,
     const std::vector<RetinotopicSizeMetrics> &size_validation_metrics,
     const SweepResult &baseline,
@@ -9113,35 +11491,45 @@ void writeL4IntersiteDiagnosticsCsv(
     writeMetricRow(output, "l4ee_effective_weight", config.enabled ? (v1_genn::kL4EEWeight * config.l4ee_scale) : 0.0);
     writeMetricRow(output, "l4e_to_l4pv_effective_weight", config.enabled ? (v1_genn::kL4EToPVWeight * config.l4e_to_l4pv_scale) : 0.0);
     writeMetricRow(output, "l4pv_to_l4e_effective_weight", config.enabled ? (v1_genn::kL4PVToEWeight * config.l4pv_to_l4e_scale) : 0.0);
+    writeMetricRow(output, "periodic_local_geometry_enabled", periodic_local_geometry_config.anyEnabled() ? 1.0 : 0.0);
+    writeMetricRow(output, "periodic_local_geometry_global_enabled", periodic_local_geometry_config.global_enabled ? 1.0 : 0.0);
+    writeMetricRow(output, "periodic_l4_intersite_geometry_enabled", periodic_local_geometry_config.l4_intersite_enabled ? 1.0 : 0.0);
+    writeMetricRow(output, "diagnostic_distance_uses_periodic_geometry", periodic_local_geometry_config.l4_intersite_enabled ? 1.0 : 0.0);
 
     const auto l4ee_edges = config.enabled ? buildLocalIntersiteConnectivity(
         v1_genn::kL4EPerSite,
         v1_genn::kL4EPerSite,
-        config.radius) : std::vector<std::pair<unsigned int, unsigned int>>{};
+        config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled) : std::vector<std::pair<unsigned int, unsigned int>>{};
     const auto l4e_pv_edges = config.enabled ? buildLocalIntersiteConnectivity(
         v1_genn::kL4EPerSite,
         v1_genn::kL4PVPerSite,
-        config.radius) : std::vector<std::pair<unsigned int, unsigned int>>{};
+        config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled) : std::vector<std::pair<unsigned int, unsigned int>>{};
     const auto l4pv_e_edges = config.enabled ? buildLocalIntersiteConnectivity(
         v1_genn::kL4PVPerSite,
         v1_genn::kL4EPerSite,
-        config.radius) : std::vector<std::pair<unsigned int, unsigned int>>{};
+        config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled) : std::vector<std::pair<unsigned int, unsigned int>>{};
 
     const ConnectivityStats l4ee_stats = summarizeConnectivity(
         l4ee_edges,
         v1_genn::kL4EPerSite,
         v1_genn::kL4EPerSite,
-        config.radius);
+        config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled);
     const ConnectivityStats l4e_pv_stats = summarizeConnectivity(
         l4e_pv_edges,
         v1_genn::kL4EPerSite,
         v1_genn::kL4PVPerSite,
-        config.radius);
+        config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled);
     const ConnectivityStats l4pv_e_stats = summarizeConnectivity(
         l4pv_e_edges,
         v1_genn::kL4PVPerSite,
         v1_genn::kL4EPerSite,
-        config.radius);
+        config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled);
 
     auto writeStats = [&](const std::string &prefix, const ConnectivityStats &stats) {
         writeMetricRow(output, prefix + "_edge_count", static_cast<double>(stats.edge_count));
@@ -9210,7 +11598,8 @@ void writeL23EESpecificityCsv(
     const std::vector<float> &weights_before,
     const std::vector<float> &weights_after,
     const std::vector<std::pair<unsigned int, unsigned int>> &edges,
-    const std::vector<CellTuningMetrics> &l23e_cell_tuning)
+    const std::vector<CellTuningMetrics> &l23e_cell_tuning,
+    bool periodic_geometry_enabled)
 {
     if(weights_before.size() != weights_after.size()) {
         throw std::runtime_error("L23E->L23E specificity export requires aligned before/after weight vectors.");
@@ -9256,11 +11645,8 @@ void writeL23EESpecificityCsv(
 
         const unsigned int pre_site = pre_id / v1_genn::kL23EPerSite;
         const unsigned int post_site = post_id / v1_genn::kL23EPerSite;
-        const auto pre_xy = v1_genn::siteIndexToXY(pre_site);
-        const auto post_xy = v1_genn::siteIndexToXY(post_site);
-        const double dx = static_cast<double>(pre_xy.first) - static_cast<double>(post_xy.first);
-        const double dy = static_cast<double>(pre_xy.second) - static_cast<double>(post_xy.second);
-        const double distance_sites = std::sqrt((dx * dx) + (dy * dy));
+        const double distance_sites =
+            localGeometryDistanceSites(pre_site, post_site, periodic_geometry_enabled);
         const double pre_pref_rad = v1_genn::sitePreferredOrientationFromIndex(pre_site);
         const double post_pref_rad = v1_genn::sitePreferredOrientationFromIndex(post_site);
         const double delta_pref_rad = v1_genn::circularOrientationDifference(pre_pref_rad, post_pref_rad);
@@ -9306,7 +11692,11 @@ void writeSummaryFiles(
     double l23ee_initial_active_mean,
     double l23ee_initial_active_gini,
     double l23ee_initial_top10_mass_share,
+    double l23ee_stdp_aplus,
+    double l23ee_stdp_aminus,
     double l23pv_context_output_scale,
+    double l4e_to_l23pv_weight_scale,
+    const L23EAdaptationConfig &l23e_adaptation_config,
     const OrientationContextAssayConfig &orientation_context_assay_config,
     const SensoryAssayConfig &sensory_assay_config,
     const VideoReplayConfig &video_replay_config,
@@ -9323,6 +11713,35 @@ void writeSummaryFiles(
     const VideoFFCoactivityCompetitionConfig &video_ff_coactivity_competition_config,
     unsigned int video_ff_coactivity_competition_application_count,
     const WeightDeltaMetrics &video_ff_coactivity_competition_l4_l23_delta_metrics,
+    const VideoFFBCMCompetitionConfig &video_ff_bcm_competition_config,
+    unsigned int video_ff_bcm_competition_application_count,
+    unsigned int video_ff_bcm_competition_activity_window_count,
+    const WeightDeltaMetrics &video_ff_bcm_competition_l4_l23_delta_metrics,
+    const ActivityScoreMetrics &video_ff_bcm_competition_activity_score_metrics,
+    const IncomingMassRatioMetrics &video_ff_bcm_competition_incoming_mass_metrics,
+    const VideoL23EPVRecruitmentConfig &video_l23e_pv_recruitment_config,
+    unsigned int video_l23e_pv_recruitment_application_count,
+    unsigned int video_l23e_pv_recruitment_activity_window_count,
+    const WeightDeltaMetrics &video_l23e_pv_recruitment_delta_metrics,
+    const ActivityScoreMetrics &video_l23e_pv_recruitment_activity_score_metrics,
+    const VideoL4EL23PVRecruitmentConfig &video_l4e_l23pv_recruitment_config,
+    unsigned int video_l4e_l23pv_recruitment_application_count,
+    unsigned int video_l4e_l23pv_recruitment_activity_window_count,
+    const WeightDeltaMetrics &video_l4e_l23pv_recruitment_delta_metrics,
+    const ActivityScoreMetrics &video_l4e_l23pv_recruitment_activity_score_metrics,
+    const VideoL23EIntrinsicHomeostasisConfig &video_l23e_intrinsic_homeostasis_config,
+    unsigned int video_l23e_intrinsic_homeostasis_application_count,
+    unsigned int video_l23e_intrinsic_homeostasis_calibration_window_count,
+    const IntrinsicHomeostasisMetrics &video_l23e_intrinsic_homeostasis_metrics,
+    const VideoL23PushPullInhibitionConfig &video_l23_push_pull_inhibition_config,
+    unsigned int video_l23_push_pull_application_count,
+    unsigned int video_l23_push_pull_activity_window_count,
+    const PushPullInhibitionMetrics &video_l23_push_pull_inhibition_metrics,
+    const ActivityScoreMetrics &video_l23_push_pull_ff_activity_score_metrics,
+    const ActivityScoreMetrics &video_l23_push_pull_pv_activity_score_metrics,
+    const ActivityScoreMetrics &video_l23_push_pull_som_activity_score_metrics,
+    const WeightDeltaMetrics &video_l23_push_pull_pv_delta_metrics,
+    const WeightDeltaMetrics &video_l23_push_pull_som_delta_metrics,
     const VideoFFEventTraceConfig &video_ff_event_trace_config,
     unsigned int video_ff_event_trace_application_count,
     const WeightDeltaMetrics &video_ff_event_trace_l4_l23_delta_metrics,
@@ -9330,6 +11749,9 @@ void writeSummaryFiles(
     const PostVideoInhibitoryStabilizationConfig &post_video_inhibitory_stabilization_config,
     unsigned int post_video_inhibitory_stabilization_application_count,
     unsigned int post_video_inhibitory_stabilization_tail_gate_post_cell_count,
+    unsigned int post_video_inhibitory_stabilization_all_site_application_count,
+    unsigned int post_video_inhibitory_stabilization_boundary_extra_application_count,
+    unsigned int post_video_inhibitory_stabilization_boundary_extra_post_cell_count,
     const WeightDeltaMetrics &post_video_inhibitory_stabilization_l23pv_to_l23e_delta_metrics,
     const WeightDeltaMetrics &post_video_inhibitory_stabilization_l23som_to_l23e_delta_metrics,
     const VideoEventTimingConfig &video_event_timing_config,
@@ -9339,7 +11761,17 @@ void writeSummaryFiles(
     const VideoConsolidationMetrics &video_consolidation_metrics,
     const HVAPredictorConfig &hva_predictor_config,
     const HVAPredictorResult &hva_predictor_result,
-    const L23ESOMBroadRecruitmentConfig &l23e_som_broad_recruitment_config)
+    const PeriodicLocalGeometryConfig &periodic_local_geometry_config,
+    const BoundaryRingPVCompensationConfig &boundary_ring_pv_compensation_config,
+    const BoundaryRingPVCompensationMetrics &boundary_ring_pv_compensation_metrics,
+    const L23ESOMBroadRecruitmentConfig &l23e_som_broad_recruitment_config,
+    const L23WithinSiteCompetitionConfig &l23_within_site_competition_config,
+    const L23OutputAssemblyConfig &l23_output_assembly_config,
+    std::size_t total_recording_steps,
+    std::size_t requested_recording_buffer_steps,
+    std::size_t recording_buffer_steps,
+    std::size_t recording_buffer_max_steps,
+    unsigned int recording_segment_flush_count)
 {
     const double l23_osi_delta = post.l23_median_osi - baseline.l23_median_osi;
     const double final_post_video_l23_osi_delta =
@@ -9357,6 +11789,18 @@ void writeSummaryFiles(
         video_ff_heterosynaptic_competition_config.enabled && video_ff_stdp_active;
     const bool video_ff_coactivity_competition_active =
         video_ff_coactivity_competition_config.enabled && video_ff_stdp_active;
+    const bool video_ff_bcm_competition_active =
+        video_ff_bcm_competition_config.enabled && video_ff_stdp_active;
+    const bool video_l23e_pv_recruitment_active =
+        video_l23e_pv_recruitment_config.enabled && video_ff_stdp_active;
+    const bool video_l4e_l23pv_recruitment_active =
+        video_l4e_l23pv_recruitment_config.enabled && video_ff_stdp_active;
+    const bool video_l23e_intrinsic_homeostasis_active =
+        video_l23e_intrinsic_homeostasis_config.enabled
+        && video_consolidation_config.enabled;
+    const bool video_l23_push_pull_inhibition_active =
+        video_l23_push_pull_inhibition_config.enabled
+        && video_consolidation_config.enabled;
     const bool video_ff_event_trace_active =
         video_ff_event_trace_config.enabled && video_ff_stdp_active;
     const bool post_video_inhibitory_stabilization_active =
@@ -9365,6 +11809,33 @@ void writeSummaryFiles(
     const bool video_recurrent_only_consolidation_active =
         video_recurrent_only_consolidation_config.enabled
         && video_consolidation_config.enabled;
+    const unsigned int validation_core_side =
+        getEnvUnsignedOrDefault("V1_VALIDATION_CORE_SIDE", 0u);
+    const bool validation_core_enabled = validation_core_side > 0u;
+    if(validation_core_enabled && validation_core_side > v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_VALIDATION_CORE_SIDE must be <= V1_SHEET_SIDE.");
+    }
+    const unsigned int validation_core_default_offset =
+        validation_core_enabled ? ((v1_genn::kSheetSide - validation_core_side) / 2u) : 0u;
+    const unsigned int validation_core_offset_x =
+        validation_core_enabled
+            ? getEnvUnsignedOrDefault("V1_VALIDATION_CORE_OFFSET_X", validation_core_default_offset)
+            : 0u;
+    const unsigned int validation_core_offset_y =
+        validation_core_enabled
+            ? getEnvUnsignedOrDefault("V1_VALIDATION_CORE_OFFSET_Y", validation_core_default_offset)
+            : 0u;
+    if(validation_core_enabled
+       && (validation_core_offset_x + validation_core_side > v1_genn::kSheetSide
+           || validation_core_offset_y + validation_core_side > v1_genn::kSheetSide)) {
+        throw std::runtime_error("V1_VALIDATION_CORE_OFFSET_X/Y + V1_VALIDATION_CORE_SIDE must fit inside V1_SHEET_SIDE.");
+    }
+    const unsigned int validation_core_site_count =
+        validation_core_enabled
+            ? (validation_core_side * validation_core_side)
+            : v1_genn::kSiteCount;
+    const unsigned int validation_halo_site_count =
+        v1_genn::kSiteCount - validation_core_site_count;
     const bool feedforward_orientation_prior_enabled = (l4_l23_orientation_config.bias_strength > 0.0);
     const bool neutral_density_match_active =
         l4_l23_orientation_config.neutral_density_match_enabled
@@ -9383,6 +11854,17 @@ void writeSummaryFiles(
     }
     csv << std::fixed << std::setprecision(6);
     csv << "metric,value\n";
+    csv << "validation_sheet_side," << v1_genn::kSheetSide << "\n";
+    csv << "validation_core_enabled," << (validation_core_enabled ? 1.0 : 0.0) << "\n";
+    csv << "validation_core_side," << validation_core_side << "\n";
+    csv << "validation_core_offset_x_sites," << validation_core_offset_x << "\n";
+    csv << "validation_core_offset_y_sites," << validation_core_offset_y << "\n";
+    csv << "validation_core_site_count," << validation_core_site_count << "\n";
+    csv << "validation_halo_site_count," << validation_halo_site_count << "\n";
+    csv << "validation_core_dynamics_changed,0.000000\n";
+    csv << "validation_core_labels_used,0.000000\n";
+    csv << "validation_core_future_frame_used,0.000000\n";
+    csv << "validation_core_output_assembly_used,0.000000\n";
     csv << "baseline_l4_median_osi," << baseline.l4_median_osi << "\n";
     csv << "baseline_l23_median_osi," << baseline.l23_median_osi << "\n";
     csv << "post_l4_median_osi," << post.l4_median_osi << "\n";
@@ -9431,8 +11913,20 @@ void writeSummaryFiles(
     csv << "l23ee_initial_active_mean," << l23ee_initial_active_mean << "\n";
     csv << "l23ee_initial_active_gini," << l23ee_initial_active_gini << "\n";
     csv << "l23ee_initial_top10_mass_share," << l23ee_initial_top10_mass_share << "\n";
+    csv << "l23ee_stdp_aplus," << l23ee_stdp_aplus << "\n";
+    csv << "l23ee_stdp_aminus," << l23ee_stdp_aminus << "\n";
     csv << "l23pv_context_output_scale," << l23pv_context_output_scale << "\n";
     csv << "l23pv_context_output_ablation_active," << (l23pv_context_output_scale != 1.0 ? 1.0 : 0.0) << "\n";
+    csv << "l4e_to_l23pv_weight_scale," << l4e_to_l23pv_weight_scale << "\n";
+    csv << "l23e_adaptation_enabled," << (l23e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23e_adaptation_tau_ms," << l23e_adaptation_config.tau_ms << "\n";
+    csv << "l23e_adaptation_spike_na," << l23e_adaptation_config.spike_na << "\n";
+    csv << "l23e_adaptation_l23e_only," << (l23e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23e_adaptation_cell_local_only," << (l23e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23e_adaptation_future_frame_used,0.000000\n";
+    csv << "l23e_adaptation_target_label_used,0.000000\n";
+    csv << "l23e_adaptation_validation_target_used,0.000000\n";
+    csv << "l23e_adaptation_global_normalization_used,0.000000\n";
     csv << "inhibitory_orientation_rule_enabled,0.000000\n";
     csv << "orientation_context_assay_enabled," << (orientation_context_assay_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "orientation_context_center_radius_sites," << orientation_context_assay_config.center_radius_sites << "\n";
@@ -9453,6 +11947,14 @@ void writeSummaryFiles(
         << (static_cast<std::size_t>(video_replay_config.effective_frame_count)
             * static_cast<std::size_t>(video_replay_config.repeat_count)) << "\n";
     csv << "video_frame_ms," << video_replay_config.frame_ms << "\n";
+    csv << "recording_total_steps," << total_recording_steps << "\n";
+    csv << "recording_buffer_requested_steps," << requested_recording_buffer_steps << "\n";
+    csv << "recording_buffer_allocated_steps," << recording_buffer_steps << "\n";
+    csv << "recording_buffer_max_steps_env," << recording_buffer_max_steps << "\n";
+    csv << "recording_buffer_cap_active,"
+        << ((recording_buffer_max_steps > 0u && recording_buffer_steps < requested_recording_buffer_steps) ? 1.0 : 0.0)
+        << "\n";
+    csv << "recording_segment_flush_count," << recording_segment_flush_count << "\n";
     csv << "video_feedback_disabled," << (video_replay_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "video_training_enabled," << (video_consolidation_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "video_ff_stdp_enabled," << (video_ff_stdp_active ? 1.0 : 0.0) << "\n";
@@ -9538,6 +12040,240 @@ void writeSummaryFiles(
         << video_ff_coactivity_competition_l4_l23_delta_metrics.max_abs_delta << "\n";
     csv << "video_ff_coactivity_competition_mean_gain_ratio,"
         << video_ff_coactivity_competition_l4_l23_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_ff_bcm_competition_enabled,"
+        << (video_ff_bcm_competition_active ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_bcm_competition_strength,"
+        << video_ff_bcm_competition_config.strength << "\n";
+    csv << "video_ff_bcm_competition_mass_min_ratio,"
+        << video_ff_bcm_competition_config.mass_min_ratio << "\n";
+    csv << "video_ff_bcm_competition_mass_max_ratio,"
+        << video_ff_bcm_competition_config.mass_max_ratio << "\n";
+    csv << "video_ff_bcm_competition_application_count,"
+        << video_ff_bcm_competition_application_count << "\n";
+    csv << "video_ff_bcm_competition_activity_score_used,"
+        << (video_ff_bcm_competition_active ? 1.0 : 0.0) << "\n";
+    csv << "video_ff_bcm_competition_activity_window_count,"
+        << video_ff_bcm_competition_activity_window_count << "\n";
+    csv << "video_ff_bcm_competition_activity_score_active_edge_count,"
+        << video_ff_bcm_competition_activity_score_metrics.active_edge_count << "\n";
+    csv << "video_ff_bcm_competition_activity_score_positive_edge_count,"
+        << video_ff_bcm_competition_activity_score_metrics.positive_edge_count << "\n";
+    csv << "video_ff_bcm_competition_activity_score_positive_frac,"
+        << video_ff_bcm_competition_activity_score_metrics.positive_frac << "\n";
+    csv << "video_ff_bcm_competition_activity_score_mean,"
+        << video_ff_bcm_competition_activity_score_metrics.mean_score << "\n";
+    csv << "video_ff_bcm_competition_activity_score_max,"
+        << video_ff_bcm_competition_activity_score_metrics.max_score << "\n";
+    csv << "video_ff_bcm_competition_local_postsynaptic_only,1.000000\n";
+    csv << "video_ff_bcm_competition_future_frame_used,0.000000\n";
+    csv << "video_ff_bcm_competition_target_label_used,0.000000\n";
+    csv << "video_ff_bcm_competition_orientation_label_used,0.000000\n";
+    csv << "video_ff_bcm_competition_heldout_frames_used,0.000000\n";
+    csv << "video_ff_bcm_competition_hva_feedback_enabled,0.000000\n";
+    csv << "video_ff_bcm_competition_active_edge_count,"
+        << video_ff_bcm_competition_l4_l23_delta_metrics.active_edge_count << "\n";
+    csv << "video_ff_bcm_competition_changed_frac,"
+        << video_ff_bcm_competition_l4_l23_delta_metrics.changed_frac << "\n";
+    csv << "video_ff_bcm_competition_mean_delta,"
+        << video_ff_bcm_competition_l4_l23_delta_metrics.mean_delta << "\n";
+    csv << "video_ff_bcm_competition_p95_abs_delta,"
+        << video_ff_bcm_competition_l4_l23_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_ff_bcm_competition_max_abs_delta,"
+        << video_ff_bcm_competition_l4_l23_delta_metrics.max_abs_delta << "\n";
+    csv << "video_ff_bcm_competition_mean_gain_ratio,"
+        << video_ff_bcm_competition_l4_l23_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_ff_bcm_competition_incoming_mass_post_count,"
+        << video_ff_bcm_competition_incoming_mass_metrics.post_count << "\n";
+    csv << "video_ff_bcm_competition_incoming_mass_min_ratio,"
+        << video_ff_bcm_competition_incoming_mass_metrics.min_ratio << "\n";
+    csv << "video_ff_bcm_competition_incoming_mass_mean_ratio,"
+        << video_ff_bcm_competition_incoming_mass_metrics.mean_ratio << "\n";
+    csv << "video_ff_bcm_competition_incoming_mass_max_ratio,"
+        << video_ff_bcm_competition_incoming_mass_metrics.max_ratio << "\n";
+    csv << "video_ff_bcm_competition_incoming_mass_p95_abs_log_ratio,"
+        << video_ff_bcm_competition_incoming_mass_metrics.p95_abs_log_ratio << "\n";
+    csv << "video_l23e_pv_recruitment_enabled,"
+        << (video_l23e_pv_recruitment_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l23e_pv_recruitment_strength,"
+        << video_l23e_pv_recruitment_config.strength << "\n";
+    csv << "video_l23e_pv_recruitment_mass_max_ratio,"
+        << video_l23e_pv_recruitment_config.mass_max_ratio << "\n";
+    csv << "video_l23e_pv_recruitment_application_count,"
+        << video_l23e_pv_recruitment_application_count << "\n";
+    csv << "video_l23e_pv_recruitment_activity_score_used,"
+        << (video_l23e_pv_recruitment_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l23e_pv_recruitment_activity_window_count,"
+        << video_l23e_pv_recruitment_activity_window_count << "\n";
+    csv << "video_l23e_pv_recruitment_activity_score_active_edge_count,"
+        << video_l23e_pv_recruitment_activity_score_metrics.active_edge_count << "\n";
+    csv << "video_l23e_pv_recruitment_activity_score_positive_edge_count,"
+        << video_l23e_pv_recruitment_activity_score_metrics.positive_edge_count << "\n";
+    csv << "video_l23e_pv_recruitment_activity_score_positive_frac,"
+        << video_l23e_pv_recruitment_activity_score_metrics.positive_frac << "\n";
+    csv << "video_l23e_pv_recruitment_activity_score_mean,"
+        << video_l23e_pv_recruitment_activity_score_metrics.mean_score << "\n";
+    csv << "video_l23e_pv_recruitment_activity_score_max,"
+        << video_l23e_pv_recruitment_activity_score_metrics.max_score << "\n";
+    csv << "video_l23e_pv_recruitment_local_postsynaptic_only,1.000000\n";
+    csv << "video_l23e_pv_recruitment_future_frame_used,0.000000\n";
+    csv << "video_l23e_pv_recruitment_target_label_used,0.000000\n";
+    csv << "video_l23e_pv_recruitment_orientation_label_used,0.000000\n";
+    csv << "video_l23e_pv_recruitment_heldout_frames_used,0.000000\n";
+    csv << "video_l23e_pv_recruitment_hva_feedback_enabled,0.000000\n";
+    csv << "video_l23e_pv_recruitment_validation_target_used,0.000000\n";
+    csv << "video_l23e_pv_recruitment_global_normalization_used,0.000000\n";
+    csv << "video_l23e_pv_recruitment_active_edge_count,"
+        << video_l23e_pv_recruitment_delta_metrics.active_edge_count << "\n";
+    csv << "video_l23e_pv_recruitment_changed_frac,"
+        << video_l23e_pv_recruitment_delta_metrics.changed_frac << "\n";
+    csv << "video_l23e_pv_recruitment_mean_delta,"
+        << video_l23e_pv_recruitment_delta_metrics.mean_delta << "\n";
+    csv << "video_l23e_pv_recruitment_p95_abs_delta,"
+        << video_l23e_pv_recruitment_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_l23e_pv_recruitment_max_abs_delta,"
+        << video_l23e_pv_recruitment_delta_metrics.max_abs_delta << "\n";
+    csv << "video_l23e_pv_recruitment_mean_gain_ratio,"
+        << video_l23e_pv_recruitment_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_l4e_l23pv_recruitment_enabled,"
+        << (video_l4e_l23pv_recruitment_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l4e_l23pv_recruitment_strength,"
+        << video_l4e_l23pv_recruitment_config.strength << "\n";
+    csv << "video_l4e_l23pv_recruitment_mass_max_ratio,"
+        << video_l4e_l23pv_recruitment_config.mass_max_ratio << "\n";
+    csv << "video_l4e_l23pv_recruitment_top_frac,"
+        << video_l4e_l23pv_recruitment_config.top_frac << "\n";
+    csv << "video_l4e_l23pv_recruitment_application_count,"
+        << video_l4e_l23pv_recruitment_application_count << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_score_used,"
+        << (video_l4e_l23pv_recruitment_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_window_count,"
+        << video_l4e_l23pv_recruitment_activity_window_count << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_score_active_edge_count,"
+        << video_l4e_l23pv_recruitment_activity_score_metrics.active_edge_count << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_score_positive_edge_count,"
+        << video_l4e_l23pv_recruitment_activity_score_metrics.positive_edge_count << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_score_positive_frac,"
+        << video_l4e_l23pv_recruitment_activity_score_metrics.positive_frac << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_score_mean,"
+        << video_l4e_l23pv_recruitment_activity_score_metrics.mean_score << "\n";
+    csv << "video_l4e_l23pv_recruitment_activity_score_max,"
+        << video_l4e_l23pv_recruitment_activity_score_metrics.max_score << "\n";
+    csv << "video_l4e_l23pv_recruitment_local_postsynaptic_only,1.000000\n";
+    csv << "video_l4e_l23pv_recruitment_current_frame_activity_only,1.000000\n";
+    csv << "video_l4e_l23pv_recruitment_future_frame_used,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_target_label_used,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_orientation_label_used,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_heldout_frames_used,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_hva_feedback_enabled,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_validation_target_used,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_global_normalization_used,0.000000\n";
+    csv << "video_l4e_l23pv_recruitment_excitatory_positive_only,1.000000\n";
+    csv << "video_l4e_l23pv_recruitment_active_edge_count,"
+        << video_l4e_l23pv_recruitment_delta_metrics.active_edge_count << "\n";
+    csv << "video_l4e_l23pv_recruitment_changed_frac,"
+        << video_l4e_l23pv_recruitment_delta_metrics.changed_frac << "\n";
+    csv << "video_l4e_l23pv_recruitment_positive_edge_frac,"
+        << video_l4e_l23pv_recruitment_delta_metrics.positive_edge_frac << "\n";
+    csv << "video_l4e_l23pv_recruitment_negative_edge_frac,"
+        << video_l4e_l23pv_recruitment_delta_metrics.negative_edge_frac << "\n";
+    csv << "video_l4e_l23pv_recruitment_mean_delta,"
+        << video_l4e_l23pv_recruitment_delta_metrics.mean_delta << "\n";
+    csv << "video_l4e_l23pv_recruitment_p95_abs_delta,"
+        << video_l4e_l23pv_recruitment_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_l4e_l23pv_recruitment_p95_changed_abs_delta,"
+        << video_l4e_l23pv_recruitment_delta_metrics.p95_changed_abs_delta << "\n";
+    csv << "video_l4e_l23pv_recruitment_max_abs_delta,"
+        << video_l4e_l23pv_recruitment_delta_metrics.max_abs_delta << "\n";
+    csv << "video_l4e_l23pv_recruitment_mean_gain_ratio,"
+        << video_l4e_l23pv_recruitment_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_enabled,"
+        << (video_l23e_intrinsic_homeostasis_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_target_hz,"
+        << video_l23e_intrinsic_homeostasis_config.target_hz << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_strength_na_per_hz,"
+        << video_l23e_intrinsic_homeostasis_config.strength_na_per_hz << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_max_suppression_na,"
+        << video_l23e_intrinsic_homeostasis_config.max_suppression_na << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_application_count,"
+        << video_l23e_intrinsic_homeostasis_application_count << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_calibration_window_count,"
+        << video_l23e_intrinsic_homeostasis_calibration_window_count << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_cell_count,"
+        << video_l23e_intrinsic_homeostasis_metrics.cell_count << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_changed_frac,"
+        << video_l23e_intrinsic_homeostasis_metrics.changed_frac << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_mean_adjustment_na,"
+        << video_l23e_intrinsic_homeostasis_metrics.mean_adjustment_na << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_max_abs_adjustment_na,"
+        << video_l23e_intrinsic_homeostasis_metrics.max_abs_adjustment_na << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_mean_observed_rate_hz,"
+        << video_l23e_intrinsic_homeostasis_metrics.mean_rate_hz << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_max_observed_rate_hz,"
+        << video_l23e_intrinsic_homeostasis_metrics.max_rate_hz << "\n";
+    csv << "video_l23e_intrinsic_homeostasis_l23e_only,1.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_cell_local_only,1.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_future_frame_used,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_target_label_used,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_orientation_label_used,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_heldout_frames_used,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_hva_feedback_enabled,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_validation_target_used,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_global_normalization_used,0.000000\n";
+    csv << "video_l23e_intrinsic_homeostasis_underactive_boost_enabled,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_enabled,"
+        << (video_l23_push_pull_inhibition_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l23_push_pull_inhibition_strength,"
+        << video_l23_push_pull_inhibition_config.strength << "\n";
+    csv << "video_l23_push_pull_inhibition_min_post_spikes,"
+        << video_l23_push_pull_inhibition_config.min_post_spikes << "\n";
+    csv << "video_l23_push_pull_inhibition_application_count,"
+        << video_l23_push_pull_application_count << "\n";
+    csv << "video_l23_push_pull_inhibition_activity_window_count,"
+        << video_l23_push_pull_activity_window_count << "\n";
+    csv << "video_l23_push_pull_inhibition_active_post_cell_count,"
+        << video_l23_push_pull_inhibition_metrics.active_post_cell_count << "\n";
+    csv << "video_l23_push_pull_inhibition_targeted_post_cell_count,"
+        << video_l23_push_pull_inhibition_metrics.targeted_post_cell_count << "\n";
+    csv << "video_l23_push_pull_inhibition_targeted_post_cell_frac,"
+        << video_l23_push_pull_inhibition_metrics.targeted_post_cell_frac << "\n";
+    csv << "video_l23_push_pull_inhibition_mean_weak_support_gate,"
+        << video_l23_push_pull_inhibition_metrics.mean_weak_support_gate << "\n";
+    csv << "video_l23_push_pull_inhibition_max_weak_support_gate,"
+        << video_l23_push_pull_inhibition_metrics.max_weak_support_gate << "\n";
+    csv << "video_l23_push_pull_inhibition_ff_activity_score_positive_frac,"
+        << video_l23_push_pull_ff_activity_score_metrics.positive_frac << "\n";
+    csv << "video_l23_push_pull_inhibition_pv_activity_score_positive_frac,"
+        << video_l23_push_pull_pv_activity_score_metrics.positive_frac << "\n";
+    csv << "video_l23_push_pull_inhibition_som_activity_score_positive_frac,"
+        << video_l23_push_pull_som_activity_score_metrics.positive_frac << "\n";
+    csv << "video_l23_push_pull_inhibition_local_postsynaptic_only,1.000000\n";
+    csv << "video_l23_push_pull_inhibition_current_frame_activity_only,1.000000\n";
+    csv << "video_l23_push_pull_inhibition_feedforward_support_per_afferent,1.000000\n";
+    csv << "video_l23_push_pull_inhibition_raw_support_sum_gate_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_local_pool_spread_enabled,1.000000\n";
+    csv << "video_l23_push_pull_inhibition_future_frame_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_target_label_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_orientation_label_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_heldout_frames_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_hva_feedback_enabled,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_validation_target_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_global_normalization_used,0.000000\n";
+    csv << "video_l23_push_pull_inhibition_l23pv_to_l23e_changed_frac,"
+        << video_l23_push_pull_pv_delta_metrics.changed_frac << "\n";
+    csv << "video_l23_push_pull_inhibition_l23pv_to_l23e_mean_delta,"
+        << video_l23_push_pull_pv_delta_metrics.mean_delta << "\n";
+    csv << "video_l23_push_pull_inhibition_l23pv_to_l23e_p95_abs_delta,"
+        << video_l23_push_pull_pv_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_l23_push_pull_inhibition_l23pv_to_l23e_p95_changed_abs_delta,"
+        << video_l23_push_pull_pv_delta_metrics.p95_changed_abs_delta << "\n";
+    csv << "video_l23_push_pull_inhibition_l23som_to_l23e_changed_frac,"
+        << video_l23_push_pull_som_delta_metrics.changed_frac << "\n";
+    csv << "video_l23_push_pull_inhibition_l23som_to_l23e_mean_delta,"
+        << video_l23_push_pull_som_delta_metrics.mean_delta << "\n";
+    csv << "video_l23_push_pull_inhibition_l23som_to_l23e_p95_abs_delta,"
+        << video_l23_push_pull_som_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_l23_push_pull_inhibition_l23som_to_l23e_p95_changed_abs_delta,"
+        << video_l23_push_pull_som_delta_metrics.p95_changed_abs_delta << "\n";
     csv << "video_ff_event_trace_enabled,"
         << (video_ff_event_trace_active ? 1.0 : 0.0) << "\n";
     csv << "video_ff_event_trace_tau_pre_ms," << video_ff_event_trace_config.tau_pre_ms << "\n";
@@ -9587,6 +12323,10 @@ void writeSummaryFiles(
             : 0u) << "\n";
     csv << "video_recurrent_only_consolidation_recurrent_learning_enabled,"
         << (video_recurrent_only_consolidation_active ? 1.0 : 0.0) << "\n";
+    csv << "video_recurrent_only_consolidation_l23ee_stdp_aplus,"
+        << video_recurrent_only_consolidation_config.l23ee_stdp_aplus << "\n";
+    csv << "video_recurrent_only_consolidation_l23ee_stdp_aminus,"
+        << video_recurrent_only_consolidation_config.l23ee_stdp_aminus << "\n";
     csv << "video_recurrent_only_consolidation_feedforward_learning_enabled,0.000000\n";
     csv << "video_recurrent_only_consolidation_inhibitory_learning_enabled,0.000000\n";
     csv << "video_recurrent_only_consolidation_future_frame_used,0.000000\n";
@@ -9613,6 +12353,16 @@ void writeSummaryFiles(
         << post_video_inhibitory_stabilization_config.eta_scale << "\n";
     csv << "post_video_inhibitory_stabilization_second_eta_scale,"
         << post_video_inhibitory_stabilization_config.second_eta_scale << "\n";
+    csv << "post_video_inhibitory_stabilization_pv_eta_scale,"
+        << post_video_inhibitory_stabilization_config.pv_eta_scale << "\n";
+    csv << "post_video_inhibitory_stabilization_som_eta_scale,"
+        << post_video_inhibitory_stabilization_config.som_eta_scale << "\n";
+    csv << "post_video_inhibitory_stabilization_pv_target_hz,"
+        << post_video_inhibitory_stabilization_config.pv_target_hz << "\n";
+    csv << "post_video_inhibitory_stabilization_pv_potentiation_only,"
+        << (post_video_inhibitory_stabilization_config.pv_potentiation_only ? 1.0 : 0.0) << "\n";
+    csv << "post_video_inhibitory_stabilization_som_potentiation_only,"
+        << (post_video_inhibitory_stabilization_config.som_potentiation_only ? 1.0 : 0.0) << "\n";
     csv << "post_video_inhibitory_stabilization_tail_gate_enabled,"
         << ((post_video_inhibitory_stabilization_active
              && post_video_inhibitory_stabilization_config.tail_gate_enabled) ? 1.0 : 0.0)
@@ -9626,6 +12376,21 @@ void writeSummaryFiles(
     csv << "post_video_inhibitory_stabilization_tail_gate_post_cell_fraction,"
         << (static_cast<double>(post_video_inhibitory_stabilization_tail_gate_post_cell_count)
             / static_cast<double>(v1_genn::kNumL23E)) << "\n";
+    csv << "post_video_inhibitory_stabilization_all_site_application_count,"
+        << post_video_inhibitory_stabilization_all_site_application_count << "\n";
+    csv << "post_video_inhibitory_stabilization_boundary_extra_enabled,"
+        << ((post_video_inhibitory_stabilization_active
+             && post_video_inhibitory_stabilization_config.boundary_extra_enabled) ? 1.0 : 0.0)
+        << "\n";
+    csv << "post_video_inhibitory_stabilization_boundary_extra_max_distance_sites,"
+        << post_video_inhibitory_stabilization_config.boundary_extra_max_distance << "\n";
+    csv << "post_video_inhibitory_stabilization_boundary_extra_application_count,"
+        << post_video_inhibitory_stabilization_boundary_extra_application_count << "\n";
+    csv << "post_video_inhibitory_stabilization_boundary_extra_post_cell_count,"
+        << post_video_inhibitory_stabilization_boundary_extra_post_cell_count << "\n";
+    csv << "post_video_inhibitory_stabilization_boundary_extra_post_cell_fraction,"
+        << (static_cast<double>(post_video_inhibitory_stabilization_boundary_extra_post_cell_count)
+            / static_cast<double>(v1_genn::kNumL23E)) << "\n";
     csv << "post_video_inhibitory_stabilization_application_count,"
         << post_video_inhibitory_stabilization_application_count << "\n";
     csv << "post_video_inhibitory_stabilization_inhibitory_only,"
@@ -9634,7 +12399,9 @@ void writeSummaryFiles(
     csv << "post_video_inhibitory_stabilization_recurrent_learning_enabled,0.000000\n";
     csv << "post_video_inhibitory_stabilization_future_frame_used,0.000000\n";
     csv << "post_video_inhibitory_stabilization_target_label_used,0.000000\n";
+    csv << "post_video_inhibitory_stabilization_orientation_label_used,0.000000\n";
     csv << "post_video_inhibitory_stabilization_heldout_frames_used,0.000000\n";
+    csv << "post_video_inhibitory_stabilization_output_assembly_used,0.000000\n";
     csv << "post_video_inhibitory_stabilization_l23pv_to_l23e_changed_frac,"
         << post_video_inhibitory_stabilization_l23pv_to_l23e_delta_metrics.changed_frac << "\n";
     csv << "post_video_inhibitory_stabilization_l23pv_to_l23e_mean_delta,"
@@ -9705,6 +12472,8 @@ void writeSummaryFiles(
         << (video_consolidation_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "lower_v1_video_consolidation_repeat_count,"
         << video_consolidation_config.repeat_count << "\n";
+    csv << "lower_v1_video_consolidation_heldout_fraction,"
+        << video_consolidation_config.heldout_fraction << "\n";
     csv << "lower_v1_video_consolidation_frame_start_index,"
         << video_consolidation_config.frame_start_index << "\n";
     csv << "lower_v1_video_consolidation_frame_count,"
@@ -9713,6 +12482,8 @@ void writeSummaryFiles(
         << video_consolidation_config.heldout_start_frame << "\n";
     csv << "lower_v1_video_consolidation_heldout_excluded_frame_count,"
         << video_consolidation_config.heldout_excluded_frame_count << "\n";
+    csv << "lower_v1_video_consolidation_hva_predictor_split_used,"
+        << (video_consolidation_config.heldout_split_uses_hva_predictor ? 1.0 : 0.0) << "\n";
     csv << "lower_v1_video_consolidation_heldout_frames_used,0.000000\n";
     csv << "lower_v1_video_consolidation_present_frame_drive_only,1.000000\n";
     csv << "lower_v1_video_consolidation_future_frame_target_used,0.000000\n";
@@ -9724,6 +12495,7 @@ void writeSummaryFiles(
     csv << "lower_v1_video_consolidation_feedforward_l4_l23_plasticity_enabled,"
         << (video_ff_stdp_active ? 1.0 : 0.0) << "\n";
     csv << "lower_v1_video_consolidation_hva_feedback_enabled,0.000000\n";
+    csv << "lower_v1_video_consolidation_hva_predictor_required,0.000000\n";
     csv << "lower_v1_video_consolidation_pre_hva_stage,"
         << (video_consolidation_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "lower_v1_video_consolidation_pre_l23e_repeat_corr,"
@@ -9813,6 +12585,68 @@ void writeSummaryFiles(
     for(const auto &metric : hva_predictor_result.metrics) {
         csv << "hva_predictor_" << metric.first << "," << metric.second << "\n";
     }
+    csv << "periodic_local_geometry_enabled,"
+        << (periodic_local_geometry_config.anyEnabled() ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_global_enabled,"
+        << (periodic_local_geometry_config.global_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_default_off,1.000000\n";
+    csv << "periodic_l4_intersite_geometry_enabled,"
+        << (periodic_local_geometry_config.l4_intersite_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_l4_l23_geometry_enabled,"
+        << (periodic_local_geometry_config.l4_l23_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_l23_recurrent_geometry_enabled,"
+        << (periodic_local_geometry_config.l23_recurrent_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_inhibitory_geometry_enabled,"
+        << (periodic_local_geometry_config.inhibitory_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_l23pv_to_l23e_geometry_enabled,"
+        << (periodic_local_geometry_config.l23pv_to_l23e_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_affects_l4_intersite,"
+        << (periodic_local_geometry_config.l4_intersite_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_affects_l4_l23_feedforward,"
+        << (periodic_local_geometry_config.l4_l23_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_affects_l23_recurrent,"
+        << (periodic_local_geometry_config.l23_recurrent_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_affects_local_inhibitory,"
+        << (periodic_local_geometry_config.inhibitory_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_affects_l23pv_to_l23e,"
+        << (periodic_local_geometry_config.l23pv_to_l23e_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_l23pv_to_l23e_geometry_affects_l23som_to_l23e,0.000000\n";
+    csv << "periodic_l23pv_to_l23e_geometry_affects_l23pv_to_l23pv,0.000000\n";
+    csv << "periodic_l23pv_to_l23e_geometry_affects_l4_local_inhibitory,0.000000\n";
+    csv << "periodic_l23pv_to_l23e_geometry_affects_l23e_recurrent,0.000000\n";
+    csv << "periodic_local_geometry_boundary_artifact_fix,"
+        << (periodic_local_geometry_config.l4_intersite_enabled ? 1.0 : 0.0) << "\n";
+    csv << "periodic_local_geometry_labels_used,0.000000\n";
+    csv << "periodic_local_geometry_validation_target_used,0.000000\n";
+    csv << "periodic_local_geometry_future_frame_used,0.000000\n";
+    csv << "periodic_l23pv_to_l23e_geometry_labels_used,0.000000\n";
+    csv << "periodic_l23pv_to_l23e_geometry_validation_target_used,0.000000\n";
+    csv << "periodic_l23pv_to_l23e_geometry_future_frame_used,0.000000\n";
+    csv << "boundary_ring_pv_compensation_enabled,"
+        << (boundary_ring_pv_compensation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "boundary_ring_pv_compensation_inner_distance_sites,"
+        << boundary_ring_pv_compensation_config.inner_distance << "\n";
+    csv << "boundary_ring_pv_compensation_outer_distance_sites,"
+        << boundary_ring_pv_compensation_config.outer_distance << "\n";
+    csv << "boundary_ring_pv_compensation_pv_to_l23e_scale,"
+        << boundary_ring_pv_compensation_config.pv_to_l23e_scale << "\n";
+    csv << "boundary_ring_pv_compensation_l23pv_to_l23e_targeted_synapses,"
+        << boundary_ring_pv_compensation_metrics.targeted_synapses << "\n";
+    csv << "boundary_ring_pv_compensation_l23pv_to_l23e_total_synapses,"
+        << boundary_ring_pv_compensation_metrics.total_synapses << "\n";
+    csv << "boundary_ring_pv_compensation_l23pv_to_l23e_targeted_fraction,"
+        << boundary_ring_pv_compensation_metrics.targeted_fraction << "\n";
+    csv << "boundary_ring_pv_compensation_affects_l23pv_to_l23e,"
+        << (boundary_ring_pv_compensation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "boundary_ring_pv_compensation_affects_l23som_to_l23e,0.000000\n";
+    csv << "boundary_ring_pv_compensation_affects_l23e_recurrent,0.000000\n";
+    csv << "boundary_ring_pv_compensation_coordinate_only,1.000000\n";
+    csv << "boundary_ring_pv_compensation_labels_used,0.000000\n";
+    csv << "boundary_ring_pv_compensation_activity_labels_used,0.000000\n";
+    csv << "boundary_ring_pv_compensation_orientation_label_used,0.000000\n";
+    csv << "boundary_ring_pv_compensation_validation_target_used,0.000000\n";
+    csv << "boundary_ring_pv_compensation_future_frame_used,0.000000\n";
+    csv << "boundary_ring_pv_compensation_output_assembly_used,0.000000\n";
     csv << "l23e_som_broad_recruitment_enabled,"
         << (l23e_som_broad_recruitment_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "l23e_som_broad_recruitment_radius_sites,"
@@ -9823,6 +12657,55 @@ void writeSummaryFiles(
         << (v1_genn::kL23EToSOMWeight * l23e_som_broad_recruitment_config.weight_scale) << "\n";
     csv << "l23e_som_broad_recruitment_estimated_total_extra_fraction,"
         << l23e_som_broad_estimated_total_extra_fraction << "\n";
+    csv << "l23_within_site_competition_enabled,"
+        << (l23_within_site_competition_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23_within_site_competition_e_pv_scale,"
+        << l23_within_site_competition_config.e_pv_scale << "\n";
+    csv << "l23_within_site_competition_pv_e_scale,"
+        << l23_within_site_competition_config.pv_e_scale << "\n";
+    csv << "l23_within_site_competition_radius_sites,0.000000\n";
+    csv << "l23_within_site_competition_same_site_only,"
+        << (l23_within_site_competition_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23_within_site_competition_orientation_label_used,0.000000\n";
+    csv << "l23_within_site_competition_future_frame_used,0.000000\n";
+    csv << "l23_within_site_competition_validation_target_used,0.000000\n";
+    csv << "l23_within_site_competition_global_normalization_used,0.000000\n";
+    csv << "l23_within_site_competition_e_pv_weight,"
+        << (v1_genn::kL23EToPVWeight * l23_within_site_competition_config.e_pv_scale) << "\n";
+    csv << "l23_within_site_competition_pv_e_weight,"
+        << (v1_genn::kL23PVToEWeight * l23_within_site_competition_config.pv_e_scale) << "\n";
+    csv << "l23_output_assembly_enabled,"
+        << (l23_output_assembly_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23_output_assembly_cells_per_site,"
+        << l23_output_assembly_config.cells_per_site << "\n";
+    csv << "l23_output_assembly_selected_cell_fraction,"
+        << (static_cast<double>(l23_output_assembly_config.cells_per_site)
+            / static_cast<double>(v1_genn::kL23EPerSite)) << "\n";
+    csv << "l23_output_assembly_population_name_default,"
+        << (l23_output_assembly_config.population_name == kDefaultL23OutputAssemblyPopulationName ? 1.0 : 0.0)
+        << "\n";
+    csv << "l23_output_assembly_training_frames_only,"
+        << (l23_output_assembly_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23_output_assembly_fixed_mask,"
+        << (l23_output_assembly_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23_output_assembly_same_site_only,"
+        << (l23_output_assembly_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l23_output_assembly_raw_l23e_rows_preserved,1.000000\n";
+    csv << "l23_output_assembly_future_frame_used,0.000000\n";
+    csv << "l23_output_assembly_heldout_frames_used,0.000000\n";
+    csv << "l23_output_assembly_target_label_used,0.000000\n";
+    csv << "l23_output_assembly_orientation_label_used,0.000000\n";
+    csv << "l23_output_assembly_validation_target_used,0.000000\n";
+    csv << "l23_output_assembly_hva_feedback_enabled,0.000000\n";
+    csv << "l23_output_assembly_global_normalization_used,0.000000\n";
+    csv << "l23_output_assembly_final_post_artifacts_enabled,"
+        << ((l23_output_assembly_config.enabled && final_post_video != nullptr) ? 1.0 : 0.0) << "\n";
+    csv << "l23_output_assembly_final_post_uses_same_fixed_mask,"
+        << ((l23_output_assembly_config.enabled && final_post_video != nullptr) ? 1.0 : 0.0) << "\n";
+    csv << "l23_output_assembly_selected_from_final_post,0.000000\n";
+    csv << "l23_output_assembly_final_post_raw_l23e_rows_preserved,1.000000\n";
+    csv << "l23_output_assembly_final_post_validation_target_used,0.000000\n";
+    csv << "l23_output_assembly_final_post_orientation_label_used,0.000000\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         csv << summary.name << "_weights_before_count," << summary.before.count << "\n";
         csv << summary.name << "_weights_before_min," << summary.before.min << "\n";
@@ -9849,6 +12732,17 @@ void writeSummaryFiles(
         throw std::runtime_error("Unable to open output file: " + output_prefix + "_summary.txt");
     }
     text << std::fixed << std::setprecision(6);
+    text << "validation_sheet_side=" << v1_genn::kSheetSide << "\n";
+    text << "validation_core_enabled=" << (validation_core_enabled ? 1 : 0) << "\n";
+    text << "validation_core_side=" << validation_core_side << "\n";
+    text << "validation_core_offset_x_sites=" << validation_core_offset_x << "\n";
+    text << "validation_core_offset_y_sites=" << validation_core_offset_y << "\n";
+    text << "validation_core_site_count=" << validation_core_site_count << "\n";
+    text << "validation_halo_site_count=" << validation_halo_site_count << "\n";
+    text << "validation_core_dynamics_changed=0\n";
+    text << "validation_core_labels_used=0\n";
+    text << "validation_core_future_frame_used=0\n";
+    text << "validation_core_output_assembly_used=0\n";
     text << "baseline_l4_median_osi=" << baseline.l4_median_osi << "\n";
     text << "baseline_l23_median_osi=" << baseline.l23_median_osi << "\n";
     text << "post_l4_median_osi=" << post.l4_median_osi << "\n";
@@ -9907,9 +12801,24 @@ void writeSummaryFiles(
     text << "l23ee_initial_active_mean=" << l23ee_initial_active_mean << "\n";
     text << "l23ee_initial_active_gini=" << l23ee_initial_active_gini << "\n";
     text << "l23ee_initial_top10_mass_share=" << l23ee_initial_top10_mass_share << "\n";
+    text << "l23ee_stdp_aplus=" << l23ee_stdp_aplus << "\n";
+    text << "l23ee_stdp_aminus=" << l23ee_stdp_aminus << "\n";
     text << "l23pv_context_output_scale=" << l23pv_context_output_scale << "\n";
     text << "l23pv_context_output_ablation_active="
          << (l23pv_context_output_scale != 1.0 ? 1 : 0) << "\n";
+    text << "l4e_to_l23pv_weight_scale=" << l4e_to_l23pv_weight_scale << "\n";
+    text << "l23e_adaptation_enabled="
+         << (l23e_adaptation_config.enabled ? 1 : 0) << "\n";
+    text << "l23e_adaptation_tau_ms=" << l23e_adaptation_config.tau_ms << "\n";
+    text << "l23e_adaptation_spike_na=" << l23e_adaptation_config.spike_na << "\n";
+    text << "l23e_adaptation_l23e_only="
+         << (l23e_adaptation_config.enabled ? 1 : 0) << "\n";
+    text << "l23e_adaptation_cell_local_only="
+         << (l23e_adaptation_config.enabled ? 1 : 0) << "\n";
+    text << "l23e_adaptation_future_frame_used=0\n";
+    text << "l23e_adaptation_target_label_used=0\n";
+    text << "l23e_adaptation_validation_target_used=0\n";
+    text << "l23e_adaptation_global_normalization_used=0\n";
     text << "inhibitory_orientation_rule_enabled=0\n";
     text << "orientation_context_assay_enabled="
          << (orientation_context_assay_config.enabled ? 1 : 0) << "\n";
@@ -9947,6 +12856,14 @@ void writeSummaryFiles(
     text << "video_drive_path="
          << (video_replay_config.drive_path.empty() ? "disabled" : video_replay_config.drive_path)
          << "\n";
+    text << "recording_total_steps=" << total_recording_steps << "\n";
+    text << "recording_buffer_requested_steps=" << requested_recording_buffer_steps << "\n";
+    text << "recording_buffer_allocated_steps=" << recording_buffer_steps << "\n";
+    text << "recording_buffer_max_steps_env=" << recording_buffer_max_steps << "\n";
+    text << "recording_buffer_cap_active="
+         << ((recording_buffer_max_steps > 0u && recording_buffer_steps < requested_recording_buffer_steps) ? 1 : 0)
+         << "\n";
+    text << "recording_segment_flush_count=" << recording_segment_flush_count << "\n";
     text << "video_feedback_disabled="
          << (video_replay_config.enabled ? 1 : 0) << "\n";
     text << "video_training_enabled=" << (video_consolidation_config.enabled ? 1 : 0) << "\n";
@@ -10033,6 +12950,188 @@ void writeSummaryFiles(
          << video_ff_coactivity_competition_l4_l23_delta_metrics.max_abs_delta << "\n";
     text << "video_ff_coactivity_competition_mean_gain_ratio="
          << video_ff_coactivity_competition_l4_l23_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_ff_bcm_competition_enabled="
+         << (video_ff_bcm_competition_active ? 1 : 0) << "\n";
+    text << "video_ff_bcm_competition_strength="
+         << video_ff_bcm_competition_config.strength << "\n";
+    text << "video_ff_bcm_competition_mass_min_ratio="
+         << video_ff_bcm_competition_config.mass_min_ratio << "\n";
+    text << "video_ff_bcm_competition_mass_max_ratio="
+         << video_ff_bcm_competition_config.mass_max_ratio << "\n";
+    text << "video_ff_bcm_competition_application_count="
+         << video_ff_bcm_competition_application_count << "\n";
+    text << "video_ff_bcm_competition_activity_score_used="
+         << (video_ff_bcm_competition_active ? 1 : 0) << "\n";
+    text << "video_ff_bcm_competition_activity_window_count="
+         << video_ff_bcm_competition_activity_window_count << "\n";
+    text << "video_ff_bcm_competition_activity_score_active_edge_count="
+         << video_ff_bcm_competition_activity_score_metrics.active_edge_count << "\n";
+    text << "video_ff_bcm_competition_activity_score_positive_edge_count="
+         << video_ff_bcm_competition_activity_score_metrics.positive_edge_count << "\n";
+    text << "video_ff_bcm_competition_activity_score_positive_frac="
+         << video_ff_bcm_competition_activity_score_metrics.positive_frac << "\n";
+    text << "video_ff_bcm_competition_activity_score_mean="
+         << video_ff_bcm_competition_activity_score_metrics.mean_score << "\n";
+    text << "video_ff_bcm_competition_activity_score_max="
+         << video_ff_bcm_competition_activity_score_metrics.max_score << "\n";
+    text << "video_ff_bcm_competition_local_postsynaptic_only=1\n";
+    text << "video_ff_bcm_competition_future_frame_used=0\n";
+    text << "video_ff_bcm_competition_target_label_used=0\n";
+    text << "video_ff_bcm_competition_orientation_label_used=0\n";
+    text << "video_ff_bcm_competition_heldout_frames_used=0\n";
+    text << "video_ff_bcm_competition_hva_feedback_enabled=0\n";
+    text << "video_ff_bcm_competition_active_edge_count="
+         << video_ff_bcm_competition_l4_l23_delta_metrics.active_edge_count << "\n";
+    text << "video_ff_bcm_competition_changed_frac="
+         << video_ff_bcm_competition_l4_l23_delta_metrics.changed_frac << "\n";
+    text << "video_ff_bcm_competition_mean_delta="
+         << video_ff_bcm_competition_l4_l23_delta_metrics.mean_delta << "\n";
+    text << "video_ff_bcm_competition_p95_abs_delta="
+         << video_ff_bcm_competition_l4_l23_delta_metrics.p95_abs_delta << "\n";
+    text << "video_ff_bcm_competition_max_abs_delta="
+         << video_ff_bcm_competition_l4_l23_delta_metrics.max_abs_delta << "\n";
+    text << "video_ff_bcm_competition_mean_gain_ratio="
+         << video_ff_bcm_competition_l4_l23_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_ff_bcm_competition_incoming_mass_post_count="
+         << video_ff_bcm_competition_incoming_mass_metrics.post_count << "\n";
+    text << "video_ff_bcm_competition_incoming_mass_min_ratio="
+         << video_ff_bcm_competition_incoming_mass_metrics.min_ratio << "\n";
+    text << "video_ff_bcm_competition_incoming_mass_mean_ratio="
+         << video_ff_bcm_competition_incoming_mass_metrics.mean_ratio << "\n";
+    text << "video_ff_bcm_competition_incoming_mass_max_ratio="
+         << video_ff_bcm_competition_incoming_mass_metrics.max_ratio << "\n";
+    text << "video_ff_bcm_competition_incoming_mass_p95_abs_log_ratio="
+         << video_ff_bcm_competition_incoming_mass_metrics.p95_abs_log_ratio << "\n";
+    text << "video_l23e_pv_recruitment_enabled="
+         << (video_l23e_pv_recruitment_active ? 1 : 0) << "\n";
+    text << "video_l23e_pv_recruitment_strength="
+         << video_l23e_pv_recruitment_config.strength << "\n";
+    text << "video_l23e_pv_recruitment_mass_max_ratio="
+         << video_l23e_pv_recruitment_config.mass_max_ratio << "\n";
+    text << "video_l23e_pv_recruitment_application_count="
+         << video_l23e_pv_recruitment_application_count << "\n";
+    text << "video_l23e_pv_recruitment_activity_score_used="
+         << (video_l23e_pv_recruitment_active ? 1 : 0) << "\n";
+    text << "video_l23e_pv_recruitment_activity_window_count="
+         << video_l23e_pv_recruitment_activity_window_count << "\n";
+    text << "video_l23e_pv_recruitment_activity_score_active_edge_count="
+         << video_l23e_pv_recruitment_activity_score_metrics.active_edge_count << "\n";
+    text << "video_l23e_pv_recruitment_activity_score_positive_edge_count="
+         << video_l23e_pv_recruitment_activity_score_metrics.positive_edge_count << "\n";
+    text << "video_l23e_pv_recruitment_activity_score_positive_frac="
+         << video_l23e_pv_recruitment_activity_score_metrics.positive_frac << "\n";
+    text << "video_l23e_pv_recruitment_activity_score_mean="
+         << video_l23e_pv_recruitment_activity_score_metrics.mean_score << "\n";
+    text << "video_l23e_pv_recruitment_activity_score_max="
+         << video_l23e_pv_recruitment_activity_score_metrics.max_score << "\n";
+    text << "video_l23e_pv_recruitment_local_postsynaptic_only=1\n";
+    text << "video_l23e_pv_recruitment_future_frame_used=0\n";
+    text << "video_l23e_pv_recruitment_target_label_used=0\n";
+    text << "video_l23e_pv_recruitment_orientation_label_used=0\n";
+    text << "video_l23e_pv_recruitment_heldout_frames_used=0\n";
+    text << "video_l23e_pv_recruitment_hva_feedback_enabled=0\n";
+    text << "video_l23e_pv_recruitment_validation_target_used=0\n";
+    text << "video_l23e_pv_recruitment_global_normalization_used=0\n";
+    text << "video_l23e_pv_recruitment_active_edge_count="
+         << video_l23e_pv_recruitment_delta_metrics.active_edge_count << "\n";
+    text << "video_l23e_pv_recruitment_changed_frac="
+         << video_l23e_pv_recruitment_delta_metrics.changed_frac << "\n";
+    text << "video_l23e_pv_recruitment_mean_delta="
+         << video_l23e_pv_recruitment_delta_metrics.mean_delta << "\n";
+    text << "video_l23e_pv_recruitment_p95_abs_delta="
+         << video_l23e_pv_recruitment_delta_metrics.p95_abs_delta << "\n";
+    text << "video_l23e_pv_recruitment_max_abs_delta="
+         << video_l23e_pv_recruitment_delta_metrics.max_abs_delta << "\n";
+    text << "video_l23e_pv_recruitment_mean_gain_ratio="
+         << video_l23e_pv_recruitment_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_l23e_intrinsic_homeostasis_enabled="
+         << (video_l23e_intrinsic_homeostasis_active ? 1 : 0) << "\n";
+    text << "video_l23e_intrinsic_homeostasis_target_hz="
+         << video_l23e_intrinsic_homeostasis_config.target_hz << "\n";
+    text << "video_l23e_intrinsic_homeostasis_strength_na_per_hz="
+         << video_l23e_intrinsic_homeostasis_config.strength_na_per_hz << "\n";
+    text << "video_l23e_intrinsic_homeostasis_max_suppression_na="
+         << video_l23e_intrinsic_homeostasis_config.max_suppression_na << "\n";
+    text << "video_l23e_intrinsic_homeostasis_application_count="
+         << video_l23e_intrinsic_homeostasis_application_count << "\n";
+    text << "video_l23e_intrinsic_homeostasis_calibration_window_count="
+         << video_l23e_intrinsic_homeostasis_calibration_window_count << "\n";
+    text << "video_l23e_intrinsic_homeostasis_cell_count="
+         << video_l23e_intrinsic_homeostasis_metrics.cell_count << "\n";
+    text << "video_l23e_intrinsic_homeostasis_changed_frac="
+         << video_l23e_intrinsic_homeostasis_metrics.changed_frac << "\n";
+    text << "video_l23e_intrinsic_homeostasis_mean_adjustment_na="
+         << video_l23e_intrinsic_homeostasis_metrics.mean_adjustment_na << "\n";
+    text << "video_l23e_intrinsic_homeostasis_max_abs_adjustment_na="
+         << video_l23e_intrinsic_homeostasis_metrics.max_abs_adjustment_na << "\n";
+    text << "video_l23e_intrinsic_homeostasis_mean_observed_rate_hz="
+         << video_l23e_intrinsic_homeostasis_metrics.mean_rate_hz << "\n";
+    text << "video_l23e_intrinsic_homeostasis_max_observed_rate_hz="
+         << video_l23e_intrinsic_homeostasis_metrics.max_rate_hz << "\n";
+    text << "video_l23e_intrinsic_homeostasis_l23e_only=1\n";
+    text << "video_l23e_intrinsic_homeostasis_cell_local_only=1\n";
+    text << "video_l23e_intrinsic_homeostasis_future_frame_used=0\n";
+    text << "video_l23e_intrinsic_homeostasis_target_label_used=0\n";
+    text << "video_l23e_intrinsic_homeostasis_orientation_label_used=0\n";
+    text << "video_l23e_intrinsic_homeostasis_heldout_frames_used=0\n";
+    text << "video_l23e_intrinsic_homeostasis_hva_feedback_enabled=0\n";
+    text << "video_l23e_intrinsic_homeostasis_validation_target_used=0\n";
+    text << "video_l23e_intrinsic_homeostasis_global_normalization_used=0\n";
+    text << "video_l23e_intrinsic_homeostasis_underactive_boost_enabled=0\n";
+    text << "video_l23_push_pull_inhibition_enabled="
+         << (video_l23_push_pull_inhibition_active ? 1 : 0) << "\n";
+    text << "video_l23_push_pull_inhibition_strength="
+         << video_l23_push_pull_inhibition_config.strength << "\n";
+    text << "video_l23_push_pull_inhibition_min_post_spikes="
+         << video_l23_push_pull_inhibition_config.min_post_spikes << "\n";
+    text << "video_l23_push_pull_inhibition_application_count="
+         << video_l23_push_pull_application_count << "\n";
+    text << "video_l23_push_pull_inhibition_activity_window_count="
+         << video_l23_push_pull_activity_window_count << "\n";
+    text << "video_l23_push_pull_inhibition_active_post_cell_count="
+         << video_l23_push_pull_inhibition_metrics.active_post_cell_count << "\n";
+    text << "video_l23_push_pull_inhibition_targeted_post_cell_count="
+         << video_l23_push_pull_inhibition_metrics.targeted_post_cell_count << "\n";
+    text << "video_l23_push_pull_inhibition_targeted_post_cell_frac="
+         << video_l23_push_pull_inhibition_metrics.targeted_post_cell_frac << "\n";
+    text << "video_l23_push_pull_inhibition_mean_weak_support_gate="
+         << video_l23_push_pull_inhibition_metrics.mean_weak_support_gate << "\n";
+    text << "video_l23_push_pull_inhibition_max_weak_support_gate="
+         << video_l23_push_pull_inhibition_metrics.max_weak_support_gate << "\n";
+    text << "video_l23_push_pull_inhibition_ff_activity_score_positive_frac="
+         << video_l23_push_pull_ff_activity_score_metrics.positive_frac << "\n";
+    text << "video_l23_push_pull_inhibition_pv_activity_score_positive_frac="
+         << video_l23_push_pull_pv_activity_score_metrics.positive_frac << "\n";
+    text << "video_l23_push_pull_inhibition_som_activity_score_positive_frac="
+         << video_l23_push_pull_som_activity_score_metrics.positive_frac << "\n";
+    text << "video_l23_push_pull_inhibition_local_postsynaptic_only=1\n";
+    text << "video_l23_push_pull_inhibition_current_frame_activity_only=1\n";
+    text << "video_l23_push_pull_inhibition_feedforward_support_per_afferent=1\n";
+    text << "video_l23_push_pull_inhibition_raw_support_sum_gate_used=0\n";
+    text << "video_l23_push_pull_inhibition_local_pool_spread_enabled=1\n";
+    text << "video_l23_push_pull_inhibition_future_frame_used=0\n";
+    text << "video_l23_push_pull_inhibition_target_label_used=0\n";
+    text << "video_l23_push_pull_inhibition_orientation_label_used=0\n";
+    text << "video_l23_push_pull_inhibition_heldout_frames_used=0\n";
+    text << "video_l23_push_pull_inhibition_hva_feedback_enabled=0\n";
+    text << "video_l23_push_pull_inhibition_validation_target_used=0\n";
+    text << "video_l23_push_pull_inhibition_global_normalization_used=0\n";
+    text << "video_l23_push_pull_inhibition_l23pv_to_l23e_changed_frac="
+         << video_l23_push_pull_pv_delta_metrics.changed_frac << "\n";
+    text << "video_l23_push_pull_inhibition_l23pv_to_l23e_mean_delta="
+         << video_l23_push_pull_pv_delta_metrics.mean_delta << "\n";
+    text << "video_l23_push_pull_inhibition_l23pv_to_l23e_p95_abs_delta="
+         << video_l23_push_pull_pv_delta_metrics.p95_abs_delta << "\n";
+    text << "video_l23_push_pull_inhibition_l23pv_to_l23e_p95_changed_abs_delta="
+         << video_l23_push_pull_pv_delta_metrics.p95_changed_abs_delta << "\n";
+    text << "video_l23_push_pull_inhibition_l23som_to_l23e_changed_frac="
+         << video_l23_push_pull_som_delta_metrics.changed_frac << "\n";
+    text << "video_l23_push_pull_inhibition_l23som_to_l23e_mean_delta="
+         << video_l23_push_pull_som_delta_metrics.mean_delta << "\n";
+    text << "video_l23_push_pull_inhibition_l23som_to_l23e_p95_abs_delta="
+         << video_l23_push_pull_som_delta_metrics.p95_abs_delta << "\n";
+    text << "video_l23_push_pull_inhibition_l23som_to_l23e_p95_changed_abs_delta="
+         << video_l23_push_pull_som_delta_metrics.p95_changed_abs_delta << "\n";
     text << "video_ff_event_trace_enabled="
          << (video_ff_event_trace_active ? 1 : 0) << "\n";
     text << "video_ff_event_trace_tau_pre_ms=" << video_ff_event_trace_config.tau_pre_ms << "\n";
@@ -10082,6 +13181,10 @@ void writeSummaryFiles(
              : 0u) << "\n";
     text << "video_recurrent_only_consolidation_recurrent_learning_enabled="
          << (video_recurrent_only_consolidation_active ? 1 : 0) << "\n";
+    text << "video_recurrent_only_consolidation_l23ee_stdp_aplus="
+         << video_recurrent_only_consolidation_config.l23ee_stdp_aplus << "\n";
+    text << "video_recurrent_only_consolidation_l23ee_stdp_aminus="
+         << video_recurrent_only_consolidation_config.l23ee_stdp_aminus << "\n";
     text << "video_recurrent_only_consolidation_feedforward_learning_enabled=0\n";
     text << "video_recurrent_only_consolidation_inhibitory_learning_enabled=0\n";
     text << "video_recurrent_only_consolidation_future_frame_used=0\n";
@@ -10108,6 +13211,16 @@ void writeSummaryFiles(
          << post_video_inhibitory_stabilization_config.eta_scale << "\n";
     text << "post_video_inhibitory_stabilization_second_eta_scale="
          << post_video_inhibitory_stabilization_config.second_eta_scale << "\n";
+    text << "post_video_inhibitory_stabilization_pv_eta_scale="
+         << post_video_inhibitory_stabilization_config.pv_eta_scale << "\n";
+    text << "post_video_inhibitory_stabilization_som_eta_scale="
+         << post_video_inhibitory_stabilization_config.som_eta_scale << "\n";
+    text << "post_video_inhibitory_stabilization_pv_target_hz="
+         << post_video_inhibitory_stabilization_config.pv_target_hz << "\n";
+    text << "post_video_inhibitory_stabilization_pv_potentiation_only="
+         << (post_video_inhibitory_stabilization_config.pv_potentiation_only ? 1 : 0) << "\n";
+    text << "post_video_inhibitory_stabilization_som_potentiation_only="
+         << (post_video_inhibitory_stabilization_config.som_potentiation_only ? 1 : 0) << "\n";
     text << "post_video_inhibitory_stabilization_tail_gate_enabled="
          << ((post_video_inhibitory_stabilization_active
               && post_video_inhibitory_stabilization_config.tail_gate_enabled) ? 1 : 0)
@@ -10121,6 +13234,21 @@ void writeSummaryFiles(
     text << "post_video_inhibitory_stabilization_tail_gate_post_cell_fraction="
          << (static_cast<double>(post_video_inhibitory_stabilization_tail_gate_post_cell_count)
              / static_cast<double>(v1_genn::kNumL23E)) << "\n";
+    text << "post_video_inhibitory_stabilization_all_site_application_count="
+         << post_video_inhibitory_stabilization_all_site_application_count << "\n";
+    text << "post_video_inhibitory_stabilization_boundary_extra_enabled="
+         << ((post_video_inhibitory_stabilization_active
+              && post_video_inhibitory_stabilization_config.boundary_extra_enabled) ? 1 : 0)
+         << "\n";
+    text << "post_video_inhibitory_stabilization_boundary_extra_max_distance_sites="
+         << post_video_inhibitory_stabilization_config.boundary_extra_max_distance << "\n";
+    text << "post_video_inhibitory_stabilization_boundary_extra_application_count="
+         << post_video_inhibitory_stabilization_boundary_extra_application_count << "\n";
+    text << "post_video_inhibitory_stabilization_boundary_extra_post_cell_count="
+         << post_video_inhibitory_stabilization_boundary_extra_post_cell_count << "\n";
+    text << "post_video_inhibitory_stabilization_boundary_extra_post_cell_fraction="
+         << (static_cast<double>(post_video_inhibitory_stabilization_boundary_extra_post_cell_count)
+             / static_cast<double>(v1_genn::kNumL23E)) << "\n";
     text << "post_video_inhibitory_stabilization_application_count="
          << post_video_inhibitory_stabilization_application_count << "\n";
     text << "post_video_inhibitory_stabilization_inhibitory_only="
@@ -10129,7 +13257,9 @@ void writeSummaryFiles(
     text << "post_video_inhibitory_stabilization_recurrent_learning_enabled=0\n";
     text << "post_video_inhibitory_stabilization_future_frame_used=0\n";
     text << "post_video_inhibitory_stabilization_target_label_used=0\n";
+    text << "post_video_inhibitory_stabilization_orientation_label_used=0\n";
     text << "post_video_inhibitory_stabilization_heldout_frames_used=0\n";
+    text << "post_video_inhibitory_stabilization_output_assembly_used=0\n";
     text << "post_video_inhibitory_stabilization_l23pv_to_l23e_changed_frac="
          << post_video_inhibitory_stabilization_l23pv_to_l23e_delta_metrics.changed_frac << "\n";
     text << "post_video_inhibitory_stabilization_l23pv_to_l23e_mean_delta="
@@ -10202,6 +13332,8 @@ void writeSummaryFiles(
          << (video_consolidation_config.enabled ? 1 : 0) << "\n";
     text << "lower_v1_video_consolidation_repeat_count="
          << video_consolidation_config.repeat_count << "\n";
+    text << "lower_v1_video_consolidation_heldout_fraction="
+         << video_consolidation_config.heldout_fraction << "\n";
     text << "lower_v1_video_consolidation_frame_start_index="
          << video_consolidation_config.frame_start_index << "\n";
     text << "lower_v1_video_consolidation_frame_count="
@@ -10210,10 +13342,13 @@ void writeSummaryFiles(
          << video_consolidation_config.heldout_start_frame << "\n";
     text << "lower_v1_video_consolidation_heldout_excluded_frame_count="
          << video_consolidation_config.heldout_excluded_frame_count << "\n";
+    text << "lower_v1_video_consolidation_hva_predictor_split_used="
+         << (video_consolidation_config.heldout_split_uses_hva_predictor ? 1 : 0) << "\n";
     text << "lower_v1_video_consolidation_heldout_frames_used=0\n";
     text << "lower_v1_video_consolidation_present_frame_drive_only=1\n";
     text << "lower_v1_video_consolidation_future_frame_target_used=0\n";
     text << "lower_v1_video_consolidation_target_label_used=0\n";
+    text << "lower_v1_video_consolidation_hva_predictor_required=0\n";
     text << "lower_v1_video_consolidation_pre_l23e_repeat_corr="
          << video_consolidation_metrics.pre_l23e_repeat_corr << "\n";
     text << "lower_v1_video_consolidation_post_l23e_repeat_corr="
@@ -10297,6 +13432,68 @@ void writeSummaryFiles(
     for(const auto &metric : hva_predictor_result.metrics) {
         text << "hva_predictor_" << metric.first << "=" << metric.second << "\n";
     }
+    text << "periodic_local_geometry_enabled="
+         << (periodic_local_geometry_config.anyEnabled() ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_global_enabled="
+         << (periodic_local_geometry_config.global_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_default_off=1\n";
+    text << "periodic_l4_intersite_geometry_enabled="
+         << (periodic_local_geometry_config.l4_intersite_enabled ? 1 : 0) << "\n";
+    text << "periodic_l4_l23_geometry_enabled="
+         << (periodic_local_geometry_config.l4_l23_enabled ? 1 : 0) << "\n";
+    text << "periodic_l23_recurrent_geometry_enabled="
+         << (periodic_local_geometry_config.l23_recurrent_enabled ? 1 : 0) << "\n";
+    text << "periodic_inhibitory_geometry_enabled="
+         << (periodic_local_geometry_config.inhibitory_enabled ? 1 : 0) << "\n";
+    text << "periodic_l23pv_to_l23e_geometry_enabled="
+         << (periodic_local_geometry_config.l23pv_to_l23e_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_affects_l4_intersite="
+         << (periodic_local_geometry_config.l4_intersite_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_affects_l4_l23_feedforward="
+         << (periodic_local_geometry_config.l4_l23_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_affects_l23_recurrent="
+         << (periodic_local_geometry_config.l23_recurrent_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_affects_local_inhibitory="
+         << (periodic_local_geometry_config.inhibitory_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_affects_l23pv_to_l23e="
+         << (periodic_local_geometry_config.l23pv_to_l23e_enabled ? 1 : 0) << "\n";
+    text << "periodic_l23pv_to_l23e_geometry_affects_l23som_to_l23e=0\n";
+    text << "periodic_l23pv_to_l23e_geometry_affects_l23pv_to_l23pv=0\n";
+    text << "periodic_l23pv_to_l23e_geometry_affects_l4_local_inhibitory=0\n";
+    text << "periodic_l23pv_to_l23e_geometry_affects_l23e_recurrent=0\n";
+    text << "periodic_local_geometry_boundary_artifact_fix="
+         << (periodic_local_geometry_config.l4_intersite_enabled ? 1 : 0) << "\n";
+    text << "periodic_local_geometry_labels_used=0\n";
+    text << "periodic_local_geometry_validation_target_used=0\n";
+    text << "periodic_local_geometry_future_frame_used=0\n";
+    text << "periodic_l23pv_to_l23e_geometry_labels_used=0\n";
+    text << "periodic_l23pv_to_l23e_geometry_validation_target_used=0\n";
+    text << "periodic_l23pv_to_l23e_geometry_future_frame_used=0\n";
+    text << "boundary_ring_pv_compensation_enabled="
+         << (boundary_ring_pv_compensation_config.enabled ? 1 : 0) << "\n";
+    text << "boundary_ring_pv_compensation_inner_distance_sites="
+         << boundary_ring_pv_compensation_config.inner_distance << "\n";
+    text << "boundary_ring_pv_compensation_outer_distance_sites="
+         << boundary_ring_pv_compensation_config.outer_distance << "\n";
+    text << "boundary_ring_pv_compensation_pv_to_l23e_scale="
+         << boundary_ring_pv_compensation_config.pv_to_l23e_scale << "\n";
+    text << "boundary_ring_pv_compensation_l23pv_to_l23e_targeted_synapses="
+         << boundary_ring_pv_compensation_metrics.targeted_synapses << "\n";
+    text << "boundary_ring_pv_compensation_l23pv_to_l23e_total_synapses="
+         << boundary_ring_pv_compensation_metrics.total_synapses << "\n";
+    text << "boundary_ring_pv_compensation_l23pv_to_l23e_targeted_fraction="
+         << boundary_ring_pv_compensation_metrics.targeted_fraction << "\n";
+    text << "boundary_ring_pv_compensation_affects_l23pv_to_l23e="
+         << (boundary_ring_pv_compensation_config.enabled ? 1 : 0) << "\n";
+    text << "boundary_ring_pv_compensation_affects_l23som_to_l23e=0\n";
+    text << "boundary_ring_pv_compensation_affects_l23e_recurrent=0\n";
+    text << "boundary_ring_pv_compensation_coordinate_only=1\n";
+    text << "boundary_ring_pv_compensation_labels_used=0\n";
+    text << "boundary_ring_pv_compensation_activity_labels_used=0\n";
+    text << "boundary_ring_pv_compensation_orientation_label_used=0\n";
+    text << "boundary_ring_pv_compensation_validation_target_used=0\n";
+    text << "boundary_ring_pv_compensation_future_frame_used=0\n";
+    text << "boundary_ring_pv_compensation_output_assembly_used=0\n";
     text << "l23e_som_broad_recruitment_enabled="
          << (l23e_som_broad_recruitment_config.enabled ? 1 : 0) << "\n";
     text << "l23e_som_broad_recruitment_radius_sites="
@@ -10307,6 +13504,54 @@ void writeSummaryFiles(
          << (v1_genn::kL23EToSOMWeight * l23e_som_broad_recruitment_config.weight_scale) << "\n";
     text << "l23e_som_broad_recruitment_estimated_total_extra_fraction="
          << l23e_som_broad_estimated_total_extra_fraction << "\n";
+    text << "l23_within_site_competition_enabled="
+         << (l23_within_site_competition_config.enabled ? 1 : 0) << "\n";
+    text << "l23_within_site_competition_e_pv_scale="
+         << l23_within_site_competition_config.e_pv_scale << "\n";
+    text << "l23_within_site_competition_pv_e_scale="
+         << l23_within_site_competition_config.pv_e_scale << "\n";
+    text << "l23_within_site_competition_radius_sites=0\n";
+    text << "l23_within_site_competition_same_site_only="
+         << (l23_within_site_competition_config.enabled ? 1 : 0) << "\n";
+    text << "l23_within_site_competition_orientation_label_used=0\n";
+    text << "l23_within_site_competition_future_frame_used=0\n";
+    text << "l23_within_site_competition_validation_target_used=0\n";
+    text << "l23_within_site_competition_global_normalization_used=0\n";
+    text << "l23_within_site_competition_e_pv_weight="
+         << (v1_genn::kL23EToPVWeight * l23_within_site_competition_config.e_pv_scale) << "\n";
+    text << "l23_within_site_competition_pv_e_weight="
+        << (v1_genn::kL23PVToEWeight * l23_within_site_competition_config.pv_e_scale) << "\n";
+    text << "l23_output_assembly_enabled="
+        << (l23_output_assembly_config.enabled ? 1 : 0) << "\n";
+    text << "l23_output_assembly_cells_per_site="
+        << l23_output_assembly_config.cells_per_site << "\n";
+    text << "l23_output_assembly_population_name="
+        << l23_output_assembly_config.population_name << "\n";
+    text << "l23_output_assembly_selected_cell_fraction="
+        << (static_cast<double>(l23_output_assembly_config.cells_per_site)
+            / static_cast<double>(v1_genn::kL23EPerSite)) << "\n";
+    text << "l23_output_assembly_training_frames_only="
+        << (l23_output_assembly_config.enabled ? 1 : 0) << "\n";
+    text << "l23_output_assembly_fixed_mask="
+        << (l23_output_assembly_config.enabled ? 1 : 0) << "\n";
+    text << "l23_output_assembly_same_site_only="
+        << (l23_output_assembly_config.enabled ? 1 : 0) << "\n";
+    text << "l23_output_assembly_raw_l23e_rows_preserved=1\n";
+    text << "l23_output_assembly_future_frame_used=0\n";
+    text << "l23_output_assembly_heldout_frames_used=0\n";
+    text << "l23_output_assembly_target_label_used=0\n";
+    text << "l23_output_assembly_orientation_label_used=0\n";
+    text << "l23_output_assembly_validation_target_used=0\n";
+    text << "l23_output_assembly_hva_feedback_enabled=0\n";
+    text << "l23_output_assembly_global_normalization_used=0\n";
+    text << "l23_output_assembly_final_post_artifacts_enabled="
+        << ((l23_output_assembly_config.enabled && final_post_video != nullptr) ? 1 : 0) << "\n";
+    text << "l23_output_assembly_final_post_uses_same_fixed_mask="
+        << ((l23_output_assembly_config.enabled && final_post_video != nullptr) ? 1 : 0) << "\n";
+    text << "l23_output_assembly_selected_from_final_post=0\n";
+    text << "l23_output_assembly_final_post_raw_l23e_rows_preserved=1\n";
+    text << "l23_output_assembly_final_post_validation_target_used=0\n";
+    text << "l23_output_assembly_final_post_orientation_label_used=0\n";
     for(const NamedWeightStats &summary : additional_weight_stats) {
         text << summary.name << "_weights_before=count:" << summary.before.count
              << ",min:" << summary.before.min
@@ -10335,6 +13580,7 @@ void modelDefinition(GeNN::ModelSpec &model)
 {
     model.setDT(v1_genn::kDtMs);
     model.setName(v1_genn::kModelName);
+    const L23EAdaptationConfig l23e_adaptation_config = getL23EAdaptationConfig();
 
     auto *l4e = model.addNeuronPopulation<V1LIF>(
         "L4E",
@@ -10357,7 +13603,7 @@ void modelDefinition(GeNN::ModelSpec &model)
     auto *l23e = model.addNeuronPopulation<V1LIF>(
         "L23E",
         v1_genn::kNumL23E,
-        makeLIFParameters(v1_genn::kExcitatoryLIF),
+        makeLIFParameters(v1_genn::kExcitatoryLIF, l23e_adaptation_config),
         makeLIFVariables(v1_genn::kExcitatoryLIF, 0.0));
 
     auto *l23pv = model.addNeuronPopulation<V1LIF>(
@@ -10386,64 +13632,79 @@ void modelDefinition(GeNN::ModelSpec &model)
     l23som->setSpikeRecordingEnabled(true);
     l23vip->setSpikeRecordingEnabled(true);
 
+    const PeriodicLocalGeometryConfig periodic_local_geometry_config =
+        getPeriodicLocalGeometryConfig();
     const auto l4_ee_patch = makePatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL4EPerSite,
         v1_genn::kL4LocalRadius,
-        true);
+        true,
+        false);
     const auto l4_e_pv_patch = makePatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL4PVPerSite,
         v1_genn::kL4LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l4_e_som_patch = makePatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL4SOMPerSite,
         v1_genn::kL4LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l4_pv_e_patch = makePatchParameters(
         v1_genn::kL4PVPerSite,
         v1_genn::kL4EPerSite,
         v1_genn::kL4LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l4_pv_pv_patch = makePatchParameters(
         v1_genn::kL4PVPerSite,
         v1_genn::kL4PVPerSite,
         v1_genn::kL4LocalRadius,
-        true);
+        true,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l4_som_e_patch = makePatchParameters(
         v1_genn::kL4SOMPerSite,
         v1_genn::kL4EPerSite,
         v1_genn::kL4LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l4_som_pv_patch = makePatchParameters(
         v1_genn::kL4SOMPerSite,
         v1_genn::kL4PVPerSite,
         v1_genn::kL4LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const L4IntersiteConfig l4_intersite_config = getL4IntersiteConfig();
+    const double l4e_to_l23pv_weight_scale = getL4EToL23PVWeightScale();
     const auto l4_ee_intersite_patch = makeIntersitePatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL4EPerSite,
-        l4_intersite_config.radius);
+        l4_intersite_config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled);
     const auto l4_e_pv_intersite_patch = makeIntersitePatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL4PVPerSite,
-        l4_intersite_config.radius);
+        l4_intersite_config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled);
     const auto l4_pv_e_intersite_patch = makeIntersitePatchParameters(
         v1_genn::kL4PVPerSite,
         v1_genn::kL4EPerSite,
-        l4_intersite_config.radius);
+        l4_intersite_config.radius,
+        periodic_local_geometry_config.l4_intersite_enabled);
 
     const auto ff_e_patch = makeOrientationBiasedPatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL23EPerSite,
-        v1_genn::kFeedforwardRadius);
+        v1_genn::kFeedforwardRadius,
+        periodic_local_geometry_config.l4_l23_enabled);
     const auto ff_i_patch = makePatchParameters(
         v1_genn::kL4EPerSite,
         v1_genn::kL23PVPerSite,
         v1_genn::kFeedforwardRadius,
-        false);
+        false,
+        periodic_local_geometry_config.l4_l23_enabled);
 
     const auto l23_ee_patch = makeSparseDistancePatchParameters(
         v1_genn::kL23EPerSite,
@@ -10451,58 +13712,83 @@ void modelDefinition(GeNN::ModelSpec &model)
         v1_genn::kL23LocalRadius,
         true,
         kL23ERecurrentPeakProbability,
-        kL23ERecurrentDistanceSigmaSq);
+        kL23ERecurrentDistanceSigmaSq,
+        periodic_local_geometry_config.l23_recurrent_enabled);
     const auto l23_e_pv_patch = makePatchParameters(
         v1_genn::kL23EPerSite,
         v1_genn::kL23PVPerSite,
         v1_genn::kL23LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_e_som_patch = makePatchParameters(
         v1_genn::kL23EPerSite,
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23SOMInputRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const L23ESOMBroadRecruitmentConfig l23e_som_broad_recruitment_config =
         getL23ESOMBroadRecruitmentConfig();
     const auto l23_e_som_broad_recruitment_patch = makeIntersitePatchParameters(
         v1_genn::kL23EPerSite,
         v1_genn::kL23SOMPerSite,
-        l23e_som_broad_recruitment_config.radius);
+        l23e_som_broad_recruitment_config.radius,
+        periodic_local_geometry_config.inhibitory_enabled);
+    const L23WithinSiteCompetitionConfig l23_within_site_competition_config =
+        getL23WithinSiteCompetitionConfig();
+    const auto l23_e_pv_same_site_competition_patch = makePatchParameters(
+        v1_genn::kL23EPerSite,
+        v1_genn::kL23PVPerSite,
+        0u,
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
+    const auto l23_pv_e_same_site_competition_patch = makePatchParameters(
+        v1_genn::kL23PVPerSite,
+        v1_genn::kL23EPerSite,
+        0u,
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_e_vip_patch = makePatchParameters(
         v1_genn::kL23EPerSite,
         v1_genn::kL23VIPPerSite,
         v1_genn::kL23LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_pv_e_patch = makePatchParameters(
         v1_genn::kL23PVPerSite,
         v1_genn::kL23EPerSite,
         v1_genn::kL23LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.l23pv_to_l23e_enabled);
     const auto l23_pv_pv_patch = makePatchParameters(
         v1_genn::kL23PVPerSite,
         v1_genn::kL23PVPerSite,
         v1_genn::kL23LocalRadius,
-        true);
+        true,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_som_e_patch = makePatchParameters(
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23EPerSite,
         v1_genn::kL23SOMOutputRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_som_pv_patch = makePatchParameters(
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23PVPerSite,
         v1_genn::kL23SOMOutputRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_som_vip_patch = makePatchParameters(
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23VIPPerSite,
         v1_genn::kL23SOMOutputRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     const auto l23_vip_som_patch = makePatchParameters(
         v1_genn::kL23VIPPerSite,
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
 
     addLocalProjection(
         model,
@@ -10601,7 +13887,7 @@ void modelDefinition(GeNN::ModelSpec &model)
         "L4E_to_L23PV",
         l4e,
         l23pv,
-        v1_genn::kL4EToL23PVWeight,
+        v1_genn::kL4EToL23PVWeight * l4e_to_l23pv_weight_scale,
         v1_genn::kExcTauSynMs,
         ff_i_patch);
 
@@ -10625,6 +13911,17 @@ void modelDefinition(GeNN::ModelSpec &model)
         v1_genn::kL23EToPVWeight,
         v1_genn::kExcTauSynMs,
         l23_e_pv_patch);
+    if(l23_within_site_competition_config.enabled
+       && l23_within_site_competition_config.e_pv_scale > 0.0) {
+        addLocalProjection(
+            model,
+            "L23E_to_L23PV_within_site_competition",
+            l23e,
+            l23pv,
+            v1_genn::kL23EToPVWeight * l23_within_site_competition_config.e_pv_scale,
+            v1_genn::kExcTauSynMs,
+            l23_e_pv_same_site_competition_patch);
+    }
     addLocalProjection(
         model,
         "L23E_to_L23SOM",
@@ -10663,6 +13960,17 @@ void modelDefinition(GeNN::ModelSpec &model)
             kL23PVToL23EWeightMin,
             kL23PVToL23EWeightMax),
         l23_pv_e_patch);
+    if(l23_within_site_competition_config.enabled
+       && l23_within_site_competition_config.pv_e_scale > 0.0) {
+        addLocalProjection(
+            model,
+            "L23PV_to_L23E_within_site_competition",
+            l23pv,
+            l23e,
+            v1_genn::kL23PVToEWeight * l23_within_site_competition_config.pv_e_scale,
+            v1_genn::kPVInhTauSynMs,
+            l23_pv_e_same_site_competition_patch);
+    }
     addLocalProjection(
         model,
         "L23PV_to_L23PV",
@@ -10742,9 +14050,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const double l23pv_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23PV_CONTEXT_OUTPUT_SCALE",
         kDefaultL23PVContextOutputScale);
+    const double l4e_to_l23pv_weight_scale = getL4EToL23PVWeightScale();
     const double l23ee_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23EE_CONTEXT_OUTPUT_SCALE",
         kDefaultL23EEContextOutputScale);
+    const L23EAdaptationConfig l23e_adaptation_config = getL23EAdaptationConfig();
     const L4L23OrientationConfig l4_l23_orientation_config = getL4L23OrientationConfig();
     const L23EELognormalInitConfig l23ee_lognormal_init_config = getL23EELognormalInitConfig();
     const TrainingGratingConfig training_grating_config = getTrainingGratingConfig();
@@ -10772,23 +14082,45 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         getVideoFFHeterosynapticCompetitionConfig(video_replay_config);
     const VideoFFCoactivityCompetitionConfig video_ff_coactivity_competition_config =
         getVideoFFCoactivityCompetitionConfig(video_replay_config);
+    const VideoFFBCMCompetitionConfig video_ff_bcm_competition_config =
+        getVideoFFBCMCompetitionConfig(video_replay_config);
+    const VideoL23EPVRecruitmentConfig video_l23e_pv_recruitment_config =
+        getVideoL23EPVRecruitmentConfig(video_replay_config);
+    const VideoL4EL23PVRecruitmentConfig video_l4e_l23pv_recruitment_config =
+        getVideoL4EL23PVRecruitmentConfig(video_replay_config);
+    const VideoL23EIntrinsicHomeostasisConfig video_l23e_intrinsic_homeostasis_config =
+        getVideoL23EIntrinsicHomeostasisConfig(video_replay_config);
+    const VideoL23PushPullInhibitionConfig video_l23_push_pull_inhibition_config =
+        getVideoL23PushPullInhibitionConfig(video_replay_config);
     const VideoFFEventTraceConfig video_ff_event_trace_config =
         getVideoFFEventTraceConfig(video_replay_config);
     const PostVideoInhibitoryStabilizationConfig post_video_inhibitory_stabilization_config =
-        getPostVideoInhibitoryStabilizationConfig(video_replay_config);
+        getPostVideoInhibitoryStabilizationConfig(video_replay_config, l23pv_homeostatic_target_hz);
     const VideoEventTimingConfig video_event_timing_config =
         getVideoEventTimingConfig(video_replay_config);
     const HVAPredictorConfig hva_predictor_config =
         getHVAPredictorConfig(video_replay_config);
     const VideoConsolidationConfig video_consolidation_config =
         getVideoConsolidationConfig(video_replay_config, hva_predictor_config);
+    const L23OutputAssemblyConfig l23_output_assembly_config =
+        getL23OutputAssemblyConfig();
+    if(l23_output_assembly_config.enabled && !video_consolidation_config.enabled) {
+        throw std::runtime_error(
+            "V1_L23_OUTPUT_ASSEMBLY_ENABLE=1 requires enabled video consolidation for training-only selection.");
+    }
     const VideoRecurrentOnlyConsolidationConfig video_recurrent_only_consolidation_config =
-        getVideoRecurrentOnlyConsolidationConfig(video_replay_config, video_consolidation_config);
+        getVideoRecurrentOnlyConsolidationConfig(
+            video_replay_config,
+            video_consolidation_config,
+            l23ee_stdp_aplus,
+            l23ee_stdp_aminus);
     const bool post_video_inhibitory_stabilization_active =
         post_video_inhibitory_stabilization_config.enabled
         && video_consolidation_config.enabled;
     const L23ESOMBroadRecruitmentConfig l23e_som_broad_recruitment_config =
         getL23ESOMBroadRecruitmentConfig();
+    const L23WithinSiteCompetitionConfig l23_within_site_competition_config =
+        getL23WithinSiteCompetitionConfig();
     const std::vector<double> size_tuning_radii_sites = getEnvDoubleListOrDefault(
         "V1_SIZE_TUNING_RADII_SITES",
         kDefaultSizeTuningRadiiSites);
@@ -10838,6 +14170,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         }
     }
     const L4IntersiteConfig l4_intersite_config = getL4IntersiteConfig();
+    const PeriodicLocalGeometryConfig periodic_local_geometry_config =
+        getPeriodicLocalGeometryConfig();
+    const BoundaryRingPVCompensationConfig boundary_ring_pv_compensation_config =
+        getBoundaryRingPVCompensationConfig();
     const ValidationSiteConfig validation_site_config = getValidationSiteConfig(
         size_tuning_radii_sites,
         broad_stimulus_radius_sites);
@@ -10854,7 +14190,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     GeNN::NeuronGroup &l23som = requireNeuronGroup(model, "L23SOM");
     GeNN::NeuronGroup &l23vip = requireNeuronGroup(model, "L23VIP");
     GeNN::SynapseGroup &l4e_to_l23e = requireSynapseGroup(model, "L4E_to_L23E");
+    GeNN::SynapseGroup &l4e_to_l23pv = requireSynapseGroup(model, "L4E_to_L23PV");
     GeNN::SynapseGroup &l23e_to_l23e = requireSynapseGroup(model, "L23E_to_L23E");
+    GeNN::SynapseGroup &l23e_to_l23pv = requireSynapseGroup(model, "L23E_to_L23PV");
     GeNN::SynapseGroup &l23pv_to_l23e = requireSynapseGroup(model, "L23PV_to_L23E");
     GeNN::SynapseGroup &l23pv_to_l23pv = requireSynapseGroup(model, "L23PV_to_L23PV");
     GeNN::SynapseGroup &l23som_to_l23e = requireSynapseGroup(model, "L23SOM_to_L23E");
@@ -11011,12 +14349,21 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const std::size_t max_safe_recording_steps =
         static_cast<std::size_t>(
             (std::uint64_t{1} << 32u) / static_cast<std::uint64_t>(max_recording_words_per_step));
-    const std::size_t recording_buffer_steps =
+    const std::size_t requested_recording_buffer_steps =
         std::max<std::size_t>(
             1u,
             std::min(
                 total_recording_steps,
                 max_safe_recording_steps - std::min<std::size_t>(1024u, max_safe_recording_steps - 1u)));
+    const std::size_t recording_buffer_max_steps =
+        static_cast<std::size_t>(getEnvUnsignedOrDefault("V1_RECORDING_BUFFER_MAX_STEPS", 0u));
+    if(recording_buffer_max_steps == 0u && std::getenv("V1_RECORDING_BUFFER_MAX_STEPS") != nullptr) {
+        throw std::runtime_error("V1_RECORDING_BUFFER_MAX_STEPS must be positive when set.");
+    }
+    const std::size_t recording_buffer_steps =
+        recording_buffer_max_steps > 0u
+            ? std::min(requested_recording_buffer_steps, recording_buffer_max_steps)
+            : requested_recording_buffer_steps;
     const std::vector<float> video_drive_frames = loadVideoDriveFrames(video_replay_config);
 
     runtime.allocate(recording_buffer_steps);
@@ -11031,9 +14378,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         scaleSynapseWeights(runtime, l23som_to_l23pv, scale);
         scaleSynapseWeights(runtime, l23som_to_l23vip, scale);
     };
-    const auto scalePvOutputs = [&](double scale) {
+    const auto scalePvToL23EOutput = [&](double scale) {
         scaleSynapseWeights(runtime, l23pv_to_l23e, scale);
-        scaleSynapseWeights(runtime, l23pv_to_l23pv, scale);
     };
 
     setConstantExternalCurrent(runtime, l4pv, 0.0);
@@ -11048,29 +14394,51 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     GeNN::Runtime::ArrayBase &l4e_i_ext = requireArray(runtime, l4e, "Iext");
     float *l4e_i_ext_host = l4e_i_ext.getHostPointer<float>();
 
-    const std::vector<std::pair<unsigned int, unsigned int>> ff_edges = buildL4EToL23EConnectivity();
+    const std::vector<std::pair<unsigned int, unsigned int>> ff_edges =
+        buildL4EToL23EConnectivity(periodic_local_geometry_config.l4_l23_enabled);
     const std::vector<std::pair<unsigned int, unsigned int>> l23ee_edges = buildSparseDistanceConnectivity(
         v1_genn::kL23EPerSite,
         v1_genn::kL23EPerSite,
         v1_genn::kL23LocalRadius,
         true,
         kL23ERecurrentPeakProbability,
-        kL23ERecurrentDistanceSigmaSq);
+        kL23ERecurrentDistanceSigmaSq,
+        periodic_local_geometry_config.l23_recurrent_enabled);
+    const std::vector<std::pair<unsigned int, unsigned int>> l23e_pv_edges = buildLocalPatchConnectivity(
+        v1_genn::kL23EPerSite,
+        v1_genn::kL23PVPerSite,
+        v1_genn::kL23LocalRadius,
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
+    const std::vector<std::pair<unsigned int, unsigned int>> l4e_l23pv_edges = buildLocalPatchConnectivity(
+        v1_genn::kL4EPerSite,
+        v1_genn::kL23PVPerSite,
+        v1_genn::kFeedforwardRadius,
+        false,
+        periodic_local_geometry_config.l4_l23_enabled);
     const std::vector<std::pair<unsigned int, unsigned int>> l23pv_edges = buildLocalPatchConnectivity(
         v1_genn::kL23PVPerSite,
         v1_genn::kL23EPerSite,
         v1_genn::kL23LocalRadius,
-        false);
+        false,
+        periodic_local_geometry_config.l23pv_to_l23e_enabled);
     const std::vector<std::pair<unsigned int, unsigned int>> l23som_edges = buildLocalPatchConnectivity(
         v1_genn::kL23SOMPerSite,
         v1_genn::kL23EPerSite,
         v1_genn::kL23SOMOutputRadius,
-        false);
+        false,
+        periodic_local_geometry_config.inhibitory_enabled);
     applyL23EELognormalInitialWeights(
         runtime,
         l23e_to_l23e,
         l23ee_edges,
         l23ee_lognormal_init_config);
+    const BoundaryRingPVCompensationMetrics boundary_ring_pv_compensation_metrics =
+        applyBoundaryRingPVCompensation(
+            runtime,
+            l23pv_to_l23e,
+            l23pv_edges,
+            boundary_ring_pv_compensation_config);
     const std::vector<float> weights_before = copyWeights(runtime, l4e_to_l23e);
     const std::vector<float> l23ee_weights_before = copyWeights(runtime, l23e_to_l23e);
     const std::vector<float> l23pv_weights_before = copyWeights(runtime, l23pv_to_l23e);
@@ -11238,10 +14606,22 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                         unsigned int phase_cycle_offset,
                         double aperture_radius_sites,
                         unsigned int aperture_center_site = std::numeric_limits<unsigned int>::max(),
-                        double inhibitory_eta_scale = 1.0) {
+                        double inhibitory_eta_scale = 1.0,
+                        double inhibitory_pv_eta_scale = 1.0,
+                        double inhibitory_som_eta_scale = 1.0,
+                        double inhibitory_pv_target_hz = -1.0,
+                        bool inhibitory_pv_potentiation_only = false,
+                        bool inhibitory_som_potentiation_only = false) {
         (void)label;
-        if(!std::isfinite(inhibitory_eta_scale) || inhibitory_eta_scale < 0.0) {
+        if(!std::isfinite(inhibitory_eta_scale) || inhibitory_eta_scale < 0.0
+           || !std::isfinite(inhibitory_pv_eta_scale) || inhibitory_pv_eta_scale < 0.0
+           || !std::isfinite(inhibitory_som_eta_scale) || inhibitory_som_eta_scale < 0.0) {
             throw std::runtime_error("Inhibitory ETA scale must be finite and non-negative.");
+        }
+        const double effective_l23pv_target_hz =
+            (inhibitory_pv_target_hz >= 0.0) ? inhibitory_pv_target_hz : l23pv_homeostatic_target_hz;
+        if(!std::isfinite(effective_l23pv_target_hz) || effective_l23pv_target_hz < 0.0) {
+            throw std::runtime_error("L23PV TargetHz must be finite and non-negative.");
         }
         runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", feedforward_learning ? stdp_aplus : 0.0);
         runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", feedforward_learning ? stdp_aminus : 0.0);
@@ -11258,22 +14638,30 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         runtime.setDynamicParamValue(
             l23pv_to_l23e,
             "TargetHz",
-            l23pv_homeostatic_target_hz);
+            effective_l23pv_target_hz);
         runtime.setDynamicParamValue(
             l23som_to_l23e,
             "TargetHz",
             l23som_homeostatic_target_hz);
         runtime.setDynamicParamValue(
             l23pv_to_l23e,
+            "PotentiationOnly",
+            (inhibitory_learning && inhibitory_pv_potentiation_only) ? 1.0 : 0.0);
+        runtime.setDynamicParamValue(
+            l23som_to_l23e,
+            "PotentiationOnly",
+            (inhibitory_learning && inhibitory_som_potentiation_only) ? 1.0 : 0.0);
+        runtime.setDynamicParamValue(
+            l23pv_to_l23e,
             "Eta",
             (inhibitory_learning && l23pv_homeostatic_enabled)
-                ? (l23pv_homeostatic_eta * inhibitory_eta_scale)
+                ? (l23pv_homeostatic_eta * inhibitory_eta_scale * inhibitory_pv_eta_scale)
                 : 0.0);
         runtime.setDynamicParamValue(
             l23som_to_l23e,
             "Eta",
             (inhibitory_learning && l23som_homeostatic_enabled)
-                ? (l23som_homeostatic_eta * inhibitory_eta_scale)
+                ? (l23som_homeostatic_eta * inhibitory_eta_scale * inhibitory_som_eta_scale)
                 : 0.0);
 
         const auto pushDrivePhase = [&](double orientation_rad, double phase_rad, double aperture_radius, unsigned int aperture_center) {
@@ -11530,6 +14918,64 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     WeightDeltaMetrics video_ff_coactivity_competition_l4_l23_delta_metrics;
     unsigned int video_ff_coactivity_competition_application_count = 0u;
     std::vector<float> video_ff_coactivity_competition_weights_before;
+    const bool video_ff_bcm_competition_active =
+        video_ff_bcm_competition_config.enabled
+        && video_consolidation_config.enabled
+        && video_ff_stdp_config.enabled
+        && video_consolidation_config.l23ee_plasticity_enabled
+        && video_consolidation_config.inhibitory_homeostasis_enabled;
+    WeightDeltaMetrics video_ff_bcm_competition_l4_l23_delta_metrics;
+    IncomingMassRatioMetrics video_ff_bcm_competition_incoming_mass_metrics;
+    ActivityScoreMetrics video_ff_bcm_competition_activity_score_metrics;
+    unsigned int video_ff_bcm_competition_application_count = 0u;
+    unsigned int video_ff_bcm_competition_activity_window_count = 0u;
+    std::vector<float> video_ff_bcm_competition_weights_before;
+    std::vector<double> video_ff_bcm_competition_activity_scores;
+    const bool video_l23e_pv_recruitment_active =
+        video_l23e_pv_recruitment_config.enabled
+        && video_consolidation_config.enabled
+        && video_ff_stdp_config.enabled
+        && video_consolidation_config.l23ee_plasticity_enabled
+        && video_consolidation_config.inhibitory_homeostasis_enabled;
+    WeightDeltaMetrics video_l23e_pv_recruitment_delta_metrics;
+    ActivityScoreMetrics video_l23e_pv_recruitment_activity_score_metrics;
+    unsigned int video_l23e_pv_recruitment_application_count = 0u;
+    unsigned int video_l23e_pv_recruitment_activity_window_count = 0u;
+    std::vector<float> video_l23e_pv_recruitment_weights_before;
+    std::vector<double> video_l23e_pv_recruitment_activity_scores;
+    const bool video_l4e_l23pv_recruitment_active =
+        video_l4e_l23pv_recruitment_config.enabled
+        && video_consolidation_config.enabled
+        && video_ff_stdp_config.enabled
+        && video_consolidation_config.l23ee_plasticity_enabled
+        && video_consolidation_config.inhibitory_homeostasis_enabled;
+    WeightDeltaMetrics video_l4e_l23pv_recruitment_delta_metrics;
+    ActivityScoreMetrics video_l4e_l23pv_recruitment_activity_score_metrics;
+    unsigned int video_l4e_l23pv_recruitment_application_count = 0u;
+    unsigned int video_l4e_l23pv_recruitment_activity_window_count = 0u;
+    std::vector<float> video_l4e_l23pv_recruitment_weights_before;
+    std::vector<double> video_l4e_l23pv_recruitment_activity_scores;
+    const bool video_l23e_intrinsic_homeostasis_active =
+        video_l23e_intrinsic_homeostasis_config.enabled
+        && video_consolidation_config.enabled;
+    IntrinsicHomeostasisMetrics video_l23e_intrinsic_homeostasis_metrics;
+    unsigned int video_l23e_intrinsic_homeostasis_application_count = 0u;
+    unsigned int video_l23e_intrinsic_homeostasis_calibration_window_count = 0u;
+    const bool video_l23_push_pull_inhibition_active =
+        video_l23_push_pull_inhibition_config.enabled
+        && video_consolidation_config.enabled;
+    PushPullInhibitionMetrics video_l23_push_pull_inhibition_metrics;
+    WeightDeltaMetrics video_l23_push_pull_pv_delta_metrics;
+    WeightDeltaMetrics video_l23_push_pull_som_delta_metrics;
+    ActivityScoreMetrics video_l23_push_pull_ff_activity_score_metrics;
+    ActivityScoreMetrics video_l23_push_pull_pv_activity_score_metrics;
+    ActivityScoreMetrics video_l23_push_pull_som_activity_score_metrics;
+    unsigned int video_l23_push_pull_activity_window_count = 0u;
+    unsigned int video_l23_push_pull_application_count = 0u;
+    std::vector<double> video_l23_push_pull_l23e_spike_counts;
+    std::vector<double> video_l23_push_pull_ff_activity_scores;
+    std::vector<double> video_l23_push_pull_pv_activity_scores;
+    std::vector<double> video_l23_push_pull_som_activity_scores;
     const bool video_ff_event_trace_active =
         video_ff_event_trace_config.enabled
         && video_consolidation_config.enabled
@@ -11545,6 +14991,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     WeightDeltaMetrics post_video_inhibitory_stabilization_l23pv_to_l23e_delta_metrics;
     WeightDeltaMetrics post_video_inhibitory_stabilization_l23som_to_l23e_delta_metrics;
     unsigned int post_video_inhibitory_stabilization_tail_gate_post_cell_count = 0u;
+    unsigned int post_video_inhibitory_stabilization_all_site_application_count = 0u;
+    unsigned int post_video_inhibitory_stabilization_boundary_extra_application_count = 0u;
+    unsigned int post_video_inhibitory_stabilization_boundary_extra_post_cell_count = 0u;
     WeightDeltaMetrics video_recurrent_only_consolidation_l23ee_delta_metrics;
 
     auto runVideoBlock = [&](std::vector<TrialWindow> *trials,
@@ -11553,7 +15002,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                              unsigned int frame_start_index,
                              unsigned int frame_count,
                              bool recurrent_learning,
-                             bool inhibitory_learning) {
+                             bool inhibitory_learning,
+                             double effective_l23ee_stdp_aplus,
+                             double effective_l23ee_stdp_aminus) {
         if(!video_replay_config.enabled) {
             return;
         }
@@ -11571,6 +15022,14 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_ff_coactivity_competition_active && video_ff_stdp_active;
         const bool apply_event_trace_ff =
             video_ff_event_trace_active && video_ff_stdp_active;
+        const bool accumulate_bcm_ff_activity_score =
+            video_ff_bcm_competition_active && video_ff_stdp_active;
+        const bool accumulate_l23e_pv_recruitment_activity_score =
+            video_l23e_pv_recruitment_active && video_ff_stdp_active;
+        const bool accumulate_l4e_l23pv_recruitment_activity_score =
+            video_l4e_l23pv_recruitment_active && video_ff_stdp_active;
+        const bool accumulate_l23_push_pull_activity_score =
+            video_l23_push_pull_inhibition_active && video_ff_stdp_active;
         runtime.setDynamicParamValue(
             l4e_to_l23e,
             "Aplus",
@@ -11592,11 +15051,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         runtime.setDynamicParamValue(
             l23e_to_l23e,
             "Aplus",
-            (recurrent_learning && l23ee_plasticity_enabled) ? l23ee_stdp_aplus : 0.0);
+            (recurrent_learning && l23ee_plasticity_enabled) ? effective_l23ee_stdp_aplus : 0.0);
         runtime.setDynamicParamValue(
             l23e_to_l23e,
             "Aminus",
-            (recurrent_learning && l23ee_plasticity_enabled) ? l23ee_stdp_aminus : 0.0);
+            (recurrent_learning && l23ee_plasticity_enabled) ? effective_l23ee_stdp_aminus : 0.0);
         runtime.setDynamicParamValue(l23pv_to_l23e, "TargetHz", l23pv_homeostatic_target_hz);
         runtime.setDynamicParamValue(l23som_to_l23e, "TargetHz", l23som_homeostatic_target_hz);
         runtime.setDynamicParamValue(
@@ -11665,6 +15124,77 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             previous_l23e_spike_counts =
                 copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
         }
+        std::vector<double> previous_bcm_l4e_spike_counts;
+        std::vector<double> previous_bcm_l23e_spike_counts;
+        if(accumulate_bcm_ff_activity_score) {
+            previous_bcm_l4e_spike_counts =
+                copyNeuronScalarState(runtime, l4e, "SpikeCount", v1_genn::kNumL4E);
+            previous_bcm_l23e_spike_counts =
+                copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+            if(video_ff_bcm_competition_activity_scores.empty()) {
+                video_ff_bcm_competition_activity_scores.assign(
+                    copyWeights(runtime, l4e_to_l23e).size(),
+                    0.0);
+            }
+        }
+        std::vector<double> previous_recruitment_l23e_spike_counts;
+        std::vector<double> previous_recruitment_l23pv_spike_counts;
+        if(accumulate_l23e_pv_recruitment_activity_score) {
+            previous_recruitment_l23e_spike_counts =
+                copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+            previous_recruitment_l23pv_spike_counts =
+                copyNeuronScalarState(runtime, l23pv, "SpikeCount", v1_genn::kNumL23PV);
+            if(video_l23e_pv_recruitment_activity_scores.empty()) {
+                video_l23e_pv_recruitment_activity_scores.assign(
+                    copyWeights(runtime, l23e_to_l23pv).size(),
+                    0.0);
+            }
+        }
+        std::vector<double> previous_l4e_l23pv_recruitment_l4e_spike_counts;
+        std::vector<double> previous_l4e_l23pv_recruitment_l23pv_spike_counts;
+        if(accumulate_l4e_l23pv_recruitment_activity_score) {
+            previous_l4e_l23pv_recruitment_l4e_spike_counts =
+                copyNeuronScalarState(runtime, l4e, "SpikeCount", v1_genn::kNumL4E);
+            previous_l4e_l23pv_recruitment_l23pv_spike_counts =
+                copyNeuronScalarState(runtime, l23pv, "SpikeCount", v1_genn::kNumL23PV);
+            if(video_l4e_l23pv_recruitment_activity_scores.empty()) {
+                video_l4e_l23pv_recruitment_activity_scores.assign(
+                    copyWeights(runtime, l4e_to_l23pv).size(),
+                    0.0);
+            }
+        }
+        std::vector<double> previous_push_pull_l4e_spike_counts;
+        std::vector<double> previous_push_pull_l23e_spike_counts;
+        std::vector<double> previous_push_pull_l23pv_spike_counts;
+        std::vector<double> previous_push_pull_l23som_spike_counts;
+        if(accumulate_l23_push_pull_activity_score) {
+            previous_push_pull_l4e_spike_counts =
+                copyNeuronScalarState(runtime, l4e, "SpikeCount", v1_genn::kNumL4E);
+            previous_push_pull_l23e_spike_counts =
+                copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+            previous_push_pull_l23pv_spike_counts =
+                copyNeuronScalarState(runtime, l23pv, "SpikeCount", v1_genn::kNumL23PV);
+            previous_push_pull_l23som_spike_counts =
+                copyNeuronScalarState(runtime, l23som, "SpikeCount", v1_genn::kNumL23SOM);
+            if(video_l23_push_pull_l23e_spike_counts.empty()) {
+                video_l23_push_pull_l23e_spike_counts.assign(v1_genn::kNumL23E, 0.0);
+            }
+            if(video_l23_push_pull_ff_activity_scores.empty()) {
+                video_l23_push_pull_ff_activity_scores.assign(
+                    copyWeights(runtime, l4e_to_l23e).size(),
+                    0.0);
+            }
+            if(video_l23_push_pull_pv_activity_scores.empty()) {
+                video_l23_push_pull_pv_activity_scores.assign(
+                    copyWeights(runtime, l23pv_to_l23e).size(),
+                    0.0);
+            }
+            if(video_l23_push_pull_som_activity_scores.empty()) {
+                video_l23_push_pull_som_activity_scores.assign(
+                    copyWeights(runtime, l23som_to_l23e).size(),
+                    0.0);
+            }
+        }
         for(unsigned int repeat_index = 0; repeat_index < repeat_count; repeat_index++) {
             for(unsigned int frame_offset = 0; frame_offset < frame_count; frame_offset++) {
                 const unsigned int frame_index = frame_start_index + frame_offset;
@@ -11695,6 +15225,129 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 }
                 for(unsigned int step = 0; step < video_frame_steps; step++) {
                     stepSimulation();
+                }
+                if(accumulate_bcm_ff_activity_score) {
+                    const std::vector<double> current_l4e_spike_counts =
+                        copyNeuronScalarState(runtime, l4e, "SpikeCount", v1_genn::kNumL4E);
+                    const std::vector<double> current_l23e_spike_counts =
+                        copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+                    const std::vector<double> l4e_frame_spikes =
+                        nonnegativeStateDelta(current_l4e_spike_counts, previous_bcm_l4e_spike_counts);
+                    const std::vector<double> l23e_frame_spikes =
+                        nonnegativeStateDelta(current_l23e_spike_counts, previous_bcm_l23e_spike_counts);
+                    accumulateFFBCMActivityScores(
+                        video_ff_bcm_competition_activity_scores,
+                        ff_edges,
+                        l4e_frame_spikes,
+                        l23e_frame_spikes);
+                    video_ff_bcm_competition_activity_window_count++;
+                    previous_bcm_l4e_spike_counts = current_l4e_spike_counts;
+                    previous_bcm_l23e_spike_counts = current_l23e_spike_counts;
+                }
+                if(accumulate_l23e_pv_recruitment_activity_score) {
+                    const std::vector<double> current_l23e_spike_counts =
+                        copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+                    const std::vector<double> current_l23pv_spike_counts =
+                        copyNeuronScalarState(runtime, l23pv, "SpikeCount", v1_genn::kNumL23PV);
+                    const std::vector<double> l23e_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23e_spike_counts,
+                            previous_recruitment_l23e_spike_counts);
+                    const std::vector<double> l23pv_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23pv_spike_counts,
+                            previous_recruitment_l23pv_spike_counts);
+                    accumulateL23EPVRecruitmentActivityScores(
+                        video_l23e_pv_recruitment_activity_scores,
+                        l23e_pv_edges,
+                        l23e_frame_spikes,
+                        l23pv_frame_spikes);
+                    video_l23e_pv_recruitment_activity_window_count++;
+                    previous_recruitment_l23e_spike_counts = current_l23e_spike_counts;
+                    previous_recruitment_l23pv_spike_counts = current_l23pv_spike_counts;
+                }
+                if(accumulate_l4e_l23pv_recruitment_activity_score) {
+                    const std::vector<double> current_l4e_spike_counts =
+                        copyNeuronScalarState(runtime, l4e, "SpikeCount", v1_genn::kNumL4E);
+                    const std::vector<double> current_l23pv_spike_counts =
+                        copyNeuronScalarState(runtime, l23pv, "SpikeCount", v1_genn::kNumL23PV);
+                    const std::vector<double> l4e_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l4e_spike_counts,
+                            previous_l4e_l23pv_recruitment_l4e_spike_counts);
+                    const std::vector<double> l23pv_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23pv_spike_counts,
+                            previous_l4e_l23pv_recruitment_l23pv_spike_counts);
+                    accumulateSparseActivityScores(
+                        video_l4e_l23pv_recruitment_activity_scores,
+                        l4e_l23pv_edges,
+                        l4e_frame_spikes,
+                        l23pv_frame_spikes,
+                        v1_genn::kNumL4E,
+                        v1_genn::kNumL23PV,
+                        "L4E->L23PV recruitment");
+                    video_l4e_l23pv_recruitment_activity_window_count++;
+                    previous_l4e_l23pv_recruitment_l4e_spike_counts = current_l4e_spike_counts;
+                    previous_l4e_l23pv_recruitment_l23pv_spike_counts = current_l23pv_spike_counts;
+                }
+                if(accumulate_l23_push_pull_activity_score) {
+                    const std::vector<double> current_l4e_spike_counts =
+                        copyNeuronScalarState(runtime, l4e, "SpikeCount", v1_genn::kNumL4E);
+                    const std::vector<double> current_l23e_spike_counts =
+                        copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+                    const std::vector<double> current_l23pv_spike_counts =
+                        copyNeuronScalarState(runtime, l23pv, "SpikeCount", v1_genn::kNumL23PV);
+                    const std::vector<double> current_l23som_spike_counts =
+                        copyNeuronScalarState(runtime, l23som, "SpikeCount", v1_genn::kNumL23SOM);
+                    const std::vector<double> l4e_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l4e_spike_counts,
+                            previous_push_pull_l4e_spike_counts);
+                    const std::vector<double> l23e_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23e_spike_counts,
+                            previous_push_pull_l23e_spike_counts);
+                    const std::vector<double> l23pv_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23pv_spike_counts,
+                            previous_push_pull_l23pv_spike_counts);
+                    const std::vector<double> l23som_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23som_spike_counts,
+                            previous_push_pull_l23som_spike_counts);
+                    for(unsigned int post_id = 0; post_id < v1_genn::kNumL23E; post_id++) {
+                        video_l23_push_pull_l23e_spike_counts[post_id] += l23e_frame_spikes[post_id];
+                    }
+                    accumulateSparseActivityScores(
+                        video_l23_push_pull_ff_activity_scores,
+                        ff_edges,
+                        l4e_frame_spikes,
+                        l23e_frame_spikes,
+                        v1_genn::kNumL4E,
+                        v1_genn::kNumL23E,
+                        "L23 push-pull feedforward");
+                    accumulateSparseActivityScores(
+                        video_l23_push_pull_pv_activity_scores,
+                        l23pv_edges,
+                        l23pv_frame_spikes,
+                        l23e_frame_spikes,
+                        v1_genn::kNumL23PV,
+                        v1_genn::kNumL23E,
+                        "L23 push-pull PV");
+                    accumulateSparseActivityScores(
+                        video_l23_push_pull_som_activity_scores,
+                        l23som_edges,
+                        l23som_frame_spikes,
+                        l23e_frame_spikes,
+                        v1_genn::kNumL23SOM,
+                        v1_genn::kNumL23E,
+                        "L23 push-pull SOM");
+                    video_l23_push_pull_activity_window_count++;
+                    previous_push_pull_l4e_spike_counts = current_l4e_spike_counts;
+                    previous_push_pull_l23e_spike_counts = current_l23e_spike_counts;
+                    previous_push_pull_l23pv_spike_counts = current_l23pv_spike_counts;
+                    previous_push_pull_l23som_spike_counts = current_l23som_spike_counts;
                 }
                 if(apply_online_ff_competition) {
                     const unsigned int exposure_frame_number =
@@ -11781,7 +15434,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             0u,
             video_replay_config.effective_frame_count,
             false,
-            false);
+            false,
+            l23ee_stdp_aplus,
+            l23ee_stdp_aminus);
     };
 
     auto runVideoPreConsolidationReplay = [&]() {
@@ -11792,7 +15447,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_consolidation_config.frame_start_index,
             video_consolidation_config.frame_count,
             false,
-            false);
+            false,
+            l23ee_stdp_aplus,
+            l23ee_stdp_aminus);
     };
 
     auto runVideoConsolidation = [&]() {
@@ -11803,7 +15460,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_consolidation_config.frame_start_index,
             video_consolidation_config.frame_count,
             video_consolidation_config.l23ee_plasticity_enabled,
-            video_consolidation_config.inhibitory_homeostasis_enabled);
+            video_consolidation_config.inhibitory_homeostasis_enabled,
+            l23ee_stdp_aplus,
+            l23ee_stdp_aminus);
     };
 
     auto runVideoRecurrentOnlyConsolidation = [&]() {
@@ -11814,7 +15473,72 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_consolidation_config.frame_start_index,
             video_consolidation_config.frame_count,
             true,
-            false);
+            false,
+            video_recurrent_only_consolidation_config.l23ee_stdp_aplus,
+            video_recurrent_only_consolidation_config.l23ee_stdp_aminus);
+    };
+
+    auto runVideoIntrinsicHomeostasisCalibration = [&]() {
+        if(!video_l23e_intrinsic_homeostasis_active) {
+            return;
+        }
+        if(l4e_i_ext.getCount() != v1_genn::kNumL4E) {
+            throw std::runtime_error("L4E Iext size does not match video intrinsic calibration frame size.");
+        }
+        if(video_consolidation_config.frame_count == 0u
+           || video_consolidation_config.frame_start_index + video_consolidation_config.frame_count
+              > video_replay_config.effective_frame_count) {
+            throw std::runtime_error("Video intrinsic calibration frame range is outside the loaded drive frames.");
+        }
+
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "HeteroMinus", 0.0);
+        runtime.setDynamicParamValue(l4e_to_l23e, "PostTargetHz", kDefaultVideoFFEventTracePostTargetHz);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aplus", 0.0);
+        runtime.setDynamicParamValue(l23e_to_l23e, "Aminus", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "PotentiationOnly", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "PotentiationOnly", 0.0);
+
+        const std::vector<double> l23e_spike_counts_before =
+            copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+        const std::size_t frame_size = v1_genn::kNumL4E;
+        for(unsigned int repeat_index = 0;
+            repeat_index < video_consolidation_config.repeat_count;
+            repeat_index++) {
+            for(unsigned int frame_offset = 0;
+                frame_offset < video_consolidation_config.frame_count;
+                frame_offset++) {
+                const unsigned int frame_index =
+                    video_consolidation_config.frame_start_index + frame_offset;
+                const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
+                std::copy(
+                    video_drive_frames.data() + offset,
+                    video_drive_frames.data() + offset + frame_size,
+                    l4e_i_ext_host);
+                l4e_i_ext.pushToDevice();
+                for(unsigned int step = 0; step < video_frame_steps; step++) {
+                    stepSimulation();
+                }
+                video_l23e_intrinsic_homeostasis_calibration_window_count++;
+            }
+        }
+
+        const double calibration_duration_s =
+            (static_cast<double>(video_consolidation_config.repeat_count)
+             * static_cast<double>(video_consolidation_config.frame_count)
+             * video_replay_config.frame_ms)
+            / 1000.0;
+        video_l23e_intrinsic_homeostasis_metrics =
+            applyL23EIntrinsicHomeostasis(
+                runtime,
+                l23e,
+                l23e_spike_counts_before,
+                calibration_duration_s,
+                video_l23e_intrinsic_homeostasis_config);
+        video_l23e_intrinsic_homeostasis_application_count++;
     };
 
     auto runVideoEventTiming = [&]() {
@@ -11962,7 +15686,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         scaleSomToL23EOutput(l23som_context_output_scale);
     }
     if(l23pv_context_output_scale != 1.0) {
-        scalePvOutputs(l23pv_context_output_scale);
+        scalePvToL23EOutput(l23pv_context_output_scale);
     }
 
     if(sensory_assay_config.enabled) {
@@ -12087,6 +15811,15 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_ff_event_trace_weights_before = copyWeights(runtime, l4e_to_l23e);
             resetFeedforwardEventTraceState(runtime, l4e_to_l23e);
         }
+        if(video_ff_bcm_competition_active) {
+            video_ff_bcm_competition_weights_before = copyWeights(runtime, l4e_to_l23e);
+        }
+        if(video_l23e_pv_recruitment_active) {
+            video_l23e_pv_recruitment_weights_before = copyWeights(runtime, l23e_to_l23pv);
+        }
+        if(video_l4e_l23pv_recruitment_active) {
+            video_l4e_l23pv_recruitment_weights_before = copyWeights(runtime, l4e_to_l23pv);
+        }
         runVideoConsolidation();
         if(video_ff_coactivity_competition_application_count > 0u
            && !video_ff_coactivity_competition_weights_before.empty()) {
@@ -12113,6 +15846,91 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     video_ff_event_trace_weights_before,
                     video_ff_event_trace_weights_after);
         }
+        if(video_ff_bcm_competition_active
+           && !video_ff_bcm_competition_weights_before.empty()) {
+            video_ff_bcm_competition_activity_score_metrics =
+                summarizeFFBCMActivityScores(
+                    video_ff_bcm_competition_activity_scores,
+                    ff_edges);
+            const std::vector<float> video_ff_bcm_weights_before_competition =
+                copyWeights(runtime, l4e_to_l23e);
+            applyLocalPostSynapticBCMFFCompetition(
+                runtime,
+                l4e_to_l23e,
+                ff_edges,
+                video_ff_bcm_competition_activity_scores,
+                video_ff_bcm_competition_config.strength,
+                kStdpWeightMin,
+                kStdpWeightMax);
+            video_ff_bcm_competition_incoming_mass_metrics =
+                applyPostSynapticIncomingMassBounds(
+                    runtime,
+                    l4e_to_l23e,
+                    ff_edges,
+                    video_ff_bcm_competition_weights_before,
+                    video_ff_bcm_competition_config.mass_min_ratio,
+                    video_ff_bcm_competition_config.mass_max_ratio,
+                    kStdpWeightMin,
+                    kStdpWeightMax);
+            video_ff_bcm_competition_l4_l23_delta_metrics =
+                computeWeightDeltaMetrics(
+                    video_ff_bcm_weights_before_competition,
+                    copyWeights(runtime, l4e_to_l23e));
+            video_ff_bcm_competition_application_count++;
+        }
+        if(video_l23e_pv_recruitment_active
+           && !video_l23e_pv_recruitment_weights_before.empty()) {
+            video_l23e_pv_recruitment_activity_score_metrics =
+                summarizeL23EPVRecruitmentActivityScores(
+                    video_l23e_pv_recruitment_activity_scores,
+                    l23e_pv_edges);
+            const std::vector<float> video_l23e_pv_weights_before_recruitment =
+                copyWeights(runtime, l23e_to_l23pv);
+            applyLocalPostSynapticL23EPVRecruitment(
+                runtime,
+                l23e_to_l23pv,
+                l23e_pv_edges,
+                video_l23e_pv_recruitment_activity_scores,
+                video_l23e_pv_recruitment_config.strength,
+                video_l23e_pv_recruitment_config.mass_max_ratio,
+                0.0,
+                v1_genn::kL23EToPVWeight * 3.0);
+            video_l23e_pv_recruitment_delta_metrics =
+                computeWeightDeltaMetrics(
+                    video_l23e_pv_weights_before_recruitment,
+                    copyWeights(runtime, l23e_to_l23pv));
+            video_l23e_pv_recruitment_application_count++;
+        }
+        if(video_l4e_l23pv_recruitment_active
+           && !video_l4e_l23pv_recruitment_weights_before.empty()) {
+            video_l4e_l23pv_recruitment_activity_score_metrics =
+                summarizeSparseActivityScores(
+                    video_l4e_l23pv_recruitment_activity_scores,
+                    l4e_l23pv_edges,
+                    v1_genn::kNumL4E,
+                    v1_genn::kNumL23PV,
+                    "L4E->L23PV recruitment");
+            const std::vector<float> video_l4e_l23pv_weights_before_recruitment =
+                copyWeights(runtime, l4e_to_l23pv);
+            applyLocalPostSynapticExcitatoryRecruitment(
+                runtime,
+                l4e_to_l23pv,
+                l4e_l23pv_edges,
+                video_l4e_l23pv_recruitment_activity_scores,
+                v1_genn::kNumL4E,
+                v1_genn::kNumL23PV,
+                video_l4e_l23pv_recruitment_config.strength,
+                video_l4e_l23pv_recruitment_config.mass_max_ratio,
+                video_l4e_l23pv_recruitment_config.top_frac,
+                0.0,
+                v1_genn::kL4EToL23PVWeight * l4e_to_l23pv_weight_scale * 3.0,
+                "L4E->L23PV recruitment");
+            video_l4e_l23pv_recruitment_delta_metrics =
+                computeWeightDeltaMetrics(
+                    video_l4e_l23pv_weights_before_recruitment,
+                    copyWeights(runtime, l4e_to_l23pv));
+            video_l4e_l23pv_recruitment_application_count++;
+        }
         if(video_ff_homeostatic_scaling_active) {
             video_ff_homeostatic_scaling_l4_l23_delta_metrics =
                 scaleActiveSynapseWeightsClamped(
@@ -12121,6 +15939,73 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     video_ff_homeostatic_scaling_config.scale,
                     kStdpWeightMin,
                     kStdpWeightMax);
+        }
+        if(video_l23_push_pull_inhibition_active
+           && !video_l23_push_pull_ff_activity_scores.empty()
+           && !video_l23_push_pull_pv_activity_scores.empty()
+           && !video_l23_push_pull_som_activity_scores.empty()) {
+            video_l23_push_pull_ff_activity_score_metrics =
+                summarizeSparseActivityScores(
+                    video_l23_push_pull_ff_activity_scores,
+                    ff_edges,
+                    v1_genn::kNumL4E,
+                    v1_genn::kNumL23E,
+                    "L23 push-pull feedforward");
+            video_l23_push_pull_pv_activity_score_metrics =
+                summarizeSparseActivityScores(
+                    video_l23_push_pull_pv_activity_scores,
+                    l23pv_edges,
+                    v1_genn::kNumL23PV,
+                    v1_genn::kNumL23E,
+                    "L23 push-pull PV");
+            video_l23_push_pull_som_activity_score_metrics =
+                summarizeSparseActivityScores(
+                    video_l23_push_pull_som_activity_scores,
+                    l23som_edges,
+                    v1_genn::kNumL23SOM,
+                    v1_genn::kNumL23E,
+                    "L23 push-pull SOM");
+            const std::vector<double> feedforward_support_scores =
+                computePostSynapticSupportScores(
+                    video_l23_push_pull_ff_activity_scores,
+                    ff_edges,
+                    v1_genn::kNumL4E,
+                    v1_genn::kNumL23E,
+                    "L23 push-pull feedforward");
+            std::vector<double> weak_support_gate_by_post;
+            video_l23_push_pull_inhibition_metrics =
+                computePushPullWeakSupportGates(
+                    video_l23_push_pull_l23e_spike_counts,
+                    feedforward_support_scores,
+                    video_l23_push_pull_inhibition_config,
+                    weak_support_gate_by_post);
+            video_l23_push_pull_pv_delta_metrics =
+                applyLocalPushPullInhibition(
+                    runtime,
+                    l23pv_to_l23e,
+                    l23pv_edges,
+                    video_l23_push_pull_pv_activity_scores,
+                    weak_support_gate_by_post,
+                    v1_genn::kNumL23PV,
+                    v1_genn::kNumL23E,
+                    video_l23_push_pull_inhibition_config.strength,
+                    kL23PVToL23EWeightMin,
+                    kL23PVToL23EWeightMax,
+                    "L23 push-pull PV");
+            video_l23_push_pull_som_delta_metrics =
+                applyLocalPushPullInhibition(
+                    runtime,
+                    l23som_to_l23e,
+                    l23som_edges,
+                    video_l23_push_pull_som_activity_scores,
+                    weak_support_gate_by_post,
+                    v1_genn::kNumL23SOM,
+                    v1_genn::kNumL23E,
+                    video_l23_push_pull_inhibition_config.strength,
+                    kL23SOMToL23EWeightMin,
+                    kL23SOMToL23EWeightMax,
+                    "L23 push-pull SOM");
+            video_l23_push_pull_application_count++;
         }
         if(video_recurrent_only_consolidation_config.enabled) {
             const std::vector<float> l23ee_weights_before_recurrent_only_video =
@@ -12158,6 +16043,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             l23som_to_l23e,
             "TailGateHz",
             post_video_inhibitory_stabilization_config.tail_gate_hz);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "BoundaryGateEnable", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "BoundaryGateEnable", 0.0);
         for(unsigned int sweep = 0;
             sweep < post_video_inhibitory_stabilization_config.sweep_count;
             sweep++) {
@@ -12173,8 +16060,53 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 sweep,
                 -1.0,
                 std::numeric_limits<unsigned int>::max(),
-                sweep_eta_scale);
+                sweep_eta_scale,
+                post_video_inhibitory_stabilization_config.pv_eta_scale,
+                post_video_inhibitory_stabilization_config.som_eta_scale,
+                post_video_inhibitory_stabilization_config.pv_target_hz,
+                post_video_inhibitory_stabilization_config.pv_potentiation_only,
+                post_video_inhibitory_stabilization_config.som_potentiation_only);
             post_video_inhibitory_stabilization_application_count++;
+            post_video_inhibitory_stabilization_all_site_application_count++;
+        }
+        if(post_video_inhibitory_stabilization_config.boundary_extra_enabled) {
+            post_video_inhibitory_stabilization_boundary_extra_post_cell_count =
+                setHomeostaticBoundaryGate(
+                    runtime,
+                    l23pv_to_l23e,
+                    v1_genn::kNumL23E,
+                    true,
+                    post_video_inhibitory_stabilization_config.boundary_extra_max_distance);
+            const unsigned int som_boundary_extra_post_cell_count =
+                setHomeostaticBoundaryGate(
+                    runtime,
+                    l23som_to_l23e,
+                    v1_genn::kNumL23E,
+                    true,
+                    post_video_inhibitory_stabilization_config.boundary_extra_max_distance);
+            if(som_boundary_extra_post_cell_count
+               != post_video_inhibitory_stabilization_boundary_extra_post_cell_count) {
+                throw std::runtime_error("Post-video PV/SOM boundary-extra target counts diverged.");
+            }
+            runtime.setDynamicParamValue(l23pv_to_l23e, "BoundaryGateEnable", 1.0);
+            runtime.setDynamicParamValue(l23som_to_l23e, "BoundaryGateEnable", 1.0);
+            runSweep(
+                "post_video_inhibitory_stabilization_boundary_extra",
+                nullptr,
+                false,
+                false,
+                true,
+                post_video_inhibitory_stabilization_config.sweep_count,
+                -1.0,
+                std::numeric_limits<unsigned int>::max(),
+                post_video_inhibitory_stabilization_config.eta_scale,
+                post_video_inhibitory_stabilization_config.pv_eta_scale,
+                post_video_inhibitory_stabilization_config.som_eta_scale,
+                post_video_inhibitory_stabilization_config.pv_target_hz,
+                post_video_inhibitory_stabilization_config.pv_potentiation_only,
+                post_video_inhibitory_stabilization_config.som_potentiation_only);
+            post_video_inhibitory_stabilization_application_count++;
+            post_video_inhibitory_stabilization_boundary_extra_application_count++;
         }
         if(post_video_inhibitory_stabilization_config.tail_gate_enabled) {
             const double tail_gate_threshold_trace =
@@ -12190,8 +16122,26 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         }
         runtime.setDynamicParamValue(l23pv_to_l23e, "TailGateEnable", 0.0);
         runtime.setDynamicParamValue(l23som_to_l23e, "TailGateEnable", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "BoundaryGateEnable", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "BoundaryGateEnable", 0.0);
+        if(post_video_inhibitory_stabilization_config.boundary_extra_enabled) {
+            setHomeostaticBoundaryGate(
+                runtime,
+                l23pv_to_l23e,
+                v1_genn::kNumL23E,
+                false,
+                post_video_inhibitory_stabilization_config.boundary_extra_max_distance);
+            setHomeostaticBoundaryGate(
+                runtime,
+                l23som_to_l23e,
+                v1_genn::kNumL23E,
+                false,
+                post_video_inhibitory_stabilization_config.boundary_extra_max_distance);
+        }
         runtime.setDynamicParamValue(l23pv_to_l23e, "Eta", 0.0);
         runtime.setDynamicParamValue(l23som_to_l23e, "Eta", 0.0);
+        runtime.setDynamicParamValue(l23pv_to_l23e, "PotentiationOnly", 0.0);
+        runtime.setDynamicParamValue(l23som_to_l23e, "PotentiationOnly", 0.0);
         post_video_inhibitory_stabilization_l23pv_to_l23e_delta_metrics =
             computeWeightDeltaMetrics(
                 l23pv_weights_before_stabilization,
@@ -12201,6 +16151,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 l23som_weights_before_stabilization,
                 copyWeights(runtime, l23som_to_l23e));
     }
+    runVideoIntrinsicHomeostasisCalibration();
     if(video_consolidation_config.enabled) {
         runSweep("final_post_video", &final_post_video_trials, false, false, false, 0u, -1.0);
         if(multiphase_cell_coverage_enabled) {
@@ -12251,7 +16202,6 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     runVideoEventTiming();
 
     flushRecordingWindow();
-    (void)recording_segment_flush_count;
     if(l4e_recordings.empty() || l4pv_recordings.empty() || l4som_recordings.empty()
        || l23e_recordings.empty() || l23pv_recordings.empty() || l23som_recordings.empty()
        || l23vip_recordings.empty()) {
@@ -12369,6 +16319,30 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_replay_config.enabled
             ? countSiteSpikesForTrials(l23som_recordings.at(0), video_replay_trials, v1_genn::kL23SOMPerSite)
             : std::vector<double>();
+    const std::vector<double> l23_output_assembly_training_cell_counts =
+        l23_output_assembly_config.enabled
+            ? countNeuronSpikesForTrials(l23e_recordings.at(0), video_consolidation_trials, v1_genn::kNumL23E)
+            : std::vector<double>();
+    const std::vector<unsigned char> l23_output_assembly_mask =
+        l23_output_assembly_config.enabled
+            ? selectL23OutputAssemblyMask(
+                l23_output_assembly_training_cell_counts,
+                l23_output_assembly_config)
+            : std::vector<unsigned char>();
+    const std::vector<double> video_l23_output_site_counts =
+        l23_output_assembly_config.enabled
+            ? countMaskedL23ESiteSpikesForTrials(
+                l23e_recordings.at(0),
+                video_replay_trials,
+                l23_output_assembly_mask)
+            : std::vector<double>();
+    const std::vector<double> final_post_video_l23_output_site_counts =
+        (video_consolidation_config.enabled && l23_output_assembly_config.enabled)
+            ? countMaskedL23ESiteSpikesForTrials(
+                l23e_recordings.at(0),
+                final_post_video_trials,
+                l23_output_assembly_mask)
+            : std::vector<double>();
     const std::vector<double> video_l4e_population_rates =
         video_replay_config.enabled
             ? countPopulationRatesForTrials(l4e_recordings.at(0), video_replay_trials, v1_genn::kNumL4E)
@@ -12384,6 +16358,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const std::vector<double> video_l23som_population_rates =
         video_replay_config.enabled
             ? countPopulationRatesForTrials(l23som_recordings.at(0), video_replay_trials, v1_genn::kNumL23SOM)
+            : std::vector<double>();
+    const std::vector<double> video_l23_output_population_rates =
+        l23_output_assembly_config.enabled
+            ? maskedPopulationRatesFromSiteCounts(
+                video_l23_output_site_counts,
+                video_replay_trials,
+                l23_output_assembly_config.cells_per_site)
             : std::vector<double>();
     const double video_consolidation_l4_l23_weight_delta_max =
         video_consolidation_config.enabled
@@ -12571,6 +16552,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_consolidation_config.enabled
             ? computeSiteMetrics(final_post_video_trials, final_post_video_l23vip_site_counts, v1_genn::kL23VIPPerSite)
             : std::vector<PopulationSiteMetrics>();
+    const std::vector<PopulationSiteMetrics> final_post_video_l23_output_sites =
+        (video_consolidation_config.enabled && l23_output_assembly_config.enabled)
+            ? computeSiteMetrics(
+                final_post_video_trials,
+                final_post_video_l23_output_site_counts,
+                l23_output_assembly_config.cells_per_site)
+            : std::vector<PopulationSiteMetrics>();
     const std::vector<CellTuningMetrics> post_l23e_cell_tuning =
         computeCellTuningMetrics(post_trials, post_l23_cell_counts, v1_genn::kNumL23E, v1_genn::kL23EPerSite);
     const std::vector<MultiPhaseCellTuningMetrics> multiphase_l23e_cell_tuning =
@@ -12600,6 +16588,16 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 cell_coverage_phase_count,
                 v1_genn::kNumL23E,
                 v1_genn::kL23EPerSite)
+            : std::vector<MultiPhaseCellTuningMetrics>();
+    const std::vector<CellTuningMetrics> final_post_video_l23_output_cell_tuning =
+        (video_consolidation_config.enabled && l23_output_assembly_config.enabled)
+            ? filterCellTuningByMask(final_post_video_l23e_cell_tuning, l23_output_assembly_mask)
+            : std::vector<CellTuningMetrics>();
+    const std::vector<MultiPhaseCellTuningMetrics> final_post_video_l23_output_multiphase_cell_tuning =
+        (video_consolidation_config.enabled && multiphase_cell_coverage_enabled && l23_output_assembly_config.enabled)
+            ? filterMultiPhaseCellTuningByMask(
+                final_post_video_multiphase_l23e_cell_tuning,
+                l23_output_assembly_mask)
             : std::vector<MultiPhaseCellTuningMetrics>();
     const std::vector<CellTuningMetrics> recurrence_l23e_cell_tuning =
         computeCellTuningMetrics(
@@ -12805,12 +16803,29 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             output_prefix + "_final_post_video_l23e_cell_tuning.csv",
             orientations_rad,
             final_post_video_l23e_cell_tuning);
+        if(l23_output_assembly_config.enabled) {
+            writePopulationSiteMetricsCsv(
+                output_prefix + "_final_post_video_l23e_output_sites.csv",
+                final_post_video,
+                final_post_video_l23_output_sites);
+            writeL23ECellTuningCsv(
+                output_prefix + "_final_post_video_l23e_output_cell_tuning.csv",
+                orientations_rad,
+                final_post_video_l23_output_cell_tuning);
+        }
         if(multiphase_cell_coverage_enabled) {
             writeL23ECellTuningMultiPhaseCsv(
                 output_prefix + "_final_post_video_l23e_cell_tuning_multiphase.csv",
                 orientations_rad,
                 final_post_video_multiphase_l23e_cell_tuning,
                 cell_coverage_phase_count);
+            if(l23_output_assembly_config.enabled) {
+                writeL23ECellTuningMultiPhaseCsv(
+                    output_prefix + "_final_post_video_l23e_output_cell_tuning_multiphase.csv",
+                    orientations_rad,
+                    final_post_video_l23_output_multiphase_cell_tuning,
+                    cell_coverage_phase_count);
+            }
         }
         writeContextValidationCsv(
             output_prefix + "_final_post_video_som_context_validation.csv",
@@ -12889,7 +16904,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_l4e_population_rates,
             video_l23e_population_rates,
             video_l23pv_population_rates,
-            video_l23som_population_rates);
+            video_l23som_population_rates,
+            l23_output_assembly_config,
+            video_l23_output_population_rates);
         writeVideoSiteRatesCsv(
             output_prefix + "_video_site_rates.csv",
             video_frame_records,
@@ -12897,14 +16914,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_l4e_site_counts,
             video_l23e_site_counts,
             video_l23pv_site_counts,
-            video_l23som_site_counts);
+            video_l23som_site_counts,
+            l23_output_assembly_config,
+            video_l23_output_site_counts);
         writeVideoFrameSummaryCsv(
             output_prefix + "_video_frame_summary.csv",
             video_frame_records,
             video_l4e_population_rates,
             video_l23e_population_rates,
             video_l23pv_population_rates,
-            video_l23som_population_rates);
+            video_l23som_population_rates,
+            l23_output_assembly_config,
+            video_l23_output_population_rates);
     }
     if(video_ff_event_trace_config.enabled
        && !video_ff_event_trace_weights_before.empty()
@@ -12917,7 +16938,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             ff_edges,
             l4e_recordings.at(0),
             l23e_recordings.at(0),
-            video_consolidation_trials);
+            video_consolidation_trials,
+            periodic_local_geometry_config.l4_l23_enabled);
     }
     if(video_consolidation_config.requested) {
         writeVideoConsolidationMetricsCsv(
@@ -12938,6 +16960,40 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_ff_coactivity_competition_config,
             video_ff_coactivity_competition_application_count,
             video_ff_coactivity_competition_l4_l23_delta_metrics,
+            video_ff_bcm_competition_active,
+            video_ff_bcm_competition_config,
+            video_ff_bcm_competition_application_count,
+            video_ff_bcm_competition_activity_window_count,
+            video_ff_bcm_competition_l4_l23_delta_metrics,
+            video_ff_bcm_competition_activity_score_metrics,
+            video_ff_bcm_competition_incoming_mass_metrics,
+            video_l23e_pv_recruitment_active,
+            video_l23e_pv_recruitment_config,
+            video_l23e_pv_recruitment_application_count,
+            video_l23e_pv_recruitment_activity_window_count,
+            video_l23e_pv_recruitment_delta_metrics,
+            video_l23e_pv_recruitment_activity_score_metrics,
+            video_l4e_l23pv_recruitment_active,
+            video_l4e_l23pv_recruitment_config,
+            video_l4e_l23pv_recruitment_application_count,
+            video_l4e_l23pv_recruitment_activity_window_count,
+            video_l4e_l23pv_recruitment_delta_metrics,
+            video_l4e_l23pv_recruitment_activity_score_metrics,
+            video_l23e_intrinsic_homeostasis_active,
+            video_l23e_intrinsic_homeostasis_config,
+            video_l23e_intrinsic_homeostasis_application_count,
+            video_l23e_intrinsic_homeostasis_calibration_window_count,
+            video_l23e_intrinsic_homeostasis_metrics,
+            video_l23_push_pull_inhibition_active,
+            video_l23_push_pull_inhibition_config,
+            video_l23_push_pull_application_count,
+            video_l23_push_pull_activity_window_count,
+            video_l23_push_pull_inhibition_metrics,
+            video_l23_push_pull_ff_activity_score_metrics,
+            video_l23_push_pull_pv_activity_score_metrics,
+            video_l23_push_pull_som_activity_score_metrics,
+            video_l23_push_pull_pv_delta_metrics,
+            video_l23_push_pull_som_delta_metrics,
             video_ff_event_trace_active,
             video_ff_event_trace_config,
             video_ff_event_trace_application_count,
@@ -12990,6 +17046,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     writeL4IntersiteDiagnosticsCsv(
         output_prefix + "_l4_intersite_diagnostics.csv",
         l4_intersite_config,
+        periodic_local_geometry_config,
         size_tuning_radii_sites,
         size_validation_metrics,
         baseline,
@@ -13008,7 +17065,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         l23ee_weights_before,
         l23ee_weights_after,
         l23ee_edges,
-        post_l23e_cell_tuning);
+        post_l23e_cell_tuning,
+        periodic_local_geometry_config.l23_recurrent_enabled);
     const std::vector<double> l23ee_initial_active_values = positiveWeightValues(l23ee_weights_before);
     const double l23ee_initial_active_mean = l23ee_initial_active_values.empty()
         ? 0.0
@@ -13036,7 +17094,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         l23ee_initial_active_mean,
         l23ee_initial_active_gini,
         l23ee_initial_top10_mass_share,
+        l23ee_stdp_aplus,
+        l23ee_stdp_aminus,
         l23pv_context_output_scale,
+        l4e_to_l23pv_weight_scale,
+        l23e_adaptation_config,
         orientation_context_assay_config,
         sensory_assay_config,
         video_replay_config,
@@ -13053,6 +17115,35 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_ff_coactivity_competition_config,
         video_ff_coactivity_competition_application_count,
         video_ff_coactivity_competition_l4_l23_delta_metrics,
+        video_ff_bcm_competition_config,
+        video_ff_bcm_competition_application_count,
+        video_ff_bcm_competition_activity_window_count,
+        video_ff_bcm_competition_l4_l23_delta_metrics,
+        video_ff_bcm_competition_activity_score_metrics,
+        video_ff_bcm_competition_incoming_mass_metrics,
+        video_l23e_pv_recruitment_config,
+        video_l23e_pv_recruitment_application_count,
+        video_l23e_pv_recruitment_activity_window_count,
+        video_l23e_pv_recruitment_delta_metrics,
+        video_l23e_pv_recruitment_activity_score_metrics,
+        video_l4e_l23pv_recruitment_config,
+        video_l4e_l23pv_recruitment_application_count,
+        video_l4e_l23pv_recruitment_activity_window_count,
+        video_l4e_l23pv_recruitment_delta_metrics,
+        video_l4e_l23pv_recruitment_activity_score_metrics,
+        video_l23e_intrinsic_homeostasis_config,
+        video_l23e_intrinsic_homeostasis_application_count,
+        video_l23e_intrinsic_homeostasis_calibration_window_count,
+        video_l23e_intrinsic_homeostasis_metrics,
+        video_l23_push_pull_inhibition_config,
+        video_l23_push_pull_application_count,
+        video_l23_push_pull_activity_window_count,
+        video_l23_push_pull_inhibition_metrics,
+        video_l23_push_pull_ff_activity_score_metrics,
+        video_l23_push_pull_pv_activity_score_metrics,
+        video_l23_push_pull_som_activity_score_metrics,
+        video_l23_push_pull_pv_delta_metrics,
+        video_l23_push_pull_som_delta_metrics,
         video_ff_event_trace_config,
         video_ff_event_trace_application_count,
         video_ff_event_trace_l4_l23_delta_metrics,
@@ -13060,6 +17151,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         post_video_inhibitory_stabilization_config,
         post_video_inhibitory_stabilization_application_count,
         post_video_inhibitory_stabilization_tail_gate_post_cell_count,
+        post_video_inhibitory_stabilization_all_site_application_count,
+        post_video_inhibitory_stabilization_boundary_extra_application_count,
+        post_video_inhibitory_stabilization_boundary_extra_post_cell_count,
         post_video_inhibitory_stabilization_l23pv_to_l23e_delta_metrics,
         post_video_inhibitory_stabilization_l23som_to_l23e_delta_metrics,
         video_event_timing_config,
@@ -13069,5 +17163,15 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_consolidation_metrics,
         hva_predictor_config,
         hva_predictor_result,
-        l23e_som_broad_recruitment_config);
+        periodic_local_geometry_config,
+        boundary_ring_pv_compensation_config,
+        boundary_ring_pv_compensation_metrics,
+        l23e_som_broad_recruitment_config,
+        l23_within_site_competition_config,
+        l23_output_assembly_config,
+        total_recording_steps,
+        requested_recording_buffer_steps,
+        recording_buffer_steps,
+        recording_buffer_max_steps,
+        recording_segment_flush_count);
 }

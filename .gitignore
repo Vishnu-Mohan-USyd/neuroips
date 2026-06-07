@@ -7,6 +7,8 @@ __pycache__/
 *.zip.part
 
 # GeNN generated/build artifacts and experiment outputs
+.local_genn/
+.runs/
 genn/*_CODE/
 genn/v1_*_*.csv
 genn/v1_*_*.txt

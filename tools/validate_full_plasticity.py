@@ -445,8 +445,11 @@ class RunData:
     final_post_video_site_rates: dict[str, list[float]] | None = None
     final_post_video_l4_sites: list[PostSiteMetric] | None = None
     final_post_video_l23e_sites: list[PostSiteMetric] | None = None
+    final_post_video_l23_output_sites: list[PostSiteMetric] | None = None
     final_post_video_l23e_cell_tuning: dict[int, CellTuningRow] | None = None
     final_post_video_l23e_cell_tuning_multiphase: dict[int, MultiPhaseCellTuningRow] | None = None
+    final_post_video_l23_output_cell_tuning: dict[int, CellTuningRow] | None = None
+    final_post_video_l23_output_cell_tuning_multiphase: dict[int, MultiPhaseCellTuningRow] | None = None
     final_post_video_context_rows: dict[tuple[str, str], ContextRow] | None = None
     final_post_video_context_rows_by_site: dict[int, dict[tuple[str, str], ContextRow]] | None = None
     final_post_video_size_tuning_rows: list[SizeTuningRow] | None = None
@@ -469,6 +472,25 @@ class RunData:
     specificity_rows: list[SpecificityRow] | None = None
     l23e_cell_tuning: dict[int, CellTuningRow] | None = None
     l23e_cell_tuning_multiphase: dict[int, MultiPhaseCellTuningRow] | None = None
+
+
+@dataclass(frozen=True)
+class ValidationCoreCrop:
+    """Declared central core used for halo/context simulation audits."""
+
+    enabled: bool
+    sheet_side: int
+    core_side: int
+    offset_x: int
+    offset_y: int
+
+    @property
+    def core_site_count(self) -> int:
+        return self.core_side * self.core_side if self.enabled else self.sheet_side * self.sheet_side
+
+    @property
+    def halo_site_count(self) -> int:
+        return (self.sheet_side * self.sheet_side) - self.core_site_count
 
 
 WEIGHT_SPECS = (
@@ -626,6 +648,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--l23-video-population",
+        default="l23e",
+        help=(
+            "Video site/population label to evaluate for L2/3 video reliability gates. "
+            "Defaults to raw l23e; raw l23e audit metrics are still reported when another "
+            "population such as l23e_output is selected."
+        ),
+    )
+    parser.add_argument(
         "--l23-video-min-raw-oracle-at-k",
         type=float,
         default=0.45,
@@ -757,6 +788,154 @@ def parse_summary_csv(path: Path) -> dict[str, float]:
     if not summary:
         raise ValidationError(f"Summary file is empty: {path}")
     return summary
+
+
+def summary_int(summary: dict[str, float], key: str, default: int) -> int:
+    value = summary.get(key, float(default))
+    if not math.isfinite(value):
+        raise ValidationError(f"Non-finite summary metric {key!r}.")
+    rounded = int(round(value))
+    if abs(value - rounded) > 1.0e-6:
+        raise ValidationError(f"Summary metric {key!r} must be integer-like, got {value}.")
+    return rounded
+
+
+def validation_core_crop_from_summary(summary: dict[str, float]) -> ValidationCoreCrop:
+    sheet_side = summary_int(summary, "validation_sheet_side", 0)
+    if sheet_side <= 0:
+        return ValidationCoreCrop(False, 0, 0, 0, 0)
+    enabled = summary.get("validation_core_enabled", 0.0) >= 0.5
+    core_side = summary_int(summary, "validation_core_side", 0)
+    offset_x = summary_int(summary, "validation_core_offset_x_sites", 0)
+    offset_y = summary_int(summary, "validation_core_offset_y_sites", 0)
+    if not enabled:
+        return ValidationCoreCrop(False, sheet_side, 0, 0, 0)
+    if core_side <= 0 or core_side > sheet_side:
+        raise ValidationError(
+            f"Invalid validation core side {core_side} for sheet side {sheet_side}."
+        )
+    if offset_x < 0 or offset_y < 0 or offset_x + core_side > sheet_side or offset_y + core_side > sheet_side:
+        raise ValidationError(
+            "Validation core offset plus side must fit inside the declared sheet."
+        )
+    return ValidationCoreCrop(True, sheet_side, core_side, offset_x, offset_y)
+
+
+def validation_core_crop_from_run(run: RunData) -> ValidationCoreCrop:
+    return validation_core_crop_from_summary(run.summary)
+
+
+def site_in_validation_core(site_id: int, crop: ValidationCoreCrop) -> bool:
+    if not crop.enabled:
+        return True
+    if site_id < 0 or site_id >= crop.sheet_side * crop.sheet_side:
+        return False
+    x = site_id % crop.sheet_side
+    y = site_id // crop.sheet_side
+    return (
+        crop.offset_x <= x < crop.offset_x + crop.core_side
+        and crop.offset_y <= y < crop.offset_y + crop.core_side
+    )
+
+
+def local_core_site_id(site_id: int, crop: ValidationCoreCrop) -> int:
+    if not crop.enabled:
+        return site_id
+    if not site_in_validation_core(site_id, crop):
+        raise ValidationError(f"Site {site_id} is outside the declared validation core.")
+    x = site_id % crop.sheet_side
+    y = site_id // crop.sheet_side
+    return ((y - crop.offset_y) * crop.core_side) + (x - crop.offset_x)
+
+
+def filter_post_site_metrics_for_core(
+    rows: list[PostSiteMetric] | None,
+    crop: ValidationCoreCrop,
+) -> list[PostSiteMetric] | None:
+    if rows is None or not crop.enabled:
+        return rows
+    return [row for row in rows if site_in_validation_core(row.site_id, crop)]
+
+
+def filter_cell_tuning_for_core(
+    rows: dict[int, CellTuningRow] | None,
+    crop: ValidationCoreCrop,
+) -> dict[int, CellTuningRow] | None:
+    if rows is None or not crop.enabled:
+        return rows
+    return {
+        cell_id: row
+        for cell_id, row in rows.items()
+        if site_in_validation_core(row.site_id, crop)
+    }
+
+
+def filter_multiphase_cell_tuning_for_core(
+    rows: dict[int, MultiPhaseCellTuningRow] | None,
+    crop: ValidationCoreCrop,
+) -> dict[int, MultiPhaseCellTuningRow] | None:
+    if rows is None or not crop.enabled:
+        return rows
+    return {
+        cell_id: row
+        for cell_id, row in rows.items()
+        if site_in_validation_core(row.site_id, crop)
+    }
+
+
+def filter_video_site_rows_for_core(
+    rows: list[VideoSiteRateRow] | None,
+    crop: ValidationCoreCrop,
+    *,
+    remap_site_ids: bool,
+) -> list[VideoSiteRateRow] | None:
+    if rows is None or not crop.enabled:
+        return rows
+    filtered: list[VideoSiteRateRow] = []
+    for row in rows:
+        if not site_in_validation_core(row.site_id, crop):
+            continue
+        site_id = local_core_site_id(row.site_id, crop) if remap_site_ids else row.site_id
+        filtered.append(replace(row, site_id=site_id))
+    return filtered
+
+
+def median_osi_for_site_rows(rows: list[PostSiteMetric]) -> float:
+    value = optional_median(row.osi for row in rows if row.osi is not None)
+    if value is None:
+        raise ValidationError("Median OSI requires at least one site row with OSI.")
+    return value
+
+
+def print_validation_core_crop_info(
+    run_label: str,
+    run: RunData,
+    crop: ValidationCoreCrop,
+    l23_sites: list[PostSiteMetric] | None,
+) -> None:
+    if not crop.enabled:
+        return
+    core_rows = filter_post_site_metrics_for_core(l23_sites, crop) if l23_sites is not None else None
+    halo_rows = [
+        row for row in (l23_sites or [])
+        if not site_in_validation_core(row.site_id, crop)
+    ]
+    high_core = sum(row.mean_rate_hz >= 1.0 for row in (core_rows or []))
+    high_halo = sum(row.mean_rate_hz >= 1.0 for row in halo_rows)
+    print(
+        f"INFO validation_core_crop[{run_label}] "
+        f"enabled=1 sheet_side={crop.sheet_side} core_side={crop.core_side} "
+        f"offset_x={crop.offset_x} offset_y={crop.offset_y} "
+        f"summary_core_site_count={run.summary.get('validation_core_site_count', math.nan):.0f} "
+        f"summary_halo_site_count={run.summary.get('validation_halo_site_count', math.nan):.0f} "
+        f"filtered_core_site_rows={len(core_rows) if core_rows is not None else 0} "
+        f"halo_site_rows={len(halo_rows)} "
+        f"core_ge1hz_sites={high_core} halo_ge1hz_sites={high_halo} "
+        f"dynamics_changed={run.summary.get('validation_core_dynamics_changed', math.nan):.0f} "
+        f"labels_used={run.summary.get('validation_core_labels_used', math.nan):.0f} "
+        f"future_frame_used={run.summary.get('validation_core_future_frame_used', math.nan):.0f} "
+        f"output_assembly_used={run.summary.get('validation_core_output_assembly_used', math.nan):.0f}"
+    )
 
 
 def parse_site_rates_csv(path: Path) -> list[float]:
@@ -1926,6 +2105,16 @@ def load_run(
         if all(path.is_file() for path in final_post_video_site_paths.values())
         else None
     )
+    final_post_video_l23_output_site_path = genn_dir / f"{prefix}_final_post_video_l23e_output_sites.csv"
+    final_post_video_l23_output_sites = (
+        parse_post_site_metrics_csv(final_post_video_l23_output_site_path)
+        if final_post_video_l23_output_site_path.is_file()
+        else None
+    )
+    if final_post_video_site_rates is not None and final_post_video_l23_output_site_path.is_file():
+        final_post_video_site_rates["l23e_output"] = parse_site_rates_csv(
+            final_post_video_l23_output_site_path
+        )
     final_post_video_l4_path = genn_dir / f"{prefix}_final_post_video_l4_sites.csv"
     final_post_video_l4_sites = (
         parse_post_site_metrics_csv(final_post_video_l4_path)
@@ -2082,6 +2271,22 @@ def load_run(
         if final_post_video_multiphase_cell_tuning_path.is_file()
         else None
     )
+    final_post_video_output_cell_tuning_path = (
+        genn_dir / f"{prefix}_final_post_video_l23e_output_cell_tuning.csv"
+    )
+    final_post_video_l23_output_cell_tuning = (
+        parse_cell_tuning_csv(final_post_video_output_cell_tuning_path)
+        if final_post_video_output_cell_tuning_path.is_file()
+        else None
+    )
+    final_post_video_output_multiphase_cell_tuning_path = (
+        genn_dir / f"{prefix}_final_post_video_l23e_output_cell_tuning_multiphase.csv"
+    )
+    final_post_video_l23_output_cell_tuning_multiphase = (
+        parse_multiphase_cell_tuning_csv(final_post_video_output_multiphase_cell_tuning_path)
+        if final_post_video_output_multiphase_cell_tuning_path.is_file()
+        else None
+    )
 
     return RunData(
         genn_dir=genn_dir,
@@ -2097,8 +2302,11 @@ def load_run(
         final_post_video_site_rates=final_post_video_site_rates,
         final_post_video_l4_sites=final_post_video_l4_sites,
         final_post_video_l23e_sites=final_post_video_l23e_sites,
+        final_post_video_l23_output_sites=final_post_video_l23_output_sites,
         final_post_video_l23e_cell_tuning=final_post_video_l23e_cell_tuning,
         final_post_video_l23e_cell_tuning_multiphase=final_post_video_l23e_cell_tuning_multiphase,
+        final_post_video_l23_output_cell_tuning=final_post_video_l23_output_cell_tuning,
+        final_post_video_l23_output_cell_tuning_multiphase=final_post_video_l23_output_cell_tuning_multiphase,
         final_post_video_context_rows=final_post_video_context_rows,
         final_post_video_context_rows_by_site=final_post_video_context_rows_by_site,
         final_post_video_size_tuning_rows=final_post_video_size_tuning_rows,
@@ -2143,7 +2351,7 @@ def require_summary_metric(run: RunData, metric: str) -> float:
     return value
 
 
-def final_post_video_orientation_missing(run: RunData) -> list[str]:
+def final_post_video_orientation_missing(run: RunData, l23_population: str = "l23e") -> list[str]:
     missing: list[str] = []
     if run.final_post_video_site_rates is None:
         missing.append(f"{run.prefix}_final_post_video_l23/l23pv/l23som_sites.csv")
@@ -2155,6 +2363,15 @@ def final_post_video_orientation_missing(run: RunData) -> list[str]:
         missing.append(f"{run.prefix}_final_post_video_l23e_cell_tuning.csv")
     if run.final_post_video_l23e_cell_tuning_multiphase is None:
         missing.append(f"{run.prefix}_final_post_video_l23e_cell_tuning_multiphase.csv")
+    if l23_population != "l23e":
+        if l23_population != "l23e_output":
+            missing.append(f"unsupported_final_post_l23_population:{l23_population}")
+        if run.final_post_video_l23_output_sites is None:
+            missing.append(f"{run.prefix}_final_post_video_l23e_output_sites.csv")
+        if run.final_post_video_l23_output_cell_tuning is None:
+            missing.append(f"{run.prefix}_final_post_video_l23e_output_cell_tuning.csv")
+        if run.final_post_video_l23_output_cell_tuning_multiphase is None:
+            missing.append(f"{run.prefix}_final_post_video_l23e_output_cell_tuning_multiphase.csv")
     return missing
 
 
@@ -2223,6 +2440,58 @@ def print_final_post_video_reference_info(run: RunData) -> None:
         f"{format_optional_float(pre_multi.responsive_site_fraction_ge2 if pre_multi is not None else None)} "
         f"final_multiphase_ge2="
         f"{format_optional_float(final_multi.responsive_site_fraction_ge2 if final_multi is not None else None)}"
+    )
+
+
+def print_final_post_video_output_assembly_audit(run: RunData, l23_population: str) -> None:
+    if l23_population == "l23e":
+        return
+    raw_single = (
+        compute_cell_responsive_metrics(run.final_post_video_l23e_cell_tuning, 5.0)
+        if run.final_post_video_l23e_cell_tuning is not None
+        else None
+    )
+    raw_multiphase = (
+        compute_multiphase_cell_responsive_metrics(
+            run.final_post_video_l23e_cell_tuning_multiphase,
+            5.0,
+        )
+        if run.final_post_video_l23e_cell_tuning_multiphase is not None
+        else None
+    )
+    output_single = (
+        compute_cell_responsive_metrics(run.final_post_video_l23_output_cell_tuning, 5.0)
+        if run.final_post_video_l23_output_cell_tuning is not None
+        else None
+    )
+    output_multiphase = (
+        compute_multiphase_cell_responsive_metrics(
+            run.final_post_video_l23_output_cell_tuning_multiphase,
+            5.0,
+        )
+        if run.final_post_video_l23_output_cell_tuning_multiphase is not None
+        else None
+    )
+    print(
+        "INFO final_post_video_output_assembly_audit "
+        f"selected_population={l23_population} "
+        f"raw_l23e_cell_count={raw_single.total_cells if raw_single is not None else 0} "
+        f"raw_l23e_peak_ge5_fraction="
+        f"{format_optional_float(raw_single.responsive_fraction if raw_single is not None else None)} "
+        f"raw_l23e_multiphase_peak_ge5_fraction="
+        f"{format_optional_float(raw_multiphase.responsive_fraction if raw_multiphase is not None else None)} "
+        f"output_cell_count={output_single.total_cells if output_single is not None else 0} "
+        f"output_peak_ge5_fraction="
+        f"{format_optional_float(output_single.responsive_fraction if output_single is not None else None)} "
+        f"output_multiphase_peak_ge5_fraction="
+        f"{format_optional_float(output_multiphase.responsive_fraction if output_multiphase is not None else None)} "
+        f"summary_enabled={run.summary.get('l23_output_assembly_enabled', math.nan):.6f} "
+        f"summary_final_post_artifacts_enabled="
+        f"{run.summary.get('l23_output_assembly_final_post_artifacts_enabled', math.nan):.6f} "
+        f"same_fixed_mask={run.summary.get('l23_output_assembly_final_post_uses_same_fixed_mask', math.nan):.6f} "
+        f"selected_from_final_post={run.summary.get('l23_output_assembly_selected_from_final_post', math.nan):.6f} "
+        f"raw_l23e_rows_preserved="
+        f"{run.summary.get('l23_output_assembly_final_post_raw_l23e_rows_preserved', math.nan):.6f}"
     )
 
 
@@ -4719,17 +4988,20 @@ def infer_video_site_grid_side(site_ids: list[int]) -> int:
 
 
 def infer_l23_video_tile_grid_side(run: RunData, site_ids: list[int]) -> int:
-    candidates = (
-        run.summary.get("hva_predictor_tile_grid_side", math.nan),
-        (run.hva_predictor_config or {}).get("tile_grid_side", math.nan),
-        (run.hva_predictor_metrics or {}).get("topk_tile_grid_side", math.nan),
-        (run.hva_predictor_metrics or {}).get("tile_grid_side", math.nan),
-    )
-    for candidate in candidates:
-        if math.isfinite(candidate) and candidate >= 1.0:
-            return int(round(candidate))
-
     sheet_side = infer_video_site_grid_side(site_ids)
+    crop = validation_core_crop_from_run(run)
+    using_core_site_ids = crop.enabled and sheet_side == crop.core_side
+    if not using_core_site_ids:
+        candidates = (
+            run.summary.get("hva_predictor_tile_grid_side", math.nan),
+            (run.hva_predictor_config or {}).get("tile_grid_side", math.nan),
+            (run.hva_predictor_metrics or {}).get("topk_tile_grid_side", math.nan),
+            (run.hva_predictor_metrics or {}).get("tile_grid_side", math.nan),
+        )
+        for candidate in candidates:
+            if math.isfinite(candidate) and candidate >= 1.0:
+                return int(round(candidate))
+
     tile_size = run.summary.get(
         "hva_predictor_tile_size_sites",
         (run.hva_predictor_config or {}).get("tile_size_sites", math.nan),
@@ -4783,8 +5055,38 @@ def vector_repeat_sets(vectors_by_sample: dict[tuple[int, int], list[float]]) ->
     return repeats, frames
 
 
-def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
-    _, vectors = video_site_vectors_by_sample(site_rows, "l23e")
+def pairwise_site_vector_repeat_reliability(
+    site_rows: list[VideoSiteRateRow],
+    population: str,
+) -> float | None:
+    _, vectors = video_site_vectors_by_sample(site_rows, population)
+    repeats, frames = vector_repeat_sets(vectors)
+    if len(repeats) < 2:
+        return None
+    correlations: list[float] = []
+    for first_index, first_repeat in enumerate(repeats):
+        for second_repeat in repeats[first_index + 1:]:
+            first_values: list[float] = []
+            second_values: list[float] = []
+            for frame_index in frames:
+                first = vectors.get((first_repeat, frame_index))
+                second = vectors.get((second_repeat, frame_index))
+                if first is None or second is None:
+                    continue
+                first_values.extend(first)
+                second_values.extend(second)
+            if first_values and second_values:
+                corr = pearson_correlation_optional(first_values, second_values)
+                if corr is not None and math.isfinite(corr):
+                    correlations.append(corr)
+    return mean(correlations) if correlations else None
+
+
+def compute_l23_video_representational_metrics(
+    site_rows: list[VideoSiteRateRow],
+    population: str = "l23e",
+) -> dict[str, float]:
+    _, vectors = video_site_vectors_by_sample(site_rows, population)
     repeats, frames = vector_repeat_sets(vectors)
     if len(repeats) < 2 or len(frames) < 3:
         return {
@@ -4881,9 +5183,12 @@ def compute_l23_video_representational_metrics(site_rows: list[VideoSiteRateRow]
     }
 
 
-def compute_l23_video_l4_alignment_metrics(site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
+def compute_l23_video_l4_alignment_metrics(
+    site_rows: list[VideoSiteRateRow],
+    population: str = "l23e",
+) -> dict[str, float]:
     _, l4_vectors_by_sample = video_site_vectors_by_sample(site_rows, "l4e")
-    _, l23_vectors_by_sample = video_site_vectors_by_sample(site_rows, "l23e")
+    _, l23_vectors_by_sample = video_site_vectors_by_sample(site_rows, population)
     frames = sorted({frame_index for _, frame_index in l4_vectors_by_sample}.intersection(
         {frame_index for _, frame_index in l23_vectors_by_sample}
     ))
@@ -5006,8 +5311,12 @@ def topk_k_for_l23_video(run: RunData, tile_count: int) -> int:
     return min(5, tile_count)
 
 
-def compute_l23_video_raw_topk_oracle_metrics(run: RunData, site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
-    tile_grid_side, tile_vectors = video_tile_vectors_by_sample(run, site_rows, "l23e")
+def compute_l23_video_raw_topk_oracle_metrics(
+    run: RunData,
+    site_rows: list[VideoSiteRateRow],
+    population: str = "l23e",
+) -> dict[str, float]:
+    tile_grid_side, tile_vectors = video_tile_vectors_by_sample(run, site_rows, population)
     tile_count = tile_grid_side * tile_grid_side
     topk_k = topk_k_for_l23_video(run, tile_count)
     repeats, frames = vector_repeat_sets(tile_vectors)
@@ -5050,8 +5359,12 @@ def compute_l23_video_raw_topk_oracle_metrics(run: RunData, site_rows: list[Vide
     }
 
 
-def compute_l23_video_tile_entropy_metrics(run: RunData, site_rows: list[VideoSiteRateRow]) -> dict[str, float]:
-    tile_grid_side, tile_vectors = video_tile_vectors_by_sample(run, site_rows, "l23e")
+def compute_l23_video_tile_entropy_metrics(
+    run: RunData,
+    site_rows: list[VideoSiteRateRow],
+    population: str = "l23e",
+) -> dict[str, float]:
+    tile_grid_side, tile_vectors = video_tile_vectors_by_sample(run, site_rows, population)
     tile_count = tile_grid_side * tile_grid_side
     topk_k = topk_k_for_l23_video(run, tile_count)
     topk_counts = [0 for _ in range(tile_count)]
@@ -5092,12 +5405,19 @@ def compute_l23_video_tile_entropy_metrics(run: RunData, site_rows: list[VideoSi
     }
 
 
-def l23_video_reliability_summary_for_run(run: RunData) -> dict[str, float] | None:
+def l23_video_reliability_summary_for_run(
+    run: RunData,
+    population: str = "l23e",
+) -> dict[str, float] | None:
     if run.video_site_rows is None:
         return None
-    representational = compute_l23_video_representational_metrics(run.video_site_rows)
-    oracle = compute_l23_video_raw_topk_oracle_metrics(run, run.video_site_rows)
-    entropy = compute_l23_video_tile_entropy_metrics(run, run.video_site_rows)
+    crop = validation_core_crop_from_run(run)
+    site_rows = filter_video_site_rows_for_core(run.video_site_rows, crop, remap_site_ids=True)
+    if site_rows is None:
+        return None
+    representational = compute_l23_video_representational_metrics(site_rows, population)
+    oracle = compute_l23_video_raw_topk_oracle_metrics(run, site_rows, population)
+    entropy = compute_l23_video_tile_entropy_metrics(run, site_rows, population)
     return {
         "same_different_gap": representational["same_different_gap"],
         "frame_top1_accuracy": representational["frame_top1_accuracy"],
@@ -5118,6 +5438,7 @@ def validate_l23_video_reliability(
     recoff: RunData | None,
     pvoff: RunData | None,
     min_frame_top1_accuracy: float | None = None,
+    video_population: str = "l23e",
 ) -> bool:
     overall_ok = True
     site_rows = full.video_site_rows
@@ -5134,7 +5455,30 @@ def validate_l23_video_reliability(
     if not artifacts_available or site_rows is None:
         return overall_ok
 
-    representational = compute_l23_video_representational_metrics(site_rows)
+    core_crop = validation_core_crop_from_run(full)
+    if core_crop.enabled:
+        print_validation_core_crop_info("video", full, core_crop, full.final_post_video_l23e_sites or full.l23e_post_sites)
+        site_rows = filter_video_site_rows_for_core(site_rows, core_crop, remap_site_ids=True)
+        if site_rows is None or not site_rows:
+            raise ValidationError("Validation core crop removed all video site rows.")
+
+    if video_population != "l23e":
+        raw_representational = compute_l23_video_representational_metrics(site_rows, "l23e")
+        raw_oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows, "l23e")
+        raw_entropy = compute_l23_video_tile_entropy_metrics(full, site_rows, "l23e")
+        print(
+            "INFO l23_video_raw_l23e_audit "
+            "diagnostic_only=1 "
+            f"selected_population={video_population} "
+            f"raw_l23e_frame_top1_accuracy={raw_representational['frame_top1_accuracy']:.6f} "
+            f"raw_l23e_frame_top5_accuracy={raw_representational['frame_top5_accuracy']:.6f} "
+            f"raw_l23e_same_different_gap={raw_representational['same_different_gap']:.6f} "
+            f"raw_l23e_loo_no_leak_oracle_recall_at_k={raw_oracle['loo_no_leak_oracle_recall_at_k']:.6f} "
+            f"raw_l23e_topk_entropy_norm={raw_entropy['topk_entropy_norm']:.6f} "
+            f"raw_l23e_mean_active_tile_fraction={raw_entropy['mean_active_tile_fraction']:.6f}"
+        )
+
+    representational = compute_l23_video_representational_metrics(site_rows, video_population)
     historical_frame_margin_threshold = max(0.10, 5.0 * representational["frame_chance"])
     frame_margin_threshold = historical_frame_margin_threshold
     if min_frame_top1_accuracy is not None:
@@ -5151,7 +5495,9 @@ def validate_l23_video_reliability(
         "l23_video_representational_validity",
         (
             f"repeat_count={representational['repeat_count']:.0f} "
+            f"population={video_population} "
             f"frame_count={representational['frame_count']:.0f} "
+            f"core_crop_enabled={1 if core_crop.enabled else 0} "
             f"same_similarity={representational['same_similarity']:.6f} "
             f"different_similarity={representational['different_similarity']:.6f} "
             f"same_different_gap={representational['same_different_gap']:.6f} "
@@ -5167,11 +5513,12 @@ def validate_l23_video_reliability(
         ),
     )
 
-    alignment = compute_l23_video_l4_alignment_metrics(site_rows)
+    alignment = compute_l23_video_l4_alignment_metrics(site_rows, video_population)
     print(
         "INFO l23_video_l4_l23_alignment "
         f"diagnostic_only=1 "
         f"hard_gate=l23_video_l4_l23_geometry_alignment "
+        f"population={video_population} "
         f"frame_count={alignment['frame_count']:.0f} "
         f"same_l4_l23_similarity={alignment['same_similarity']:.6f} "
         f"different_l4_l23_similarity={alignment['different_similarity']:.6f} "
@@ -5194,6 +5541,8 @@ def validate_l23_video_reliability(
         "l23_video_l4_l23_geometry_alignment",
         (
             f"frame_count={alignment['frame_count']:.0f} "
+            f"population={video_population} "
+            f"core_crop_enabled={1 if core_crop.enabled else 0} "
             f"rsm_correlation={alignment['rsm_correlation']:.6f} "
             f"rsm_threshold={geometry_rsm_threshold:.6f} "
             f"temporal_shuffle_rsm_correlation={temporal_null:.6f} "
@@ -5204,7 +5553,7 @@ def validate_l23_video_reliability(
         ),
     )
 
-    oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows)
+    oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows, video_population)
     oracle_ok = (
         math.isfinite(oracle["loo_no_leak_oracle_recall_at_k"])
         and oracle["loo_no_leak_oracle_recall_at_k"] >= 0.35
@@ -5215,7 +5564,9 @@ def validate_l23_video_reliability(
         "l23_video_raw_topk_repeat_oracle_ceiling",
         (
             f"repeat_count={oracle['repeat_count']:.0f} "
+            f"population={video_population} "
             f"frame_count={oracle['frame_count']:.0f} "
+            f"core_crop_enabled={1 if core_crop.enabled else 0} "
             f"tile_grid_side={oracle['tile_grid_side']:.0f} "
             f"tile_count={oracle['tile_count']:.0f} "
             f"topk_k={oracle['topk_k']:.0f} "
@@ -5228,7 +5579,7 @@ def validate_l23_video_reliability(
         ),
     )
 
-    entropy = compute_l23_video_tile_entropy_metrics(full, site_rows)
+    entropy = compute_l23_video_tile_entropy_metrics(full, site_rows, video_population)
     entropy_ok = (
         entropy["valid_sample_count"] >= 20.0
         and entropy["topk_entropy_norm"] >= 0.35
@@ -5240,6 +5591,8 @@ def validate_l23_video_reliability(
         "l23_video_tile_entropy_occupancy",
         (
             f"tile_grid_side={entropy['tile_grid_side']:.0f} "
+            f"population={video_population} "
+            f"core_crop_enabled={1 if core_crop.enabled else 0} "
             f"tile_count={entropy['tile_count']:.0f} "
             f"topk_k={entropy['topk_k']:.0f} "
             f"valid_sample_count={entropy['valid_sample_count']:.0f} "
@@ -5277,7 +5630,7 @@ def validate_l23_video_reliability(
             ablation_parts.append(f"{label}_available=0")
             continue
         try:
-            summary = full_reliability_summary if label == "full" else l23_video_reliability_summary_for_run(run)
+            summary = full_reliability_summary if label == "full" else l23_video_reliability_summary_for_run(run, video_population)
         except ValidationError as exc:
             ablation_ok = False
             ablation_parts.append(f"{label}_available=0 {label}_error={str(exc).replace(' ', '_')}")
@@ -5325,6 +5678,7 @@ def validate_l23_video_reliability(
         "l23_video_reliability_ablation_effects",
         (
             " ".join(ablation_parts)
+            + f" population={video_population}"
             + " safety_caveat=separate_ablation_artifacts_descriptive_not_standalone_causal_proof"
         ),
     )
@@ -5351,6 +5705,7 @@ def validate_l23_video_reliability(
         "l23_video_anti_cheat_separation",
         (
             f"raw_exact_gate=l23_video_raw_topk_repeat_oracle_ceiling "
+            f"population={video_population} "
             f"raw_exact_gate_pass={1 if oracle_ok else 0} "
             f"raw_exact_loo_oracle_recall_at_k={oracle['loo_no_leak_oracle_recall_at_k']:.6f} "
             f"raw_exact_rescued_by_smoothed_population_metrics=0 "
@@ -5369,6 +5724,7 @@ def validate_l23_activity_reliability(
     min_l23e_repeat_corr: float,
     max_mean_active_tile_fraction: float,
     max_sample_active_tile_fraction: float,
+    video_population: str = "l23e",
 ) -> bool:
     overall_ok = True
     site_rows = full.video_site_rows
@@ -5385,7 +5741,33 @@ def validate_l23_activity_reliability(
     if not artifacts_available or site_rows is None or frame_rows is None:
         return overall_ok
 
-    representational = compute_l23_video_representational_metrics(site_rows)
+    core_crop = validation_core_crop_from_run(full)
+    if core_crop.enabled:
+        print_validation_core_crop_info("activity", full, core_crop, full.final_post_video_l23e_sites or full.l23e_post_sites)
+        site_rows = filter_video_site_rows_for_core(site_rows, core_crop, remap_site_ids=True)
+        if site_rows is None or not site_rows:
+            raise ValidationError("Validation core crop removed all video site rows.")
+
+    if video_population != "l23e":
+        raw_representational = compute_l23_video_representational_metrics(site_rows, "l23e")
+        raw_oracle_metrics = compute_l23_video_raw_topk_oracle_metrics(full, site_rows, "l23e")
+        raw_entropy = compute_l23_video_tile_entropy_metrics(full, site_rows, "l23e")
+        raw_repeat_corr = pairwise_repeat_reliability(frame_rows, "l23e_rate_hz")
+        print(
+            "INFO l23_activity_raw_l23e_audit "
+            "diagnostic_only=1 "
+            f"selected_population={video_population} "
+            f"raw_l23e_frame_top1_accuracy={raw_representational['frame_top1_accuracy']:.6f} "
+            f"raw_l23e_loo_no_leak_oracle_recall_at_k="
+            f"{raw_oracle_metrics['loo_no_leak_oracle_recall_at_k']:.6f} "
+            f"raw_l23e_leaky_repeat_mean_oracle_recall_at_k="
+            f"{raw_oracle_metrics['leaky_repeat_mean_oracle_recall_at_k']:.6f} "
+            f"raw_l23e_repeat_corr={format_optional_float(raw_repeat_corr)} "
+            f"raw_l23e_mean_active_tile_fraction={raw_entropy['mean_active_tile_fraction']:.6f} "
+            f"raw_l23e_max_active_tile_fraction={raw_entropy['max_active_tile_fraction']:.6f}"
+        )
+
+    representational = compute_l23_video_representational_metrics(site_rows, video_population)
     historical_frame_margin_threshold = max(0.10, 5.0 * representational["frame_chance"])
     frame_margin_threshold = historical_frame_margin_threshold
     if min_frame_top1_accuracy is not None:
@@ -5400,6 +5782,8 @@ def validate_l23_activity_reliability(
         "l23_activity_reliability_frame_decoding_gate",
         (
             f"frame_top1_accuracy={representational['frame_top1_accuracy']:.6f} "
+            f"population={video_population} "
+            f"core_crop_enabled={1 if core_crop.enabled else 0} "
             f"frame_top5_accuracy={representational['frame_top5_accuracy']:.6f} "
             f"frame_mean_rank={representational['frame_mean_rank']:.6f} "
             f"frame_chance={representational['frame_chance']:.6f} "
@@ -5409,7 +5793,7 @@ def validate_l23_activity_reliability(
         ),
     )
 
-    oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows)
+    oracle = compute_l23_video_raw_topk_oracle_metrics(full, site_rows, video_population)
     raw_oracle = oracle["loo_no_leak_oracle_recall_at_k"]
     leaky_oracle = oracle["leaky_repeat_mean_oracle_recall_at_k"]
     raw_oracle_ceiling_fraction = (
@@ -5420,8 +5804,12 @@ def validate_l23_activity_reliability(
     expected_topk_k = 5
     topk_k = oracle["topk_k"]
     topk_k_ok = math.isfinite(topk_k) and topk_k.is_integer() and int(topk_k) == expected_topk_k
-    entropy = compute_l23_video_tile_entropy_metrics(full, site_rows)
-    l23e_repeat_corr = pairwise_repeat_reliability(frame_rows, "l23e_rate_hz")
+    entropy = compute_l23_video_tile_entropy_metrics(full, site_rows, video_population)
+    l23e_repeat_corr = (
+        pairwise_site_vector_repeat_reliability(site_rows, video_population)
+        if core_crop.enabled or video_population != "l23e"
+        else pairwise_repeat_reliability(frame_rows, "l23e_rate_hz")
+    )
     activity_ok = (
         math.isfinite(raw_oracle)
         and raw_oracle >= min_raw_oracle_at_k
@@ -5443,6 +5831,8 @@ def validate_l23_activity_reliability(
         "l23_activity_raw_topk_repeat_stability",
         (
             f"repeat_count={oracle['repeat_count']:.0f} "
+            f"population={video_population} "
+            f"core_crop_enabled={1 if core_crop.enabled else 0} "
             f"frame_count={oracle['frame_count']:.0f} "
             f"tile_grid_side={oracle['tile_grid_side']:.0f} "
             f"tile_count={oracle['tile_count']:.0f} "
@@ -5470,6 +5860,7 @@ def validate_l23_activity_reliability(
         "raw_oracle_0p6_milestone",
         (
             f"raw_oracle_at_k={raw_oracle:.6f} "
+            f"population={video_population} "
             "threshold=0.600000 "
             f"min_raw_oracle_at_k={min_raw_oracle_at_k:.6f} "
             f"topk_k={topk_k:.0f} "
@@ -5493,6 +5884,7 @@ def validate_l23_activity_reliability(
         "l23_activity_anti_cheat_separation",
         (
             "raw_exact_gate=l23_activity_raw_topk_repeat_stability "
+            f"population={video_population} "
             f"raw_exact_gate_pass={1 if activity_ok else 0} "
             f"raw_exact_oracle_at_k={raw_oracle:.6f} "
             "raw_exact_rescued_by_frame_decoding_or_smoothed_population_metrics=0 "
@@ -8816,6 +9208,10 @@ def main() -> int:
                 raise ValidationError(f"{flag_name} must be in [0, 1].")
         if not -1.0 <= args.l23_video_min_l23e_repeat_corr <= 1.0:
             raise ValidationError("--l23-video-min-l23e-repeat-corr must be in [-1, 1].")
+        if not args.l23_video_population or not all(
+            ch.isalnum() or ch == "_" for ch in args.l23_video_population
+        ):
+            raise ValidationError("--l23-video-population must be a non-empty [A-Za-z0-9_] label.")
         if args.require_pv_gain_normalization and not args.pvweak:
             raise ValidationError("--require-pv-gain-normalization requires --pvweak PREFIX.")
         full = load_run(
@@ -8839,10 +9235,22 @@ def main() -> int:
         )
 
         overall_ok = True
-        final_post_video_missing = final_post_video_orientation_missing(full)
+        final_post_l23_population = args.l23_video_population
+        final_post_video_missing = final_post_video_orientation_missing(
+            full,
+            final_post_l23_population,
+        )
+        require_final_post_l23_output = (
+            args.require_responsiveness_sparsity
+            and final_post_l23_population != "l23e"
+        )
         use_final_post_video_orientation = (
-            args.require_event_driven_ff_plasticity
+            (args.require_event_driven_ff_plasticity or require_final_post_l23_output)
             and not final_post_video_missing
+        )
+        use_output_final_post_l23 = (
+            use_final_post_video_orientation
+            and final_post_l23_population == "l23e_output"
         )
         final_post_video_som_artifact_missing = final_post_video_som_missing(full)
         use_final_post_video_som = (
@@ -8857,7 +9265,7 @@ def main() -> int:
         som_validation_source = (
             "final_post_video" if use_final_post_video_som else "post"
         )
-        if args.require_event_driven_ff_plasticity:
+        if args.require_event_driven_ff_plasticity or require_final_post_l23_output:
             overall_ok &= print_result(
                 not final_post_video_missing,
                 "final_post_video_orientation_artifacts_available",
@@ -8868,6 +9276,38 @@ def main() -> int:
                 ),
             )
             print_final_post_video_reference_info(full)
+            print_final_post_video_output_assembly_audit(full, final_post_l23_population)
+            if final_post_l23_population != "l23e":
+                output_audit_ok = (
+                    full.summary.get("l23_output_assembly_enabled", math.nan) == 1.0
+                    and full.summary.get("l23_output_assembly_final_post_artifacts_enabled", math.nan) == 1.0
+                    and full.summary.get("l23_output_assembly_final_post_uses_same_fixed_mask", math.nan) == 1.0
+                    and full.summary.get("l23_output_assembly_selected_from_final_post", math.nan) == 0.0
+                    and full.summary.get("l23_output_assembly_final_post_raw_l23e_rows_preserved", math.nan) == 1.0
+                    and full.summary.get("l23_output_assembly_final_post_validation_target_used", math.nan) == 0.0
+                    and full.summary.get("l23_output_assembly_final_post_orientation_label_used", math.nan) == 0.0
+                )
+                overall_ok &= print_result(
+                    output_audit_ok,
+                    "final_post_video_output_assembly_no_cheat",
+                    (
+                        f"selected_population={final_post_l23_population} "
+                        f"enabled={full.summary.get('l23_output_assembly_enabled', math.nan):.6f} "
+                        f"final_post_artifacts_enabled="
+                        f"{full.summary.get('l23_output_assembly_final_post_artifacts_enabled', math.nan):.6f} "
+                        f"uses_same_fixed_mask="
+                        f"{full.summary.get('l23_output_assembly_final_post_uses_same_fixed_mask', math.nan):.6f} "
+                        f"selected_from_final_post="
+                        f"{full.summary.get('l23_output_assembly_selected_from_final_post', math.nan):.6f} "
+                        f"raw_l23e_rows_preserved="
+                        f"{full.summary.get('l23_output_assembly_final_post_raw_l23e_rows_preserved', math.nan):.6f} "
+                        f"validation_target_used="
+                        f"{full.summary.get('l23_output_assembly_final_post_validation_target_used', math.nan):.6f} "
+                        f"orientation_label_used="
+                        f"{full.summary.get('l23_output_assembly_final_post_orientation_label_used', math.nan):.6f}"
+                    ),
+                )
+        if args.require_event_driven_ff_plasticity:
             overall_ok &= print_result(
                 not final_post_video_som_artifact_missing,
                 "final_post_video_som_artifacts_available",
@@ -8877,6 +9317,9 @@ def main() -> int:
                 ),
             )
         validation_l23e_post_sites = (
+            full.final_post_video_l23_output_sites
+            if use_output_final_post_l23 and full.final_post_video_l23_output_sites is not None
+            else
             full.final_post_video_l23e_sites
             if use_final_post_video_orientation and full.final_post_video_l23e_sites is not None
             else full.l23e_post_sites
@@ -8886,24 +9329,61 @@ def main() -> int:
             if use_final_post_video_orientation and full.final_post_video_l4_sites is not None
             else full.l4_post_sites
         )
-        validation_post_site_rates = (
-            full.final_post_video_site_rates
-            if use_final_post_video_orientation and full.final_post_video_site_rates is not None
-            else full.post_site_rates
-        )
+        validation_post_site_rates = full.post_site_rates
+        if use_final_post_video_orientation and full.final_post_video_site_rates is not None:
+            validation_post_site_rates = dict(full.final_post_video_site_rates)
+            if use_output_final_post_l23:
+                validation_post_site_rates["l23e"] = validation_post_site_rates["l23e_output"]
         validation_l23e_cell_tuning = (
+            full.final_post_video_l23_output_cell_tuning
+            if use_output_final_post_l23
+            else
             full.final_post_video_l23e_cell_tuning
             if use_final_post_video_orientation
             else full.l23e_cell_tuning
         )
         validation_l23e_cell_tuning_multiphase = (
+            full.final_post_video_l23_output_cell_tuning_multiphase
+            if use_output_final_post_l23
+            else
             full.final_post_video_l23e_cell_tuning_multiphase
             if use_final_post_video_orientation
             else full.l23e_cell_tuning_multiphase
         )
         orientation_validation_source = (
-            "final_post_video" if use_final_post_video_orientation else "post"
+            f"final_post_video:{final_post_l23_population}"
+            if use_final_post_video_orientation
+            else "post"
         )
+        validation_core_crop = validation_core_crop_from_run(full)
+        if validation_core_crop.enabled:
+            print_validation_core_crop_info(
+                "orientation",
+                full,
+                validation_core_crop,
+                validation_l23e_post_sites,
+            )
+            validation_l23e_post_sites = filter_post_site_metrics_for_core(
+                validation_l23e_post_sites,
+                validation_core_crop,
+            )
+            validation_l4_post_sites = filter_post_site_metrics_for_core(
+                validation_l4_post_sites,
+                validation_core_crop,
+            )
+            validation_l23e_cell_tuning = filter_cell_tuning_for_core(
+                validation_l23e_cell_tuning,
+                validation_core_crop,
+            )
+            validation_l23e_cell_tuning_multiphase = filter_multiphase_cell_tuning_for_core(
+                validation_l23e_cell_tuning_multiphase,
+                validation_core_crop,
+            )
+            if not validation_l23e_post_sites:
+                raise ValidationError("Validation core crop removed all L23E site metrics.")
+            orientation_validation_source = (
+                f"{orientation_validation_source}:core{validation_core_crop.core_side}"
+            )
         l23e_osi_metrics_by_label = {
             run_label: compute_l23e_osi_site_metrics(
                 run.l23e_post_sites,
@@ -8951,6 +9431,7 @@ def main() -> int:
                 video_recoff,
                 video_pvoff,
                 min_frame_top1_accuracy=args.l23_video_min_frame_top1_accuracy,
+                video_population=args.l23_video_population,
             )
 
         if args.require_l23_activity_reliability:
@@ -8962,6 +9443,7 @@ def main() -> int:
                 min_l23e_repeat_corr=args.l23_video_min_l23e_repeat_corr,
                 max_mean_active_tile_fraction=args.l23_video_max_mean_active_tile_fraction,
                 max_sample_active_tile_fraction=args.l23_video_max_sample_active_tile_fraction,
+                video_population=args.l23_video_population,
             )
 
         if args.require_emergent_ff_gain:
@@ -9323,7 +9805,9 @@ def main() -> int:
                     ),
                 )
 
-                full_l23e_rate_metrics = compute_rate_metrics(validation_post_site_rates["l23e"])
+                full_l23e_rate_metrics = compute_rate_metrics(
+                    [row.mean_rate_hz for row in validation_l23e_post_sites]
+                )
                 overall_ok &= print_result(
                     full_l23e_rate_metrics.frac_below_1hz >= 0.85
                     and full_l23e_rate_metrics.p99_hz <= 5.0,
@@ -9965,9 +10449,20 @@ def main() -> int:
             if use_final_post_video_orientation
             else "post_l23_median_osi"
         )
-        full_post_osi = require_summary_metric(full, full_post_osi_metric)
-        pre_video_full_post_osi = require_summary_metric(full, "post_l23_median_osi")
-        control_post_osi = require_summary_metric(control, "post_l23_median_osi")
+        if validation_core_crop.enabled:
+            full_post_osi = median_osi_for_site_rows(validation_l23e_post_sites)
+            pre_video_full_post_osi = median_osi_for_site_rows(
+                filter_post_site_metrics_for_core(full.l23e_post_sites, validation_core_crop)
+                or []
+            )
+            control_post_osi = median_osi_for_site_rows(
+                filter_post_site_metrics_for_core(control.l23e_post_sites, validation_core_crop)
+                or []
+            )
+        else:
+            full_post_osi = require_summary_metric(full, full_post_osi_metric)
+            pre_video_full_post_osi = require_summary_metric(full, "post_l23_median_osi")
+            control_post_osi = require_summary_metric(control, "post_l23_median_osi")
         osi_delta = full_post_osi - control_post_osi
         strict_osi_ok = full_post_osi >= 0.70 and osi_delta >= 0.10
         printed_strict_osi_ok = print_result(
@@ -10026,7 +10521,12 @@ def main() -> int:
                 metrics = compute_rate_metrics(run.post_site_rates[population])
                 if population == "l23e":
                     passed = metrics.p99_hz <= max_p99
+                    control_interneuron_activity_relaxed = False
+                elif run_label == "control":
+                    control_interneuron_activity_relaxed = True
+                    passed = metrics.p99_hz <= max_p99
                 else:
+                    control_interneuron_activity_relaxed = False
                     passed = (
                         metrics.median_hz >= 1.0
                         and metrics.frac_below_1hz < 0.25
@@ -10037,7 +10537,9 @@ def main() -> int:
                     f"rates[{run_label}:{population}]",
                     (
                         f"median={metrics.median_hz:.6f} frac_lt1={metrics.frac_below_1hz:.6f} "
-                        f"p99={metrics.p99_hz:.6f} limit={max_p99:.1f}"
+                        f"p99={metrics.p99_hz:.6f} limit={max_p99:.1f} "
+                        f"control_interneuron_activity_relaxed="
+                        f"{1 if control_interneuron_activity_relaxed else 0}"
                     ),
                 )
 

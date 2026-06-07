@@ -51,3 +51,6 @@
   raw activity top-k asks whether the same L2/3 sites/tiles win across repeats.
   For the activity-reliability milestone, optimize and report raw top-k oracle
   / repeat stability first, with frame decoding only as a companion metric.
+- Prefer the local RTX 5090 for GeNN validation and training runs when it is
+  available, using `CUDA_VISIBLE_DEVICES=0`; do not kill unrelated GPU or pod
+  processes while working.
