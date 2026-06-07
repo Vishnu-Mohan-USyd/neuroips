@@ -796,6 +796,7 @@ struct TrainingGratingConfig {
     std::string mode = kTrainingGratingModeLegacy;
     unsigned int phase_count = 1;
     bool counterbalance_direction = false;
+    double l4_drive_scale = 1.0;
 };
 
 struct L4L23OrientationConfig {
@@ -813,6 +814,12 @@ struct L23EAdaptationConfig {
     bool enabled = false;
     double tau_ms = 0.0;
     double spike_na = 0.0;
+};
+
+struct L4EAdaptationConfig {
+    bool enabled = false;
+    double tau_ms = 250.0;
+    double spike_na = 0.0005;
 };
 
 struct OrientationContextAssayConfig {
@@ -837,6 +844,16 @@ struct VideoReplayConfig {
     unsigned int effective_frame_count = 0;
     unsigned int repeat_count = 1;
     double frame_ms = kDefaultVideoFrameMs;
+    double l4_drive_scale = 1.0;
+};
+
+struct VideoL4DivisiveNormConfig {
+    bool enabled = false;
+    double beta = 0.8;
+    double sigma = 0.15;
+    double tau_ms = 250.0;
+    unsigned int radius = 1u;
+    double floor_na = 0.12;
 };
 
 struct VideoEventTimingConfig {
@@ -1324,10 +1341,13 @@ L23EELognormalInitConfig getL23EELognormalInitConfig();
 double getOrientationSoftBiasStrength();
 
 L23EAdaptationConfig getL23EAdaptationConfig();
+L4EAdaptationConfig getL4EAdaptationConfig();
 
-GeNN::ParamValues makeLIFParameters(
+GeNN::ParamValues makeLIFParametersWithAdaptation(
     const v1_genn::LIFParameters &params,
-    const L23EAdaptationConfig &adaptation_config = L23EAdaptationConfig{})
+    bool adaptation_enabled,
+    double adaptation_tau_ms,
+    double adaptation_spike_na)
 {
     return {
         {"C", params.c},
@@ -1337,9 +1357,31 @@ GeNN::ParamValues makeLIFParameters(
         {"Vthresh", params.v_thresh_mv},
         {"Ioffset", params.i_offset_na},
         {"TauRefrac", params.tau_refrac_ms},
-        {"TauAdapt", adaptation_config.enabled ? adaptation_config.tau_ms : 0.0},
-        {"AdaptSpike", adaptation_config.enabled ? adaptation_config.spike_na : 0.0},
+        {"TauAdapt", adaptation_enabled ? adaptation_tau_ms : 0.0},
+        {"AdaptSpike", adaptation_enabled ? adaptation_spike_na : 0.0},
     };
+}
+
+GeNN::ParamValues makeLIFParameters(
+    const v1_genn::LIFParameters &params,
+    const L23EAdaptationConfig &adaptation_config = L23EAdaptationConfig{})
+{
+    return makeLIFParametersWithAdaptation(
+        params,
+        adaptation_config.enabled,
+        adaptation_config.tau_ms,
+        adaptation_config.spike_na);
+}
+
+GeNN::ParamValues makeLIFParameters(
+    const v1_genn::LIFParameters &params,
+    const L4EAdaptationConfig &adaptation_config)
+{
+    return makeLIFParametersWithAdaptation(
+        params,
+        adaptation_config.enabled,
+        adaptation_config.tau_ms,
+        adaptation_config.spike_na);
 }
 
 GeNN::VarValues makeLIFVariables(const v1_genn::LIFParameters &params, const GeNN::InitVarSnippet::Init &external_drive)
@@ -1750,6 +1792,21 @@ L23EAdaptationConfig getL23EAdaptationConfig()
     return config;
 }
 
+L4EAdaptationConfig getL4EAdaptationConfig()
+{
+    L4EAdaptationConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_L4E_ADAPTATION_ENABLE", 0u) != 0u;
+    config.tau_ms = getEnvDoubleOrDefault("V1_L4E_ADAPTATION_TAU_MS", 250.0);
+    config.spike_na = getEnvDoubleOrDefault("V1_L4E_ADAPTATION_SPIKE_NA", 0.0005);
+    if(!std::isfinite(config.tau_ms) || config.tau_ms <= 0.0) {
+        throw std::runtime_error("V1_L4E_ADAPTATION_TAU_MS must be finite and positive.");
+    }
+    if(!std::isfinite(config.spike_na) || config.spike_na < 0.0) {
+        throw std::runtime_error("V1_L4E_ADAPTATION_SPIKE_NA must be finite and non-negative.");
+    }
+    return config;
+}
+
 double getOrientationSoftBiasStrength()
 {
     const char *strict_env = std::getenv("V1_L4_L23_ORIENTATION_BIAS_STRENGTH");
@@ -2003,8 +2060,12 @@ TrainingGratingConfig getTrainingGratingConfig()
         config.mode = kTrainingGratingModePhaseDrift;
     }
     config.phase_drift_enabled = (config.mode == kTrainingGratingModePhaseDrift || config.phase_count > 1u);
+    config.l4_drive_scale = getEnvDoubleOrDefault("V1_ANALYTIC_L4_DRIVE_SCALE", 1.0);
     if(config.phase_drift_enabled && config.phase_count < 2u) {
         throw std::runtime_error("V1_TRAINING_DRIFT_PHASE_COUNT must be at least 2 when phase-drift training is enabled.");
+    }
+    if(!std::isfinite(config.l4_drive_scale) || config.l4_drive_scale < 0.0 || config.l4_drive_scale > 10.0) {
+        throw std::runtime_error("V1_ANALYTIC_L4_DRIVE_SCALE must be finite and in [0, 10].");
     }
     if(!config.phase_drift_enabled) {
         config.phase_count = 1u;
@@ -2076,6 +2137,7 @@ VideoReplayConfig getVideoReplayConfig()
     config.max_frames = getEnvUnsignedOrDefault("V1_VIDEO_MAX_FRAMES", 0u);
     config.repeat_count = getEnvUnsignedOrDefault("V1_VIDEO_REPLAY_REPEAT_COUNT", 1u);
     config.frame_ms = getEnvDoubleOrDefault("V1_VIDEO_FRAME_MS", kDefaultVideoFrameMs);
+    config.l4_drive_scale = getEnvDoubleOrDefault("V1_VIDEO_L4_DRIVE_SCALE", 1.0);
     if(!config.enabled) {
         return config;
     }
@@ -2091,11 +2153,42 @@ VideoReplayConfig getVideoReplayConfig()
     if(config.repeat_count == 0u) {
         throw std::runtime_error("V1_VIDEO_REPLAY_REPEAT_COUNT must be at least 1.");
     }
+    if(!std::isfinite(config.l4_drive_scale) || config.l4_drive_scale < 0.0 || config.l4_drive_scale > 10.0) {
+        throw std::runtime_error("V1_VIDEO_L4_DRIVE_SCALE must be finite and in [0, 10].");
+    }
     config.effective_frame_count = (config.max_frames > 0u)
         ? std::min(config.frame_count, config.max_frames)
         : config.frame_count;
     if(config.effective_frame_count == 0u) {
         throw std::runtime_error("V1_VIDEO_MAX_FRAMES selected zero frames.");
+    }
+    return config;
+}
+
+VideoL4DivisiveNormConfig getVideoL4DivisiveNormConfig()
+{
+    VideoL4DivisiveNormConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_VIDEO_L4_DIVISIVE_NORM_ENABLE", 0u) != 0u;
+    config.beta = getEnvDoubleOrDefault("V1_VIDEO_L4_DIVISIVE_NORM_BETA", config.beta);
+    config.sigma = getEnvDoubleOrDefault("V1_VIDEO_L4_DIVISIVE_NORM_SIGMA", config.sigma);
+    config.tau_ms = getEnvDoubleOrDefault("V1_VIDEO_L4_DIVISIVE_NORM_TAU_MS", config.tau_ms);
+    config.radius = getEnvUnsignedOrDefault("V1_VIDEO_L4_DIVISIVE_NORM_RADIUS", config.radius);
+    config.floor_na = getEnvDoubleOrDefault("V1_VIDEO_L4_DIVISIVE_NORM_FLOOR_NA", config.floor_na);
+
+    if(!std::isfinite(config.beta) || config.beta < 0.0 || config.beta > 100.0) {
+        throw std::runtime_error("V1_VIDEO_L4_DIVISIVE_NORM_BETA must be finite and in [0, 100].");
+    }
+    if(!std::isfinite(config.sigma) || config.sigma <= 0.0) {
+        throw std::runtime_error("V1_VIDEO_L4_DIVISIVE_NORM_SIGMA must be finite and positive.");
+    }
+    if(!std::isfinite(config.tau_ms) || config.tau_ms <= 0.0) {
+        throw std::runtime_error("V1_VIDEO_L4_DIVISIVE_NORM_TAU_MS must be finite and positive.");
+    }
+    if(config.radius >= v1_genn::kSheetSide) {
+        throw std::runtime_error("V1_VIDEO_L4_DIVISIVE_NORM_RADIUS must be < V1_SHEET_SIDE.");
+    }
+    if(!std::isfinite(config.floor_na) || config.floor_na < 0.0) {
+        throw std::runtime_error("V1_VIDEO_L4_DIVISIVE_NORM_FLOOR_NA must be finite and non-negative.");
     }
     return config;
 }
@@ -3431,6 +3524,97 @@ void fillRuntimeArray(GeNN::Runtime::ArrayBase &array, double value)
     array.pushToDevice();
 }
 
+void copyScaledCurrentToHost(const float *source, std::size_t count, float *target, double scale)
+{
+    if(scale == 1.0) {
+        std::copy(source, source + count, target);
+        return;
+    }
+    for(std::size_t i = 0; i < count; i++) {
+        target[i] = static_cast<float>(static_cast<double>(source[i]) * scale);
+    }
+}
+
+int wrappedCoordinate(int coordinate, unsigned int side)
+{
+    const int signed_side = static_cast<int>(side);
+    int wrapped = coordinate % signed_side;
+    if(wrapped < 0) {
+        wrapped += signed_side;
+    }
+    return wrapped;
+}
+
+void copyVideoL4DriveToHost(
+    const float *source,
+    std::size_t count,
+    float *target,
+    double scale,
+    const VideoL4DivisiveNormConfig &norm_config,
+    std::vector<double> &norm_state,
+    double frame_ms,
+    bool periodic_geometry_enabled)
+{
+    if(!norm_config.enabled) {
+        copyScaledCurrentToHost(source, count, target, scale);
+        return;
+    }
+    if(count != v1_genn::kNumL4E) {
+        throw std::runtime_error("Video L4 divisive normalization requires a full L4E frame.");
+    }
+    if(norm_state.size() != v1_genn::kSiteCount) {
+        norm_state.assign(v1_genn::kSiteCount, 0.0);
+    }
+
+    const double alpha = 1.0 - std::exp(-frame_ms / norm_config.tau_ms);
+    std::vector<double> local_energy(v1_genn::kSiteCount, 0.0);
+    for(unsigned int site = 0; site < v1_genn::kSiteCount; site++) {
+        const auto xy = v1_genn::siteIndexToXY(site);
+        double pool_sum = 0.0;
+        unsigned int pool_count = 0u;
+        const int radius = static_cast<int>(norm_config.radius);
+        for(int dy = -radius; dy <= radius; dy++) {
+            int ny = static_cast<int>(xy.second) + dy;
+            if(periodic_geometry_enabled) {
+                ny = wrappedCoordinate(ny, v1_genn::kSheetSide);
+            }
+            else if(ny < 0 || ny >= static_cast<int>(v1_genn::kSheetSide)) {
+                continue;
+            }
+            for(int dx = -radius; dx <= radius; dx++) {
+                int nx = static_cast<int>(xy.first) + dx;
+                if(periodic_geometry_enabled) {
+                    nx = wrappedCoordinate(nx, v1_genn::kSheetSide);
+                }
+                else if(nx < 0 || nx >= static_cast<int>(v1_genn::kSheetSide)) {
+                    continue;
+                }
+                const unsigned int neighbor_site =
+                    (static_cast<unsigned int>(ny) * v1_genn::kSheetSide) + static_cast<unsigned int>(nx);
+                const std::size_t base = static_cast<std::size_t>(neighbor_site) * v1_genn::kL4EPerSite;
+                for(unsigned int channel = 0; channel < v1_genn::kL4EPerSite; channel++) {
+                    const double source_current = static_cast<double>(source[base + channel]);
+                    pool_sum += std::max(source_current - norm_config.floor_na, 0.0);
+                    pool_count++;
+                }
+            }
+        }
+        local_energy[site] = (pool_count > 0u) ? (pool_sum / static_cast<double>(pool_count)) : 0.0;
+    }
+
+    for(unsigned int site = 0; site < v1_genn::kSiteCount; site++) {
+        const double previous_state = norm_state[site];
+        const double denominator = 1.0 + ((norm_config.beta * previous_state) / norm_config.sigma);
+        const std::size_t base = static_cast<std::size_t>(site) * v1_genn::kL4EPerSite;
+        for(unsigned int channel = 0; channel < v1_genn::kL4EPerSite; channel++) {
+            const std::size_t index = base + channel;
+            const double contrast = std::max(static_cast<double>(source[index]) - norm_config.floor_na, 0.0);
+            target[index] = static_cast<float>((norm_config.floor_na + (contrast / denominator)) * scale);
+        }
+        norm_state[site] = previous_state + (alpha * (local_energy[site] - previous_state));
+    }
+}
+
 std::vector<double> copyNeuronScalarState(
     GeNN::Runtime::Runtime &runtime,
     const GeNN::NeuronGroup &group,
@@ -3528,16 +3712,6 @@ void resetFeedforwardEventTraceState(
 double deterministicConnectionUnit(unsigned int pre_id, unsigned int post_id);
 double softOrientationConnectionProbability(double similarity, unsigned int manhattan_distance, double bias_strength);
 double orientationNeutralConnectionProbability(unsigned int manhattan_distance, double probability_scale);
-
-int wrappedCoordinate(int coordinate, unsigned int side)
-{
-    const int signed_side = static_cast<int>(side);
-    int wrapped = coordinate % signed_side;
-    if(wrapped < 0) {
-        wrapped += signed_side;
-    }
-    return wrapped;
-}
 
 double localGeometryDelta(unsigned int first, unsigned int second, bool periodic_geometry_enabled)
 {
@@ -11696,10 +11870,12 @@ void writeSummaryFiles(
     double l23ee_stdp_aminus,
     double l23pv_context_output_scale,
     double l4e_to_l23pv_weight_scale,
+    const L4EAdaptationConfig &l4e_adaptation_config,
     const L23EAdaptationConfig &l23e_adaptation_config,
     const OrientationContextAssayConfig &orientation_context_assay_config,
     const SensoryAssayConfig &sensory_assay_config,
     const VideoReplayConfig &video_replay_config,
+    const VideoL4DivisiveNormConfig &video_l4_divisive_norm_config,
     const VideoPVReliabilityConfig &video_pv_reliability_config,
     const VideoSOMReliabilityConfig &video_som_reliability_config,
     const VideoFFReliabilityConfig &video_ff_reliability_config,
@@ -11893,6 +12069,10 @@ void writeSummaryFiles(
     csv << "training_grating_phase_count," << training_grating_config.phase_count << "\n";
     csv << "training_grating_phase_slot_ms," << training_grating_phase_slot_ms << "\n";
     csv << "training_grating_counterbalance_enabled," << (training_grating_config.counterbalance_direction ? 1.0 : 0.0) << "\n";
+    csv << "analytic_l4_drive_scale," << training_grating_config.l4_drive_scale << "\n";
+    csv << "analytic_l4_drive_scale_future_frame_used,0.000000\n";
+    csv << "analytic_l4_drive_scale_target_label_used,0.000000\n";
+    csv << "analytic_l4_drive_scale_output_assembly_used,0.000000\n";
     csv << "l4_l23_orientation_bias_strength," << l4_l23_orientation_config.bias_strength << "\n";
     csv << "l4_l23_feedforward_orientation_prior_enabled," << (feedforward_orientation_prior_enabled ? 1.0 : 0.0) << "\n";
     csv << "l4_l23_orientation_neutral_density_match_enabled,"
@@ -11918,6 +12098,16 @@ void writeSummaryFiles(
     csv << "l23pv_context_output_scale," << l23pv_context_output_scale << "\n";
     csv << "l23pv_context_output_ablation_active," << (l23pv_context_output_scale != 1.0 ? 1.0 : 0.0) << "\n";
     csv << "l4e_to_l23pv_weight_scale," << l4e_to_l23pv_weight_scale << "\n";
+    csv << "l4e_adaptation_enabled," << (l4e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l4e_adaptation_tau_ms," << l4e_adaptation_config.tau_ms << "\n";
+    csv << "l4e_adaptation_spike_na," << l4e_adaptation_config.spike_na << "\n";
+    csv << "l4e_adaptation_l4e_only," << (l4e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l4e_adaptation_cell_local_only," << (l4e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "l4e_adaptation_future_frame_used,0.000000\n";
+    csv << "l4e_adaptation_target_label_used,0.000000\n";
+    csv << "l4e_adaptation_validation_target_used,0.000000\n";
+    csv << "l4e_adaptation_output_assembly_used,0.000000\n";
+    csv << "l4e_adaptation_global_run_statistics_used,0.000000\n";
     csv << "l23e_adaptation_enabled," << (l23e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "l23e_adaptation_tau_ms," << l23e_adaptation_config.tau_ms << "\n";
     csv << "l23e_adaptation_spike_na," << l23e_adaptation_config.spike_na << "\n";
@@ -11947,6 +12137,36 @@ void writeSummaryFiles(
         << (static_cast<std::size_t>(video_replay_config.effective_frame_count)
             * static_cast<std::size_t>(video_replay_config.repeat_count)) << "\n";
     csv << "video_frame_ms," << video_replay_config.frame_ms << "\n";
+    csv << "video_l4_drive_scale," << video_replay_config.l4_drive_scale << "\n";
+    csv << "video_l4_drive_scale_future_frame_used,0.000000\n";
+    csv << "video_l4_drive_scale_target_label_used,0.000000\n";
+    csv << "video_l4_drive_scale_heldout_frames_used,0.000000\n";
+    csv << "video_l4_drive_scale_output_assembly_used,0.000000\n";
+    csv << "video_l4_divisive_norm_enabled,"
+        << (video_l4_divisive_norm_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_divisive_norm_beta," << video_l4_divisive_norm_config.beta << "\n";
+    csv << "video_l4_divisive_norm_sigma," << video_l4_divisive_norm_config.sigma << "\n";
+    csv << "video_l4_divisive_norm_tau_ms," << video_l4_divisive_norm_config.tau_ms << "\n";
+    csv << "video_l4_divisive_norm_radius_sites," << video_l4_divisive_norm_config.radius << "\n";
+    csv << "video_l4_divisive_norm_floor_na," << video_l4_divisive_norm_config.floor_na << "\n";
+    csv << "video_l4_divisive_norm_contrast_only,"
+        << (video_l4_divisive_norm_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_divisive_norm_floor_preserved_before_scale,"
+        << (video_l4_divisive_norm_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_divisive_norm_temporal_local_state_only,"
+        << (video_l4_divisive_norm_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_divisive_norm_denominator_uses_previous_frame_state,"
+        << (video_l4_divisive_norm_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_divisive_norm_uses_l4_intersite_periodic_geometry,"
+        << ((video_l4_divisive_norm_config.enabled && periodic_local_geometry_config.l4_intersite_enabled) ? 1.0 : 0.0)
+        << "\n";
+    csv << "video_l4_divisive_norm_applies_to_analytic_drive,0.000000\n";
+    csv << "video_l4_divisive_norm_future_frame_used,0.000000\n";
+    csv << "video_l4_divisive_norm_target_label_used,0.000000\n";
+    csv << "video_l4_divisive_norm_heldout_frames_used,0.000000\n";
+    csv << "video_l4_divisive_norm_output_assembly_used,0.000000\n";
+    csv << "video_l4_divisive_norm_global_run_statistics_used,0.000000\n";
+    csv << "video_l4_divisive_norm_rate_cap_used,0.000000\n";
     csv << "recording_total_steps," << total_recording_steps << "\n";
     csv << "recording_buffer_requested_steps," << requested_recording_buffer_steps << "\n";
     csv << "recording_buffer_allocated_steps," << recording_buffer_steps << "\n";
@@ -12778,6 +12998,10 @@ void writeSummaryFiles(
     text << "training_grating_counterbalance_enabled="
          << (training_grating_config.counterbalance_direction ? 1 : 0)
          << "\n";
+    text << "analytic_l4_drive_scale=" << training_grating_config.l4_drive_scale << "\n";
+    text << "analytic_l4_drive_scale_future_frame_used=0\n";
+    text << "analytic_l4_drive_scale_target_label_used=0\n";
+    text << "analytic_l4_drive_scale_output_assembly_used=0\n";
     text << "l4_l23_orientation_bias_strength=" << l4_l23_orientation_config.bias_strength << "\n";
     text << "l4_l23_feedforward_orientation_prior_enabled="
          << (feedforward_orientation_prior_enabled ? 1 : 0) << "\n";
@@ -12807,6 +13031,19 @@ void writeSummaryFiles(
     text << "l23pv_context_output_ablation_active="
          << (l23pv_context_output_scale != 1.0 ? 1 : 0) << "\n";
     text << "l4e_to_l23pv_weight_scale=" << l4e_to_l23pv_weight_scale << "\n";
+    text << "l4e_adaptation_enabled="
+         << (l4e_adaptation_config.enabled ? 1 : 0) << "\n";
+    text << "l4e_adaptation_tau_ms=" << l4e_adaptation_config.tau_ms << "\n";
+    text << "l4e_adaptation_spike_na=" << l4e_adaptation_config.spike_na << "\n";
+    text << "l4e_adaptation_l4e_only="
+         << (l4e_adaptation_config.enabled ? 1 : 0) << "\n";
+    text << "l4e_adaptation_cell_local_only="
+         << (l4e_adaptation_config.enabled ? 1 : 0) << "\n";
+    text << "l4e_adaptation_future_frame_used=0\n";
+    text << "l4e_adaptation_target_label_used=0\n";
+    text << "l4e_adaptation_validation_target_used=0\n";
+    text << "l4e_adaptation_output_assembly_used=0\n";
+    text << "l4e_adaptation_global_run_statistics_used=0\n";
     text << "l23e_adaptation_enabled="
          << (l23e_adaptation_config.enabled ? 1 : 0) << "\n";
     text << "l23e_adaptation_tau_ms=" << l23e_adaptation_config.tau_ms << "\n";
@@ -12856,6 +13093,36 @@ void writeSummaryFiles(
     text << "video_drive_path="
          << (video_replay_config.drive_path.empty() ? "disabled" : video_replay_config.drive_path)
          << "\n";
+    text << "video_l4_drive_scale=" << video_replay_config.l4_drive_scale << "\n";
+    text << "video_l4_drive_scale_future_frame_used=0\n";
+    text << "video_l4_drive_scale_target_label_used=0\n";
+    text << "video_l4_drive_scale_heldout_frames_used=0\n";
+    text << "video_l4_drive_scale_output_assembly_used=0\n";
+    text << "video_l4_divisive_norm_enabled="
+         << (video_l4_divisive_norm_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_divisive_norm_beta=" << video_l4_divisive_norm_config.beta << "\n";
+    text << "video_l4_divisive_norm_sigma=" << video_l4_divisive_norm_config.sigma << "\n";
+    text << "video_l4_divisive_norm_tau_ms=" << video_l4_divisive_norm_config.tau_ms << "\n";
+    text << "video_l4_divisive_norm_radius_sites=" << video_l4_divisive_norm_config.radius << "\n";
+    text << "video_l4_divisive_norm_floor_na=" << video_l4_divisive_norm_config.floor_na << "\n";
+    text << "video_l4_divisive_norm_contrast_only="
+         << (video_l4_divisive_norm_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_divisive_norm_floor_preserved_before_scale="
+         << (video_l4_divisive_norm_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_divisive_norm_temporal_local_state_only="
+         << (video_l4_divisive_norm_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_divisive_norm_denominator_uses_previous_frame_state="
+         << (video_l4_divisive_norm_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_divisive_norm_uses_l4_intersite_periodic_geometry="
+         << ((video_l4_divisive_norm_config.enabled && periodic_local_geometry_config.l4_intersite_enabled) ? 1 : 0)
+         << "\n";
+    text << "video_l4_divisive_norm_applies_to_analytic_drive=0\n";
+    text << "video_l4_divisive_norm_future_frame_used=0\n";
+    text << "video_l4_divisive_norm_target_label_used=0\n";
+    text << "video_l4_divisive_norm_heldout_frames_used=0\n";
+    text << "video_l4_divisive_norm_output_assembly_used=0\n";
+    text << "video_l4_divisive_norm_global_run_statistics_used=0\n";
+    text << "video_l4_divisive_norm_rate_cap_used=0\n";
     text << "recording_total_steps=" << total_recording_steps << "\n";
     text << "recording_buffer_requested_steps=" << requested_recording_buffer_steps << "\n";
     text << "recording_buffer_allocated_steps=" << recording_buffer_steps << "\n";
@@ -13580,12 +13847,13 @@ void modelDefinition(GeNN::ModelSpec &model)
 {
     model.setDT(v1_genn::kDtMs);
     model.setName(v1_genn::kModelName);
+    const L4EAdaptationConfig l4e_adaptation_config = getL4EAdaptationConfig();
     const L23EAdaptationConfig l23e_adaptation_config = getL23EAdaptationConfig();
 
     auto *l4e = model.addNeuronPopulation<V1LIF>(
         "L4E",
         v1_genn::kNumL4E,
-        makeLIFParameters(v1_genn::kExcitatoryLIF),
+        makeLIFParameters(v1_genn::kExcitatoryLIF, l4e_adaptation_config),
         makeLIFVariables(v1_genn::kExcitatoryLIF, GeNN::uninitialisedVar()));
 
     auto *l4pv = model.addNeuronPopulation<V1LIF>(
@@ -14054,6 +14322,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const double l23ee_context_output_scale = getEnvDoubleOrDefault(
         "V1_L23EE_CONTEXT_OUTPUT_SCALE",
         kDefaultL23EEContextOutputScale);
+    const L4EAdaptationConfig l4e_adaptation_config = getL4EAdaptationConfig();
     const L23EAdaptationConfig l23e_adaptation_config = getL23EAdaptationConfig();
     const L4L23OrientationConfig l4_l23_orientation_config = getL4L23OrientationConfig();
     const L23EELognormalInitConfig l23ee_lognormal_init_config = getL23EELognormalInitConfig();
@@ -14068,6 +14337,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         getOrientationContextAssayConfig(broad_stimulus_radius_sites);
     const SensoryAssayConfig sensory_assay_config = getSensoryAssayConfig();
     const VideoReplayConfig video_replay_config = getVideoReplayConfig();
+    const VideoL4DivisiveNormConfig video_l4_divisive_norm_config =
+        getVideoL4DivisiveNormConfig();
     const VideoPVReliabilityConfig video_pv_reliability_config =
         getVideoPVReliabilityConfig(video_replay_config);
     const VideoSOMReliabilityConfig video_som_reliability_config =
@@ -14393,6 +14664,32 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
 
     GeNN::Runtime::ArrayBase &l4e_i_ext = requireArray(runtime, l4e, "Iext");
     float *l4e_i_ext_host = l4e_i_ext.getHostPointer<float>();
+    std::vector<float> l4e_drive;
+    std::vector<double> video_l4_divisive_norm_state(v1_genn::kSiteCount, 0.0);
+    const auto pushScaledL4ECurrent = [&](const float *source, std::size_t count, double scale) {
+        copyScaledCurrentToHost(source, count, l4e_i_ext_host, scale);
+        l4e_i_ext.pushToDevice();
+    };
+    const auto pushAnalyticL4EDrive = [&]() {
+        pushScaledL4ECurrent(l4e_drive.data(), l4e_drive.size(), training_grating_config.l4_drive_scale);
+    };
+    const auto pushVideoL4EDrive = [&](const float *source, std::size_t count) {
+        copyVideoL4DriveToHost(
+            source,
+            count,
+            l4e_i_ext_host,
+            video_replay_config.l4_drive_scale,
+            video_l4_divisive_norm_config,
+            video_l4_divisive_norm_state,
+            video_replay_config.frame_ms,
+            periodic_local_geometry_config.l4_intersite_enabled);
+        l4e_i_ext.pushToDevice();
+    };
+    const auto fillVideoL4ECurrent = [&](double current) {
+        const float scaled_current = static_cast<float>(current * video_replay_config.l4_drive_scale);
+        std::fill(l4e_i_ext_host, l4e_i_ext_host + l4e_i_ext.getCount(), scaled_current);
+        l4e_i_ext.pushToDevice();
+    };
 
     const std::vector<std::pair<unsigned int, unsigned int>> ff_edges =
         buildL4EToL23EConnectivity(periodic_local_geometry_config.l4_l23_enabled);
@@ -14514,7 +14811,6 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         }
     }
 
-    std::vector<float> l4e_drive;
     SingleRecordedSpikeBatch l4e_recordings;
     SingleRecordedSpikeBatch l4pv_recordings;
     SingleRecordedSpikeBatch l4som_recordings;
@@ -14666,8 +14962,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
 
         const auto pushDrivePhase = [&](double orientation_rad, double phase_rad, double aperture_radius, unsigned int aperture_center) {
             fillL4EDrive(l4e_drive, orientation_rad, phase_rad, aperture_radius, aperture_center);
-            std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
-            l4e_i_ext.pushToDevice();
+            pushAnalyticL4EDrive();
         };
         const auto driftPhaseForSubslot = [&](unsigned int orientation_index, unsigned int subslot_index) {
             const unsigned int start_slot = (phase_cycle_offset + orientation_index) % training_grating_config.phase_count;
@@ -14747,8 +15042,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     / static_cast<double>(cell_coverage_phase_count);
 
                 fillL4EDrive(l4e_drive, orientation_rad, phase_rad, -1.0);
-                std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
-                l4e_i_ext.pushToDevice();
+                pushAnalyticL4EDrive();
 
                 const double trial_start_ms = runtime.getTime();
                 measurement_trials.push_back({
@@ -14785,8 +15079,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             aperture_radius_sites,
             aperture_center_site,
             aperture_inner_radius_sites);
-        std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
-        l4e_i_ext.pushToDevice();
+        pushAnalyticL4EDrive();
 
         const double trial_start_ms = runtime.getTime();
         TrialWindow trial{
@@ -14823,8 +15116,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             center_radius_sites,
             surround_outer_radius_sites,
             aperture_center_site);
-        std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
-        l4e_i_ext.pushToDevice();
+        pushAnalyticL4EDrive();
 
         const double trial_start_ms = runtime.getTime();
         TrialWindow trial{
@@ -14884,8 +15176,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             aperture_center_site,
             -1.0,
             contrast);
-        std::copy(l4e_drive.begin(), l4e_drive.end(), l4e_i_ext_host);
-        l4e_i_ext.pushToDevice();
+        pushAnalyticL4EDrive();
 
         const double trial_start_ms = runtime.getTime();
         TrialWindow trial{
@@ -15199,11 +15490,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             for(unsigned int frame_offset = 0; frame_offset < frame_count; frame_offset++) {
                 const unsigned int frame_index = frame_start_index + frame_offset;
                 const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
-                std::copy(
-                    video_drive_frames.data() + offset,
-                    video_drive_frames.data() + offset + frame_size,
-                    l4e_i_ext_host);
-                l4e_i_ext.pushToDevice();
+                pushVideoL4EDrive(video_drive_frames.data() + offset, frame_size);
 
                 const double trial_start_ms = runtime.getTime();
                 TrialWindow trial{
@@ -15514,11 +15801,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 const unsigned int frame_index =
                     video_consolidation_config.frame_start_index + frame_offset;
                 const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
-                std::copy(
-                    video_drive_frames.data() + offset,
-                    video_drive_frames.data() + offset + frame_size,
-                    l4e_i_ext_host);
-                l4e_i_ext.pushToDevice();
+                pushVideoL4EDrive(video_drive_frames.data() + offset, frame_size);
                 for(unsigned int step = 0; step < video_frame_steps; step++) {
                     stepSimulation();
                 }
@@ -15570,19 +15853,14 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             return sum / static_cast<double>(frame_size);
         };
         const auto fillConstantL4ECurrent = [&](double current) {
-            std::fill(l4e_i_ext_host, l4e_i_ext_host + l4e_i_ext.getCount(), static_cast<float>(current));
-            l4e_i_ext.pushToDevice();
+            fillVideoL4ECurrent(current);
         };
         const auto pushFrameDrive = [&](unsigned int frame_index) {
             const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
             if(offset + frame_size > video_drive_frames.size()) {
                 throw std::runtime_error("Video event timing frame index exceeds loaded drive data.");
             }
-            std::copy(
-                video_drive_frames.data() + offset,
-                video_drive_frames.data() + offset + frame_size,
-                l4e_i_ext_host);
-            l4e_i_ext.pushToDevice();
+            pushVideoL4EDrive(video_drive_frames.data() + offset, frame_size);
         };
 
         const auto runTimingTrial = [&](const std::string &condition,
@@ -15626,7 +15904,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 frame_index,
                 trial,
                 event_start_ms,
-                blank_control ? 0.0 : gray_current,
+                blank_control ? 0.0 : (gray_current * video_replay_config.l4_drive_scale),
                 post_uses_frame));
             for(unsigned int step = 0; step < video_event_post_steps; step++) {
                 stepSimulation();
@@ -17098,10 +17376,12 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         l23ee_stdp_aminus,
         l23pv_context_output_scale,
         l4e_to_l23pv_weight_scale,
+        l4e_adaptation_config,
         l23e_adaptation_config,
         orientation_context_assay_config,
         sensory_assay_config,
         video_replay_config,
+        video_l4_divisive_norm_config,
         video_pv_reliability_config,
         video_som_reliability_config,
         video_ff_reliability_config,
