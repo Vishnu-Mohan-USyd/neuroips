@@ -54,3 +54,7 @@
 - Prefer the local RTX 5090 for GeNN validation and training runs when it is
   available, using `CUDA_VISIBLE_DEVICES=0`; do not kill unrelated GPU or pod
   processes while working.
+- For rate/homeostasis remediation, documenting an unresolved biological caveat
+  is not completion when the user explicitly asks to keep solving it. Continue
+  iterating on biologically plausible mechanisms until the stated L4/PV goals
+  pass, or until there is a proven blocker accepted by the user.

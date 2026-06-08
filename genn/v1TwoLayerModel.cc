@@ -564,6 +564,10 @@ constexpr double kDefaultVideoL23EIntrinsicHomeostasisStrengthNaPerHz = 0.001;
 constexpr double kDefaultVideoL23EIntrinsicHomeostasisMaxSuppressionNa = 0.050;
 constexpr double kDefaultVideoL23PushPullInhibitionStrength = 0.04;
 constexpr double kDefaultVideoL23PushPullInhibitionMinPostSpikes = 1.0;
+constexpr double kDefaultVideoL23EEHeterosynapticCompetitionStrength = 0.00008;
+constexpr double kDefaultVideoL23EEHeterosynapticCompetitionMinPostSpikes = 1.0;
+constexpr double kDefaultVideoL23EEHeterosynapticCompetitionMassTolerance = 0.02;
+constexpr double kDefaultVideoL23EEHeterosynapticCompetitionTopFrac = 0.10;
 constexpr double kDefaultVideoFFEventTraceTauPreMs = 20.0;
 constexpr double kDefaultVideoFFEventTraceTauPostMs = 40.0;
 constexpr double kDefaultVideoFFEventTraceTauRateMs = 2000.0;
@@ -856,6 +860,14 @@ struct VideoL4DivisiveNormConfig {
     double floor_na = 0.12;
 };
 
+struct VideoL4STDConfig {
+    bool enabled = false;
+    double floor_na = 0.12;
+    double tau_rec_ms = 750.0;
+    double u = 0.12;
+    double r_min = 0.60;
+};
+
 struct VideoEventTimingConfig {
     bool enabled = false;
     unsigned int max_events = 0;
@@ -961,6 +973,14 @@ struct VideoL23PushPullInhibitionConfig {
     bool enabled = false;
     double strength = 0.0;
     double min_post_spikes = kDefaultVideoL23PushPullInhibitionMinPostSpikes;
+};
+
+struct VideoL23EEHeterosynapticCompetitionConfig {
+    bool enabled = false;
+    double strength = kDefaultVideoL23EEHeterosynapticCompetitionStrength;
+    double min_post_spikes = kDefaultVideoL23EEHeterosynapticCompetitionMinPostSpikes;
+    double mass_tolerance = kDefaultVideoL23EEHeterosynapticCompetitionMassTolerance;
+    double top_frac = kDefaultVideoL23EEHeterosynapticCompetitionTopFrac;
 };
 
 struct PushPullInhibitionMetrics {
@@ -2193,6 +2213,30 @@ VideoL4DivisiveNormConfig getVideoL4DivisiveNormConfig()
     return config;
 }
 
+VideoL4STDConfig getVideoL4STDConfig()
+{
+    VideoL4STDConfig config;
+    config.enabled = getEnvUnsignedOrDefault("V1_VIDEO_L4_STD_ENABLE", 0u) != 0u;
+    config.floor_na = getEnvDoubleOrDefault("V1_VIDEO_L4_STD_FLOOR_NA", config.floor_na);
+    config.tau_rec_ms = getEnvDoubleOrDefault("V1_VIDEO_L4_STD_TAU_REC_MS", config.tau_rec_ms);
+    config.u = getEnvDoubleOrDefault("V1_VIDEO_L4_STD_U", config.u);
+    config.r_min = getEnvDoubleOrDefault("V1_VIDEO_L4_STD_R_MIN", config.r_min);
+
+    if(!std::isfinite(config.floor_na) || config.floor_na < 0.0) {
+        throw std::runtime_error("V1_VIDEO_L4_STD_FLOOR_NA must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.tau_rec_ms) || config.tau_rec_ms <= 0.0) {
+        throw std::runtime_error("V1_VIDEO_L4_STD_TAU_REC_MS must be finite and positive.");
+    }
+    if(!std::isfinite(config.u) || config.u < 0.0 || config.u > 1.0) {
+        throw std::runtime_error("V1_VIDEO_L4_STD_U must be finite and in [0, 1].");
+    }
+    if(!std::isfinite(config.r_min) || config.r_min < 0.0 || config.r_min > 1.0) {
+        throw std::runtime_error("V1_VIDEO_L4_STD_R_MIN must be finite and in [0, 1].");
+    }
+    return config;
+}
+
 VideoPVReliabilityConfig getVideoPVReliabilityConfig(const VideoReplayConfig &video_config)
 {
     VideoPVReliabilityConfig config;
@@ -2593,6 +2637,62 @@ VideoL23PushPullInhibitionConfig getVideoL23PushPullInhibitionConfig(
     if(!std::isfinite(config.min_post_spikes) || config.min_post_spikes < 0.0) {
         throw std::runtime_error(
             "V1_VIDEO_L23_PUSH_PULL_INHIBITION_MIN_POST_SPIKES must be finite and non-negative.");
+    }
+    return config;
+}
+
+VideoL23EEHeterosynapticCompetitionConfig getVideoL23EEHeterosynapticCompetitionConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoL23EEHeterosynapticCompetitionConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_L23EE_HETEROSYN_COMPETITION_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.strength = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_STRENGTH",
+            kDefaultVideoL23EEHeterosynapticCompetitionStrength)
+        : kDefaultVideoL23EEHeterosynapticCompetitionStrength;
+    config.min_post_spikes = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_MIN_POST_SPIKES",
+            kDefaultVideoL23EEHeterosynapticCompetitionMinPostSpikes)
+        : kDefaultVideoL23EEHeterosynapticCompetitionMinPostSpikes;
+    config.mass_tolerance = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_MASS_TOLERANCE",
+            kDefaultVideoL23EEHeterosynapticCompetitionMassTolerance)
+        : kDefaultVideoL23EEHeterosynapticCompetitionMassTolerance;
+    config.top_frac = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_TOP_FRAC",
+            kDefaultVideoL23EEHeterosynapticCompetitionTopFrac)
+        : kDefaultVideoL23EEHeterosynapticCompetitionTopFrac;
+
+    if(!enable_requested) {
+        return config;
+    }
+    if(!std::isfinite(config.strength)
+       || config.strength < 0.0
+       || config.strength > 0.001) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_STRENGTH must be finite and in [0.0, 0.001].");
+    }
+    if(!std::isfinite(config.min_post_spikes) || config.min_post_spikes < 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_MIN_POST_SPIKES must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.mass_tolerance)
+       || config.mass_tolerance < 0.0
+       || config.mass_tolerance > 0.25) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_MASS_TOLERANCE must be finite and in [0.0, 0.25].");
+    }
+    if(!std::isfinite(config.top_frac)
+       || config.top_frac <= 0.0
+       || config.top_frac > 0.5) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_TOP_FRAC must be finite and in (0.0, 0.5].");
     }
     return config;
 }
@@ -3543,6 +3643,38 @@ int wrappedCoordinate(int coordinate, unsigned int side)
         wrapped += signed_side;
     }
     return wrapped;
+}
+
+void applyVideoL4AfferentSTD(
+    const float *source,
+    std::size_t count,
+    const VideoL4STDConfig &std_config,
+    std::vector<double> &std_state,
+    std::vector<float> &std_shaped_drive,
+    double frame_ms)
+{
+    if(count != v1_genn::kNumL4E) {
+        throw std::runtime_error("Video L4 afferent STD requires a full L4E frame.");
+    }
+    if(std_state.size() != count) {
+        std_state.assign(count, 1.0);
+    }
+    std_shaped_drive.resize(count);
+
+    for(std::size_t i = 0; i < count; i++) {
+        const double contrast = std::max(static_cast<double>(source[i]) - std_config.floor_na, 0.0);
+        std_shaped_drive[i] = static_cast<float>(std_config.floor_na + (std_state[i] * contrast));
+    }
+
+    const double alpha = 1.0 - std::exp(-frame_ms / std_config.tau_rec_ms);
+    for(std::size_t i = 0; i < count; i++) {
+        const double contrast = std::max(static_cast<double>(source[i]) - std_config.floor_na, 0.0);
+        double recovered = std::min(1.0, std_state[i] + (alpha * (1.0 - std_state[i])));
+        if(contrast > 0.0) {
+            recovered = std::max(std_config.r_min, recovered * (1.0 - std_config.u));
+        }
+        std_state[i] = recovered;
+    }
 }
 
 void copyVideoL4DriveToHost(
@@ -4687,6 +4819,157 @@ WeightDeltaMetrics applyLocalPostSynapticBCMFFCompetition(
         for(std::size_t i = 0; i < incoming.size(); i++) {
             after[incoming[i]] = static_cast<float>(
                 std::min(wmax, std::max(wmin, proposals[i] + lambda)));
+        }
+    }
+
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
+}
+
+WeightDeltaMetrics applyLocalPostSynapticL23EEHeterosynapticCompetition(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &activity_scores,
+    const std::vector<double> &post_spike_counts,
+    const VideoL23EEHeterosynapticCompetitionConfig &config,
+    double wmin,
+    double wmax)
+{
+    if(post_spike_counts.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("L23EE heterosynaptic competition received unexpected post spike vector size.");
+    }
+    if(!std::isfinite(config.strength)
+       || !std::isfinite(config.min_post_spikes)
+       || !std::isfinite(config.mass_tolerance)
+       || !std::isfinite(config.top_frac)
+       || !std::isfinite(wmin)
+       || !std::isfinite(wmax)
+       || config.strength < 0.0
+       || config.min_post_spikes < 0.0
+       || config.mass_tolerance < 0.0
+       || config.top_frac <= 0.0
+       || config.top_frac > 0.5
+       || wmin > wmax) {
+        throw std::runtime_error("Invalid L23EE heterosynaptic competition parameters.");
+    }
+
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    if(activity_scores.size() != before.size()) {
+        throw std::runtime_error("L23EE heterosynaptic competition activity/current weights have mismatched sizes.");
+    }
+    if(before.empty() || edges.empty() || config.strength <= 0.0) {
+        return WeightDeltaMetrics{};
+    }
+    if((before.size() % v1_genn::kNumL23E) != 0u) {
+        throw std::runtime_error("L23EE heterosynaptic competition expected row-major sparse weight capacity.");
+    }
+
+    const std::size_t max_row_length = before.size() / v1_genn::kNumL23E;
+    std::vector<std::vector<std::size_t>> incoming_by_post(v1_genn::kNumL23E);
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL23E || post_id >= v1_genn::kNumL23E) {
+            throw std::runtime_error("L23EE heterosynaptic competition edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23EE heterosynaptic competition exceeded sparse row capacity.");
+        }
+        incoming_by_post[post_id].push_back((static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index);
+        row_active_index++;
+    }
+
+    std::vector<float> after = before;
+    std::vector<std::pair<double, std::size_t>> ranked_synapses;
+    for(unsigned int post_id = 0; post_id < v1_genn::kNumL23E; post_id++) {
+        const std::vector<std::size_t> &incoming = incoming_by_post[post_id];
+        if(incoming.size() < 2u || post_spike_counts[post_id] < config.min_post_spikes) {
+            continue;
+        }
+
+        double original_sum = 0.0;
+        double score_sum = 0.0;
+        ranked_synapses.clear();
+        ranked_synapses.reserve(incoming.size());
+        for(std::size_t synapse_index : incoming) {
+            const double weight = static_cast<double>(before[synapse_index]);
+            if(weight <= 1.0e-12) {
+                continue;
+            }
+            const double score = std::max(0.0, activity_scores[synapse_index]);
+            original_sum += weight;
+            score_sum += score;
+            ranked_synapses.emplace_back(score, synapse_index);
+        }
+        if(ranked_synapses.size() < 2u || original_sum <= 1.0e-12 || score_sum <= 1.0e-12) {
+            continue;
+        }
+
+        std::stable_sort(
+            ranked_synapses.begin(),
+            ranked_synapses.end(),
+            [](const auto &lhs, const auto &rhs) {
+                if(lhs.first != rhs.first) {
+                    return lhs.first > rhs.first;
+                }
+                return lhs.second < rhs.second;
+            });
+
+        const std::size_t top_count = std::min(
+            ranked_synapses.size() - 1u,
+            std::max<std::size_t>(
+                1u,
+                static_cast<std::size_t>(
+                    std::ceil(config.top_frac * static_cast<double>(ranked_synapses.size())))));
+
+        double total_top_headroom = 0.0;
+        double total_depression_capacity = 0.0;
+        for(std::size_t rank = 0; rank < ranked_synapses.size(); rank++) {
+            const std::size_t synapse_index = ranked_synapses[rank].second;
+            const double weight = static_cast<double>(before[synapse_index]);
+            if(rank < top_count) {
+                total_top_headroom += std::min(config.strength, std::max(0.0, wmax - weight));
+            }
+            else {
+                total_depression_capacity += std::max(0.0, weight - wmin);
+            }
+        }
+        const double transfer = std::min(total_top_headroom, total_depression_capacity);
+        if(transfer <= 1.0e-12) {
+            continue;
+        }
+
+        double projected_sum = original_sum;
+        for(std::size_t rank = 0; rank < ranked_synapses.size(); rank++) {
+            const std::size_t synapse_index = ranked_synapses[rank].second;
+            const double weight = static_cast<double>(before[synapse_index]);
+            if(rank < top_count) {
+                const double headroom =
+                    std::min(config.strength, std::max(0.0, wmax - weight));
+                const double delta = transfer * (headroom / total_top_headroom);
+                after[synapse_index] = static_cast<float>(
+                    std::min(wmax, std::max(wmin, weight + delta)));
+                projected_sum += static_cast<double>(after[synapse_index]) - weight;
+            }
+            else {
+                const double capacity = std::max(0.0, weight - wmin);
+                const double delta = transfer * (capacity / total_depression_capacity);
+                after[synapse_index] = static_cast<float>(
+                    std::min(wmax, std::max(wmin, weight - delta)));
+                projected_sum += static_cast<double>(after[synapse_index]) - weight;
+            }
+        }
+
+        const double mass_ratio = projected_sum / original_sum;
+        if(std::fabs(mass_ratio - 1.0) > (config.mass_tolerance + 1.0e-9)) {
+            throw std::runtime_error("L23EE heterosynaptic competition exceeded incoming mass tolerance.");
         }
     }
 
@@ -11869,6 +12152,8 @@ void writeSummaryFiles(
     double l23ee_stdp_aplus,
     double l23ee_stdp_aminus,
     double l23pv_context_output_scale,
+    double l23ee_context_output_scale,
+    bool l23ee_context_output_restored_before_video,
     double l4e_to_l23pv_weight_scale,
     const L4EAdaptationConfig &l4e_adaptation_config,
     const L23EAdaptationConfig &l23e_adaptation_config,
@@ -11876,6 +12161,7 @@ void writeSummaryFiles(
     const SensoryAssayConfig &sensory_assay_config,
     const VideoReplayConfig &video_replay_config,
     const VideoL4DivisiveNormConfig &video_l4_divisive_norm_config,
+    const VideoL4STDConfig &video_l4_std_config,
     const VideoPVReliabilityConfig &video_pv_reliability_config,
     const VideoSOMReliabilityConfig &video_som_reliability_config,
     const VideoFFReliabilityConfig &video_ff_reliability_config,
@@ -11934,6 +12220,11 @@ void writeSummaryFiles(
     const VideoConsolidationConfig &video_consolidation_config,
     const VideoRecurrentOnlyConsolidationConfig &video_recurrent_only_consolidation_config,
     const WeightDeltaMetrics &video_recurrent_only_consolidation_l23ee_delta_metrics,
+    const VideoL23EEHeterosynapticCompetitionConfig &video_l23ee_heterosynaptic_competition_config,
+    unsigned int video_l23ee_heterosynaptic_competition_application_count,
+    unsigned int video_l23ee_heterosynaptic_competition_activity_window_count,
+    const WeightDeltaMetrics &video_l23ee_heterosynaptic_competition_delta_metrics,
+    const ActivityScoreMetrics &video_l23ee_heterosynaptic_competition_activity_score_metrics,
     const VideoConsolidationMetrics &video_consolidation_metrics,
     const HVAPredictorConfig &hva_predictor_config,
     const HVAPredictorResult &hva_predictor_result,
@@ -11985,6 +12276,9 @@ void writeSummaryFiles(
     const bool video_recurrent_only_consolidation_active =
         video_recurrent_only_consolidation_config.enabled
         && video_consolidation_config.enabled;
+    const bool video_l23ee_heterosynaptic_competition_active =
+        video_l23ee_heterosynaptic_competition_config.enabled
+        && video_recurrent_only_consolidation_active;
     const unsigned int validation_core_side =
         getEnvUnsignedOrDefault("V1_VALIDATION_CORE_SIDE", 0u);
     const bool validation_core_enabled = validation_core_side > 0u;
@@ -12097,6 +12391,14 @@ void writeSummaryFiles(
     csv << "l23ee_stdp_aminus," << l23ee_stdp_aminus << "\n";
     csv << "l23pv_context_output_scale," << l23pv_context_output_scale << "\n";
     csv << "l23pv_context_output_ablation_active," << (l23pv_context_output_scale != 1.0 ? 1.0 : 0.0) << "\n";
+    csv << "l23ee_context_output_scale," << l23ee_context_output_scale << "\n";
+    csv << "l23ee_context_output_ablation_active," << (l23ee_context_output_scale != 1.0 ? 1.0 : 0.0) << "\n";
+    csv << "l23ee_context_output_assay_local,1.000000\n";
+    csv << "l23ee_context_output_restored_before_video_plasticity,"
+        << (l23ee_context_output_restored_before_video ? 1.0 : 0.0) << "\n";
+    csv << "l23ee_context_output_future_frame_used,0.000000\n";
+    csv << "l23ee_context_output_target_label_used,0.000000\n";
+    csv << "l23ee_context_output_validation_metric_used,0.000000\n";
     csv << "l4e_to_l23pv_weight_scale," << l4e_to_l23pv_weight_scale << "\n";
     csv << "l4e_adaptation_enabled," << (l4e_adaptation_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "l4e_adaptation_tau_ms," << l4e_adaptation_config.tau_ms << "\n";
@@ -12142,6 +12444,34 @@ void writeSummaryFiles(
     csv << "video_l4_drive_scale_target_label_used,0.000000\n";
     csv << "video_l4_drive_scale_heldout_frames_used,0.000000\n";
     csv << "video_l4_drive_scale_output_assembly_used,0.000000\n";
+    csv << "video_l4_std_enabled," << (video_l4_std_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_tau_rec_ms," << video_l4_std_config.tau_rec_ms << "\n";
+    csv << "video_l4_std_u," << video_l4_std_config.u << "\n";
+    csv << "video_l4_std_r_min," << video_l4_std_config.r_min << "\n";
+    csv << "video_l4_std_floor_na," << video_l4_std_config.floor_na << "\n";
+    csv << "video_l4_std_per_afferent_local_state,"
+        << (video_l4_std_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_uses_previous_frame_state,"
+        << (video_l4_std_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_updates_after_current_frame_written,"
+        << (video_l4_std_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_continuous_within_clip,"
+        << (video_l4_std_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_reset_between_repeats_events,"
+        << (video_l4_std_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_reset_every_frame,0.000000\n";
+    csv << "video_l4_std_reset_uses_labels,0.000000\n";
+    csv << "video_l4_std_reset_uses_future_frames,0.000000\n";
+    csv << "video_l4_std_reset_uses_global_metrics,0.000000\n";
+    csv << "video_l4_std_applies_before_divisive_norm,"
+        << ((video_l4_std_config.enabled && video_l4_divisive_norm_config.enabled) ? 1.0 : 0.0) << "\n";
+    csv << "video_l4_std_applies_to_analytic_drive,0.000000\n";
+    csv << "video_l4_std_future_frame_used,0.000000\n";
+    csv << "video_l4_std_target_label_used,0.000000\n";
+    csv << "video_l4_std_heldout_frames_used,0.000000\n";
+    csv << "video_l4_std_output_assembly_used,0.000000\n";
+    csv << "video_l4_std_global_run_statistics_used,0.000000\n";
+    csv << "video_l4_std_rate_cap_used,0.000000\n";
     csv << "video_l4_divisive_norm_enabled,"
         << (video_l4_divisive_norm_config.enabled ? 1.0 : 0.0) << "\n";
     csv << "video_l4_divisive_norm_beta," << video_l4_divisive_norm_config.beta << "\n";
@@ -12565,6 +12895,50 @@ void writeSummaryFiles(
         << video_recurrent_only_consolidation_l23ee_delta_metrics.max_abs_delta << "\n";
     csv << "video_recurrent_only_consolidation_l23ee_mean_gain_ratio,"
         << video_recurrent_only_consolidation_l23ee_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_l23ee_heterosyn_competition_enabled,"
+        << (video_l23ee_heterosynaptic_competition_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l23ee_heterosyn_competition_active,"
+        << (video_l23ee_heterosynaptic_competition_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l23ee_heterosyn_competition_strength,"
+        << video_l23ee_heterosynaptic_competition_config.strength << "\n";
+    csv << "video_l23ee_heterosyn_competition_min_post_spikes,"
+        << video_l23ee_heterosynaptic_competition_config.min_post_spikes << "\n";
+    csv << "video_l23ee_heterosyn_competition_mass_tolerance,"
+        << video_l23ee_heterosynaptic_competition_config.mass_tolerance << "\n";
+    csv << "video_l23ee_heterosyn_competition_top_frac,"
+        << video_l23ee_heterosynaptic_competition_config.top_frac << "\n";
+    csv << "video_l23ee_heterosyn_competition_recurrent_only,1.000000\n";
+    csv << "video_l23ee_heterosyn_competition_local_postsynaptic_only,1.000000\n";
+    csv << "video_l23ee_heterosyn_competition_uses_l23e_spike_coactivity,1.000000\n";
+    csv << "video_l23ee_heterosyn_competition_orientation_label_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_future_frame_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_target_label_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_heldout_frames_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_validation_metric_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_global_rate_cap_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_global_normalization_used,0.000000\n";
+    csv << "video_l23ee_heterosyn_competition_application_count,"
+        << video_l23ee_heterosynaptic_competition_application_count << "\n";
+    csv << "video_l23ee_heterosyn_competition_activity_window_count,"
+        << video_l23ee_heterosynaptic_competition_activity_window_count << "\n";
+    csv << "video_l23ee_heterosyn_competition_activity_positive_frac,"
+        << video_l23ee_heterosynaptic_competition_activity_score_metrics.positive_frac << "\n";
+    csv << "video_l23ee_heterosyn_competition_activity_mean_score,"
+        << video_l23ee_heterosynaptic_competition_activity_score_metrics.mean_score << "\n";
+    csv << "video_l23ee_heterosyn_competition_activity_max_score,"
+        << video_l23ee_heterosynaptic_competition_activity_score_metrics.max_score << "\n";
+    csv << "video_l23ee_heterosyn_competition_active_edge_count,"
+        << video_l23ee_heterosynaptic_competition_delta_metrics.active_edge_count << "\n";
+    csv << "video_l23ee_heterosyn_competition_changed_frac,"
+        << video_l23ee_heterosynaptic_competition_delta_metrics.changed_frac << "\n";
+    csv << "video_l23ee_heterosyn_competition_mean_delta,"
+        << video_l23ee_heterosynaptic_competition_delta_metrics.mean_delta << "\n";
+    csv << "video_l23ee_heterosyn_competition_p95_abs_delta,"
+        << video_l23ee_heterosynaptic_competition_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_l23ee_heterosyn_competition_max_abs_delta,"
+        << video_l23ee_heterosynaptic_competition_delta_metrics.max_abs_delta << "\n";
+    csv << "video_l23ee_heterosyn_competition_mean_gain_ratio,"
+        << video_l23ee_heterosynaptic_competition_delta_metrics.mean_gain_ratio << "\n";
     csv << "post_video_inhibitory_stabilization_enabled,"
         << (post_video_inhibitory_stabilization_active ? 1.0 : 0.0) << "\n";
     csv << "post_video_inhibitory_stabilization_sweep_count,"
@@ -13030,6 +13404,15 @@ void writeSummaryFiles(
     text << "l23pv_context_output_scale=" << l23pv_context_output_scale << "\n";
     text << "l23pv_context_output_ablation_active="
          << (l23pv_context_output_scale != 1.0 ? 1 : 0) << "\n";
+    text << "l23ee_context_output_scale=" << l23ee_context_output_scale << "\n";
+    text << "l23ee_context_output_ablation_active="
+         << (l23ee_context_output_scale != 1.0 ? 1 : 0) << "\n";
+    text << "l23ee_context_output_assay_local=1\n";
+    text << "l23ee_context_output_restored_before_video_plasticity="
+         << (l23ee_context_output_restored_before_video ? 1 : 0) << "\n";
+    text << "l23ee_context_output_future_frame_used=0\n";
+    text << "l23ee_context_output_target_label_used=0\n";
+    text << "l23ee_context_output_validation_metric_used=0\n";
     text << "l4e_to_l23pv_weight_scale=" << l4e_to_l23pv_weight_scale << "\n";
     text << "l4e_adaptation_enabled="
          << (l4e_adaptation_config.enabled ? 1 : 0) << "\n";
@@ -13098,6 +13481,34 @@ void writeSummaryFiles(
     text << "video_l4_drive_scale_target_label_used=0\n";
     text << "video_l4_drive_scale_heldout_frames_used=0\n";
     text << "video_l4_drive_scale_output_assembly_used=0\n";
+    text << "video_l4_std_enabled=" << (video_l4_std_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_std_tau_rec_ms=" << video_l4_std_config.tau_rec_ms << "\n";
+    text << "video_l4_std_u=" << video_l4_std_config.u << "\n";
+    text << "video_l4_std_r_min=" << video_l4_std_config.r_min << "\n";
+    text << "video_l4_std_floor_na=" << video_l4_std_config.floor_na << "\n";
+    text << "video_l4_std_per_afferent_local_state="
+         << (video_l4_std_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_std_uses_previous_frame_state="
+         << (video_l4_std_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_std_updates_after_current_frame_written="
+         << (video_l4_std_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_std_continuous_within_clip="
+         << (video_l4_std_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_std_reset_between_repeats_events="
+         << (video_l4_std_config.enabled ? 1 : 0) << "\n";
+    text << "video_l4_std_reset_every_frame=0\n";
+    text << "video_l4_std_reset_uses_labels=0\n";
+    text << "video_l4_std_reset_uses_future_frames=0\n";
+    text << "video_l4_std_reset_uses_global_metrics=0\n";
+    text << "video_l4_std_applies_before_divisive_norm="
+         << ((video_l4_std_config.enabled && video_l4_divisive_norm_config.enabled) ? 1 : 0) << "\n";
+    text << "video_l4_std_applies_to_analytic_drive=0\n";
+    text << "video_l4_std_future_frame_used=0\n";
+    text << "video_l4_std_target_label_used=0\n";
+    text << "video_l4_std_heldout_frames_used=0\n";
+    text << "video_l4_std_output_assembly_used=0\n";
+    text << "video_l4_std_global_run_statistics_used=0\n";
+    text << "video_l4_std_rate_cap_used=0\n";
     text << "video_l4_divisive_norm_enabled="
          << (video_l4_divisive_norm_config.enabled ? 1 : 0) << "\n";
     text << "video_l4_divisive_norm_beta=" << video_l4_divisive_norm_config.beta << "\n";
@@ -13470,6 +13881,50 @@ void writeSummaryFiles(
          << video_recurrent_only_consolidation_l23ee_delta_metrics.max_abs_delta << "\n";
     text << "video_recurrent_only_consolidation_l23ee_mean_gain_ratio="
          << video_recurrent_only_consolidation_l23ee_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_l23ee_heterosyn_competition_enabled="
+         << (video_l23ee_heterosynaptic_competition_config.enabled ? 1 : 0) << "\n";
+    text << "video_l23ee_heterosyn_competition_active="
+         << (video_l23ee_heterosynaptic_competition_active ? 1 : 0) << "\n";
+    text << "video_l23ee_heterosyn_competition_strength="
+         << video_l23ee_heterosynaptic_competition_config.strength << "\n";
+    text << "video_l23ee_heterosyn_competition_min_post_spikes="
+         << video_l23ee_heterosynaptic_competition_config.min_post_spikes << "\n";
+    text << "video_l23ee_heterosyn_competition_mass_tolerance="
+         << video_l23ee_heterosynaptic_competition_config.mass_tolerance << "\n";
+    text << "video_l23ee_heterosyn_competition_top_frac="
+         << video_l23ee_heterosynaptic_competition_config.top_frac << "\n";
+    text << "video_l23ee_heterosyn_competition_recurrent_only=1\n";
+    text << "video_l23ee_heterosyn_competition_local_postsynaptic_only=1\n";
+    text << "video_l23ee_heterosyn_competition_uses_l23e_spike_coactivity=1\n";
+    text << "video_l23ee_heterosyn_competition_orientation_label_used=0\n";
+    text << "video_l23ee_heterosyn_competition_future_frame_used=0\n";
+    text << "video_l23ee_heterosyn_competition_target_label_used=0\n";
+    text << "video_l23ee_heterosyn_competition_heldout_frames_used=0\n";
+    text << "video_l23ee_heterosyn_competition_validation_metric_used=0\n";
+    text << "video_l23ee_heterosyn_competition_global_rate_cap_used=0\n";
+    text << "video_l23ee_heterosyn_competition_global_normalization_used=0\n";
+    text << "video_l23ee_heterosyn_competition_application_count="
+         << video_l23ee_heterosynaptic_competition_application_count << "\n";
+    text << "video_l23ee_heterosyn_competition_activity_window_count="
+         << video_l23ee_heterosynaptic_competition_activity_window_count << "\n";
+    text << "video_l23ee_heterosyn_competition_activity_positive_frac="
+         << video_l23ee_heterosynaptic_competition_activity_score_metrics.positive_frac << "\n";
+    text << "video_l23ee_heterosyn_competition_activity_mean_score="
+         << video_l23ee_heterosynaptic_competition_activity_score_metrics.mean_score << "\n";
+    text << "video_l23ee_heterosyn_competition_activity_max_score="
+         << video_l23ee_heterosynaptic_competition_activity_score_metrics.max_score << "\n";
+    text << "video_l23ee_heterosyn_competition_active_edge_count="
+         << video_l23ee_heterosynaptic_competition_delta_metrics.active_edge_count << "\n";
+    text << "video_l23ee_heterosyn_competition_changed_frac="
+         << video_l23ee_heterosynaptic_competition_delta_metrics.changed_frac << "\n";
+    text << "video_l23ee_heterosyn_competition_mean_delta="
+         << video_l23ee_heterosynaptic_competition_delta_metrics.mean_delta << "\n";
+    text << "video_l23ee_heterosyn_competition_p95_abs_delta="
+         << video_l23ee_heterosynaptic_competition_delta_metrics.p95_abs_delta << "\n";
+    text << "video_l23ee_heterosyn_competition_max_abs_delta="
+         << video_l23ee_heterosynaptic_competition_delta_metrics.max_abs_delta << "\n";
+    text << "video_l23ee_heterosyn_competition_mean_gain_ratio="
+         << video_l23ee_heterosynaptic_competition_delta_metrics.mean_gain_ratio << "\n";
     text << "post_video_inhibitory_stabilization_enabled="
          << (post_video_inhibitory_stabilization_active ? 1 : 0) << "\n";
     text << "post_video_inhibitory_stabilization_sweep_count="
@@ -14339,6 +14794,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     const VideoReplayConfig video_replay_config = getVideoReplayConfig();
     const VideoL4DivisiveNormConfig video_l4_divisive_norm_config =
         getVideoL4DivisiveNormConfig();
+    const VideoL4STDConfig video_l4_std_config = getVideoL4STDConfig();
     const VideoPVReliabilityConfig video_pv_reliability_config =
         getVideoPVReliabilityConfig(video_replay_config);
     const VideoSOMReliabilityConfig video_som_reliability_config =
@@ -14385,6 +14841,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_consolidation_config,
             l23ee_stdp_aplus,
             l23ee_stdp_aminus);
+    const VideoL23EEHeterosynapticCompetitionConfig video_l23ee_heterosynaptic_competition_config =
+        getVideoL23EEHeterosynapticCompetitionConfig(video_replay_config);
     const bool post_video_inhibitory_stabilization_active =
         post_video_inhibitory_stabilization_config.enabled
         && video_consolidation_config.enabled;
@@ -14666,6 +15124,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     float *l4e_i_ext_host = l4e_i_ext.getHostPointer<float>();
     std::vector<float> l4e_drive;
     std::vector<double> video_l4_divisive_norm_state(v1_genn::kSiteCount, 0.0);
+    std::vector<double> video_l4_std_state(v1_genn::kNumL4E, 1.0);
+    std::vector<float> video_l4_std_shaped_drive;
+    const auto resetVideoL4STDState = [&]() {
+        if(video_l4_std_config.enabled) {
+            std::fill(video_l4_std_state.begin(), video_l4_std_state.end(), 1.0);
+        }
+    };
     const auto pushScaledL4ECurrent = [&](const float *source, std::size_t count, double scale) {
         copyScaledCurrentToHost(source, count, l4e_i_ext_host, scale);
         l4e_i_ext.pushToDevice();
@@ -14674,9 +15139,22 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         pushScaledL4ECurrent(l4e_drive.data(), l4e_drive.size(), training_grating_config.l4_drive_scale);
     };
     const auto pushVideoL4EDrive = [&](const float *source, std::size_t count) {
+        const float *video_source = source;
+        std::size_t video_count = count;
+        if(video_l4_std_config.enabled) {
+            applyVideoL4AfferentSTD(
+                source,
+                count,
+                video_l4_std_config,
+                video_l4_std_state,
+                video_l4_std_shaped_drive,
+                video_replay_config.frame_ms);
+            video_source = video_l4_std_shaped_drive.data();
+            video_count = video_l4_std_shaped_drive.size();
+        }
         copyVideoL4DriveToHost(
-            source,
-            count,
+            video_source,
+            video_count,
             l4e_i_ext_host,
             video_replay_config.l4_drive_scale,
             video_l4_divisive_norm_config,
@@ -15286,6 +15764,15 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     unsigned int post_video_inhibitory_stabilization_boundary_extra_application_count = 0u;
     unsigned int post_video_inhibitory_stabilization_boundary_extra_post_cell_count = 0u;
     WeightDeltaMetrics video_recurrent_only_consolidation_l23ee_delta_metrics;
+    const bool video_l23ee_heterosynaptic_competition_active =
+        video_l23ee_heterosynaptic_competition_config.enabled
+        && video_recurrent_only_consolidation_config.enabled;
+    WeightDeltaMetrics video_l23ee_heterosynaptic_competition_delta_metrics;
+    ActivityScoreMetrics video_l23ee_heterosynaptic_competition_activity_score_metrics;
+    unsigned int video_l23ee_heterosynaptic_competition_application_count = 0u;
+    unsigned int video_l23ee_heterosynaptic_competition_activity_window_count = 0u;
+    std::vector<double> video_l23ee_heterosynaptic_competition_activity_scores;
+    std::vector<double> video_l23ee_heterosynaptic_competition_post_spike_counts;
 
     auto runVideoBlock = [&](std::vector<TrialWindow> *trials,
                              std::vector<VideoFrameRecord> *records,
@@ -15321,6 +15808,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_l4e_l23pv_recruitment_active && video_ff_stdp_active;
         const bool accumulate_l23_push_pull_activity_score =
             video_l23_push_pull_inhibition_active && video_ff_stdp_active;
+        const bool accumulate_l23ee_heterosynaptic_competition_score =
+            video_l23ee_heterosynaptic_competition_active && recurrent_learning && !inhibitory_learning;
         runtime.setDynamicParamValue(
             l4e_to_l23e,
             "Aplus",
@@ -15486,7 +15975,23 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     0.0);
             }
         }
+        std::vector<double> previous_l23ee_heterosynaptic_competition_l23e_spike_counts;
+        if(accumulate_l23ee_heterosynaptic_competition_score) {
+            previous_l23ee_heterosynaptic_competition_l23e_spike_counts =
+                copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+            if(video_l23ee_heterosynaptic_competition_activity_scores.empty()) {
+                video_l23ee_heterosynaptic_competition_activity_scores.assign(
+                    copyWeights(runtime, l23e_to_l23e).size(),
+                    0.0);
+            }
+            if(video_l23ee_heterosynaptic_competition_post_spike_counts.empty()) {
+                video_l23ee_heterosynaptic_competition_post_spike_counts.assign(
+                    v1_genn::kNumL23E,
+                    0.0);
+            }
+        }
         for(unsigned int repeat_index = 0; repeat_index < repeat_count; repeat_index++) {
+            resetVideoL4STDState();
             for(unsigned int frame_offset = 0; frame_offset < frame_count; frame_offset++) {
                 const unsigned int frame_index = frame_start_index + frame_offset;
                 const std::size_t offset = static_cast<std::size_t>(frame_index) * frame_size;
@@ -15635,6 +16140,29 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     previous_push_pull_l23e_spike_counts = current_l23e_spike_counts;
                     previous_push_pull_l23pv_spike_counts = current_l23pv_spike_counts;
                     previous_push_pull_l23som_spike_counts = current_l23som_spike_counts;
+                }
+                if(accumulate_l23ee_heterosynaptic_competition_score) {
+                    const std::vector<double> current_l23e_spike_counts =
+                        copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+                    const std::vector<double> l23e_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23e_spike_counts,
+                            previous_l23ee_heterosynaptic_competition_l23e_spike_counts);
+                    for(unsigned int post_id = 0; post_id < v1_genn::kNumL23E; post_id++) {
+                        video_l23ee_heterosynaptic_competition_post_spike_counts[post_id] +=
+                            l23e_frame_spikes[post_id];
+                    }
+                    accumulateSparseActivityScores(
+                        video_l23ee_heterosynaptic_competition_activity_scores,
+                        l23ee_edges,
+                        l23e_frame_spikes,
+                        l23e_frame_spikes,
+                        v1_genn::kNumL23E,
+                        v1_genn::kNumL23E,
+                        "L23EE heterosynaptic competition");
+                    video_l23ee_heterosynaptic_competition_activity_window_count++;
+                    previous_l23ee_heterosynaptic_competition_l23e_spike_counts =
+                        current_l23e_spike_counts;
                 }
                 if(apply_online_ff_competition) {
                     const unsigned int exposure_frame_number =
@@ -15795,6 +16323,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         for(unsigned int repeat_index = 0;
             repeat_index < video_consolidation_config.repeat_count;
             repeat_index++) {
+            resetVideoL4STDState();
             for(unsigned int frame_offset = 0;
                 frame_offset < video_consolidation_config.frame_count;
                 frame_offset++) {
@@ -15869,6 +16398,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                                         unsigned int frame_index,
                                         bool post_uses_frame,
                                         bool blank_control) {
+            resetVideoL4STDState();
             const double gray_current = video_event_timing_config.gray_from_frame_mean
                 ? frameMean(frame_index)
                 : video_event_timing_config.gray_current;
@@ -16076,10 +16606,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             orientation_context_trials.push_back(trial_set);
         }
     }
-    if(l23ee_context_output_scale != 1.0) {
+    const bool l23ee_context_output_ablation_active = l23ee_context_output_scale != 1.0;
+    bool l23ee_context_output_restored_before_video = !l23ee_context_output_ablation_active;
+    std::vector<float> l23ee_weights_before_recurrence_context_scale;
+    if(l23ee_context_output_ablation_active) {
+        l23ee_weights_before_recurrence_context_scale = copyWeights(runtime, l23e_to_l23e);
         scaleSynapseWeights(runtime, l23e_to_l23e, l23ee_context_output_scale);
     }
     runSweep("recurrence_context", &recurrence_context_trials, false, false, false, 0u, -1.0);
+    if(l23ee_context_output_ablation_active) {
+        setSynapseWeights(runtime, l23e_to_l23e, l23ee_weights_before_recurrence_context_scale);
+        l23ee_context_output_restored_before_video = true;
+    }
     const bool video_ff_homeostatic_scaling_active =
         video_ff_homeostatic_scaling_config.enabled && video_consolidation_config.enabled;
     WeightDeltaMetrics video_ff_homeostatic_scaling_l4_l23_delta_metrics;
@@ -16289,6 +16827,26 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             const std::vector<float> l23ee_weights_before_recurrent_only_video =
                 copyWeights(runtime, l23e_to_l23e);
             runVideoRecurrentOnlyConsolidation();
+            if(video_l23ee_heterosynaptic_competition_active) {
+                video_l23ee_heterosynaptic_competition_activity_score_metrics =
+                    summarizeSparseActivityScores(
+                        video_l23ee_heterosynaptic_competition_activity_scores,
+                        l23ee_edges,
+                        v1_genn::kNumL23E,
+                        v1_genn::kNumL23E,
+                        "L23EE heterosynaptic competition");
+                video_l23ee_heterosynaptic_competition_delta_metrics =
+                    applyLocalPostSynapticL23EEHeterosynapticCompetition(
+                        runtime,
+                        l23e_to_l23e,
+                        l23ee_edges,
+                        video_l23ee_heterosynaptic_competition_activity_scores,
+                        video_l23ee_heterosynaptic_competition_post_spike_counts,
+                        video_l23ee_heterosynaptic_competition_config,
+                        kL23EEStdpWeightMin,
+                        kL23EEStdpWeightMax);
+                video_l23ee_heterosynaptic_competition_application_count++;
+            }
             video_recurrent_only_consolidation_l23ee_delta_metrics =
                 computeWeightDeltaMetrics(
                     l23ee_weights_before_recurrent_only_video,
@@ -17375,6 +17933,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         l23ee_stdp_aplus,
         l23ee_stdp_aminus,
         l23pv_context_output_scale,
+        l23ee_context_output_scale,
+        l23ee_context_output_restored_before_video,
         l4e_to_l23pv_weight_scale,
         l4e_adaptation_config,
         l23e_adaptation_config,
@@ -17382,6 +17942,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         sensory_assay_config,
         video_replay_config,
         video_l4_divisive_norm_config,
+        video_l4_std_config,
         video_pv_reliability_config,
         video_som_reliability_config,
         video_ff_reliability_config,
@@ -17440,6 +18001,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_consolidation_config,
         video_recurrent_only_consolidation_config,
         video_recurrent_only_consolidation_l23ee_delta_metrics,
+        video_l23ee_heterosynaptic_competition_config,
+        video_l23ee_heterosynaptic_competition_application_count,
+        video_l23ee_heterosynaptic_competition_activity_window_count,
+        video_l23ee_heterosynaptic_competition_delta_metrics,
+        video_l23ee_heterosynaptic_competition_activity_score_metrics,
         video_consolidation_metrics,
         hva_predictor_config,
         hva_predictor_result,

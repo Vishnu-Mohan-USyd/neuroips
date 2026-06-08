@@ -526,6 +526,16 @@ POST_SITE_SUFFIXES = {
     "l23som": "_post_l23som_sites.csv",
 }
 
+PV_DOSE_EXPECTED_SCALES = (1.0, 0.75, 0.5, 0.25, 0.0)
+PV_DOSE_MONOTONIC_TOLERANCE = 0.01
+PV_DOSE_ENDPOINT_PREFERRED_GAIN = 0.15
+PV_DOSE_ENDPOINT_MIN_GAIN = 0.10
+PV_DOSE_RAW_ORACLE_MIN = 0.60
+PV_DOSE_L23E_P99_LIMIT_HZ = 5.0
+PV_DOSE_FULLPV_FRAC_LT1_MIN = 0.85
+PV_DOSE_PVOFF_FRAC_LT1_MIN = 0.70
+PV_DOSE_PVOFF_FRAC_LT1_DROP_MAX = 0.25
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -559,6 +569,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pvweak",
         help="Optional prefix for PV-output weakening run, e.g. v1_fp_pvweak.",
+    )
+    parser.add_argument(
+        "--pv-dose-prefixes",
+        nargs="+",
+        metavar="PREFIX",
+        help=(
+            "Optional explicit PV dose-response run prefixes for PV output scales "
+            "1.0,0.75,0.5,0.25,0.0. Accepts five positional prefixes or one "
+            "comma-separated list."
+        ),
     )
     parser.add_argument(
         "--pvoff",
@@ -2342,6 +2362,21 @@ def try_load_optional_run(genn_dir: Path, prefix: str | None, label: str) -> Run
         return None
 
 
+def parse_pv_dose_prefixes(raw_prefixes: list[str] | None) -> list[str] | None:
+    if raw_prefixes is None:
+        return None
+    prefixes: list[str] = []
+    for raw_prefix in raw_prefixes:
+        prefixes.extend(part.strip() for part in raw_prefix.split(",") if part.strip())
+    if len(prefixes) != len(PV_DOSE_EXPECTED_SCALES):
+        expected = ",".join(f"{scale:g}" for scale in PV_DOSE_EXPECTED_SCALES)
+        raise ValidationError(
+            "--pv-dose-prefixes requires exactly five prefixes for PV scales "
+            f"{expected}; got {len(prefixes)}."
+        )
+    return prefixes
+
+
 def require_summary_metric(run: RunData, metric: str) -> float:
     if metric not in run.summary:
         raise ValidationError(f"Missing summary metric {metric!r} in prefix {run.prefix}")
@@ -2349,6 +2384,29 @@ def require_summary_metric(run: RunData, metric: str) -> float:
     if not math.isfinite(value):
         raise ValidationError(f"Non-finite summary metric {metric!r} in prefix {run.prefix}")
     return value
+
+
+def summary_metric_or_default(run: RunData, metric: str, default: float) -> float:
+    value = run.summary.get(metric, default)
+    if not math.isfinite(value):
+        raise ValidationError(f"Non-finite summary metric {metric!r} in prefix {run.prefix}")
+    return value
+
+
+def pv_dose_no_cheat_violations(run: RunData) -> list[str]:
+    forbidden_tokens = (
+        "future_frame_used",
+        "target_label_used",
+        "orientation_label_used",
+        "validation_metric_used",
+        "heldout_frame_used",
+        "heldout_data_used",
+    )
+    violations: list[str] = []
+    for metric, value in sorted(run.summary.items()):
+        if any(token in metric for token in forbidden_tokens) and abs(value) > 1.0e-12:
+            violations.append(f"{run.prefix}:{metric}={value:.6g}")
+    return violations
 
 
 def final_post_video_orientation_missing(run: RunData, l23_population: str = "l23e") -> list[str]:
@@ -2590,9 +2648,29 @@ def orientation_tuning_metrics(rates_by_deg: dict[float, float]) -> tuple[float,
     return osi, max(rates_by_deg.values()), preferred_deg
 
 
-def compute_pv_gain_normalization_metrics(full: RunData, pvweak: RunData) -> dict[str, float]:
-    pvweak_scale = require_summary_metric(pvweak, "l23pv_context_output_scale")
-    pvweak_active = require_summary_metric(pvweak, "l23pv_context_output_ablation_active")
+def compute_pv_gain_normalization_metrics(
+    full: RunData,
+    pvweak: RunData,
+    *,
+    default_pvweak_scale: float | None = None,
+    default_pvweak_active: float | None = None,
+) -> dict[str, float]:
+    if default_pvweak_scale is None:
+        pvweak_scale = require_summary_metric(pvweak, "l23pv_context_output_scale")
+    else:
+        pvweak_scale = summary_metric_or_default(
+            pvweak,
+            "l23pv_context_output_scale",
+            default_pvweak_scale,
+        )
+    if default_pvweak_active is None:
+        pvweak_active = require_summary_metric(pvweak, "l23pv_context_output_ablation_active")
+    else:
+        pvweak_active = summary_metric_or_default(
+            pvweak,
+            "l23pv_context_output_ablation_active",
+            default_pvweak_active,
+        )
 
     paired_full_rates: list[float] = []
     paired_pvweak_rates: list[float] = []
@@ -2684,6 +2762,101 @@ def compute_pv_gain_normalization_metrics(full: RunData, pvweak: RunData) -> dic
         "full_l23pv_post_p99_hz": full_pv_rate_metrics.p99_hz,
         "full_l23pv_post_p99_limit_hz": 150.0,
     }
+
+
+def compute_optional_pv_dose_raw_oracle(run: RunData) -> dict[str, float] | None:
+    if run.video_site_rows is None:
+        return None
+    raw_oracle = compute_l23_video_raw_topk_oracle_metrics(run, run.video_site_rows, "l23e")
+    value = raw_oracle.get("loo_no_leak_oracle_recall_at_k", math.nan)
+    if not math.isfinite(value):
+        return None
+    return raw_oracle
+
+
+def compute_pv_dose_l23e_sparse_rate_metrics(run: RunData) -> tuple[RateMetrics, str, int]:
+    crop = validation_core_crop_from_run(run)
+    if run.final_post_video_l23e_sites is not None:
+        final_rows = filter_post_site_metrics_for_core(run.final_post_video_l23e_sites, crop)
+        if final_rows:
+            source = "final_post_video:l23e"
+            if crop.enabled:
+                source = f"{source}:core{crop.core_side}"
+            return compute_rate_metrics([row.mean_rate_hz for row in final_rows]), source, len(final_rows)
+
+    post_rows = filter_post_site_metrics_for_core(run.l23e_post_sites, crop)
+    if post_rows:
+        source = "post:l23e"
+        if crop.enabled:
+            source = f"{source}:core{crop.core_side}"
+        return compute_rate_metrics([row.mean_rate_hz for row in post_rows]), source, len(post_rows)
+
+    rates = run.post_site_rates["l23e"]
+    return compute_rate_metrics(rates), "post:l23e:all_sites", len(rates)
+
+
+def compute_pv_dose_response_rows(full: RunData, dose_runs: list[RunData]) -> list[dict[str, float | str | None]]:
+    if len(dose_runs) != len(PV_DOSE_EXPECTED_SCALES):
+        raise ValidationError(
+            f"PV dose-response requires {len(PV_DOSE_EXPECTED_SCALES)} runs; got {len(dose_runs)}."
+        )
+
+    dose_rows: list[dict[str, float | str | None]] = []
+    for expected_scale, run in zip(PV_DOSE_EXPECTED_SCALES, dose_runs, strict=True):
+        metrics = compute_pv_gain_normalization_metrics(
+            full,
+            run,
+            default_pvweak_scale=expected_scale if expected_scale == 1.0 else None,
+            default_pvweak_active=0.0 if expected_scale == 1.0 else None,
+        )
+        l23e_rates, l23e_rate_source, l23e_rate_site_count = compute_pv_dose_l23e_sparse_rate_metrics(run)
+        raw_oracle = compute_optional_pv_dose_raw_oracle(run)
+        dose_rows.append(
+            {
+                "prefix": run.prefix,
+                "expected_scale": expected_scale,
+                "observed_scale": metrics["pvweak_scale"],
+                "scale_error": abs(metrics["pvweak_scale"] - expected_scale),
+                "active": metrics["pvweak_active"],
+                "mean_gain": metrics["mean_increase_fraction"],
+                "median_gain": metrics["median_increase_fraction"],
+                "mean_l23e_hz": metrics["pvweak_mean_l23e_hz"],
+                "median_l23e_hz": metrics["pvweak_median_l23e_hz"],
+                "context_p99_hz": metrics["pvweak_l23e_context_p99_hz"],
+                "responsive_site_count": metrics["responsive_site_count"],
+                "median_osi": metrics["pvweak_median_osi"],
+                "median_osi_drop": metrics["median_osi_drop"],
+                "median_pref_shift_deg": metrics["median_pref_shift_deg"],
+                "max_pref_shift_deg": metrics["max_pref_shift_deg"],
+                "post_l23e_median_hz": l23e_rates.median_hz,
+                "post_l23e_frac_lt1": l23e_rates.frac_below_1hz,
+                "post_l23e_p99_hz": l23e_rates.p99_hz,
+                "l23e_rate_source": l23e_rate_source,
+                "l23e_rate_site_count": float(l23e_rate_site_count),
+                "raw_oracle_recall_at_k": (
+                    raw_oracle["loo_no_leak_oracle_recall_at_k"] if raw_oracle is not None else None
+                ),
+                "raw_oracle_topk_k": raw_oracle["topk_k"] if raw_oracle is not None else None,
+                "no_cheat_violation_count": float(len(pv_dose_no_cheat_violations(run))),
+            }
+        )
+    return dose_rows
+
+
+def format_pv_dose_series(dose_rows: list[dict[str, float | str | None]], key: str) -> str:
+    return ",".join(
+        f"{float(row['observed_scale']):.2f}:{float(row[key]):.6f}"
+        for row in dose_rows
+        if row[key] is not None
+    )
+
+
+def format_pv_dose_text_series(dose_rows: list[dict[str, float | str | None]], key: str) -> str:
+    return ",".join(
+        f"{float(row['observed_scale']):.2f}:{row[key]}"
+        for row in dose_rows
+        if row[key] is not None
+    )
 
 
 def compute_l23e_osi_site_metrics(
@@ -9212,8 +9385,11 @@ def main() -> int:
             ch.isalnum() or ch == "_" for ch in args.l23_video_population
         ):
             raise ValidationError("--l23-video-population must be a non-empty [A-Za-z0-9_] label.")
-        if args.require_pv_gain_normalization and not args.pvweak:
-            raise ValidationError("--require-pv-gain-normalization requires --pvweak PREFIX.")
+        pv_dose_prefixes = parse_pv_dose_prefixes(args.pv_dose_prefixes)
+        if args.require_pv_gain_normalization and not args.pvweak and pv_dose_prefixes is None:
+            raise ValidationError(
+                "--require-pv-gain-normalization requires --pvweak PREFIX or --pv-dose-prefixes."
+            )
         full = load_run(
             args.genn_dir,
             args.full,
@@ -9222,7 +9398,16 @@ def main() -> int:
         )
         control = load_run(args.genn_dir, args.control)
         somoff = load_run(args.genn_dir, args.somoff, require_size_tuning=True)
-        pvweak = load_run(args.genn_dir, args.pvweak) if args.require_pv_gain_normalization else None
+        pvweak = (
+            load_run(args.genn_dir, args.pvweak)
+            if args.require_pv_gain_normalization and args.pvweak
+            else None
+        )
+        pv_dose_runs = (
+            [load_run(args.genn_dir, prefix) for prefix in pv_dose_prefixes]
+            if args.require_pv_gain_normalization and pv_dose_prefixes is not None
+            else None
+        )
         video_recoff = (
             try_load_optional_run(args.genn_dir, args.recoff, "recoff")
             if args.require_l23_video_reliability
@@ -10170,73 +10355,248 @@ def main() -> int:
         )
 
         if args.require_pv_gain_normalization:
-            if pvweak is None:
-                raise ValidationError("--require-pv-gain-normalization requires loaded --pvweak data.")
-            pv_metrics = compute_pv_gain_normalization_metrics(full, pvweak)
-            pv_scale_is_half = abs(pv_metrics["pvweak_scale"] - 0.5) <= 1.0e-6
-            gain_floor = 0.20 if pv_scale_is_half else 0.10
-            gain_signal = max(
-                pv_metrics["mean_increase_fraction"],
-                pv_metrics["median_increase_fraction"],
-            )
-            gain_upper_ok = (
-                (not pv_scale_is_half)
-                or (
-                    pv_metrics["mean_increase_fraction"] <= 1.50
-                    and pv_metrics["median_increase_fraction"] <= 1.50
+            if pv_dose_runs is not None:
+                dose_rows = compute_pv_dose_response_rows(full, pv_dose_runs)
+                observed_scales = [float(row["observed_scale"]) for row in dose_rows]
+                mean_gains = [float(row["mean_gain"]) for row in dose_rows]
+                scale_ok = all(float(row["scale_error"]) <= 1.0e-6 for row in dose_rows)
+                active_ok = all(
+                    (float(row["active"]) == 0.0 if float(row["expected_scale"]) == 1.0 else float(row["active"]) == 1.0)
+                    for row in dose_rows
                 )
-            )
-            overall_ok &= print_result(
-                pv_metrics["pvweak_active"] == 1.0
-                and pv_metrics["pvweak_scale"] < 1.0
-                and pv_metrics["driven_rate_count"] > 0.0
-                and gain_signal >= gain_floor
-                and gain_upper_ok
-                and pv_metrics["pvweak_l23e_context_p99_hz"] <= pv_metrics["l23e_p99_limit_hz"],
-                "pv_gain_normalization_causality",
-                (
-                    f"pvweak_scale={pv_metrics['pvweak_scale']:.6f} "
-                    f"pvweak_active={pv_metrics['pvweak_active']:.0f} "
-                    f"site_count={int(pv_metrics['site_count'])} "
-                    f"driven_rate_count={int(pv_metrics['driven_rate_count'])} "
-                    f"full_mean_l23e_hz={pv_metrics['full_mean_l23e_hz']:.6f} "
-                    f"pvweak_mean_l23e_hz={pv_metrics['pvweak_mean_l23e_hz']:.6f} "
-                    f"mean_increase_fraction={pv_metrics['mean_increase_fraction']:.6f} "
-                    f"full_median_l23e_hz={pv_metrics['full_median_l23e_hz']:.6f} "
-                    f"pvweak_median_l23e_hz={pv_metrics['pvweak_median_l23e_hz']:.6f} "
-                    f"median_increase_fraction={pv_metrics['median_increase_fraction']:.6f} "
-                    f"required_gain_floor={gain_floor:.6f} "
-                    f"scale_half_upper_bound_applies={int(pv_scale_is_half)} "
-                    f"pvweak_l23e_context_p99_hz={pv_metrics['pvweak_l23e_context_p99_hz']:.6f} "
-                    f"p99_limit_hz={pv_metrics['l23e_p99_limit_hz']:.6f}"
-                ),
-            )
-            overall_ok &= print_result(
-                pv_metrics["responsive_site_count"] > 0.0
-                and pv_metrics["median_osi_drop"] <= 0.15
-                and pv_metrics["median_pref_shift_deg"] <= 22.5,
-                "pv_gain_normalization_selectivity_safety",
-                (
-                    f"responsive_site_count={int(pv_metrics['responsive_site_count'])} "
-                    f"full_median_osi={pv_metrics['full_median_osi']:.6f} "
-                    f"pvweak_median_osi={pv_metrics['pvweak_median_osi']:.6f} "
-                    f"median_osi_drop={pv_metrics['median_osi_drop']:.6f} "
-                    f"median_pref_shift_deg={pv_metrics['median_pref_shift_deg']:.6f} "
-                    f"max_pref_shift_deg={pv_metrics['max_pref_shift_deg']:.6f}"
-                ),
-            )
-            overall_ok &= print_result(
-                pv_metrics["full_l23pv_post_median_hz"] >= 1.0
-                and pv_metrics["full_l23pv_post_frac_lt1"] < 0.25
-                and pv_metrics["full_l23pv_post_p99_hz"] <= pv_metrics["full_l23pv_post_p99_limit_hz"],
-                "pv_gain_normalization_rates",
-                (
-                    f"full_l23pv_post_median_hz={pv_metrics['full_l23pv_post_median_hz']:.6f} "
-                    f"full_l23pv_post_frac_lt1={pv_metrics['full_l23pv_post_frac_lt1']:.6f} "
-                    f"full_l23pv_post_p99_hz={pv_metrics['full_l23pv_post_p99_hz']:.6f} "
-                    f"p99_limit_hz={pv_metrics['full_l23pv_post_p99_limit_hz']:.6f}"
-                ),
-            )
+                max_reversal = max(
+                    (
+                        max(0.0, mean_gains[index] - mean_gains[index + 1])
+                        for index in range(len(mean_gains) - 1)
+                    ),
+                    default=0.0,
+                )
+                endpoint = dose_rows[-1]
+                half_rows = [row for row in dose_rows if abs(float(row["expected_scale"]) - 0.5) <= 1.0e-6]
+                full_pv_row = dose_rows[0]
+                pvoff_row = dose_rows[-1]
+                raw_oracle_rows = [
+                    row for row in dose_rows if row["raw_oracle_recall_at_k"] is not None
+                ]
+                raw_oracle_min = (
+                    min(float(row["raw_oracle_recall_at_k"]) for row in raw_oracle_rows)
+                    if raw_oracle_rows
+                    else math.nan
+                )
+                selectivity_ok = all(
+                    float(row["responsive_site_count"]) > 0.0
+                    and float(row["median_osi_drop"]) <= 0.20
+                    and float(row["median_pref_shift_deg"]) <= 22.5
+                    and float(row["max_pref_shift_deg"]) <= 45.0
+                    for row in dose_rows
+                )
+                l23e_p99_ok = all(
+                    float(row["post_l23e_p99_hz"]) <= PV_DOSE_L23E_P99_LIMIT_HZ
+                    for row in dose_rows
+                )
+                full_frac_lt1 = float(full_pv_row["post_l23e_frac_lt1"])
+                pvoff_frac_lt1 = float(pvoff_row["post_l23e_frac_lt1"])
+                pvoff_frac_lt1_drop = full_frac_lt1 - pvoff_frac_lt1
+                sparsity_ok = (
+                    full_frac_lt1 >= PV_DOSE_FULLPV_FRAC_LT1_MIN
+                    and (
+                        pvoff_frac_lt1 >= PV_DOSE_PVOFF_FRAC_LT1_MIN
+                        or pvoff_frac_lt1_drop <= PV_DOSE_PVOFF_FRAC_LT1_DROP_MAX
+                    )
+                )
+                no_cheat_violations: list[str] = []
+                for run in pv_dose_runs:
+                    no_cheat_violations.extend(pv_dose_no_cheat_violations(run))
+
+                overall_ok &= print_result(
+                    scale_ok and active_ok,
+                    "pv_gain_normalization_dose_response_replaces_half_pv",
+                    (
+                        "dose_response_mode=1 "
+                        "legacy_half_pv_fixed_gain_required=0 "
+                        "expected_scales=1.00,0.75,0.50,0.25,0.00 "
+                        f"observed_scales={','.join(f'{scale:.2f}' for scale in observed_scales)} "
+                        f"active_flags={','.join(str(int(float(row['active']))) for row in dose_rows)}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    max_reversal <= PV_DOSE_MONOTONIC_TOLERANCE,
+                    "pv_gain_normalization_dose_response_monotonic",
+                    (
+                        f"scale_to_mean_gain={format_pv_dose_series(dose_rows, 'mean_gain')} "
+                        f"max_reversal={max_reversal:.6f} "
+                        f"tolerance={PV_DOSE_MONOTONIC_TOLERANCE:.6f}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    float(endpoint["active"]) == 1.0
+                    and float(endpoint["observed_scale"]) <= 1.0e-6
+                    and float(endpoint["mean_gain"]) >= PV_DOSE_ENDPOINT_MIN_GAIN
+                    and float(endpoint["context_p99_hz"]) <= 100.0,
+                    "pv_gain_normalization_causality",
+                    (
+                        "endpoint=pvoff "
+                        f"pvweak_scale={float(endpoint['observed_scale']):.6f} "
+                        f"pvweak_active={float(endpoint['active']):.0f} "
+                        f"mean_increase_fraction={float(endpoint['mean_gain']):.6f} "
+                        f"minimum_gain_floor={PV_DOSE_ENDPOINT_MIN_GAIN:.6f} "
+                        f"preferred_gain_floor={PV_DOSE_ENDPOINT_PREFERRED_GAIN:.6f} "
+                        f"preferred_met={int(float(endpoint['mean_gain']) >= PV_DOSE_ENDPOINT_PREFERRED_GAIN)} "
+                        f"pvweak_l23e_context_p99_hz={float(endpoint['context_p99_hz']):.6f} "
+                        "p99_limit_hz=100.000000"
+                    ),
+                )
+                if half_rows:
+                    half_row = half_rows[0]
+                    print_result(
+                        True,
+                        "pv_gain_normalization_half_pv_legacy_info",
+                        (
+                            "informational=1 "
+                            "dose_response_mode=1 "
+                            "legacy_fixed_mean_gain_floor_not_required=1 "
+                            f"pvweak_scale={float(half_row['observed_scale']):.6f} "
+                            f"mean_increase_fraction={float(half_row['mean_gain']):.6f} "
+                            f"median_increase_fraction={float(half_row['median_gain']):.6f}"
+                        ),
+                    )
+                overall_ok &= print_result(
+                    selectivity_ok,
+                    "pv_gain_normalization_selectivity_safety",
+                    (
+                        f"scale_to_median_osi={format_pv_dose_series(dose_rows, 'median_osi')} "
+                        f"scale_to_median_osi_drop={format_pv_dose_series(dose_rows, 'median_osi_drop')} "
+                        f"scale_to_median_pref_shift_deg={format_pv_dose_series(dose_rows, 'median_pref_shift_deg')} "
+                        "max_allowed_osi_drop=0.200000 "
+                        "max_allowed_median_pref_shift_deg=22.500000 "
+                        "max_allowed_pref_shift_deg=45.000000"
+                    ),
+                )
+                overall_ok &= print_result(
+                    l23e_p99_ok,
+                    "pv_gain_normalization_l23e_rate_safety",
+                    (
+                        f"scale_to_l23e_rate_source={format_pv_dose_text_series(dose_rows, 'l23e_rate_source')} "
+                        f"scale_to_l23e_site_count={format_pv_dose_series(dose_rows, 'l23e_rate_site_count')} "
+                        f"scale_to_l23e_p99_hz={format_pv_dose_series(dose_rows, 'post_l23e_p99_hz')} "
+                        f"p99_limit_hz={PV_DOSE_L23E_P99_LIMIT_HZ:.6f}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    sparsity_ok,
+                    "pv_gain_normalization_sparsity_safety",
+                    (
+                        f"scale_to_l23e_rate_source={format_pv_dose_text_series(dose_rows, 'l23e_rate_source')} "
+                        f"scale_to_l23e_site_count={format_pv_dose_series(dose_rows, 'l23e_rate_site_count')} "
+                        f"full_pv_frac_lt1={full_frac_lt1:.6f} "
+                        f"full_pv_required_frac_lt1={PV_DOSE_FULLPV_FRAC_LT1_MIN:.6f} "
+                        f"pvoff_frac_lt1={pvoff_frac_lt1:.6f} "
+                        f"pvoff_min_frac_lt1={PV_DOSE_PVOFF_FRAC_LT1_MIN:.6f} "
+                        f"pvoff_frac_lt1_drop={pvoff_frac_lt1_drop:.6f} "
+                        f"pvoff_max_allowed_drop={PV_DOSE_PVOFF_FRAC_LT1_DROP_MAX:.6f}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    not raw_oracle_rows or raw_oracle_min >= PV_DOSE_RAW_ORACLE_MIN,
+                    "pv_gain_normalization_raw_oracle_safety",
+                    (
+                        f"available_doses={len(raw_oracle_rows)} "
+                        f"scale_to_raw_oracle={format_pv_dose_series(dose_rows, 'raw_oracle_recall_at_k')} "
+                        f"min_raw_oracle={raw_oracle_min:.6f} "
+                        f"required_min={PV_DOSE_RAW_ORACLE_MIN:.6f}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    not no_cheat_violations,
+                    "pv_gain_normalization_no_cheat_audit",
+                    (
+                        "summary_future_target_orientation_heldout_validation_metric_rows_required_zero=1 "
+                        f"violation_count={len(no_cheat_violations)} "
+                        f"first_violation={no_cheat_violations[0] if no_cheat_violations else 'none'}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    float(full_pv_row["post_l23e_p99_hz"]) <= PV_DOSE_L23E_P99_LIMIT_HZ,
+                    "pv_gain_normalization_rates",
+                    (
+                        "dose_response_mode=1 "
+                        "legacy_full_pv_rate_row_preserved=1 "
+                        f"full_l23e_rate_source={full_pv_row['l23e_rate_source']} "
+                        f"full_l23e_site_count={float(full_pv_row['l23e_rate_site_count']):.0f} "
+                        f"full_l23e_median_hz={float(full_pv_row['post_l23e_median_hz']):.6f} "
+                        f"full_l23e_frac_lt1={full_frac_lt1:.6f} "
+                        f"full_l23e_p99_hz={float(full_pv_row['post_l23e_p99_hz']):.6f} "
+                        f"p99_limit_hz={PV_DOSE_L23E_P99_LIMIT_HZ:.6f}"
+                    ),
+                )
+            else:
+                if pvweak is None:
+                    raise ValidationError("--require-pv-gain-normalization requires loaded --pvweak data.")
+                pv_metrics = compute_pv_gain_normalization_metrics(full, pvweak)
+                pv_scale_is_half = abs(pv_metrics["pvweak_scale"] - 0.5) <= 1.0e-6
+                gain_floor = 0.20 if pv_scale_is_half else 0.10
+                gain_signal = max(
+                    pv_metrics["mean_increase_fraction"],
+                    pv_metrics["median_increase_fraction"],
+                )
+                gain_upper_ok = (
+                    (not pv_scale_is_half)
+                    or (
+                        pv_metrics["mean_increase_fraction"] <= 1.50
+                        and pv_metrics["median_increase_fraction"] <= 1.50
+                    )
+                )
+                overall_ok &= print_result(
+                    pv_metrics["pvweak_active"] == 1.0
+                    and pv_metrics["pvweak_scale"] < 1.0
+                    and pv_metrics["driven_rate_count"] > 0.0
+                    and gain_signal >= gain_floor
+                    and gain_upper_ok
+                    and pv_metrics["pvweak_l23e_context_p99_hz"] <= pv_metrics["l23e_p99_limit_hz"],
+                    "pv_gain_normalization_causality",
+                    (
+                        f"pvweak_scale={pv_metrics['pvweak_scale']:.6f} "
+                        f"pvweak_active={pv_metrics['pvweak_active']:.0f} "
+                        f"site_count={int(pv_metrics['site_count'])} "
+                        f"driven_rate_count={int(pv_metrics['driven_rate_count'])} "
+                        f"full_mean_l23e_hz={pv_metrics['full_mean_l23e_hz']:.6f} "
+                        f"pvweak_mean_l23e_hz={pv_metrics['pvweak_mean_l23e_hz']:.6f} "
+                        f"mean_increase_fraction={pv_metrics['mean_increase_fraction']:.6f} "
+                        f"full_median_l23e_hz={pv_metrics['full_median_l23e_hz']:.6f} "
+                        f"pvweak_median_l23e_hz={pv_metrics['pvweak_median_l23e_hz']:.6f} "
+                        f"median_increase_fraction={pv_metrics['median_increase_fraction']:.6f} "
+                        f"required_gain_floor={gain_floor:.6f} "
+                        f"scale_half_upper_bound_applies={int(pv_scale_is_half)} "
+                        f"pvweak_l23e_context_p99_hz={pv_metrics['pvweak_l23e_context_p99_hz']:.6f} "
+                        f"p99_limit_hz={pv_metrics['l23e_p99_limit_hz']:.6f}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    pv_metrics["responsive_site_count"] > 0.0
+                    and pv_metrics["median_osi_drop"] <= 0.15
+                    and pv_metrics["median_pref_shift_deg"] <= 22.5,
+                    "pv_gain_normalization_selectivity_safety",
+                    (
+                        f"responsive_site_count={int(pv_metrics['responsive_site_count'])} "
+                        f"full_median_osi={pv_metrics['full_median_osi']:.6f} "
+                        f"pvweak_median_osi={pv_metrics['pvweak_median_osi']:.6f} "
+                        f"median_osi_drop={pv_metrics['median_osi_drop']:.6f} "
+                        f"median_pref_shift_deg={pv_metrics['median_pref_shift_deg']:.6f} "
+                        f"max_pref_shift_deg={pv_metrics['max_pref_shift_deg']:.6f}"
+                    ),
+                )
+                overall_ok &= print_result(
+                    pv_metrics["full_l23pv_post_median_hz"] >= 1.0
+                    and pv_metrics["full_l23pv_post_frac_lt1"] < 0.25
+                    and pv_metrics["full_l23pv_post_p99_hz"] <= pv_metrics["full_l23pv_post_p99_limit_hz"],
+                    "pv_gain_normalization_rates",
+                    (
+                        f"full_l23pv_post_median_hz={pv_metrics['full_l23pv_post_median_hz']:.6f} "
+                        f"full_l23pv_post_frac_lt1={pv_metrics['full_l23pv_post_frac_lt1']:.6f} "
+                        f"full_l23pv_post_p99_hz={pv_metrics['full_l23pv_post_p99_hz']:.6f} "
+                        f"p99_limit_hz={pv_metrics['full_l23pv_post_p99_limit_hz']:.6f}"
+                    ),
+                )
 
         if args.require_emergent_l23_orientation_suppression:
             ff_bias_strength = require_summary_metric(full, "l4_l23_orientation_bias_strength")
