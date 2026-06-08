@@ -2,7 +2,7 @@
 
 ## Final Resolution Update: L4/PV Rate-Homeostasis Branch
 
-Date: 2026-06-08
+Date: 2026-06-09
 Branch: `v1-rate-homeostasis-l4-pv-resolution`
 Final accepted validator log: `.runs/logs/v1_ratehomeo_topk10_final_pvdose_strict_validator_after_pv_sparsity_source_fix.log`
 Final validator status: `VALIDATOR_STATUS=0`
@@ -129,6 +129,8 @@ Date: 2026-06-08
 Branch: `v1-rate-homeostasis-remediation`  
 Checkpoint before remediation: `0ce46a4`  
 Accepted candidate: `v1_ratehomeo_videol4scale085_truebaseline_pvrel105_pveta110_matrix`
+
+The remainder of this document preserves the earlier remediation checkpoint for auditability. It is historical and superseded by the final resolution section above. In particular, the old half-PV caveat and the old `81.402887 Hz` L4E-rate caveat do not describe the final accepted branch state.
 
 ## Scope
 
@@ -364,7 +366,9 @@ Summary/validator evidence:
 - `post_video_inhibitory_stabilization_output_assembly_used=0.000000`
 - `l23_activity_anti_cheat_separation`: PASS, raw exact gate passed and was not rescued by frame decoding or smoothed population metrics.
 
-## Remaining Caveats
+## Earlier Candidate Caveats, Superseded
+
+These caveats applied to the earlier `v1-rate-homeostasis-remediation` candidate and are kept only to show what was fixed or reframed later.
 
 1. L4E video/event firing remains high.
    - Natural-video L4E frame mean was `81.402887 Hz`, with frame range `78.091406-85.355078 Hz`.
