@@ -58,3 +58,9 @@
   is not completion when the user explicitly asks to keep solving it. Continue
   iterating on biologically plausible mechanisms until the stated L4/PV goals
   pass, or until there is a proven blocker accepted by the user.
+- On branch `v1-biophysical-l23ee-plasticity`, the accepted replacement for the
+  old top-k L23EE recurrent competition is documented in
+  `docs/l23ee_triplet_homeostatic_plasticity_report.md`: old top-k disabled,
+  triplet/homeostatic L23EE enabled with LR `1.25`, heldout fraction `0.15625`
+  giving 54 video exposure frames, and strict acceptance log
+  `.runs/logs/v1_triplet_l23ee_lr125_hold15625_acceptance_strict_validator.log`.

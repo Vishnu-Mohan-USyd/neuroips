@@ -568,6 +568,15 @@ constexpr double kDefaultVideoL23EEHeterosynapticCompetitionStrength = 0.00008;
 constexpr double kDefaultVideoL23EEHeterosynapticCompetitionMinPostSpikes = 1.0;
 constexpr double kDefaultVideoL23EEHeterosynapticCompetitionMassTolerance = 0.02;
 constexpr double kDefaultVideoL23EEHeterosynapticCompetitionTopFrac = 0.10;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityLearningRate = 1.0;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityAPlus = 1.0e-6;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityAMinus = 1.0e-6;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityMassEta = 0.05;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityMinPostSpikes = 1.0;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityTauPreFrames = 2.0;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityTauPostFrames = 2.0;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityTauSlowFrames = 20.0;
+constexpr double kDefaultVideoL23EETripletHomeostaticPlasticityMassTolerance = 0.02;
 constexpr double kDefaultVideoFFEventTraceTauPreMs = 20.0;
 constexpr double kDefaultVideoFFEventTraceTauPostMs = 40.0;
 constexpr double kDefaultVideoFFEventTraceTauRateMs = 2000.0;
@@ -981,6 +990,19 @@ struct VideoL23EEHeterosynapticCompetitionConfig {
     double min_post_spikes = kDefaultVideoL23EEHeterosynapticCompetitionMinPostSpikes;
     double mass_tolerance = kDefaultVideoL23EEHeterosynapticCompetitionMassTolerance;
     double top_frac = kDefaultVideoL23EEHeterosynapticCompetitionTopFrac;
+};
+
+struct VideoL23EETripletHomeostaticPlasticityConfig {
+    bool enabled = false;
+    double learning_rate = kDefaultVideoL23EETripletHomeostaticPlasticityLearningRate;
+    double aplus = kDefaultVideoL23EETripletHomeostaticPlasticityAPlus;
+    double aminus = kDefaultVideoL23EETripletHomeostaticPlasticityAMinus;
+    double mass_eta = kDefaultVideoL23EETripletHomeostaticPlasticityMassEta;
+    double min_post_spikes = kDefaultVideoL23EETripletHomeostaticPlasticityMinPostSpikes;
+    double tau_pre_frames = kDefaultVideoL23EETripletHomeostaticPlasticityTauPreFrames;
+    double tau_post_frames = kDefaultVideoL23EETripletHomeostaticPlasticityTauPostFrames;
+    double tau_slow_frames = kDefaultVideoL23EETripletHomeostaticPlasticityTauSlowFrames;
+    double mass_tolerance = kDefaultVideoL23EETripletHomeostaticPlasticityMassTolerance;
 };
 
 struct PushPullInhibitionMetrics {
@@ -2693,6 +2715,111 @@ VideoL23EEHeterosynapticCompetitionConfig getVideoL23EEHeterosynapticCompetition
        || config.top_frac > 0.5) {
         throw std::runtime_error(
             "V1_VIDEO_L23EE_HETEROSYN_COMPETITION_TOP_FRAC must be finite and in (0.0, 0.5].");
+    }
+    return config;
+}
+
+VideoL23EETripletHomeostaticPlasticityConfig getVideoL23EETripletHomeostaticPlasticityConfig(
+    const VideoReplayConfig &video_config)
+{
+    VideoL23EETripletHomeostaticPlasticityConfig config;
+    const bool enable_requested =
+        getEnvUnsignedOrDefault("V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_ENABLE", 0u) != 0u;
+    config.enabled = video_config.enabled && enable_requested;
+    config.learning_rate = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_LEARNING_RATE",
+            kDefaultVideoL23EETripletHomeostaticPlasticityLearningRate)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityLearningRate;
+    config.aplus = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_A_PLUS",
+            kDefaultVideoL23EETripletHomeostaticPlasticityAPlus)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityAPlus;
+    config.aminus = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_A_MINUS",
+            kDefaultVideoL23EETripletHomeostaticPlasticityAMinus)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityAMinus;
+    config.mass_eta = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_MASS_ETA",
+            kDefaultVideoL23EETripletHomeostaticPlasticityMassEta)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityMassEta;
+    config.min_post_spikes = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_MIN_POST_SPIKES",
+            kDefaultVideoL23EETripletHomeostaticPlasticityMinPostSpikes)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityMinPostSpikes;
+    config.tau_pre_frames = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_TAU_PRE_FRAMES",
+            kDefaultVideoL23EETripletHomeostaticPlasticityTauPreFrames)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityTauPreFrames;
+    config.tau_post_frames = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_TAU_POST_FRAMES",
+            kDefaultVideoL23EETripletHomeostaticPlasticityTauPostFrames)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityTauPostFrames;
+    config.tau_slow_frames = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_TAU_SLOW_FRAMES",
+            kDefaultVideoL23EETripletHomeostaticPlasticityTauSlowFrames)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityTauSlowFrames;
+    config.mass_tolerance = enable_requested
+        ? getEnvDoubleOrDefault(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_MASS_TOLERANCE",
+            kDefaultVideoL23EETripletHomeostaticPlasticityMassTolerance)
+        : kDefaultVideoL23EETripletHomeostaticPlasticityMassTolerance;
+
+    if(!enable_requested) {
+        return config;
+    }
+    if(!std::isfinite(config.learning_rate)
+       || config.learning_rate < 0.0
+       || config.learning_rate > 10.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_LEARNING_RATE must be finite and in [0.0, 10.0].");
+    }
+    if(!std::isfinite(config.aplus)
+       || config.aplus < 0.0
+       || config.aplus > 0.001) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_A_PLUS must be finite and in [0.0, 0.001].");
+    }
+    if(!std::isfinite(config.aminus)
+       || config.aminus < 0.0
+       || config.aminus > 0.001) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_A_MINUS must be finite and in [0.0, 0.001].");
+    }
+    if(!std::isfinite(config.mass_eta)
+       || config.mass_eta < 0.0
+       || config.mass_eta > 1.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_MASS_ETA must be finite and in [0.0, 1.0].");
+    }
+    if(!std::isfinite(config.min_post_spikes) || config.min_post_spikes < 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_MIN_POST_SPIKES must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.tau_pre_frames) || config.tau_pre_frames <= 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_TAU_PRE_FRAMES must be finite and positive.");
+    }
+    if(!std::isfinite(config.tau_post_frames) || config.tau_post_frames <= 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_TAU_POST_FRAMES must be finite and positive.");
+    }
+    if(!std::isfinite(config.tau_slow_frames) || config.tau_slow_frames <= 0.0) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_TAU_SLOW_FRAMES must be finite and positive.");
+    }
+    if(!std::isfinite(config.mass_tolerance)
+       || config.mass_tolerance < 0.0
+       || config.mass_tolerance > 0.25) {
+        throw std::runtime_error(
+            "V1_VIDEO_L23EE_TRIPLET_HOMEOSTATIC_PLASTICITY_MASS_TOLERANCE must be finite and in [0.0, 0.25].");
     }
     return config;
 }
@@ -4977,6 +5104,210 @@ WeightDeltaMetrics applyLocalPostSynapticL23EEHeterosynapticCompetition(
     return computeWeightDeltaMetrics(before, after);
 }
 
+void accumulateL23EETripletHomeostaticPlasticityScores(
+    std::vector<double> &ltp_scores,
+    std::vector<double> &ltd_scores,
+    std::vector<double> &post_spike_counts,
+    std::vector<double> &pre_traces,
+    std::vector<double> &post_fast_traces,
+    std::vector<double> &post_slow_traces,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &l23e_frame_spikes,
+    const VideoL23EETripletHomeostaticPlasticityConfig &config)
+{
+    if(l23e_frame_spikes.size() != v1_genn::kNumL23E
+       || post_spike_counts.size() != v1_genn::kNumL23E
+       || pre_traces.size() != v1_genn::kNumL23E
+       || post_fast_traces.size() != v1_genn::kNumL23E
+       || post_slow_traces.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity received unexpected L23E vector size.");
+    }
+    if(ltp_scores.size() != ltd_scores.size()) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity score vectors have mismatched sizes.");
+    }
+    if(ltp_scores.empty() || edges.empty()) {
+        return;
+    }
+    if((ltp_scores.size() % v1_genn::kNumL23E) != 0u) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity expected row-major sparse score capacity.");
+    }
+    if(!std::isfinite(config.tau_pre_frames)
+       || !std::isfinite(config.tau_post_frames)
+       || !std::isfinite(config.tau_slow_frames)
+       || config.tau_pre_frames <= 0.0
+       || config.tau_post_frames <= 0.0
+       || config.tau_slow_frames <= 0.0) {
+        throw std::runtime_error("Invalid L23EE triplet/homeostatic trace time constants.");
+    }
+
+    const std::size_t max_row_length = ltp_scores.size() / v1_genn::kNumL23E;
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL23E || post_id >= v1_genn::kNumL23E) {
+            throw std::runtime_error("L23EE triplet/homeostatic plasticity edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23EE triplet/homeostatic plasticity exceeded sparse row capacity.");
+        }
+
+        const std::size_t slot =
+            (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        const double pre_spikes = std::max(0.0, l23e_frame_spikes[pre_id]);
+        const double post_spikes = std::max(0.0, l23e_frame_spikes[post_id]);
+        ltp_scores[slot] += pre_traces[pre_id] * post_spikes * post_slow_traces[post_id];
+        ltd_scores[slot] += pre_spikes * post_fast_traces[post_id];
+        row_active_index++;
+    }
+
+    const double pre_decay = std::exp(-1.0 / config.tau_pre_frames);
+    const double post_decay = std::exp(-1.0 / config.tau_post_frames);
+    const double slow_decay = std::exp(-1.0 / config.tau_slow_frames);
+    for(unsigned int neuron_id = 0; neuron_id < v1_genn::kNumL23E; neuron_id++) {
+        const double spikes = std::max(0.0, l23e_frame_spikes[neuron_id]);
+        post_spike_counts[neuron_id] += spikes;
+        pre_traces[neuron_id] = (pre_decay * pre_traces[neuron_id]) + spikes;
+        post_fast_traces[neuron_id] = (post_decay * post_fast_traces[neuron_id]) + spikes;
+        post_slow_traces[neuron_id] = (slow_decay * post_slow_traces[neuron_id]) + spikes;
+    }
+}
+
+WeightDeltaMetrics applyLocalPostSynapticL23EETripletHomeostaticPlasticity(
+    GeNN::Runtime::Runtime &runtime,
+    GeNN::SynapseGroup &synapse_group,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    const std::vector<double> &ltp_scores,
+    const std::vector<double> &ltd_scores,
+    const std::vector<double> &post_spike_counts,
+    const VideoL23EETripletHomeostaticPlasticityConfig &config,
+    double wmin,
+    double wmax)
+{
+    if(post_spike_counts.size() != v1_genn::kNumL23E) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity received unexpected post spike vector size.");
+    }
+    if(ltp_scores.size() != ltd_scores.size()) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity score vectors have mismatched sizes.");
+    }
+    if(!std::isfinite(config.learning_rate)
+       || !std::isfinite(config.aplus)
+       || !std::isfinite(config.aminus)
+       || !std::isfinite(config.mass_eta)
+       || !std::isfinite(config.min_post_spikes)
+       || !std::isfinite(wmin)
+       || !std::isfinite(wmax)
+       || config.learning_rate < 0.0
+       || config.aplus < 0.0
+       || config.aminus < 0.0
+       || config.mass_eta < 0.0
+       || config.mass_eta > 1.0
+       || config.min_post_spikes < 0.0
+       || wmin > wmax) {
+        throw std::runtime_error("Invalid L23EE triplet/homeostatic plasticity parameters.");
+    }
+
+    const std::vector<float> before = copyWeights(runtime, synapse_group);
+    if(ltp_scores.size() != before.size()) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity scores/current weights have mismatched sizes.");
+    }
+    if(before.empty()
+       || edges.empty()
+       || (config.learning_rate <= 0.0 && config.mass_eta <= 0.0)) {
+        return WeightDeltaMetrics{};
+    }
+    if((before.size() % v1_genn::kNumL23E) != 0u) {
+        throw std::runtime_error("L23EE triplet/homeostatic plasticity expected row-major sparse weight capacity.");
+    }
+
+    const std::size_t max_row_length = before.size() / v1_genn::kNumL23E;
+    std::vector<std::vector<std::size_t>> incoming_by_post(v1_genn::kNumL23E);
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= v1_genn::kNumL23E || post_id >= v1_genn::kNumL23E) {
+            throw std::runtime_error("L23EE triplet/homeostatic plasticity edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error("L23EE triplet/homeostatic plasticity exceeded sparse row capacity.");
+        }
+        incoming_by_post[post_id].push_back((static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index);
+        row_active_index++;
+    }
+
+    std::vector<float> after = before;
+    std::vector<std::size_t> active_incoming;
+    std::vector<double> local_updates;
+    for(unsigned int post_id = 0; post_id < v1_genn::kNumL23E; post_id++) {
+        const std::vector<std::size_t> &incoming = incoming_by_post[post_id];
+        if(incoming.size() < 2u || post_spike_counts[post_id] < config.min_post_spikes) {
+            continue;
+        }
+
+        active_incoming.clear();
+        local_updates.clear();
+        double original_sum = 0.0;
+        double update_sum = 0.0;
+        for(std::size_t synapse_index : incoming) {
+            const double weight = static_cast<double>(before[synapse_index]);
+            if(weight <= 1.0e-12) {
+                continue;
+            }
+            const double update =
+                config.learning_rate
+                * ((config.aplus * ltp_scores[synapse_index])
+                   - (config.aminus * ltd_scores[synapse_index]));
+            if(!std::isfinite(update)) {
+                throw std::runtime_error("L23EE triplet/homeostatic plasticity produced non-finite update.");
+            }
+            active_incoming.push_back(synapse_index);
+            local_updates.push_back(update);
+            original_sum += weight;
+            update_sum += update;
+        }
+        if(active_incoming.size() < 2u || original_sum <= 1.0e-12) {
+            continue;
+        }
+
+        const double mean_update = update_sum / static_cast<double>(active_incoming.size());
+        double after_sum = 0.0;
+        for(std::size_t i = 0; i < active_incoming.size(); i++) {
+            const std::size_t synapse_index = active_incoming[i];
+            const double proposed =
+                static_cast<double>(before[synapse_index]) + (local_updates[i] - mean_update);
+            after[synapse_index] =
+                static_cast<float>(std::min(wmax, std::max(wmin, proposed)));
+            after_sum += static_cast<double>(after[synapse_index]);
+        }
+
+        if(config.mass_eta > 0.0) {
+            const double correction =
+                config.mass_eta
+                * (original_sum - after_sum)
+                / static_cast<double>(active_incoming.size());
+            for(std::size_t synapse_index : active_incoming) {
+                const double proposed = static_cast<double>(after[synapse_index]) + correction;
+                after[synapse_index] =
+                    static_cast<float>(std::min(wmax, std::max(wmin, proposed)));
+            }
+        }
+    }
+
+    setSynapseWeights(runtime, synapse_group, after);
+    return computeWeightDeltaMetrics(before, after);
+}
+
 void accumulateL23EPVRecruitmentActivityScores(
     std::vector<double> &activity_scores,
     const std::vector<std::pair<unsigned int, unsigned int>> &edges,
@@ -5711,6 +6042,75 @@ double percentile(std::vector<double> values, double percent)
     }
     const double fraction = position - static_cast<double>(lower_index);
     return ((1.0 - fraction) * values[lower_index]) + (fraction * values[upper_index]);
+}
+
+IncomingMassRatioMetrics computeSparseIncomingMassRatioMetrics(
+    const std::vector<float> &before,
+    const std::vector<float> &after,
+    const std::vector<std::pair<unsigned int, unsigned int>> &edges,
+    std::size_t pre_count,
+    std::size_t post_count,
+    const char *label)
+{
+    if(before.size() != after.size()) {
+        throw std::runtime_error(std::string(label) + " incoming mass ratio weights have mismatched sizes.");
+    }
+    if(before.empty() || edges.empty()) {
+        return IncomingMassRatioMetrics{};
+    }
+    if(pre_count == 0u || post_count == 0u || (before.size() % pre_count) != 0u) {
+        throw std::runtime_error(std::string(label) + " incoming mass ratio expected row-major sparse weight capacity.");
+    }
+    const std::size_t max_row_length = before.size() / pre_count;
+    std::vector<double> before_sum(post_count, 0.0);
+    std::vector<double> after_sum(post_count, 0.0);
+
+    unsigned int previous_pre_id = std::numeric_limits<unsigned int>::max();
+    std::size_t row_active_index = 0u;
+    for(const auto &edge : edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pre_count || post_id >= post_count) {
+            throw std::runtime_error(std::string(label) + " incoming mass ratio edge id out of range.");
+        }
+        if(pre_id != previous_pre_id) {
+            previous_pre_id = pre_id;
+            row_active_index = 0u;
+        }
+        if(row_active_index >= max_row_length) {
+            throw std::runtime_error(std::string(label) + " incoming mass ratio exceeded sparse row capacity.");
+        }
+        const std::size_t slot = (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index;
+        before_sum[post_id] += static_cast<double>(before[slot]);
+        after_sum[post_id] += static_cast<double>(after[slot]);
+        row_active_index++;
+    }
+
+    std::vector<double> ratios;
+    ratios.reserve(post_count);
+    std::vector<double> abs_log_ratios;
+    abs_log_ratios.reserve(post_count);
+    for(std::size_t post_id = 0; post_id < post_count; post_id++) {
+        if(before_sum[post_id] <= 1.0e-12) {
+            continue;
+        }
+        const double ratio = after_sum[post_id] / before_sum[post_id];
+        if(!std::isfinite(ratio) || ratio <= 0.0) {
+            continue;
+        }
+        ratios.push_back(ratio);
+        abs_log_ratios.push_back(std::fabs(std::log(ratio)));
+    }
+    if(ratios.empty()) {
+        return IncomingMassRatioMetrics{};
+    }
+    return IncomingMassRatioMetrics{
+        static_cast<unsigned int>(ratios.size()),
+        *std::min_element(ratios.begin(), ratios.end()),
+        std::accumulate(ratios.begin(), ratios.end(), 0.0) / static_cast<double>(ratios.size()),
+        *std::max_element(ratios.begin(), ratios.end()),
+        percentile(abs_log_ratios, 95.0),
+    };
 }
 
 IncomingMassRatioMetrics computeIncomingMassRatioMetrics(
@@ -12225,6 +12625,13 @@ void writeSummaryFiles(
     unsigned int video_l23ee_heterosynaptic_competition_activity_window_count,
     const WeightDeltaMetrics &video_l23ee_heterosynaptic_competition_delta_metrics,
     const ActivityScoreMetrics &video_l23ee_heterosynaptic_competition_activity_score_metrics,
+    const VideoL23EETripletHomeostaticPlasticityConfig &video_l23ee_triplet_homeostatic_plasticity_config,
+    unsigned int video_l23ee_triplet_homeostatic_plasticity_application_count,
+    unsigned int video_l23ee_triplet_homeostatic_plasticity_activity_window_count,
+    const WeightDeltaMetrics &video_l23ee_triplet_homeostatic_plasticity_delta_metrics,
+    const IncomingMassRatioMetrics &video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics,
+    const ActivityScoreMetrics &video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics,
+    const ActivityScoreMetrics &video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics,
     const VideoConsolidationMetrics &video_consolidation_metrics,
     const HVAPredictorConfig &hva_predictor_config,
     const HVAPredictorResult &hva_predictor_result,
@@ -12278,6 +12685,9 @@ void writeSummaryFiles(
         && video_consolidation_config.enabled;
     const bool video_l23ee_heterosynaptic_competition_active =
         video_l23ee_heterosynaptic_competition_config.enabled
+        && video_recurrent_only_consolidation_active;
+    const bool video_l23ee_triplet_homeostatic_plasticity_active =
+        video_l23ee_triplet_homeostatic_plasticity_config.enabled
         && video_recurrent_only_consolidation_active;
     const unsigned int validation_core_side =
         getEnvUnsignedOrDefault("V1_VALIDATION_CORE_SIDE", 0u);
@@ -12939,6 +13349,88 @@ void writeSummaryFiles(
         << video_l23ee_heterosynaptic_competition_delta_metrics.max_abs_delta << "\n";
     csv << "video_l23ee_heterosyn_competition_mean_gain_ratio,"
         << video_l23ee_heterosynaptic_competition_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_enabled,"
+        << (video_l23ee_triplet_homeostatic_plasticity_config.enabled ? 1.0 : 0.0) << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_active,"
+        << (video_l23ee_triplet_homeostatic_plasticity_active ? 1.0 : 0.0) << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_learning_rate,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.learning_rate << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_a_plus,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.aplus << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_a_minus,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.aminus << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_mass_eta,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.mass_eta << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_min_post_spikes,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.min_post_spikes << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_tau_pre_frames,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.tau_pre_frames << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_tau_post_frames,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.tau_post_frames << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_tau_slow_frames,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.tau_slow_frames << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_mass_tolerance,"
+        << video_l23ee_triplet_homeostatic_plasticity_config.mass_tolerance << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_recurrent_only,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_local_postsynaptic_only,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_uses_l23e_spike_traces,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_one_frame_lagged_traces,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_continuous_all_incoming_synapses,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_subtracts_postsynaptic_mean_update,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_soft_postsynaptic_mass_homeostasis,1.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_exact_normalization_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_orientation_label_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_future_frame_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_target_label_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_heldout_frames_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_validation_metric_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_global_rate_cap_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_global_normalization_used,0.000000\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_application_count,"
+        << video_l23ee_triplet_homeostatic_plasticity_application_count << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_activity_window_count,"
+        << video_l23ee_triplet_homeostatic_plasticity_activity_window_count << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_ltp_score_positive_frac,"
+        << video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics.positive_frac << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_ltp_score_mean,"
+        << video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics.mean_score << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_ltp_score_max,"
+        << video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics.max_score << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_ltd_score_positive_frac,"
+        << video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics.positive_frac << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_ltd_score_mean,"
+        << video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics.mean_score << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_ltd_score_max,"
+        << video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics.max_score << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_active_edge_count,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.active_edge_count << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_changed_frac,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.changed_frac << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_positive_edge_frac,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.positive_edge_frac << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_negative_edge_frac,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.negative_edge_frac << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_mean_delta,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.mean_delta << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_p95_abs_delta,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.p95_abs_delta << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_p95_changed_abs_delta,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.p95_changed_abs_delta << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_max_abs_delta,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.max_abs_delta << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_mean_gain_ratio,"
+        << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.mean_gain_ratio << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_post_count,"
+        << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.post_count << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_min_ratio,"
+        << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.min_ratio << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_mean_ratio,"
+        << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.mean_ratio << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_max_ratio,"
+        << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.max_ratio << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_p95_abs_log_ratio,"
+        << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.p95_abs_log_ratio << "\n";
+    csv << "video_l23ee_triplet_homeostatic_plasticity_mass_tolerance_diagnostic_only,1.000000\n";
     csv << "post_video_inhibitory_stabilization_enabled,"
         << (post_video_inhibitory_stabilization_active ? 1.0 : 0.0) << "\n";
     csv << "post_video_inhibitory_stabilization_sweep_count,"
@@ -13925,6 +14417,88 @@ void writeSummaryFiles(
          << video_l23ee_heterosynaptic_competition_delta_metrics.max_abs_delta << "\n";
     text << "video_l23ee_heterosyn_competition_mean_gain_ratio="
          << video_l23ee_heterosynaptic_competition_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_enabled="
+         << (video_l23ee_triplet_homeostatic_plasticity_config.enabled ? 1 : 0) << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_active="
+         << (video_l23ee_triplet_homeostatic_plasticity_active ? 1 : 0) << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_learning_rate="
+         << video_l23ee_triplet_homeostatic_plasticity_config.learning_rate << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_a_plus="
+         << video_l23ee_triplet_homeostatic_plasticity_config.aplus << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_a_minus="
+         << video_l23ee_triplet_homeostatic_plasticity_config.aminus << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_mass_eta="
+         << video_l23ee_triplet_homeostatic_plasticity_config.mass_eta << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_min_post_spikes="
+         << video_l23ee_triplet_homeostatic_plasticity_config.min_post_spikes << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_tau_pre_frames="
+         << video_l23ee_triplet_homeostatic_plasticity_config.tau_pre_frames << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_tau_post_frames="
+         << video_l23ee_triplet_homeostatic_plasticity_config.tau_post_frames << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_tau_slow_frames="
+         << video_l23ee_triplet_homeostatic_plasticity_config.tau_slow_frames << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_mass_tolerance="
+         << video_l23ee_triplet_homeostatic_plasticity_config.mass_tolerance << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_recurrent_only=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_local_postsynaptic_only=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_uses_l23e_spike_traces=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_one_frame_lagged_traces=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_continuous_all_incoming_synapses=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_subtracts_postsynaptic_mean_update=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_soft_postsynaptic_mass_homeostasis=1\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_exact_normalization_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_orientation_label_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_future_frame_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_target_label_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_heldout_frames_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_validation_metric_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_global_rate_cap_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_global_normalization_used=0\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_application_count="
+         << video_l23ee_triplet_homeostatic_plasticity_application_count << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_activity_window_count="
+         << video_l23ee_triplet_homeostatic_plasticity_activity_window_count << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_ltp_score_positive_frac="
+         << video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics.positive_frac << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_ltp_score_mean="
+         << video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics.mean_score << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_ltp_score_max="
+         << video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics.max_score << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_ltd_score_positive_frac="
+         << video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics.positive_frac << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_ltd_score_mean="
+         << video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics.mean_score << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_ltd_score_max="
+         << video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics.max_score << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_active_edge_count="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.active_edge_count << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_changed_frac="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.changed_frac << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_positive_edge_frac="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.positive_edge_frac << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_negative_edge_frac="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.negative_edge_frac << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_mean_delta="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.mean_delta << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_p95_abs_delta="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.p95_abs_delta << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_p95_changed_abs_delta="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.p95_changed_abs_delta << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_max_abs_delta="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.max_abs_delta << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_mean_gain_ratio="
+         << video_l23ee_triplet_homeostatic_plasticity_delta_metrics.mean_gain_ratio << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_post_count="
+         << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.post_count << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_min_ratio="
+         << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.min_ratio << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_mean_ratio="
+         << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.mean_ratio << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_max_ratio="
+         << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.max_ratio << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_incoming_mass_p95_abs_log_ratio="
+         << video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics.p95_abs_log_ratio << "\n";
+    text << "video_l23ee_triplet_homeostatic_plasticity_mass_tolerance_diagnostic_only=1\n";
     text << "post_video_inhibitory_stabilization_enabled="
          << (post_video_inhibitory_stabilization_active ? 1 : 0) << "\n";
     text << "post_video_inhibitory_stabilization_sweep_count="
@@ -14843,6 +15417,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             l23ee_stdp_aminus);
     const VideoL23EEHeterosynapticCompetitionConfig video_l23ee_heterosynaptic_competition_config =
         getVideoL23EEHeterosynapticCompetitionConfig(video_replay_config);
+    const VideoL23EETripletHomeostaticPlasticityConfig video_l23ee_triplet_homeostatic_plasticity_config =
+        getVideoL23EETripletHomeostaticPlasticityConfig(video_replay_config);
     const bool post_video_inhibitory_stabilization_active =
         post_video_inhibitory_stabilization_config.enabled
         && video_consolidation_config.enabled;
@@ -15773,6 +16349,21 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     unsigned int video_l23ee_heterosynaptic_competition_activity_window_count = 0u;
     std::vector<double> video_l23ee_heterosynaptic_competition_activity_scores;
     std::vector<double> video_l23ee_heterosynaptic_competition_post_spike_counts;
+    const bool video_l23ee_triplet_homeostatic_plasticity_active =
+        video_l23ee_triplet_homeostatic_plasticity_config.enabled
+        && video_recurrent_only_consolidation_config.enabled;
+    WeightDeltaMetrics video_l23ee_triplet_homeostatic_plasticity_delta_metrics;
+    IncomingMassRatioMetrics video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics;
+    ActivityScoreMetrics video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics;
+    ActivityScoreMetrics video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics;
+    unsigned int video_l23ee_triplet_homeostatic_plasticity_application_count = 0u;
+    unsigned int video_l23ee_triplet_homeostatic_plasticity_activity_window_count = 0u;
+    std::vector<double> video_l23ee_triplet_homeostatic_plasticity_ltp_scores;
+    std::vector<double> video_l23ee_triplet_homeostatic_plasticity_ltd_scores;
+    std::vector<double> video_l23ee_triplet_homeostatic_plasticity_post_spike_counts;
+    std::vector<double> video_l23ee_triplet_homeostatic_plasticity_pre_traces;
+    std::vector<double> video_l23ee_triplet_homeostatic_plasticity_post_fast_traces;
+    std::vector<double> video_l23ee_triplet_homeostatic_plasticity_post_slow_traces;
 
     auto runVideoBlock = [&](std::vector<TrialWindow> *trials,
                              std::vector<VideoFrameRecord> *records,
@@ -15810,6 +16401,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             video_l23_push_pull_inhibition_active && video_ff_stdp_active;
         const bool accumulate_l23ee_heterosynaptic_competition_score =
             video_l23ee_heterosynaptic_competition_active && recurrent_learning && !inhibitory_learning;
+        const bool accumulate_l23ee_triplet_homeostatic_plasticity_score =
+            video_l23ee_triplet_homeostatic_plasticity_active && recurrent_learning && !inhibitory_learning;
         runtime.setDynamicParamValue(
             l4e_to_l23e,
             "Aplus",
@@ -15990,6 +16583,41 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     0.0);
             }
         }
+        std::vector<double> previous_l23ee_triplet_homeostatic_plasticity_l23e_spike_counts;
+        if(accumulate_l23ee_triplet_homeostatic_plasticity_score) {
+            previous_l23ee_triplet_homeostatic_plasticity_l23e_spike_counts =
+                copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+            if(video_l23ee_triplet_homeostatic_plasticity_ltp_scores.empty()) {
+                video_l23ee_triplet_homeostatic_plasticity_ltp_scores.assign(
+                    copyWeights(runtime, l23e_to_l23e).size(),
+                    0.0);
+            }
+            if(video_l23ee_triplet_homeostatic_plasticity_ltd_scores.empty()) {
+                video_l23ee_triplet_homeostatic_plasticity_ltd_scores.assign(
+                    copyWeights(runtime, l23e_to_l23e).size(),
+                    0.0);
+            }
+            if(video_l23ee_triplet_homeostatic_plasticity_post_spike_counts.empty()) {
+                video_l23ee_triplet_homeostatic_plasticity_post_spike_counts.assign(
+                    v1_genn::kNumL23E,
+                    0.0);
+            }
+            if(video_l23ee_triplet_homeostatic_plasticity_pre_traces.empty()) {
+                video_l23ee_triplet_homeostatic_plasticity_pre_traces.assign(
+                    v1_genn::kNumL23E,
+                    0.0);
+            }
+            if(video_l23ee_triplet_homeostatic_plasticity_post_fast_traces.empty()) {
+                video_l23ee_triplet_homeostatic_plasticity_post_fast_traces.assign(
+                    v1_genn::kNumL23E,
+                    0.0);
+            }
+            if(video_l23ee_triplet_homeostatic_plasticity_post_slow_traces.empty()) {
+                video_l23ee_triplet_homeostatic_plasticity_post_slow_traces.assign(
+                    v1_genn::kNumL23E,
+                    0.0);
+            }
+        }
         for(unsigned int repeat_index = 0; repeat_index < repeat_count; repeat_index++) {
             resetVideoL4STDState();
             for(unsigned int frame_offset = 0; frame_offset < frame_count; frame_offset++) {
@@ -16162,6 +16790,27 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                         "L23EE heterosynaptic competition");
                     video_l23ee_heterosynaptic_competition_activity_window_count++;
                     previous_l23ee_heterosynaptic_competition_l23e_spike_counts =
+                        current_l23e_spike_counts;
+                }
+                if(accumulate_l23ee_triplet_homeostatic_plasticity_score) {
+                    const std::vector<double> current_l23e_spike_counts =
+                        copyNeuronScalarState(runtime, l23e, "SpikeCount", v1_genn::kNumL23E);
+                    const std::vector<double> l23e_frame_spikes =
+                        nonnegativeStateDelta(
+                            current_l23e_spike_counts,
+                            previous_l23ee_triplet_homeostatic_plasticity_l23e_spike_counts);
+                    accumulateL23EETripletHomeostaticPlasticityScores(
+                        video_l23ee_triplet_homeostatic_plasticity_ltp_scores,
+                        video_l23ee_triplet_homeostatic_plasticity_ltd_scores,
+                        video_l23ee_triplet_homeostatic_plasticity_post_spike_counts,
+                        video_l23ee_triplet_homeostatic_plasticity_pre_traces,
+                        video_l23ee_triplet_homeostatic_plasticity_post_fast_traces,
+                        video_l23ee_triplet_homeostatic_plasticity_post_slow_traces,
+                        l23ee_edges,
+                        l23e_frame_spikes,
+                        video_l23ee_triplet_homeostatic_plasticity_config);
+                    video_l23ee_triplet_homeostatic_plasticity_activity_window_count++;
+                    previous_l23ee_triplet_homeostatic_plasticity_l23e_spike_counts =
                         current_l23e_spike_counts;
                 }
                 if(apply_online_ff_competition) {
@@ -16846,6 +17495,44 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                         kL23EEStdpWeightMin,
                         kL23EEStdpWeightMax);
                 video_l23ee_heterosynaptic_competition_application_count++;
+            }
+            if(video_l23ee_triplet_homeostatic_plasticity_active) {
+                video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics =
+                    summarizeSparseActivityScores(
+                        video_l23ee_triplet_homeostatic_plasticity_ltp_scores,
+                        l23ee_edges,
+                        v1_genn::kNumL23E,
+                        v1_genn::kNumL23E,
+                        "L23EE triplet/homeostatic plasticity LTP");
+                video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics =
+                    summarizeSparseActivityScores(
+                        video_l23ee_triplet_homeostatic_plasticity_ltd_scores,
+                        l23ee_edges,
+                        v1_genn::kNumL23E,
+                        v1_genn::kNumL23E,
+                        "L23EE triplet/homeostatic plasticity LTD");
+                const std::vector<float> l23ee_weights_before_triplet_homeostatic =
+                    copyWeights(runtime, l23e_to_l23e);
+                video_l23ee_triplet_homeostatic_plasticity_delta_metrics =
+                    applyLocalPostSynapticL23EETripletHomeostaticPlasticity(
+                        runtime,
+                        l23e_to_l23e,
+                        l23ee_edges,
+                        video_l23ee_triplet_homeostatic_plasticity_ltp_scores,
+                        video_l23ee_triplet_homeostatic_plasticity_ltd_scores,
+                        video_l23ee_triplet_homeostatic_plasticity_post_spike_counts,
+                        video_l23ee_triplet_homeostatic_plasticity_config,
+                        kL23EEStdpWeightMin,
+                        kL23EEStdpWeightMax);
+                video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics =
+                    computeSparseIncomingMassRatioMetrics(
+                        l23ee_weights_before_triplet_homeostatic,
+                        copyWeights(runtime, l23e_to_l23e),
+                        l23ee_edges,
+                        v1_genn::kNumL23E,
+                        v1_genn::kNumL23E,
+                        "L23EE triplet/homeostatic plasticity");
+                video_l23ee_triplet_homeostatic_plasticity_application_count++;
             }
             video_recurrent_only_consolidation_l23ee_delta_metrics =
                 computeWeightDeltaMetrics(
@@ -18006,6 +18693,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         video_l23ee_heterosynaptic_competition_activity_window_count,
         video_l23ee_heterosynaptic_competition_delta_metrics,
         video_l23ee_heterosynaptic_competition_activity_score_metrics,
+        video_l23ee_triplet_homeostatic_plasticity_config,
+        video_l23ee_triplet_homeostatic_plasticity_application_count,
+        video_l23ee_triplet_homeostatic_plasticity_activity_window_count,
+        video_l23ee_triplet_homeostatic_plasticity_delta_metrics,
+        video_l23ee_triplet_homeostatic_plasticity_incoming_mass_metrics,
+        video_l23ee_triplet_homeostatic_plasticity_ltp_score_metrics,
+        video_l23ee_triplet_homeostatic_plasticity_ltd_score_metrics,
         video_consolidation_metrics,
         hva_predictor_config,
         hva_predictor_result,

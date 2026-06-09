@@ -160,3 +160,49 @@ Primary sources:
   apical-tuft context is explicitly modeled.
 - Three-factor neuromodulated plasticity and homeostatic stabilization.
 - Multi-hypercolumn contextual feedback and long-range L2/3 horizontals.
+
+### 6. L23E to L23E recurrent triplet/homeostatic plasticity
+
+Biological mapping:
+The previous top-k recurrent heterosynaptic competition was replaced by an
+opt-in local triplet/coactivity recurrent rule with postsynaptic-local soft mass
+homeostasis. The accepted branch is documented in
+`docs/l23ee_triplet_homeostatic_plasticity_report.md`.
+
+Why this is in v1:
+The recurrent pathway needed to support Ko/Cossell-style enrichment of strong
+synapses among coactive/correlated L2/3 units without using ranked top-k
+selection, orientation labels, future frames, validation metrics, or global
+normalization. The accepted rule uses L23E spike traces, mean-subtracted
+postsynaptic-local updates across all incoming recurrent synapses, and soft
+postsynaptic-local mass homeostasis.
+
+Validation evidence:
+The strict accepted log
+`.runs/logs/v1_triplet_l23ee_lr125_hold15625_acceptance_strict_validator.log`
+passes raw L23E activity repeat stability (`raw_oracle_at_k=0.704167`),
+final-post-video OSI (`0.853370`), L23EE strong-synapse enrichment
+(`combined_odds_ratio=1.272063`), heavy-tail-like recurrent distribution
+(`gini=0.205810`, `top10pct_mass_share=0.178914`), shuffle specificity
+(`z_score=4.543718`), and recurrence contribution
+(`mean_corr_delta=0.010623`).
+
+Primary sources:
+
+- Ko H, Hofer SB, Pichler B, Buchanan KA, Sjoestroem PJ, Mrsic-Flogel TD.
+  2011. *Functional specificity of local synaptic connections in neocortical
+  networks.* Nature. DOI: https://doi.org/10.1038/nature09880
+- Cossell L, Iacaruso MF, Muir DR, et al. 2015. *Functional organization of
+  excitatory synaptic strength in primary visual cortex.* Nature.
+  DOI: https://doi.org/10.1038/nature14182
+- Pfister JP, Gerstner W. 2006. *Triplets of spikes in a model of
+  spike-timing-dependent plasticity.* Journal of Neuroscience.
+  DOI: https://doi.org/10.1523/JNEUROSCI.1425-06.2006
+- Froemke RC, Dan Y. 2002. *Spike-timing-dependent synaptic modification
+  induced by natural spike trains.* Nature. DOI: https://doi.org/10.1038/416433a
+- Royer S, Pare D. 2003. *Conservation of total synaptic weight through
+  balanced synaptic depression and potentiation.* Nature.
+  DOI: https://doi.org/10.1038/nature01530
+- Song S, Sjoestroem PJ, Reigl M, Nelson S, Chklovskii DB. 2005. *Highly
+  nonrandom features of synaptic connectivity in local cortical circuits.*
+  PLoS Biology. DOI: https://doi.org/10.1371/journal.pbio.0030068
