@@ -93,6 +93,10 @@ MYGPU_WS=dev2 mygpu exec env BASH_ENV=/scratch/.bashrc bash -lc \
 - Verified commit: `dd258075263c4b2bcb6607d230add658bcc23127`
 - Build script: `/scratch/proj/v1_snn_l4_l23/neuroips/.local_genn/genn/bin/genn-buildmodel.sh`
 
+Always use the absolute GeNN path above on `dev2`. A relative call such as
+`.local_genn/genn/bin/genn-buildmodel.sh` only works from the repository root
+and fails from `neuroips/genn`.
+
 CUDA compatibility for this pod requires the CUDA compat library path when
 building/running generated GeNN CUDA code:
 
