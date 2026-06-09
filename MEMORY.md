@@ -64,3 +64,10 @@
   triplet/homeostatic L23EE enabled with LR `1.25`, heldout fraction `0.15625`
   giving 54 video exposure frames, and strict acceptance log
   `.runs/logs/v1_triplet_l23ee_lr125_hold15625_acceptance_strict_validator.log`.
+- Restart checkpoint 2026-06-09: branch `v1-biophysical-l23ee-plasticity` is
+  clean and pushed to `neuroips` at commit
+  `5679cf383e1380aacf701cb426253e0ccaa43f2d`. The next planned work is to
+  evaluate and/or implement stable L2/3 population-representation and decoded
+  future-state metrics for the higher predictor, using population vector
+  correlation, RSM stability, decoder transfer, and future-state correlation as
+  biology-aligned complements to raw exact top-k activity recall.
