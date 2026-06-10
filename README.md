@@ -5,13 +5,18 @@ The primary path is a generated-code workflow for NVIDIA GPUs on the H200 pod,
 with fixed L4 orientation-tuned drive, explicit E/I populations in `L4` and
 `L2/3`, local L4 to L2/3 convergence, and local recurrent structure.
 
-Latest detailed report:
+Current release-state entry point:
+
+- `docs/release_state_20260610_l23_population_state.md`
+
+Latest detailed reports:
 
 - `docs/hva_predictor_system_report.md`
 - `docs/pre_top_down_v1_biology_alignment_report.md`
 - `docs/v1_soft_prior_som_recurrence_report.md`
 - `docs/v1_l4_intersite_scaling_report.md`
 - `docs/v1_cell_responsive_coverage_report.md`
+- `docs/l23_population_state_dev2_validation_report.md`
 
 ## Model summary
 
@@ -166,6 +171,19 @@ lower-V1 mutation. The final H200 validator returned `rc=0` with no `FAIL`
 lines; key held-out top-k metrics were `model_recall_at_k=0.269048`,
 `persistence_recall_at_k=0.195238`, `train_frequency_recall_at_k=0.215476`,
 and `model_chance_ratio=5.380952`.
+
+The current population-state validation milestone is documented in
+`docs/release_state_20260610_l23_population_state.md` and
+`docs/l23_population_state_dev2_validation_report.md`. The latest dev2 run
+`v1_l23_popstate4_dev2_20260609T154837Z` validates repeated natural-video
+L2/3E population states in the central `32x32` core of a `40x40` sheet. It
+passes strict gates for repeat population-vector reliability
+(`repeat_vector_corr_mean=0.672147`), odd/even representational geometry
+(`odd_even_rsm_corr=0.901051`), and held-out-repeat decoder transfer
+(`heldout_decoder_top1_accuracy=0.750000`,
+`heldout_decoder_top5_accuracy=0.996094`), with HVA/top-down feedback disabled.
+This is the preferred biological target for the next higher-area predictor;
+exact top-k tile identity is retained only as a diagnostic stress test.
 
 Zero-training subtype perturbation checks used `V1_L23*_GATE_NA=0.2` one at a
 time. Relative to the no-gate control, PV and SOM gates suppressed mean L2/3E
