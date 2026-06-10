@@ -84,6 +84,20 @@ Primary workspace:
 dev2
 ```
 
+Live release-time check:
+
+```text
+2026-06-10T15:03:04+10:00
+mygpu status: Phase=Pending, pod=dev2-0-4
+mygpu exec: workload is not ready to stream: pod is not ready
+mygpu resume: rejected because the workload is already Pending, not Stopped
+```
+
+Interpretation: dev2 exists and is being scheduled, but was not yet ready for a
+fresh exec command at release time. The previously validated scratch paths and
+artifact records below remain the source of truth for the completed validation
+run until a new live exec probe succeeds.
+
 Use these commands after a restart:
 
 ```bash
@@ -258,4 +272,3 @@ as the primary biology metric. The predictor validation should include:
 - persistence, time-shuffle, spatial-shuffle, and no-learning controls,
 - explicit no-leakage checks for future frames, labels, validation metrics, and
   feedback into lower V1.
-
