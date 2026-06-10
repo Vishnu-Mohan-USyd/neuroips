@@ -93,11 +93,38 @@ branch: v1-l23-population-state-validation
 HEAD: 449ef48 validate l23 population state geometry
 ```
 
-`dev2` was no longer reachable at the time this checkpoint was written:
+`dev2` was initially unreachable while this checkpoint was being written:
 
 ```text
 mygpu exec: workload is not ready to stream: pod not found
 ```
+
+It was re-verified reachable immediately afterward, after the user reported that
+the pod was back:
+
+```text
+STDOUT_PROBE=1
+/scratch
+dev2-0-3
+DONE
+```
+
+The remote repo and metrics artifact were also re-verified:
+
+```text
+## v1-l23-population-state-validation
+449ef48 validate l23 population state geometry
+2e76e5a tools: add l23 population state validator
+852e384 Checkpoint restart state for population metrics
+5679cf3 Replace L23EE top-k competition with triplet homeostasis
+4cdcf8b Clarify final rate homeostasis report
+
+METRICS_JSON_PRESENT=1
+-rw-rw-r-- 1 2029910 dgxgroup 7495 Jun  9 15:55 /scratch/proj/v1_snn_l4_l23/runs/v1_l23_popstate4_dev2_20260609T154837Z/v1_l23_popstate4_dev2_20260609T154837Z_l23_population_state_metrics.json
+```
+
+Interpret the empty-output attempt as a transient `mygpu`/pod streaming issue,
+not as evidence of missing code or missing artifacts.
 
 If needed after restart:
 
