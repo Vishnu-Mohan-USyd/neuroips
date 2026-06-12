@@ -597,6 +597,8 @@ constexpr double kDefaultHVAPredictorEventBiasLearningRate = 0.0;
 constexpr double kDefaultHVAPredictorWeightDecay = 0.001;
 constexpr double kDefaultHVAPredictorEventWeightDecay = 0.005;
 constexpr double kDefaultHVAPredictorEventResidualGain = 0.5;
+constexpr double kDefaultHVAPredictorLeakyBaselineBeta = 0.8;
+constexpr double kDefaultHVAPredictorResidualFanInNormFloor = 1.0;
 constexpr double kDefaultHVAPredictorRateScaleHz = 10.0;
 constexpr double kDefaultHVAPredictorWeightClip = 2.0;
 constexpr double kDefaultHVAPredictorHeldoutFraction = 0.25;
@@ -1072,6 +1074,10 @@ struct HVAPredictorConfig {
     double weight_decay = kDefaultHVAPredictorWeightDecay;
     double event_weight_decay = kDefaultHVAPredictorEventWeightDecay;
     double event_residual_gain = kDefaultHVAPredictorEventResidualGain;
+    bool leaky_baseline_enabled = false;
+    double leaky_baseline_beta = kDefaultHVAPredictorLeakyBaselineBeta;
+    bool residual_fanin_normalized_update_enabled = false;
+    double residual_fanin_norm_floor = kDefaultHVAPredictorResidualFanInNormFloor;
     double rate_scale_hz = kDefaultHVAPredictorRateScaleHz;
     double weight_clip = kDefaultHVAPredictorWeightClip;
     double heldout_fraction = kDefaultHVAPredictorHeldoutFraction;
@@ -3082,6 +3088,16 @@ HVAPredictorConfig getHVAPredictorConfig(const VideoReplayConfig &video_config)
     config.event_residual_gain = getEnvDoubleOrDefault(
         "V1_HVA_PREDICTOR_EVENT_RESIDUAL_GAIN",
         kDefaultHVAPredictorEventResidualGain);
+    config.leaky_baseline_enabled =
+        getEnvUnsignedOrDefault("V1_HVA_LEAKY_BASELINE_ENABLE", 0u) != 0u;
+    config.leaky_baseline_beta = getEnvDoubleOrDefault(
+        "V1_HVA_LEAKY_BASELINE_BETA",
+        kDefaultHVAPredictorLeakyBaselineBeta);
+    config.residual_fanin_normalized_update_enabled =
+        getEnvUnsignedOrDefault("V1_HVA_RESIDUAL_FANIN_NORM_ENABLE", 0u) != 0u;
+    config.residual_fanin_norm_floor = getEnvDoubleOrDefault(
+        "V1_HVA_RESIDUAL_FANIN_NORM_FLOOR",
+        kDefaultHVAPredictorResidualFanInNormFloor);
     config.rate_scale_hz = getEnvDoubleOrDefault(
         "V1_HVA_PREDICTOR_RATE_SCALE_HZ",
         kDefaultHVAPredictorRateScaleHz);
@@ -3195,6 +3211,14 @@ HVAPredictorConfig getHVAPredictorConfig(const VideoReplayConfig &video_config)
     }
     if(config.event_residual_gain < 0.0 || !std::isfinite(config.event_residual_gain)) {
         throw std::runtime_error("V1_HVA_PREDICTOR_EVENT_RESIDUAL_GAIN must be finite and non-negative.");
+    }
+    if(config.leaky_baseline_beta < 0.0
+       || config.leaky_baseline_beta > 1.0
+       || !std::isfinite(config.leaky_baseline_beta)) {
+        throw std::runtime_error("V1_HVA_LEAKY_BASELINE_BETA must be finite and in [0, 1].");
+    }
+    if(config.residual_fanin_norm_floor <= 0.0 || !std::isfinite(config.residual_fanin_norm_floor)) {
+        throw std::runtime_error("V1_HVA_RESIDUAL_FANIN_NORM_FLOOR must be finite and positive.");
     }
     if(config.rate_scale_hz <= 0.0 || !std::isfinite(config.rate_scale_hz)) {
         throw std::runtime_error("V1_HVA_PREDICTOR_RATE_SCALE_HZ must be finite and positive.");
@@ -8443,6 +8467,16 @@ HVAPredictorResult trainHVAPredictorSidecar(
     std::vector<double> train_residual_sq(channel_tile_count, 0.0);
     std::vector<unsigned int> train_target_count(channel_tile_count, 0u);
     std::vector<std::vector<double>> train_target_values(channel_tile_count);
+    const auto predictionBaselineState = [&](std::size_t state_index, double current_state) {
+        if(!config.leaky_baseline_enabled) {
+            return current_state;
+        }
+        const double beta = config.leaky_baseline_beta;
+        return clippedValue(
+            (beta * current_state) + ((1.0 - beta) * train_mean_target[state_index]),
+            0.0,
+            1.0);
+    };
     std::size_t train_prediction_count = 0u;
     std::size_t heldout_prediction_count = 0u;
     std::size_t boundary_gap_prediction_count = 0u;
@@ -8461,21 +8495,14 @@ HVAPredictorResult trainHVAPredictorSidecar(
             train_prediction_count += tile_count * target_channel_count;
             const std::size_t target_sample_index =
                 (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + target_frame_index;
-            const std::size_t current_sample_index =
-                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
             for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
                 for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
                     const std::size_t stats_index = targetTileIndex(target_channel, tile_id);
-                    const double current =
-                        normalizedRate(target_tile_rates[target_channel][(current_sample_index * tile_count) + tile_id]);
                     const double target =
                         normalizedRate(target_tile_rates[target_channel][(target_sample_index * tile_count) + tile_id]);
                     const double event_window_target =
                         eventWindowTargetState(target_channel, repeat_index, target_frame_index, tile_id);
-                    const double residual = target - current;
                     train_mean_target[stats_index] += target;
-                    train_residual_mean[stats_index] += residual;
-                    train_residual_sq[stats_index] += residual * residual;
                     train_target_values[stats_index].push_back(event_window_target);
                     train_target_count[stats_index]++;
                 }
@@ -8662,6 +8689,36 @@ HVAPredictorResult trainHVAPredictorSidecar(
                 throw std::runtime_error("HVA predictor train split produced an empty tile target set.");
             }
             train_mean_target[stats_index] /= static_cast<double>(train_target_count[stats_index]);
+        }
+    }
+    for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+        for(unsigned int frame_index = 0; frame_index + config.delay_frames < video_config.effective_frame_count; frame_index++) {
+            const unsigned int target_frame_index = frame_index + config.delay_frames;
+            if(predictionSplit(frame_index, target_frame_index) != "train") {
+                continue;
+            }
+            const std::size_t target_sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + target_frame_index;
+            const std::size_t current_sample_index =
+                (static_cast<std::size_t>(repeat_index) * video_config.effective_frame_count) + frame_index;
+            for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+                for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+                    const std::size_t stats_index = targetTileIndex(target_channel, tile_id);
+                    const double current =
+                        normalizedRate(target_tile_rates[target_channel][(current_sample_index * tile_count) + tile_id]);
+                    const double target =
+                        normalizedRate(target_tile_rates[target_channel][(target_sample_index * tile_count) + tile_id]);
+                    const double baseline = predictionBaselineState(stats_index, current);
+                    const double residual = target - baseline;
+                    train_residual_mean[stats_index] += residual;
+                    train_residual_sq[stats_index] += residual * residual;
+                }
+            }
+        }
+    }
+    for(unsigned int target_channel = 0; target_channel < target_channel_count; target_channel++) {
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            const std::size_t stats_index = targetTileIndex(target_channel, tile_id);
             train_residual_mean[stats_index] /= static_cast<double>(train_target_count[stats_index]);
         }
     }
@@ -8878,6 +8935,10 @@ HVAPredictorResult trainHVAPredictorSidecar(
     TopKWeightedStats heldout_topk_repeat_avg_smooth_weighted_stats;
     std::vector<std::vector<double>> targets_by_channel_tile(channel_tile_count);
     std::vector<std::vector<double>> predictions_by_channel_tile(channel_tile_count);
+    double residual_update_denominator_sum = 0.0;
+    double residual_update_denominator_min = std::numeric_limits<double>::infinity();
+    double residual_update_denominator_max = 0.0;
+    std::size_t residual_update_denominator_count = 0u;
 
     const auto rawFeatureValue = [&](std::size_t sample_index, unsigned int tile_id, unsigned int feature) {
         return feature_series[featureIndex(sample_index, tile_id, feature)];
@@ -8961,12 +9022,14 @@ HVAPredictorResult trainHVAPredictorSidecar(
 
                         double residual_norm_prediction = result.biases_after[state_index];
                         double event_logit = result.event_biases_after[state_index];
+                        double local_feature_sq = 0.0;
                         for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
                             if(!localReadoutEnabled(pre_tile, post_tile)) {
                                 continue;
                             }
                             for(unsigned int feature = 0; feature < non_sequence_feature_channel_count; feature++) {
                                 const double feature_value = featureValue(sample_index, pre_tile, feature);
+                                local_feature_sq += feature_value * feature_value;
                                 residual_norm_prediction += result.readout_weights_after[
                                     readoutIndex(target_channel, post_tile, pre_tile, feature)]
                                     * feature_value;
@@ -8979,8 +9042,24 @@ HVAPredictorResult trainHVAPredictorSidecar(
                             }
                         }
 
+                        const double baseline_state =
+                            predictionBaselineState(state_index, current_target_state);
                         const double residual_error =
-                            (target_state - current_target_state) - residual_norm_prediction;
+                            (target_state - baseline_state) - residual_norm_prediction;
+                        double residual_update_scale = 1.0;
+                        if(config.residual_fanin_normalized_update_enabled) {
+                            const double denominator =
+                                std::max(config.residual_fanin_norm_floor, local_feature_sq);
+                            residual_update_scale = 1.0 / denominator;
+                            residual_update_denominator_sum += denominator;
+                            residual_update_denominator_min =
+                                std::min(residual_update_denominator_min, denominator);
+                            residual_update_denominator_max =
+                                std::max(residual_update_denominator_max, denominator);
+                            residual_update_denominator_count++;
+                        }
+                        const double residual_update_error =
+                            residual_error * residual_update_scale;
                         const double predicted_event_probability = event_tile_selected[state_index]
                             ? sigmoid(event_logit)
                             : train_event_rate[state_index];
@@ -8996,7 +9075,7 @@ HVAPredictorResult trainHVAPredictorSidecar(
                                     readoutIndex(target_channel, post_tile, pre_tile, feature)];
                                 weight =
                                     (weight * (1.0 - config.weight_decay))
-                                    + (config.learning_rate * residual_error * feature_value);
+                                    + (config.learning_rate * residual_update_error * feature_value);
                                 weight = clippedValue(weight, -config.weight_clip, config.weight_clip);
                                 if(event_tile_selected[state_index]) {
                                     double &event_weight = result.event_weights_after[
@@ -9008,7 +9087,7 @@ HVAPredictorResult trainHVAPredictorSidecar(
                                 }
                             }
                         }
-                        result.biases_after[state_index] += config.bias_learning_rate * residual_error;
+                        result.biases_after[state_index] += config.bias_learning_rate * residual_update_error;
                         result.biases_after[state_index] =
                             clippedValue(result.biases_after[state_index], -config.weight_clip, config.weight_clip);
                         if(event_tile_selected[state_index] && config.event_bias_learning_rate > 0.0) {
@@ -9194,8 +9273,10 @@ HVAPredictorResult trainHVAPredictorSidecar(
                     temporal_block_shift_event_prob[state_index] =
                         (eventWindowTargetState(target_channel, repeat_index, time_shuffle_frame, post_tile)
                          >= event_threshold_norm[state_index]) ? 1.0 : 0.0;
+                    const double baseline_state =
+                        predictionBaselineState(state_index, current_target_state[state_index]);
                     target_residual_norm[state_index] =
-                        target_state[state_index] - current_target_state[state_index];
+                        target_state[state_index] - baseline_state;
                     target_residual_z[state_index] =
                         (target_residual_norm[state_index] - train_residual_mean[state_index])
                         / train_residual_std[state_index];
@@ -9216,12 +9297,12 @@ HVAPredictorResult trainHVAPredictorSidecar(
                         / train_residual_std[state_index];
                     predicted_state[state_index] =
                         clippedValue(
-                            current_target_state[state_index] + predicted_residual_norm[state_index],
+                            baseline_state + predicted_residual_norm[state_index],
                             0.0,
                             1.0);
                     no_learning_state[state_index] =
                         clippedValue(
-                            current_target_state[state_index] + train_residual_mean[state_index],
+                            baseline_state + train_residual_mean[state_index],
                             0.0,
                             1.0);
                     if(event_tile_selected[state_index]) {
@@ -9812,6 +9893,12 @@ HVAPredictorResult trainHVAPredictorSidecar(
     const auto topKMean = [](double sum, std::size_t count) {
         return count > 0u ? (sum / static_cast<double>(count)) : 0.0;
     };
+    const double residual_update_denominator_mean =
+        residual_update_denominator_count > 0u
+            ? (residual_update_denominator_sum / static_cast<double>(residual_update_denominator_count))
+            : 0.0;
+    const double residual_update_denominator_min_metric =
+        residual_update_denominator_count > 0u ? residual_update_denominator_min : 0.0;
     const double heldout_topk_model_recall = topKMean(heldout_topk_stats.model_recall, heldout_topk_stats.count);
     const double heldout_topk_persistence_recall = topKMean(heldout_topk_stats.persistence_recall, heldout_topk_stats.count);
     const double heldout_topk_train_frequency_recall = topKMean(heldout_topk_stats.train_frequency_recall, heldout_topk_stats.count);
@@ -10041,6 +10128,24 @@ HVAPredictorResult trainHVAPredictorSidecar(
         {"evaluation_updates_enabled", 0.0},
         {"training_epoch_count", static_cast<double>(config.training_epochs)},
         {"training_update_count", static_cast<double>(config.training_epochs) * static_cast<double>(train_prediction_count)},
+        {"leaky_autoregressive_baseline_enabled", config.leaky_baseline_enabled ? 1.0 : 0.0},
+        {"leaky_autoregressive_baseline_beta", config.leaky_baseline_beta},
+        {"prediction_baseline_mode_code", config.leaky_baseline_enabled ? 1.0 : 0.0},
+        {"prediction_baseline_uses_current_l23e", 1.0},
+        {"prediction_baseline_uses_train_mean_target",
+         config.leaky_baseline_enabled ? 1.0 : 0.0},
+        {"prediction_baseline_future_leakage_enabled", 0.0},
+        {"residual_target_baseline_mode_code", config.leaky_baseline_enabled ? 1.0 : 0.0},
+        {"residual_fanin_normalized_update_enabled",
+         config.residual_fanin_normalized_update_enabled ? 1.0 : 0.0},
+        {"residual_fanin_normalized_update_train_only", 1.0},
+        {"residual_fanin_normalized_update_l23e_only", 1.0},
+        {"residual_fanin_norm_floor", config.residual_fanin_norm_floor},
+        {"residual_fanin_norm_update_count",
+         static_cast<double>(residual_update_denominator_count)},
+        {"residual_fanin_norm_denominator_mean", residual_update_denominator_mean},
+        {"residual_fanin_norm_denominator_min", residual_update_denominator_min_metric},
+        {"residual_fanin_norm_denominator_max", residual_update_denominator_max},
         {"feature_standardization_enabled", 1.0},
         {"feature_standardization_train_only", 1.0},
         {"feature_standardization_feature_count", static_cast<double>(feature_channel_count)},
@@ -11331,6 +11436,14 @@ void writeHVAPredictorConfigCsv(
     output << "weight_decay," << config.weight_decay << "\n";
     output << "event_weight_decay," << config.event_weight_decay << "\n";
     output << "event_residual_gain," << config.event_residual_gain << "\n";
+    output << "leaky_autoregressive_baseline_enabled,"
+           << (config.leaky_baseline_enabled ? 1.0 : 0.0) << "\n";
+    output << "leaky_autoregressive_baseline_beta,"
+           << config.leaky_baseline_beta << "\n";
+    output << "residual_fanin_normalized_update_enabled,"
+           << (config.residual_fanin_normalized_update_enabled ? 1.0 : 0.0) << "\n";
+    output << "residual_fanin_norm_floor,"
+           << config.residual_fanin_norm_floor << "\n";
     output << "rate_scale_hz," << config.rate_scale_hz << "\n";
     output << "weight_clip," << config.weight_clip << "\n";
     output << "heldout_fraction," << config.heldout_fraction << "\n";

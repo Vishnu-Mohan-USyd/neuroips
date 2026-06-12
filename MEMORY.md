@@ -54,6 +54,12 @@
 - Prefer the local RTX 5090 for GeNN validation and training runs when it is
   available, using `CUDA_VISIBLE_DEVICES=0`; do not kill unrelated GPU or pod
   processes while working.
+- H200 pod workspace `dev-codex` is available via
+  `MYGPU_WS=dev-codex mygpu connect`. Keep this project's files separated from
+  other projects on shared drives. If any `runai`/`mygpu` command fails with
+  token-expiry/login-required symptoms, run `bash ~/sih-gpu/app-login.sh` or
+  `mygpu re-login`; never run plain `runai login` because it opens an
+  interactive browser flow and can hang.
 - For rate/homeostasis remediation, documenting an unresolved biological caveat
   is not completion when the user explicitly asks to keep solving it. Continue
   iterating on biologically plausible mechanisms until the stated L4/PV goals
@@ -71,3 +77,20 @@
   future-state metrics for the higher predictor, using population vector
   correlation, RSM stability, decoder transfer, and future-state correlation as
   biology-aligned complements to raw exact top-k activity recall.
+- For biology/neuroscience literature work on `reuben-ML`, first read
+  `~/research-auth/README.md`. Prefer OA sources first (arXiv, PubMed Central,
+  Unpaywall). For individual publisher papers, use
+  `~/research-auth/fetch-paper <url> [outfile]`; use agentify-desktop MCP
+  browser for JS-heavy/bot-walled pages, ask the user to perform SSO login if
+  required, export cookies with `python3 ~/research-auth/export-cookies.py`,
+  and never mass-crawl PDFs through EZproxy. Use Elsevier TDM API for
+  ScienceDirect/Elsevier content.
+- For neuroscience literature research on `reuben-ML`, use the USyd campus-IP
+  access workflow in `~/research-auth/README.md`: try OA sources first
+  (arXiv/PubMed Central/Unpaywall/OpenAlex), then use
+  `~/research-auth/fetch-paper <url> [outfile]` for individual papers. For
+  JS-heavy or bot-walled pages use the agentify browser; if SSO is required,
+  ask the user to log in once and export cookies with
+  `python3 ~/research-auth/export-cookies.py <domain>`. Never mass-crawl PDFs
+  through EZproxy or publisher sites; bulk full text must use publisher TDM
+  APIs, and ScienceDirect/Elsevier content should use the Elsevier TDM API.

@@ -742,6 +742,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-hva-population-state-prediction",
+        action="store_true",
+        help=(
+            "Require heldout HVA L23E distributed population-state vector gates "
+            "computed from *_hva_predictor_predictions.csv. This treats exact top-k "
+            "tile identity as diagnostic only."
+        ),
+    )
+    parser.add_argument(
         "--allow-responsive-osi",
         action="store_true",
         help=(
@@ -7019,7 +7028,208 @@ def compute_hva_population_prediction_metrics(
     return metrics
 
 
-def validate_hva_predictor(run: RunData, require_population_prediction: bool = False) -> bool:
+_HVA_POPULATION_STATE_SCORERS = (
+    "model",
+    "persistence",
+    "train_mean",
+    "no_learning",
+    "temporal_block_shift",
+    "spatial_tile_shuffle",
+)
+
+
+def _hva_population_state_value(row: HVAPredictorPredictionRow, scorer: str) -> float:
+    if scorer == "model":
+        return row.predicted_state_norm
+    if scorer == "persistence":
+        return row.persistence_pred_state_norm
+    if scorer == "train_mean":
+        return row.train_mean_pred_state_norm
+    if scorer == "no_learning":
+        return row.no_learning_pred_state_norm
+    if scorer == "temporal_block_shift":
+        return row.temporal_block_shift_pred_state_norm
+    if scorer == "spatial_tile_shuffle":
+        return row.spatial_tile_shuffle_pred_state_norm
+    raise ValidationError(f"Unknown HVA population-state scorer: {scorer}")
+
+
+def _hva_population_state_mse(target: list[float], prediction: list[float]) -> float:
+    if len(target) != len(prediction) or not target:
+        raise ValidationError("HVA population-state MSE requires aligned non-empty vectors.")
+    return sum((x - y) ** 2 for x, y in zip(target, prediction)) / len(target)
+
+
+def _mean_optional(values: list[float | None]) -> float:
+    finite = [value for value in values if value is not None and math.isfinite(value)]
+    return mean(finite) if finite else math.nan
+
+
+def _frame_rsm_upper(vectors_by_frame: dict[int, list[float]]) -> list[float]:
+    frames = sorted(vectors_by_frame)
+    values: list[float] = []
+    for first_index, first_frame in enumerate(frames):
+        for second_frame in frames[first_index + 1:]:
+            similarity = cosine_similarity_optional(
+                vectors_by_frame[first_frame],
+                vectors_by_frame[second_frame],
+            )
+            if similarity is not None and math.isfinite(similarity):
+                values.append(similarity)
+    return values
+
+
+def compute_hva_population_state_prediction_metrics(
+    heldout_rows: list[HVAPredictorPredictionRow],
+    tile_count_float: float,
+) -> dict[str, float]:
+    """Evaluate heldout future L23E population-vector prediction.
+
+    Rows are grouped by one heldout prediction sample and scored across all HVA
+    tiles. This uses the existing exported target/prediction fields only; no
+    future inputs, non-L23 channels, or top-k target values are read here.
+    """
+
+    tile_count = int(round(tile_count_float))
+    grid_side = int(round(math.sqrt(tile_count)))
+    if tile_count <= 0 or grid_side * grid_side != tile_count:
+        raise ValidationError(f"HVA population-state prediction requires square tile count, got {tile_count}.")
+
+    sample_groups: dict[tuple[int, int, int, int], dict[int, HVAPredictorPredictionRow]] = {}
+    for row in heldout_rows:
+        if row.target_channel != "l23e":
+            continue
+        if row.tile_id < 0 or row.tile_id >= tile_count:
+            raise ValidationError(f"HVA population-state prediction found invalid tile_id={row.tile_id}.")
+        key = (row.repeat_index, row.frame_index, row.target_frame_index, row.target_channel_index)
+        tiles = sample_groups.setdefault(key, {})
+        if row.tile_id in tiles:
+            raise ValidationError(
+                "HVA population-state prediction found duplicate tile row for "
+                f"sample={key}, tile_id={row.tile_id}."
+            )
+        tiles[row.tile_id] = row
+
+    if not sample_groups:
+        raise ValidationError("HVA population-state prediction found no heldout L23E rows.")
+
+    metric_lists: dict[str, list[float | None]] = {}
+    for scorer in _HVA_POPULATION_STATE_SCORERS:
+        metric_lists[f"{scorer}_vector_corr"] = []
+        metric_lists[f"{scorer}_vector_cosine"] = []
+        metric_lists[f"{scorer}_mse"] = []
+
+    target_vectors_by_frame: dict[int, list[list[float]]] = {}
+    scorer_vectors_by_frame: dict[str, dict[int, list[list[float]]]] = {
+        scorer: {} for scorer in _HVA_POPULATION_STATE_SCORERS
+    }
+
+    complete_sample_count = 0
+    skipped_incomplete_sample_count = 0
+    for key, tiles in sample_groups.items():
+        if len(tiles) != tile_count:
+            skipped_incomplete_sample_count += 1
+            continue
+        ordered_rows = [tiles[tile_id] for tile_id in range(tile_count)]
+        target = [row.target_state_norm for row in ordered_rows]
+        if not all(math.isfinite(value) for value in target):
+            raise ValidationError("HVA population-state target vector contains non-finite values.")
+
+        target_frame_index = key[2]
+        target_vectors_by_frame.setdefault(target_frame_index, []).append(target)
+        for scorer in _HVA_POPULATION_STATE_SCORERS:
+            prediction = [_hva_population_state_value(row, scorer) for row in ordered_rows]
+            if not all(math.isfinite(value) for value in prediction):
+                raise ValidationError(f"HVA population-state {scorer} vector contains non-finite values.")
+            metric_lists[f"{scorer}_vector_corr"].append(pearson_correlation_optional(target, prediction))
+            metric_lists[f"{scorer}_vector_cosine"].append(cosine_similarity_optional(target, prediction))
+            metric_lists[f"{scorer}_mse"].append(_hva_population_state_mse(target, prediction))
+            scorer_vectors_by_frame[scorer].setdefault(target_frame_index, []).append(prediction)
+        complete_sample_count += 1
+
+    if complete_sample_count == 0:
+        raise ValidationError("HVA population-state prediction found no complete heldout tile vectors.")
+
+    target_frame_vectors = {
+        frame_index: vector_mean(vectors)
+        for frame_index, vectors in target_vectors_by_frame.items()
+    }
+    target_rsm = _frame_rsm_upper(target_frame_vectors)
+
+    metrics: dict[str, float] = {
+        "tile_count": float(tile_count),
+        "tile_grid_side": float(grid_side),
+        "heldout_row_count": float(len(heldout_rows)),
+        "sample_count": float(len(sample_groups)),
+        "complete_sample_count": float(complete_sample_count),
+        "skipped_incomplete_sample_count": float(skipped_incomplete_sample_count),
+        "target_frame_count": float(len(target_frame_vectors)),
+        "rsm_pair_count": float(len(target_rsm)),
+    }
+    for scorer in _HVA_POPULATION_STATE_SCORERS:
+        metrics[f"{scorer}_vector_corr_mean"] = _mean_optional(metric_lists[f"{scorer}_vector_corr"])
+        metrics[f"{scorer}_vector_cosine_mean"] = _mean_optional(metric_lists[f"{scorer}_vector_cosine"])
+        metrics[f"{scorer}_mse_mean"] = _mean_optional(metric_lists[f"{scorer}_mse"])
+        scorer_frame_vectors = {
+            frame_index: vector_mean(vectors)
+            for frame_index, vectors in scorer_vectors_by_frame[scorer].items()
+        }
+        scorer_rsm = _frame_rsm_upper(scorer_frame_vectors)
+        rsm_corr = (
+            pearson_correlation_optional(target_rsm, scorer_rsm)
+            if len(target_rsm) == len(scorer_rsm) and len(target_rsm) >= 3
+            else None
+        )
+        metrics[f"{scorer}_rsm_corr"] = rsm_corr if rsm_corr is not None else math.nan
+
+    for baseline in _HVA_POPULATION_STATE_SCORERS:
+        if baseline == "model":
+            continue
+        metrics[f"model_vs_{baseline}_vector_corr_delta"] = (
+            metrics["model_vector_corr_mean"] - metrics[f"{baseline}_vector_corr_mean"]
+        )
+        metrics[f"model_vs_{baseline}_vector_cosine_delta"] = (
+            metrics["model_vector_cosine_mean"] - metrics[f"{baseline}_vector_cosine_mean"]
+        )
+        metrics[f"model_vs_{baseline}_mse_delta"] = (
+            metrics[f"{baseline}_mse_mean"] - metrics["model_mse_mean"]
+        )
+    return metrics
+
+
+def hva_population_state_prediction_passes(metrics: dict[str, float]) -> bool:
+    """Return whether model vector prediction strictly beats all baselines."""
+
+    if metrics["complete_sample_count"] < 2.0:
+        return False
+    if metrics["skipped_incomplete_sample_count"] != 0.0:
+        return False
+    for metric in ("model_vector_corr_mean", "model_vector_cosine_mean", "model_mse_mean"):
+        if not math.isfinite(metrics.get(metric, math.nan)):
+            return False
+    for baseline in _HVA_POPULATION_STATE_SCORERS:
+        if baseline == "model":
+            continue
+        if not (
+            math.isfinite(metrics.get(f"{baseline}_vector_corr_mean", math.nan))
+            and math.isfinite(metrics.get(f"{baseline}_vector_cosine_mean", math.nan))
+            and math.isfinite(metrics.get(f"{baseline}_mse_mean", math.nan))
+        ):
+            return False
+        if metrics[f"model_vs_{baseline}_vector_corr_delta"] <= 1.0e-9:
+            return False
+        if metrics[f"model_vs_{baseline}_vector_cosine_delta"] <= 1.0e-9:
+            return False
+        if metrics[f"model_vs_{baseline}_mse_delta"] <= 1.0e-9:
+            return False
+    return True
+
+
+def validate_hva_predictor(
+    run: RunData,
+    require_population_prediction: bool = False,
+    require_population_state_prediction: bool = False,
+) -> bool:
     overall_ok = True
     config = run.hva_predictor_config
     metrics = run.hva_predictor_metrics
@@ -8382,6 +8592,67 @@ def validate_hva_predictor(run: RunData, require_population_prediction: bool = F
             ),
         )
 
+    if require_population_state_prediction:
+        population_state_metrics = compute_hva_population_state_prediction_metrics(
+            heldout_rows,
+            tile_count,
+        )
+        population_state_isolation_ok = (
+            isolation_ok
+            and split_ok
+            and target_channels == ["l23e"]
+            and l23e_only_input == 1.0
+            and l4e_input_enabled == 0.0
+            and l23pv_input_enabled == 0.0
+            and feature_non_l23_inputs == 0.0
+            and feature_future_leakage == 0.0
+            and lag_future_lookahead == 0.0
+            and past_only_lookahead == 0.0
+            and topk_feedback_enabled == 0.0
+        )
+        population_state_ok = (
+            population_state_isolation_ok
+            and hva_population_state_prediction_passes(population_state_metrics)
+        )
+        overall_ok &= print_result(
+            population_state_ok,
+            "hva_population_state_prediction_vectors",
+            (
+                f"heldout_rows={population_state_metrics['heldout_row_count']:.0f} "
+                f"complete_sample_count={population_state_metrics['complete_sample_count']:.0f} "
+                f"skipped_incomplete_sample_count="
+                f"{population_state_metrics['skipped_incomplete_sample_count']:.0f} "
+                f"tile_count={population_state_metrics['tile_count']:.0f} "
+                f"tile_grid_side={population_state_metrics['tile_grid_side']:.0f} "
+                f"target_frame_count={population_state_metrics['target_frame_count']:.0f} "
+                f"model_corr={population_state_metrics['model_vector_corr_mean']:.6f} "
+                f"persistence_corr={population_state_metrics['persistence_vector_corr_mean']:.6f} "
+                f"train_mean_corr={population_state_metrics['train_mean_vector_corr_mean']:.6f} "
+                f"no_learning_corr={population_state_metrics['no_learning_vector_corr_mean']:.6f} "
+                f"time_shuffle_corr={population_state_metrics['temporal_block_shift_vector_corr_mean']:.6f} "
+                f"spatial_shuffle_corr={population_state_metrics['spatial_tile_shuffle_vector_corr_mean']:.6f} "
+                f"model_cosine={population_state_metrics['model_vector_cosine_mean']:.6f} "
+                f"persistence_cosine={population_state_metrics['persistence_vector_cosine_mean']:.6f} "
+                f"train_mean_cosine={population_state_metrics['train_mean_vector_cosine_mean']:.6f} "
+                f"no_learning_cosine={population_state_metrics['no_learning_vector_cosine_mean']:.6f} "
+                f"time_shuffle_cosine={population_state_metrics['temporal_block_shift_vector_cosine_mean']:.6f} "
+                f"spatial_shuffle_cosine={population_state_metrics['spatial_tile_shuffle_vector_cosine_mean']:.6f} "
+                f"model_mse={population_state_metrics['model_mse_mean']:.6f} "
+                f"persistence_mse={population_state_metrics['persistence_mse_mean']:.6f} "
+                f"train_mean_mse={population_state_metrics['train_mean_mse_mean']:.6f} "
+                f"no_learning_mse={population_state_metrics['no_learning_mse_mean']:.6f} "
+                f"time_shuffle_mse={population_state_metrics['temporal_block_shift_mse_mean']:.6f} "
+                f"spatial_shuffle_mse={population_state_metrics['spatial_tile_shuffle_mse_mean']:.6f} "
+                f"model_rsm_corr={population_state_metrics['model_rsm_corr']:.6f} "
+                f"persistence_rsm_corr={population_state_metrics['persistence_rsm_corr']:.6f} "
+                f"population_state_isolation_ok={1 if population_state_isolation_ok else 0} "
+                f"input_channel_l23e_only={l23e_only_input:.0f} "
+                f"feature_uses_non_l23_inputs={feature_non_l23_inputs:.0f} "
+                f"feature_future_leakage_enabled={feature_future_leakage:.0f} "
+                f"hva_feedback_enabled={topk_feedback_enabled:.0f}"
+            ),
+        )
+
     model_mse = require_metric(metrics, "heldout_model_mse_norm", "HVA predictor metrics")
     model_raw_mse = require_metric(metrics, "heldout_model_raw_mse_norm", "HVA predictor metrics")
     residual_z_mse = require_metric(metrics, "heldout_model_residual_z_mse", "HVA predictor metrics")
@@ -9640,10 +9911,15 @@ def main() -> int:
         if args.require_natural_video_event_timing:
             overall_ok &= validate_natural_video_event_timing(full)
 
-        if args.require_hva_predictor or args.require_hva_population_prediction:
+        if (
+            args.require_hva_predictor
+            or args.require_hva_population_prediction
+            or args.require_hva_population_state_prediction
+        ):
             overall_ok &= validate_hva_predictor(
                 full,
                 require_population_prediction=args.require_hva_population_prediction,
+                require_population_state_prediction=args.require_hva_population_state_prediction,
             )
 
         if args.require_sensory_baseline_contrast_annulus:
