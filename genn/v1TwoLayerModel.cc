@@ -649,7 +649,8 @@ constexpr const char *kSpikingHVAMultiTimescalePredPVRecurrentPrefix = "HVA_PRED
 constexpr const char *kSpikingHVAL23EHistoryPredPrefix = "L23E_to_HVA_PRED_E_causallag_";
 constexpr const char *kSpikingHVAL23EHistoryPVPrefix = "L23E_to_HVA_PV_causallag_";
 constexpr char kSpikingHVAContextToPredGroupName[] = "HVA_CTX_E_to_HVA_PRED_E";
-constexpr char kSpikingHVAContextToPVGroupName[] = "HVA_CTX_E_to_HVA_PV_predictor_suppression";
+constexpr char kSpikingHVAContextToPredPVGroupName[] = "HVA_CTX_E_to_HVA_PRED_PV";
+constexpr char kSpikingHVAPredPVToPredGroupName[] = "HVA_PRED_PV_to_HVA_PRED_E";
 constexpr unsigned int kSpikingHVAL23EHistoryMaxLagCount = 8u;
 constexpr unsigned int kHVAPredictorTraceChannelCount = 3;
 constexpr unsigned int kHVAPredictorBaseFeatureChannelCount = 5;
@@ -1142,6 +1143,7 @@ struct SpikingHVAConfig {
     unsigned int e_per_site = 4u;
     unsigned int pv_per_site = 1u;
     unsigned int pred_e_per_site = 4u;
+    unsigned int pred_pv_per_site = 1u;
     unsigned int l23e_to_e_radius = 1u;
     unsigned int l23e_to_pv_radius = 1u;
     unsigned int e_to_pred_radius = 2u;
@@ -1157,6 +1159,7 @@ struct SpikingHVAConfig {
     double e_gate_na = 0.0;
     double pv_gate_na = 0.0;
     double pred_e_gate_na = 0.0;
+    double pred_pv_gate_na = 0.0;
     double slow_context_gate_na = 0.0;
     double slow_context_tau_ms = 500.0;
     double slow_context_e_to_context_weight = 0.0010;
@@ -1206,6 +1209,7 @@ struct SpikingHVAConfig {
     double e_to_pv_weight = 0.0020;
     double pv_to_e_weight = -0.0060;
     double pv_to_pred_weight = -0.0020;
+    double pred_pv_to_pred_weight = -0.0020;
 
     unsigned int e_count() const
     {
@@ -1222,6 +1226,11 @@ struct SpikingHVAConfig {
         return v1_genn::kSiteCount * pred_e_per_site;
     }
 
+    unsigned int pred_pv_count() const
+    {
+        return v1_genn::kSiteCount * pred_pv_per_site;
+    }
+
     unsigned int slow_context_count() const
     {
         return v1_genn::kSiteCount * slow_context_per_site;
@@ -1232,6 +1241,7 @@ struct SpikingHVAMetrics {
     double video_hva_e_mean_rate_hz = 0.0;
     double video_hva_pv_mean_rate_hz = 0.0;
     double video_hva_pred_e_mean_rate_hz = 0.0;
+    double video_hva_pred_pv_mean_rate_hz = 0.0;
     double video_hva_slow_context_mean_rate_hz = 0.0;
     unsigned int video_rate_sample_count = 0u;
 };
@@ -3750,6 +3760,9 @@ SpikingHVAConfig getSpikingHVAConfig()
     config.pred_e_per_site = getEnvUnsignedOrDefault(
         "V1_SPIKING_HVA_PRED_E_PER_SITE",
         config.pred_e_per_site);
+    config.pred_pv_per_site = getEnvUnsignedOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_PER_SITE",
+        config.pred_pv_per_site);
     config.slow_context_enabled =
         getEnvUnsignedOrDefault(
             "V1_SPIKING_HVA_SLOW_CONTEXT_ENABLE",
@@ -3786,6 +3799,9 @@ SpikingHVAConfig getSpikingHVAConfig()
     config.e_gate_na = getEnvDoubleOrDefault("V1_SPIKING_HVA_E_GATE_NA", config.e_gate_na);
     config.pv_gate_na = getEnvDoubleOrDefault("V1_SPIKING_HVA_PV_GATE_NA", config.pv_gate_na);
     config.pred_e_gate_na = getEnvDoubleOrDefault("V1_SPIKING_HVA_PRED_E_GATE_NA", config.pred_e_gate_na);
+    config.pred_pv_gate_na = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_GATE_NA",
+        config.pred_pv_gate_na);
     config.slow_context_gate_na = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_SLOW_CONTEXT_GATE_NA",
         config.slow_context_gate_na);
@@ -3931,6 +3947,9 @@ SpikingHVAConfig getSpikingHVAConfig()
     config.pv_to_pred_weight = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_PV_TO_PRED_WEIGHT",
         config.pv_to_pred_weight);
+    config.pred_pv_to_pred_weight = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_TO_PRED_WEIGHT",
+        config.pred_pv_to_pred_weight);
 
     if(!config.enabled) {
         return config;
@@ -3943,6 +3962,9 @@ SpikingHVAConfig getSpikingHVAConfig()
     }
     if(config.pred_e_per_site == 0u) {
         throw std::runtime_error("V1_SPIKING_HVA_PRED_E_PER_SITE must be at least 1 when V1_SPIKING_HVA_ENABLE=1.");
+    }
+    if(config.pred_pv_per_site == 0u) {
+        throw std::runtime_error("V1_SPIKING_HVA_PRED_PV_PER_SITE must be at least 1 when V1_SPIKING_HVA_ENABLE=1.");
     }
     if(config.slow_context_per_site == 0u) {
         throw std::runtime_error(
@@ -3962,6 +3984,7 @@ SpikingHVAConfig getSpikingHVAConfig()
     if(!std::isfinite(config.e_gate_na)
        || !std::isfinite(config.pv_gate_na)
        || !std::isfinite(config.pred_e_gate_na)
+       || !std::isfinite(config.pred_pv_gate_na)
        || !std::isfinite(config.slow_context_gate_na)) {
         throw std::runtime_error("V1_SPIKING_HVA gate currents must be finite.");
     }
@@ -3983,11 +4006,6 @@ SpikingHVAConfig getSpikingHVAConfig()
     if(config.ctx_to_pred_suppressive_enabled && !config.ctx_to_pred_enabled) {
         throw std::runtime_error(
             "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_ENABLE=1 requires V1_SPIKING_HVA_CTX_TO_PRED_ENABLE=1.");
-    }
-    if(config.ctx_to_pred_suppressive_enabled
-       && (!config.e_to_pv_enabled || !config.pv_to_pred_enabled)) {
-        throw std::runtime_error(
-            "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_ENABLE=1 requires HVA E/PV and PV-to-PRED paths.");
     }
     if(config.slow_context_homeostasis_enabled && config.slow_context_homeostasis_epochs == 0u) {
         throw std::runtime_error(
@@ -4133,6 +4151,9 @@ SpikingHVAConfig getSpikingHVAConfig()
     }
     if(config.pv_to_pred_weight > 0.0 || !std::isfinite(config.pv_to_pred_weight)) {
         throw std::runtime_error("V1_SPIKING_HVA_PV_TO_PRED_WEIGHT must be finite and non-positive.");
+    }
+    if(config.pred_pv_to_pred_weight > 0.0 || !std::isfinite(config.pred_pv_to_pred_weight)) {
+        throw std::runtime_error("V1_SPIKING_HVA_PRED_PV_TO_PRED_WEIGHT must be finite and non-positive.");
     }
     return config;
 }
@@ -8707,6 +8728,7 @@ struct SpikingHVAPredictionProjectionTrainingResult {
     bool ctx_to_pred_suppressive_actual_genn = false;
     unsigned int ctx_to_pred_suppressive_radius_tiles = 0u;
     std::size_t ctx_to_pred_suppressive_connection_count = 0u;
+    std::size_t ctx_to_pred_suppressive_output_connection_count = 0u;
     std::uint64_t ctx_to_pred_suppressive_train_update_count = 0u;
     std::uint64_t ctx_to_pred_suppressive_heldout_update_count = 0u;
     double ctx_to_pred_suppressive_weight_scale = 0.0;
@@ -9020,14 +9042,15 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
     GeNN::NeuronGroup &hva_pred_e,
     GeNN::SynapseGroup &hva_e_to_hva_pred_e,
     GeNN::SynapseGroup *hva_context_to_hva_pred_e,
-    GeNN::SynapseGroup *hva_context_to_hva_pv,
+    GeNN::SynapseGroup *hva_context_to_hva_pred_pv,
     const std::vector<GeNN::SynapseGroup *> &hva_e_to_hva_pred_e_multitau,
     const std::vector<GeNN::SynapseGroup *> &hva_e_to_hva_pv_multitau,
     const std::vector<GeNN::SynapseGroup *> &hva_pred_e_to_hva_pred_e_multitau,
     const std::vector<GeNN::SynapseGroup *> &hva_pred_e_to_hva_pv_multitau,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_e_pred_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_context_pred_edges,
-    const std::vector<std::pair<unsigned int, unsigned int>> &hva_context_pv_edges,
+    const std::vector<std::pair<unsigned int, unsigned int>> &hva_context_pred_pv_edges,
+    const std::vector<std::pair<unsigned int, unsigned int>> &hva_pred_pv_pred_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_e_pv_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_pred_e_pred_e_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_pred_e_pv_edges)
@@ -9064,11 +9087,13 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
     result.ctx_to_pred_suppressive_enabled =
         result.ctx_to_pred_enabled
         && spiking_hva_config.ctx_to_pred_suppressive_enabled
-        && hva_context_to_hva_pv != nullptr;
+        && hva_context_to_hva_pred_pv != nullptr;
     result.ctx_to_pred_suppressive_actual_genn = result.ctx_to_pred_suppressive_enabled;
     result.ctx_to_pred_suppressive_radius_tiles = spiking_hva_config.ctx_to_pred_suppressive_radius;
     result.ctx_to_pred_suppressive_connection_count =
-        result.ctx_to_pred_suppressive_enabled ? hva_context_pv_edges.size() : 0u;
+        result.ctx_to_pred_suppressive_enabled ? hva_context_pred_pv_edges.size() : 0u;
+    result.ctx_to_pred_suppressive_output_connection_count =
+        result.ctx_to_pred_suppressive_enabled ? hva_pred_pv_pred_edges.size() : 0u;
     result.ctx_to_pred_suppressive_weight_scale =
         result.ctx_to_pred_suppressive_enabled
             ? spiking_hva_config.ctx_to_pred_suppressive_weight
@@ -9135,10 +9160,13 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
         result.ctx_to_pred_weights_after = result.ctx_to_pred_weights_before;
     }
     if(result.ctx_to_pred_suppressive_enabled) {
-        if(hva_context_pv_edges.empty()) {
-            throw std::runtime_error("HVA_CTX_E->HVA_PV suppressive training requires non-empty real local GeNN edges.");
+        if(hva_context_pred_pv_edges.empty()) {
+            throw std::runtime_error("HVA_CTX_E->HVA_PRED_PV suppressive training requires non-empty real local GeNN edges.");
         }
-        result.ctx_to_pred_suppressive_weights_before = copyWeights(runtime, *hva_context_to_hva_pv);
+        if(hva_pred_pv_pred_edges.empty()) {
+            throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E suppressive output requires non-empty real local GeNN edges.");
+        }
+        result.ctx_to_pred_suppressive_weights_before = copyWeights(runtime, *hva_context_to_hva_pred_pv);
         result.ctx_to_pred_suppressive_weights_after = result.ctx_to_pred_suppressive_weights_before;
     }
     if(video_trials.empty()) {
@@ -9781,14 +9809,14 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
             result.ctx_to_pred_suppressive_weight_max_before,
             result.ctx_to_pred_suppressive_weight_nonzero_frac_before);
         result.ctx_to_pred_suppressive_weights_after = installTileWeights(
-            *hva_context_to_hva_pv,
-            hva_context_pv_edges,
+            *hva_context_to_hva_pred_pv,
+            hva_context_pred_pv_edges,
             spiking_hva_config.slow_context_per_site,
-            spiking_hva_config.pv_per_site,
+            spiking_hva_config.pred_pv_per_site,
             spiking_hva_config.ctx_to_pred_suppressive_weight,
             ctx_to_pred_suppressive_tile_weights,
             0u,
-            kSpikingHVAContextToPVGroupName);
+            kSpikingHVAContextToPredPVGroupName);
         computeActualWeightStats(
             result.ctx_to_pred_suppressive_weights_after,
             result.ctx_to_pred_suppressive_weight_mean_after,
@@ -12906,10 +12934,18 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         actual_projection_training.ctx_to_pred_suppressive_enabled ? 1.0 : 0.0});
     result.metrics.push_back({"ctx_to_pred_suppressive_actual_genn",
         actual_projection_training.ctx_to_pred_suppressive_actual_genn ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_suppressive_dedicated_pred_pv_population",
+        actual_projection_training.ctx_to_pred_suppressive_enabled ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_suppressive_uses_shared_hva_pv",
+        0.0});
+    result.metrics.push_back({"ctx_to_pred_suppressive_pred_pv_to_pred_e_output_enabled",
+        actual_projection_training.ctx_to_pred_suppressive_enabled ? 1.0 : 0.0});
     result.metrics.push_back({"ctx_to_pred_suppressive_radius_tiles",
         static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_radius_tiles)});
     result.metrics.push_back({"ctx_to_pred_suppressive_connection_count",
         static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_connection_count)});
+    result.metrics.push_back({"ctx_to_pred_suppressive_output_connection_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_output_connection_count)});
     result.metrics.push_back({"ctx_to_pred_suppressive_weight_scale",
         actual_projection_training.ctx_to_pred_suppressive_weight_scale});
     result.metrics.push_back({"ctx_to_pred_suppressive_train_update_count",
@@ -19344,10 +19380,12 @@ void writeSummaryFiles(
     csv << "spiking_hva_e_per_site," << spiking_hva_config.e_per_site << "\n";
     csv << "spiking_hva_pv_per_site," << spiking_hva_config.pv_per_site << "\n";
     csv << "spiking_hva_pred_e_per_site," << spiking_hva_config.pred_e_per_site << "\n";
+    csv << "spiking_hva_pred_pv_per_site," << spiking_hva_config.pred_pv_per_site << "\n";
     csv << "spiking_hva_slow_context_per_site," << spiking_hva_config.slow_context_per_site << "\n";
     csv << "spiking_hva_e_count," << (spiking_hva_config.enabled ? spiking_hva_config.e_count() : 0u) << "\n";
     csv << "spiking_hva_pv_count," << (spiking_hva_config.enabled ? spiking_hva_config.pv_count() : 0u) << "\n";
     csv << "spiking_hva_pred_e_count," << (spiking_hva_config.enabled ? spiking_hva_config.pred_e_count() : 0u) << "\n";
+    csv << "spiking_hva_pred_pv_count," << (spiking_hva_config.enabled ? spiking_hva_config.pred_pv_count() : 0u) << "\n";
     csv << "spiking_hva_slow_context_count,"
         << ((spiking_hva_config.enabled && spiking_hva_config.slow_context_enabled)
                 ? spiking_hva_config.slow_context_count()
@@ -19389,6 +19427,7 @@ void writeSummaryFiles(
     csv << "spiking_hva_e_gate_na," << spiking_hva_config.e_gate_na << "\n";
     csv << "spiking_hva_pv_gate_na," << spiking_hva_config.pv_gate_na << "\n";
     csv << "spiking_hva_pred_e_gate_na," << spiking_hva_config.pred_e_gate_na << "\n";
+    csv << "spiking_hva_pred_pv_gate_na," << spiking_hva_config.pred_pv_gate_na << "\n";
     csv << "spiking_hva_slow_context_gate_na," << spiking_hva_config.slow_context_gate_na << "\n";
     csv << "spiking_hva_slow_context_homeostasis_enabled,"
         << (spiking_hva_config.slow_context_homeostasis_enabled ? 1.0 : 0.0) << "\n";
@@ -19525,6 +19564,7 @@ void writeSummaryFiles(
     csv << "spiking_hva_e_to_pv_weight," << spiking_hva_config.e_to_pv_weight << "\n";
     csv << "spiking_hva_pv_to_e_weight," << spiking_hva_config.pv_to_e_weight << "\n";
     csv << "spiking_hva_pv_to_pred_weight," << spiking_hva_config.pv_to_pred_weight << "\n";
+    csv << "spiking_hva_pred_pv_to_pred_weight," << spiking_hva_config.pred_pv_to_pred_weight << "\n";
     csv << "spiking_hva_e_to_slow_context_weight,"
         << spiking_hva_config.slow_context_e_to_context_weight << "\n";
     csv << "spiking_hva_slow_context_to_e_weight,"
@@ -19535,6 +19575,8 @@ void writeSummaryFiles(
     csv << "spiking_hva_video_hva_e_mean_rate_hz," << spiking_hva_metrics.video_hva_e_mean_rate_hz << "\n";
     csv << "spiking_hva_video_hva_pv_mean_rate_hz," << spiking_hva_metrics.video_hva_pv_mean_rate_hz << "\n";
     csv << "spiking_hva_video_hva_pred_e_mean_rate_hz," << spiking_hva_metrics.video_hva_pred_e_mean_rate_hz << "\n";
+    csv << "spiking_hva_video_hva_pred_pv_mean_rate_hz,"
+        << spiking_hva_metrics.video_hva_pred_pv_mean_rate_hz << "\n";
     csv << "spiking_hva_video_hva_slow_context_mean_rate_hz,"
         << spiking_hva_metrics.video_hva_slow_context_mean_rate_hz << "\n";
     csv << "spiking_hva_predictor_enabled,"
@@ -20774,6 +20816,7 @@ void writeSummaryFiles(
     text << "spiking_hva_e_per_site=" << spiking_hva_config.e_per_site << "\n";
     text << "spiking_hva_pv_per_site=" << spiking_hva_config.pv_per_site << "\n";
     text << "spiking_hva_pred_e_per_site=" << spiking_hva_config.pred_e_per_site << "\n";
+    text << "spiking_hva_pred_pv_per_site=" << spiking_hva_config.pred_pv_per_site << "\n";
     text << "spiking_hva_slow_context_per_site="
          << spiking_hva_config.slow_context_per_site << "\n";
     text << "spiking_hva_e_count="
@@ -20782,6 +20825,8 @@ void writeSummaryFiles(
          << (spiking_hva_config.enabled ? spiking_hva_config.pv_count() : 0u) << "\n";
     text << "spiking_hva_pred_e_count="
          << (spiking_hva_config.enabled ? spiking_hva_config.pred_e_count() : 0u) << "\n";
+    text << "spiking_hva_pred_pv_count="
+         << (spiking_hva_config.enabled ? spiking_hva_config.pred_pv_count() : 0u) << "\n";
     text << "spiking_hva_slow_context_count="
          << ((spiking_hva_config.enabled && spiking_hva_config.slow_context_enabled)
                  ? spiking_hva_config.slow_context_count()
@@ -20827,6 +20872,7 @@ void writeSummaryFiles(
     text << "spiking_hva_e_gate_na=" << spiking_hva_config.e_gate_na << "\n";
     text << "spiking_hva_pv_gate_na=" << spiking_hva_config.pv_gate_na << "\n";
     text << "spiking_hva_pred_e_gate_na=" << spiking_hva_config.pred_e_gate_na << "\n";
+    text << "spiking_hva_pred_pv_gate_na=" << spiking_hva_config.pred_pv_gate_na << "\n";
     text << "spiking_hva_slow_context_gate_na="
          << spiking_hva_config.slow_context_gate_na << "\n";
     text << "spiking_hva_slow_context_homeostasis_enabled="
@@ -20967,6 +21013,7 @@ void writeSummaryFiles(
     text << "spiking_hva_e_to_pv_weight=" << spiking_hva_config.e_to_pv_weight << "\n";
     text << "spiking_hva_pv_to_e_weight=" << spiking_hva_config.pv_to_e_weight << "\n";
     text << "spiking_hva_pv_to_pred_weight=" << spiking_hva_config.pv_to_pred_weight << "\n";
+    text << "spiking_hva_pred_pv_to_pred_weight=" << spiking_hva_config.pred_pv_to_pred_weight << "\n";
     text << "spiking_hva_e_to_slow_context_weight="
          << spiking_hva_config.slow_context_e_to_context_weight << "\n";
     text << "spiking_hva_slow_context_to_e_weight="
@@ -20981,6 +21028,8 @@ void writeSummaryFiles(
          << spiking_hva_metrics.video_hva_pv_mean_rate_hz << "\n";
     text << "spiking_hva_video_hva_pred_e_mean_rate_hz="
          << spiking_hva_metrics.video_hva_pred_e_mean_rate_hz << "\n";
+    text << "spiking_hva_video_hva_pred_pv_mean_rate_hz="
+         << spiking_hva_metrics.video_hva_pred_pv_mean_rate_hz << "\n";
     text << "spiking_hva_video_hva_slow_context_mean_rate_hz="
          << spiking_hva_metrics.video_hva_slow_context_mean_rate_hz << "\n";
     text << "spiking_hva_predictor_enabled="
@@ -21324,6 +21373,7 @@ void modelDefinition(GeNN::ModelSpec &model)
     GeNN::NeuronGroup *hva_e = nullptr;
     GeNN::NeuronGroup *hva_pv = nullptr;
     GeNN::NeuronGroup *hva_pred_e = nullptr;
+    GeNN::NeuronGroup *hva_pred_pv = nullptr;
     GeNN::NeuronGroup *hva_context_e = nullptr;
     if(spiking_hva_config.enabled) {
         hva_e = model.addNeuronPopulation<V1LIF>(
@@ -21341,6 +21391,11 @@ void modelDefinition(GeNN::ModelSpec &model)
             spiking_hva_config.pred_e_count(),
             makeLIFParameters(v1_genn::kExcitatoryLIF),
             makeLIFVariables(v1_genn::kExcitatoryLIF, 0.0));
+        hva_pred_pv = model.addNeuronPopulation<V1LIF>(
+            "HVA_PRED_PV",
+            spiking_hva_config.pred_pv_count(),
+            makeLIFParameters(v1_genn::kPVLIF),
+            makeLIFVariables(v1_genn::kPVLIF, 0.0));
         if(spiking_hva_config.slow_context_enabled) {
             hva_context_e = model.addNeuronPopulation<V1LIF>(
                 "HVA_CTX_E",
@@ -21361,6 +21416,7 @@ void modelDefinition(GeNN::ModelSpec &model)
         hva_e->setSpikeRecordingEnabled(true);
         hva_pv->setSpikeRecordingEnabled(true);
         hva_pred_e->setSpikeRecordingEnabled(true);
+        hva_pred_pv->setSpikeRecordingEnabled(true);
         if(hva_context_e != nullptr) {
             hva_context_e->setSpikeRecordingEnabled(true);
         }
@@ -21808,7 +21864,13 @@ void modelDefinition(GeNN::ModelSpec &model)
             hva_periodic_geometry);
         const auto hva_context_hva_pv_predictor_patch = makePatchParameters(
             spiking_hva_config.slow_context_per_site,
-            spiking_hva_config.pv_per_site,
+            spiking_hva_config.pred_pv_per_site,
+            spiking_hva_config.ctx_to_pred_suppressive_radius,
+            false,
+            hva_periodic_geometry);
+        const auto hva_pred_pv_hva_pred_e_patch = makePatchParameters(
+            spiking_hva_config.pred_pv_per_site,
+            spiking_hva_config.pred_e_per_site,
             spiking_hva_config.ctx_to_pred_suppressive_radius,
             false,
             hva_periodic_geometry);
@@ -21942,12 +22004,20 @@ void modelDefinition(GeNN::ModelSpec &model)
                 if(spiking_hva_config.ctx_to_pred_suppressive_enabled) {
                     addLocalProjection(
                         model,
-                        kSpikingHVAContextToPVGroupName,
+                        kSpikingHVAContextToPredPVGroupName,
                         hva_context_e,
-                        hva_pv,
+                        hva_pred_pv,
                         0.0,
                         spiking_hva_config.slow_context_tau_ms,
                         hva_context_hva_pv_predictor_patch);
+                    addLocalProjection(
+                        model,
+                        kSpikingHVAPredPVToPredGroupName,
+                        hva_pred_pv,
+                        hva_pred_e,
+                        spiking_hva_config.pred_pv_to_pred_weight,
+                        v1_genn::kInhTauSynMs,
+                        hva_pred_pv_hva_pred_e_patch);
                 }
             }
         }
@@ -22250,6 +22320,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         spiking_hva_config.enabled ? &requireNeuronGroup(model, "HVA_PV") : nullptr;
     GeNN::NeuronGroup *hva_pred_e =
         spiking_hva_config.enabled ? &requireNeuronGroup(model, "HVA_PRED_E") : nullptr;
+    GeNN::NeuronGroup *hva_pred_pv =
+        spiking_hva_config.enabled ? &requireNeuronGroup(model, "HVA_PRED_PV") : nullptr;
     GeNN::NeuronGroup *hva_context_e =
         (spiking_hva_config.enabled && spiking_hva_config.slow_context_enabled)
             ? &requireNeuronGroup(model, "HVA_CTX_E")
@@ -22266,12 +22338,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
          && spiking_hva_config.ctx_to_pred_enabled)
             ? &requireSynapseGroup(model, kSpikingHVAContextToPredGroupName)
             : nullptr;
-    GeNN::SynapseGroup *hva_context_e_to_hva_pv_predictor =
+    GeNN::SynapseGroup *hva_context_e_to_hva_pred_pv =
         (spiking_hva_config.enabled
          && spiking_hva_config.slow_context_enabled
          && spiking_hva_config.ctx_to_pred_enabled
          && spiking_hva_config.ctx_to_pred_suppressive_enabled)
-            ? &requireSynapseGroup(model, kSpikingHVAContextToPVGroupName)
+            ? &requireSynapseGroup(model, kSpikingHVAContextToPredPVGroupName)
+            : nullptr;
+    GeNN::SynapseGroup *hva_pred_pv_to_hva_pred_e =
+        (spiking_hva_config.enabled
+         && spiking_hva_config.ctx_to_pred_enabled
+         && spiking_hva_config.ctx_to_pred_suppressive_enabled)
+            ? &requireSynapseGroup(model, kSpikingHVAPredPVToPredGroupName)
             : nullptr;
     GeNN::SynapseGroup &l4e_to_l23e = requireSynapseGroup(model, "L4E_to_L23E");
     GeNN::SynapseGroup &l4e_to_l23pv = requireSynapseGroup(model, "L4E_to_L23PV");
@@ -22502,6 +22580,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         spikeRecordingWordCount(spiking_hva_config.enabled ? spiking_hva_config.e_count() : 0u),
         spikeRecordingWordCount(spiking_hva_config.enabled ? spiking_hva_config.pv_count() : 0u),
         spikeRecordingWordCount(spiking_hva_config.enabled ? spiking_hva_config.pred_e_count() : 0u),
+        spikeRecordingWordCount(spiking_hva_config.enabled ? spiking_hva_config.pred_pv_count() : 0u),
         spikeRecordingWordCount(
             (spiking_hva_config.enabled && spiking_hva_config.slow_context_enabled)
                 ? spiking_hva_config.slow_context_count()
@@ -22552,6 +22631,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         setConstantExternalCurrent(runtime, *hva_e, spiking_hva_config.e_gate_na);
         setConstantExternalCurrent(runtime, *hva_pv, spiking_hva_config.pv_gate_na);
         setConstantExternalCurrent(runtime, *hva_pred_e, spiking_hva_config.pred_e_gate_na);
+        setConstantExternalCurrent(runtime, *hva_pred_pv, spiking_hva_config.pred_pv_gate_na);
         if(hva_context_e != nullptr) {
             setConstantExternalCurrent(runtime, *hva_context_e, spiking_hva_config.slow_context_gate_na);
         }
@@ -22731,14 +22811,25 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 false,
                 periodic_local_geometry_config.global_enabled)
             : std::vector<std::pair<unsigned int, unsigned int>>();
-    const std::vector<std::pair<unsigned int, unsigned int>> hva_context_pv_predictor_edges =
+    const std::vector<std::pair<unsigned int, unsigned int>> hva_context_pred_pv_edges =
         (spiking_hva_config.enabled
          && spiking_hva_config.slow_context_enabled
          && spiking_hva_config.ctx_to_pred_enabled
          && spiking_hva_config.ctx_to_pred_suppressive_enabled)
             ? buildLocalPatchConnectivity(
                 spiking_hva_config.slow_context_per_site,
-                spiking_hva_config.pv_per_site,
+                spiking_hva_config.pred_pv_per_site,
+                spiking_hva_config.ctx_to_pred_suppressive_radius,
+                false,
+                periodic_local_geometry_config.global_enabled)
+            : std::vector<std::pair<unsigned int, unsigned int>>();
+    const std::vector<std::pair<unsigned int, unsigned int>> hva_pred_pv_pred_edges =
+        (spiking_hva_config.enabled
+         && spiking_hva_config.ctx_to_pred_enabled
+         && spiking_hva_config.ctx_to_pred_suppressive_enabled)
+            ? buildLocalPatchConnectivity(
+                spiking_hva_config.pred_pv_per_site,
+                spiking_hva_config.pred_e_per_site,
                 spiking_hva_config.ctx_to_pred_suppressive_radius,
                 false,
                 periodic_local_geometry_config.global_enabled)
@@ -22771,6 +22862,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
             resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
             resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+            resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
             if(hva_context_e != nullptr) {
                 resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
             }
@@ -22871,6 +22963,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     SingleRecordedSpikeBatch hva_e_recordings;
     SingleRecordedSpikeBatch hva_pv_recordings;
     SingleRecordedSpikeBatch hva_pred_e_recordings;
+    SingleRecordedSpikeBatch hva_pred_pv_recordings;
     SingleRecordedSpikeBatch hva_context_e_recordings;
     std::uint64_t last_recording_flush_step = 0u;
     unsigned int recording_segment_flush_count = 0u;
@@ -22962,6 +23055,14 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 last_recording_flush_step,
                 current_step,
                 hva_pred_e_recordings.batch);
+            appendRecordedSpikeWindow(
+                runtime,
+                *hva_pred_pv,
+                spiking_hva_config.pred_pv_count(),
+                recording_buffer_steps,
+                last_recording_flush_step,
+                current_step,
+                hva_pred_pv_recordings.batch);
             if(hva_context_e != nullptr) {
                 appendRecordedSpikeWindow(
                     runtime,
@@ -25013,6 +25114,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
                 resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
                 resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+                resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
                 resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
                 runVideoBlock(
                     &calibration_trials,
@@ -25135,6 +25237,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
         resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
         resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+        resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
         resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
         runVideoBlock(
             &transition_training_trials,
@@ -25200,14 +25303,15 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 *hva_pred_e,
                 *hva_e_to_hva_pred_e,
                 hva_context_e_to_hva_pred_e,
-                hva_context_e_to_hva_pv_predictor,
+                hva_context_e_to_hva_pred_pv,
                 hva_e_to_hva_pred_e_multitau,
                 hva_e_to_hva_pv_multitau,
                 hva_pred_e_to_hva_pred_e_multitau,
                 hva_pred_e_to_hva_pv_multitau,
                 hva_e_pred_edges,
                 hva_context_pred_edges,
-                hva_context_pv_predictor_edges,
+                hva_context_pred_pv_edges,
+                hva_pred_pv_pred_edges,
                 hva_e_pv_edges,
                 hva_pred_e_pred_e_edges,
                 hva_pred_e_pv_edges);
@@ -25261,6 +25365,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
                 resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
                 resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+                resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
                 if(hva_context_e != nullptr) {
                     resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
                 }
@@ -25424,6 +25529,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
                     resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
                     resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+                    resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
                     if(hva_context_e != nullptr) {
                         resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
                     }
@@ -25625,6 +25731,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
             resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
             resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+            resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
             if(hva_context_e != nullptr) {
                 resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
             }
@@ -25689,6 +25796,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
             resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
             resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+            resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
             if(hva_context_e != nullptr) {
                 resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
             }
@@ -25758,6 +25866,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
             resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
             resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+            resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
             if(hva_context_e != nullptr) {
                 resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
             }
@@ -25853,6 +25962,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
                 resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
                 resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+                resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
                 if(hva_context_e != nullptr) {
                     resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
                 }
@@ -25964,17 +26074,29 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 std::vector<float> zero_weights(saved_ctx_to_pred_weights.size(), 0.0f);
                 setSynapseWeights(runtime, *hva_context_e_to_hva_pred_e, zero_weights);
                 std::vector<float> saved_ctx_to_pv_suppressive_weights;
+                std::vector<float> saved_pred_pv_to_pred_weights;
                 if(spiking_hva_actual_prediction_training.ctx_to_pred_suppressive_enabled
-                   && hva_context_e_to_hva_pv_predictor != nullptr) {
+                   && hva_context_e_to_hva_pred_pv != nullptr) {
                     saved_ctx_to_pv_suppressive_weights =
-                        copyWeights(runtime, *hva_context_e_to_hva_pv_predictor);
+                        copyWeights(runtime, *hva_context_e_to_hva_pred_pv);
                     std::vector<float> zero_suppressive_weights(
                         saved_ctx_to_pv_suppressive_weights.size(),
                         0.0f);
                     setSynapseWeights(
                         runtime,
-                        *hva_context_e_to_hva_pv_predictor,
+                        *hva_context_e_to_hva_pred_pv,
                         zero_suppressive_weights);
+                    if(hva_pred_pv_to_hva_pred_e != nullptr) {
+                        saved_pred_pv_to_pred_weights =
+                            copyWeights(runtime, *hva_pred_pv_to_hva_pred_e);
+                        std::vector<float> zero_pred_pv_output_weights(
+                            saved_pred_pv_to_pred_weights.size(),
+                            0.0f);
+                        setSynapseWeights(
+                            runtime,
+                            *hva_pred_pv_to_hva_pred_e,
+                            zero_pred_pv_output_weights);
+                    }
                 }
 
                 std::vector<TrialWindow> ctx_to_pred_ablation_trials;
@@ -25996,11 +26118,18 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     *hva_context_e_to_hva_pred_e,
                     saved_ctx_to_pred_weights);
                 if(!saved_ctx_to_pv_suppressive_weights.empty()
-                   && hva_context_e_to_hva_pv_predictor != nullptr) {
+                   && hva_context_e_to_hva_pred_pv != nullptr) {
                     setSynapseWeights(
                         runtime,
-                        *hva_context_e_to_hva_pv_predictor,
+                        *hva_context_e_to_hva_pred_pv,
                         saved_ctx_to_pv_suppressive_weights);
+                }
+                if(!saved_pred_pv_to_pred_weights.empty()
+                   && hva_pred_pv_to_hva_pred_e != nullptr) {
+                    setSynapseWeights(
+                        runtime,
+                        *hva_pred_pv_to_hva_pred_e,
+                        saved_pred_pv_to_pred_weights);
                 }
                 flushRecordingWindow();
             }
@@ -26230,7 +26359,10 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         throw std::runtime_error("Expected recorded spikes for all recorded V1 populations.");
     }
     if(spiking_hva_config.enabled
-       && (hva_e_recordings.empty() || hva_pv_recordings.empty() || hva_pred_e_recordings.empty())) {
+       && (hva_e_recordings.empty()
+           || hva_pv_recordings.empty()
+           || hva_pred_e_recordings.empty()
+           || hva_pred_pv_recordings.empty())) {
         throw std::runtime_error("Expected recorded spikes for all recorded HVA populations.");
     }
     if(spiking_hva_config.enabled
@@ -26456,6 +26588,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 spiking_hva_prediction_trials,
                 spiking_hva_config.pred_e_count())
             : std::vector<double>();
+    const std::vector<double> video_hva_pred_pv_population_rates =
+        (spiking_hva_predictor_config.enabled && !spiking_hva_prediction_trials.empty())
+            ? countPopulationRatesForTrials(
+                hva_pred_pv_recordings.at(0),
+                spiking_hva_prediction_trials,
+                spiking_hva_config.pred_pv_count())
+            : std::vector<double>();
     if(spiking_hva_context_transition_active && spiking_hva_predictor_config.enabled) {
         if(hva_context_e_to_hva_context_e_transition == nullptr) {
             throw std::runtime_error("HVA_CTX_E transition source export requires the transition synapse group.");
@@ -26496,6 +26635,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         meanRate(video_hva_e_population_rates),
         meanRate(video_hva_pv_population_rates),
         meanRate(video_hva_pred_e_population_rates),
+        meanRate(video_hva_pred_pv_population_rates),
         meanRate(video_hva_slow_context_population_rates),
         static_cast<unsigned int>(video_hva_e_population_rates.size()),
     };
@@ -26656,7 +26796,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             spiking_hva_config.slow_context_context_to_e_weight,
             spiking_hva_config.slow_context_context_to_pv_weight,
             spiking_hva_config.pred_e_per_site,
-            spiking_hva_config.pv_to_pred_enabled,
+            spiking_hva_config.pv_to_pred_enabled
+                || spiking_hva_actual_prediction_training.ctx_to_pred_suppressive_enabled,
             spiking_hva_actual_prediction_training);
 
     const std::vector<std::pair<std::string, std::vector<double>>> baseline_subtype_rates{
