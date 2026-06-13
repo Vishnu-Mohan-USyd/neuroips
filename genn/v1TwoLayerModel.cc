@@ -648,6 +648,8 @@ constexpr const char *kSpikingHVAMultiTimescalePredRecurrentPrefix = "HVA_PRED_E
 constexpr const char *kSpikingHVAMultiTimescalePredPVRecurrentPrefix = "HVA_PRED_E_to_HVA_PV_multitau_";
 constexpr const char *kSpikingHVAL23EHistoryPredPrefix = "L23E_to_HVA_PRED_E_causallag_";
 constexpr const char *kSpikingHVAL23EHistoryPVPrefix = "L23E_to_HVA_PV_causallag_";
+constexpr char kSpikingHVAContextToPredGroupName[] = "HVA_CTX_E_to_HVA_PRED_E";
+constexpr char kSpikingHVAContextToPVGroupName[] = "HVA_CTX_E_to_HVA_PV_predictor_suppression";
 constexpr unsigned int kSpikingHVAL23EHistoryMaxLagCount = 8u;
 constexpr unsigned int kHVAPredictorTraceChannelCount = 3;
 constexpr unsigned int kHVAPredictorBaseFeatureChannelCount = 5;
@@ -1175,6 +1177,12 @@ struct SpikingHVAConfig {
     double slow_context_transition_weight_max = 0.005;
     double slow_context_transition_weight_decay = 0.0;
     double slow_context_transition_rate_scale_hz = 20.0;
+    bool ctx_to_pred_enabled = false;
+    unsigned int ctx_to_pred_radius = 2u;
+    double ctx_to_pred_weight = 0.0020;
+    bool ctx_to_pred_suppressive_enabled = false;
+    unsigned int ctx_to_pred_suppressive_radius = 2u;
+    double ctx_to_pred_suppressive_weight = 0.0020;
     double pred_e_baseline_rate_gain = 1.0;
     double pred_e_baseline_min_hz = 0.0;
     double pred_e_baseline_subthreshold_pivot_hz = 1.0;
@@ -3840,6 +3848,26 @@ SpikingHVAConfig getSpikingHVAConfig()
     config.slow_context_transition_rate_scale_hz = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_CTX_TRANSITION_RATE_SCALE_HZ",
         config.slow_context_transition_rate_scale_hz);
+    config.ctx_to_pred_enabled =
+        getEnvUnsignedOrDefault(
+            "V1_SPIKING_HVA_CTX_TO_PRED_ENABLE",
+            config.ctx_to_pred_enabled ? 1u : 0u) != 0u;
+    config.ctx_to_pred_radius = getEnvUnsignedOrDefault(
+        "V1_SPIKING_HVA_CTX_TO_PRED_RADIUS",
+        config.ctx_to_pred_radius);
+    config.ctx_to_pred_weight = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_CTX_TO_PRED_WEIGHT",
+        config.ctx_to_pred_weight);
+    config.ctx_to_pred_suppressive_enabled =
+        getEnvUnsignedOrDefault(
+            "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_ENABLE",
+            config.ctx_to_pred_suppressive_enabled ? 1u : 0u) != 0u;
+    config.ctx_to_pred_suppressive_radius = getEnvUnsignedOrDefault(
+        "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_RADIUS",
+        config.ctx_to_pred_suppressive_radius);
+    config.ctx_to_pred_suppressive_weight = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_WEIGHT",
+        config.ctx_to_pred_suppressive_weight);
     config.pred_e_baseline_rate_gain = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_PRED_E_BASELINE_RATE_GAIN",
         config.pred_e_baseline_rate_gain);
@@ -3926,7 +3954,9 @@ SpikingHVAConfig getSpikingHVAConfig()
        || config.pred_e_recurrent_radius > v1_genn::kSheetSide
        || config.recurrent_radius > v1_genn::kSheetSide
        || config.slow_context_radius > v1_genn::kSheetSide
-       || config.slow_context_transition_radius > v1_genn::kSheetSide) {
+       || config.slow_context_transition_radius > v1_genn::kSheetSide
+       || config.ctx_to_pred_radius > v1_genn::kSheetSide
+       || config.ctx_to_pred_suppressive_radius > v1_genn::kSheetSide) {
         throw std::runtime_error("V1_SPIKING_HVA radii must not exceed V1_SHEET_SIDE.");
     }
     if(!std::isfinite(config.e_gate_na)
@@ -3945,6 +3975,19 @@ SpikingHVAConfig getSpikingHVAConfig()
     if(config.slow_context_transition_enabled && !config.slow_context_enabled) {
         throw std::runtime_error(
             "V1_SPIKING_HVA_CTX_TRANSITION_ENABLE=1 requires V1_SPIKING_HVA_SLOW_CONTEXT_ENABLE=1.");
+    }
+    if(config.ctx_to_pred_enabled && !config.slow_context_enabled) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_CTX_TO_PRED_ENABLE=1 requires V1_SPIKING_HVA_SLOW_CONTEXT_ENABLE=1.");
+    }
+    if(config.ctx_to_pred_suppressive_enabled && !config.ctx_to_pred_enabled) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_ENABLE=1 requires V1_SPIKING_HVA_CTX_TO_PRED_ENABLE=1.");
+    }
+    if(config.ctx_to_pred_suppressive_enabled
+       && (!config.e_to_pv_enabled || !config.pv_to_pred_enabled)) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_ENABLE=1 requires HVA E/PV and PV-to-PRED paths.");
     }
     if(config.slow_context_homeostasis_enabled && config.slow_context_homeostasis_epochs == 0u) {
         throw std::runtime_error(
@@ -4062,6 +4105,14 @@ SpikingHVAConfig getSpikingHVAConfig()
     if(config.slow_context_context_to_pv_weight < 0.0
        || !std::isfinite(config.slow_context_context_to_pv_weight)) {
         throw std::runtime_error("V1_SPIKING_HVA_SLOW_CONTEXT_TO_PV_WEIGHT must be finite and non-negative.");
+    }
+    if(config.ctx_to_pred_weight < 0.0 || !std::isfinite(config.ctx_to_pred_weight)) {
+        throw std::runtime_error("V1_SPIKING_HVA_CTX_TO_PRED_WEIGHT must be finite and non-negative.");
+    }
+    if(config.ctx_to_pred_suppressive_weight < 0.0
+       || !std::isfinite(config.ctx_to_pred_suppressive_weight)) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_CTX_TO_PRED_SUPPRESSIVE_WEIGHT must be finite and non-negative.");
     }
     if(config.pred_e_recurrent_weight < 0.0 || !std::isfinite(config.pred_e_recurrent_weight)) {
         throw std::runtime_error("V1_SPIKING_HVA_PRED_E_RECURRENT_WEIGHT must be finite and non-negative.");
@@ -8638,6 +8689,41 @@ struct SpikingHVAPredictionProjectionTrainingResult {
     double l23e_history_signed_contribution_abs_mean_norm = 0.0;
     double l23e_history_exc_contribution_abs_mean_norm = 0.0;
     double l23e_history_inh_contribution_abs_mean_norm = 0.0;
+    bool ctx_to_pred_enabled = false;
+    bool ctx_to_pred_actual_genn = false;
+    unsigned int ctx_to_pred_radius_tiles = 0u;
+    std::size_t ctx_to_pred_connection_count = 0u;
+    std::uint64_t ctx_to_pred_train_update_count = 0u;
+    std::uint64_t ctx_to_pred_heldout_update_count = 0u;
+    double ctx_to_pred_weight_scale = 0.0;
+    double ctx_to_pred_weight_mean_before = 0.0;
+    double ctx_to_pred_weight_max_before = 0.0;
+    double ctx_to_pred_weight_nonzero_frac_before = 0.0;
+    double ctx_to_pred_weight_mean_after = 0.0;
+    double ctx_to_pred_weight_max_after = 0.0;
+    double ctx_to_pred_weight_nonzero_frac_after = 0.0;
+    double ctx_to_pred_weight_changed_frac = 0.0;
+    bool ctx_to_pred_suppressive_enabled = false;
+    bool ctx_to_pred_suppressive_actual_genn = false;
+    unsigned int ctx_to_pred_suppressive_radius_tiles = 0u;
+    std::size_t ctx_to_pred_suppressive_connection_count = 0u;
+    std::uint64_t ctx_to_pred_suppressive_train_update_count = 0u;
+    std::uint64_t ctx_to_pred_suppressive_heldout_update_count = 0u;
+    double ctx_to_pred_suppressive_weight_scale = 0.0;
+    double ctx_to_pred_suppressive_weight_mean_before = 0.0;
+    double ctx_to_pred_suppressive_weight_max_before = 0.0;
+    double ctx_to_pred_suppressive_weight_nonzero_frac_before = 0.0;
+    double ctx_to_pred_suppressive_weight_mean_after = 0.0;
+    double ctx_to_pred_suppressive_weight_max_after = 0.0;
+    double ctx_to_pred_suppressive_weight_nonzero_frac_after = 0.0;
+    double ctx_to_pred_suppressive_weight_changed_frac = 0.0;
+    double ctx_to_pred_signed_contribution_abs_mean_norm = 0.0;
+    double ctx_to_pred_exc_contribution_abs_mean_norm = 0.0;
+    double ctx_to_pred_suppressive_contribution_abs_mean_norm = 0.0;
+    std::vector<float> ctx_to_pred_weights_before;
+    std::vector<float> ctx_to_pred_weights_after;
+    std::vector<float> ctx_to_pred_suppressive_weights_before;
+    std::vector<float> ctx_to_pred_suppressive_weights_after;
 };
 
 SpikingHVAContextTransitionMetrics trainSpikingHVAContextTransitionAssembly(
@@ -8929,14 +9015,19 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
     const std::vector<TrialWindow> &video_trials,
     const std::vector<double> &l23e_site_spike_counts,
     const std::vector<double> &hva_e_site_spike_counts,
+    const std::vector<double> &hva_context_site_spike_counts,
     GeNN::Runtime::Runtime &runtime,
     GeNN::NeuronGroup &hva_pred_e,
     GeNN::SynapseGroup &hva_e_to_hva_pred_e,
+    GeNN::SynapseGroup *hva_context_to_hva_pred_e,
+    GeNN::SynapseGroup *hva_context_to_hva_pv,
     const std::vector<GeNN::SynapseGroup *> &hva_e_to_hva_pred_e_multitau,
     const std::vector<GeNN::SynapseGroup *> &hva_e_to_hva_pv_multitau,
     const std::vector<GeNN::SynapseGroup *> &hva_pred_e_to_hva_pred_e_multitau,
     const std::vector<GeNN::SynapseGroup *> &hva_pred_e_to_hva_pv_multitau,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_e_pred_edges,
+    const std::vector<std::pair<unsigned int, unsigned int>> &hva_context_pred_edges,
+    const std::vector<std::pair<unsigned int, unsigned int>> &hva_context_pv_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_e_pv_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_pred_e_pred_e_edges,
     const std::vector<std::pair<unsigned int, unsigned int>> &hva_pred_e_pv_edges)
@@ -8961,6 +9052,27 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
         spiking_hva_config.pv_to_pred_homeostasis_min_weight;
     result.pv_to_pred_homeostasis_max_weight =
         spiking_hva_config.pv_to_pred_homeostasis_max_weight;
+    result.ctx_to_pred_enabled =
+        spiking_hva_config.ctx_to_pred_enabled
+        && spiking_hva_config.slow_context_enabled
+        && hva_context_to_hva_pred_e != nullptr;
+    result.ctx_to_pred_actual_genn = result.ctx_to_pred_enabled;
+    result.ctx_to_pred_radius_tiles = spiking_hva_config.ctx_to_pred_radius;
+    result.ctx_to_pred_connection_count =
+        result.ctx_to_pred_enabled ? hva_context_pred_edges.size() : 0u;
+    result.ctx_to_pred_weight_scale = spiking_hva_config.ctx_to_pred_weight;
+    result.ctx_to_pred_suppressive_enabled =
+        result.ctx_to_pred_enabled
+        && spiking_hva_config.ctx_to_pred_suppressive_enabled
+        && hva_context_to_hva_pv != nullptr;
+    result.ctx_to_pred_suppressive_actual_genn = result.ctx_to_pred_suppressive_enabled;
+    result.ctx_to_pred_suppressive_radius_tiles = spiking_hva_config.ctx_to_pred_suppressive_radius;
+    result.ctx_to_pred_suppressive_connection_count =
+        result.ctx_to_pred_suppressive_enabled ? hva_context_pv_edges.size() : 0u;
+    result.ctx_to_pred_suppressive_weight_scale =
+        result.ctx_to_pred_suppressive_enabled
+            ? spiking_hva_config.ctx_to_pred_suppressive_weight
+            : 0.0;
     result.baseline_current_cap_na = spiking_hva_config.pred_e_baseline_max_na;
     result.multi_timescale_actual_genn_state_enabled =
         config.multi_timescale_state_enabled && !hva_e_to_hva_pred_e_multitau.empty();
@@ -9015,6 +9127,20 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
 
     result.weights_before = copyWeights(runtime, hva_e_to_hva_pred_e);
     result.weights_after = result.weights_before;
+    if(result.ctx_to_pred_enabled) {
+        if(hva_context_pred_edges.empty()) {
+            throw std::runtime_error("HVA_CTX_E->HVA_PRED_E training requires non-empty real local GeNN edges.");
+        }
+        result.ctx_to_pred_weights_before = copyWeights(runtime, *hva_context_to_hva_pred_e);
+        result.ctx_to_pred_weights_after = result.ctx_to_pred_weights_before;
+    }
+    if(result.ctx_to_pred_suppressive_enabled) {
+        if(hva_context_pv_edges.empty()) {
+            throw std::runtime_error("HVA_CTX_E->HVA_PV suppressive training requires non-empty real local GeNN edges.");
+        }
+        result.ctx_to_pred_suppressive_weights_before = copyWeights(runtime, *hva_context_to_hva_pv);
+        result.ctx_to_pred_suppressive_weights_after = result.ctx_to_pred_suppressive_weights_before;
+    }
     if(video_trials.empty()) {
         return result;
     }
@@ -9084,6 +9210,15 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
         config.tile_grid_side,
         spiking_hva_config.e_per_site,
         "Spiking HVA actual predictor training HVA_E");
+    std::vector<double> hva_context_tile_rates;
+    if(result.ctx_to_pred_enabled) {
+        hva_context_tile_rates = makePopulationTileRatesForVideoTrials(
+            video_trials,
+            hva_context_site_spike_counts,
+            config.tile_grid_side,
+            spiking_hva_config.slow_context_per_site,
+            "Spiking HVA actual predictor training HVA_CTX_E");
+    }
 
     std::vector<double> target_mean(tile_count, 0.0);
     std::vector<unsigned int> target_count(tile_count, 0u);
@@ -9192,6 +9327,8 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
     hva_pred_e_iext.pushToDevice();
 
     std::vector<double> tile_weights(pair_count, 0.0);
+    std::vector<double> ctx_to_pred_tile_weights(pair_count, 0.0);
+    std::vector<double> ctx_to_pred_suppressive_tile_weights(pair_count, 0.0);
     const auto weightIndex = [&](unsigned int post_tile, unsigned int pre_tile) -> std::size_t {
         return (static_cast<std::size_t>(post_tile) * tile_count) + pre_tile;
     };
@@ -9205,6 +9342,35 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
                 * normRate(hva_e_tile_rates[tileOffset(repeat_index, frame_index, pre_tile)]);
         }
         return prediction;
+    };
+    const auto predictCtxResidual = [&](unsigned int repeat_index, unsigned int frame_index, unsigned int post_tile) {
+        double excitatory_prediction = 0.0;
+        double suppressive_prediction = 0.0;
+        if(!result.ctx_to_pred_enabled) {
+            return 0.0;
+        }
+        const unsigned int active_radius =
+            result.ctx_to_pred_suppressive_enabled
+                ? std::max(
+                    spiking_hva_config.ctx_to_pred_radius,
+                    spiking_hva_config.ctx_to_pred_suppressive_radius)
+                : spiking_hva_config.ctx_to_pred_radius;
+        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+            const unsigned int distance = manhattanDistance(pre_tile, post_tile);
+            if(distance > active_radius) {
+                continue;
+            }
+            const double pre_norm =
+                normRate(hva_context_tile_rates[tileOffset(repeat_index, frame_index, pre_tile)]);
+            if(distance <= spiking_hva_config.ctx_to_pred_radius) {
+                excitatory_prediction += ctx_to_pred_tile_weights[weightIndex(post_tile, pre_tile)] * pre_norm;
+            }
+            if(result.ctx_to_pred_suppressive_enabled && distance <= spiking_hva_config.ctx_to_pred_suppressive_radius) {
+                suppressive_prediction +=
+                    ctx_to_pred_suppressive_tile_weights[weightIndex(post_tile, pre_tile)] * pre_norm;
+            }
+        }
+        return excitatory_prediction - suppressive_prediction;
     };
 
     for(unsigned int epoch = 0; epoch < config.training_epochs; epoch++) {
@@ -9247,6 +9413,87 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
                     0.0,
                     config.weight_clip);
                 result.train_update_count++;
+            }
+        }
+    }
+
+    if(result.ctx_to_pred_enabled) {
+        for(unsigned int epoch = 0; epoch < config.training_epochs; epoch++) {
+            std::vector<double> local_gradient(pair_count, 0.0);
+            std::vector<double> local_suppressive_gradient(pair_count, 0.0);
+            std::vector<double> row_pre_energy(tile_count, 0.0);
+            const unsigned int active_radius =
+                result.ctx_to_pred_suppressive_enabled
+                    ? std::max(
+                        spiking_hva_config.ctx_to_pred_radius,
+                        spiking_hva_config.ctx_to_pred_suppressive_radius)
+                    : spiking_hva_config.ctx_to_pred_radius;
+            for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+                for(unsigned int frame_index = 0; frame_index + delay_frames < video_config.effective_frame_count; frame_index++) {
+                    const unsigned int target_frame = frame_index + delay_frames;
+                    if(isHeldoutTargetFrame(target_frame)
+                       || !validPredictionFrames(frame_index, target_frame)) {
+                        continue;
+                    }
+                    for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                        const double target_norm =
+                            normRate(l23e_tile_rates[tileOffset(repeat_index, target_frame, post_tile)]);
+                        const double residual_target = target_norm - target_mean[post_tile];
+                        const double residual_error =
+                            residual_target
+                            - predictResidual(repeat_index, frame_index, post_tile)
+                            - predictCtxResidual(repeat_index, frame_index, post_tile);
+                        for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                            const unsigned int distance = manhattanDistance(pre_tile, post_tile);
+                            if(distance > active_radius) {
+                                continue;
+                            }
+                            const double pre_norm =
+                                normRate(hva_context_tile_rates[tileOffset(repeat_index, frame_index, pre_tile)]);
+                            if(pre_norm <= 0.0) {
+                                continue;
+                            }
+                            const std::size_t index = weightIndex(post_tile, pre_tile);
+                            if(distance <= spiking_hva_config.ctx_to_pred_radius) {
+                                local_gradient[index] += pre_norm * residual_error;
+                            }
+                            if(result.ctx_to_pred_suppressive_enabled
+                               && distance <= spiking_hva_config.ctx_to_pred_suppressive_radius) {
+                                local_suppressive_gradient[index] -= pre_norm * residual_error;
+                            }
+                            row_pre_energy[post_tile] += pre_norm * pre_norm;
+                        }
+                    }
+                }
+            }
+            for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                const double row_norm = std::max(1.0e-4, row_pre_energy[post_tile]);
+                for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                    const unsigned int distance = manhattanDistance(pre_tile, post_tile);
+                    if(distance > active_radius) {
+                        continue;
+                    }
+                    const std::size_t index = weightIndex(post_tile, pre_tile);
+                    if(distance <= spiking_hva_config.ctx_to_pred_radius) {
+                        ctx_to_pred_tile_weights[index] = clippedValue(
+                            (ctx_to_pred_tile_weights[index] * (1.0 - config.weight_decay))
+                                + (config.row_update_gain * local_gradient[index] / row_norm),
+                            0.0,
+                            config.weight_clip);
+                        result.train_update_count++;
+                        result.ctx_to_pred_train_update_count++;
+                    }
+                    if(result.ctx_to_pred_suppressive_enabled
+                       && distance <= spiking_hva_config.ctx_to_pred_suppressive_radius) {
+                        ctx_to_pred_suppressive_tile_weights[index] = clippedValue(
+                            (ctx_to_pred_suppressive_tile_weights[index] * (1.0 - config.weight_decay))
+                                + (config.row_update_gain * local_suppressive_gradient[index] / row_norm),
+                            0.0,
+                            config.weight_clip);
+                        result.train_update_count++;
+                        result.ctx_to_pred_suppressive_train_update_count++;
+                    }
+                }
             }
         }
     }
@@ -9473,6 +9720,148 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
             }
         }
     };
+    const auto computeActualWeightStats = [](const std::vector<float> &weights,
+                                             double &mean,
+                                             double &max_weight,
+                                             double &nonzero_frac) {
+        double sum = 0.0;
+        std::size_t nonzero_count = 0u;
+        max_weight = 0.0;
+        for(float weight : weights) {
+            const double value = static_cast<double>(weight);
+            sum += value;
+            max_weight = std::max(max_weight, value);
+            if(value > 0.0) {
+                nonzero_count++;
+            }
+        }
+        mean = weights.empty() ? 0.0 : sum / static_cast<double>(weights.size());
+        nonzero_frac = weights.empty()
+            ? 0.0
+            : static_cast<double>(nonzero_count) / static_cast<double>(weights.size());
+    };
+    if(result.ctx_to_pred_enabled) {
+        computeActualWeightStats(
+            result.ctx_to_pred_weights_before,
+            result.ctx_to_pred_weight_mean_before,
+            result.ctx_to_pred_weight_max_before,
+            result.ctx_to_pred_weight_nonzero_frac_before);
+        result.ctx_to_pred_weights_after = installTileWeights(
+            *hva_context_to_hva_pred_e,
+            hva_context_pred_edges,
+            spiking_hva_config.slow_context_per_site,
+            spiking_hva_config.pred_e_per_site,
+            spiking_hva_config.ctx_to_pred_weight,
+            ctx_to_pred_tile_weights,
+            0u,
+            kSpikingHVAContextToPredGroupName);
+        computeActualWeightStats(
+            result.ctx_to_pred_weights_after,
+            result.ctx_to_pred_weight_mean_after,
+            result.ctx_to_pred_weight_max_after,
+            result.ctx_to_pred_weight_nonzero_frac_after);
+        const std::size_t compare_count = std::min(
+            result.ctx_to_pred_weights_before.size(),
+            result.ctx_to_pred_weights_after.size());
+        std::size_t changed_count = 0u;
+        for(std::size_t index = 0; index < compare_count; index++) {
+            if(result.ctx_to_pred_weights_before[index] != result.ctx_to_pred_weights_after[index]) {
+                changed_count++;
+            }
+        }
+        result.ctx_to_pred_weight_changed_frac = compare_count == 0u
+            ? 0.0
+            : static_cast<double>(changed_count) / static_cast<double>(compare_count);
+        result.ctx_to_pred_heldout_update_count = 0u;
+    }
+    if(result.ctx_to_pred_suppressive_enabled) {
+        computeActualWeightStats(
+            result.ctx_to_pred_suppressive_weights_before,
+            result.ctx_to_pred_suppressive_weight_mean_before,
+            result.ctx_to_pred_suppressive_weight_max_before,
+            result.ctx_to_pred_suppressive_weight_nonzero_frac_before);
+        result.ctx_to_pred_suppressive_weights_after = installTileWeights(
+            *hva_context_to_hva_pv,
+            hva_context_pv_edges,
+            spiking_hva_config.slow_context_per_site,
+            spiking_hva_config.pv_per_site,
+            spiking_hva_config.ctx_to_pred_suppressive_weight,
+            ctx_to_pred_suppressive_tile_weights,
+            0u,
+            kSpikingHVAContextToPVGroupName);
+        computeActualWeightStats(
+            result.ctx_to_pred_suppressive_weights_after,
+            result.ctx_to_pred_suppressive_weight_mean_after,
+            result.ctx_to_pred_suppressive_weight_max_after,
+            result.ctx_to_pred_suppressive_weight_nonzero_frac_after);
+        const std::size_t compare_count = std::min(
+            result.ctx_to_pred_suppressive_weights_before.size(),
+            result.ctx_to_pred_suppressive_weights_after.size());
+        std::size_t changed_count = 0u;
+        for(std::size_t index = 0; index < compare_count; index++) {
+            if(result.ctx_to_pred_suppressive_weights_before[index]
+               != result.ctx_to_pred_suppressive_weights_after[index]) {
+                changed_count++;
+            }
+        }
+        result.ctx_to_pred_suppressive_weight_changed_frac = compare_count == 0u
+            ? 0.0
+            : static_cast<double>(changed_count) / static_cast<double>(compare_count);
+        result.ctx_to_pred_suppressive_heldout_update_count = 0u;
+    }
+    if(result.ctx_to_pred_enabled) {
+        double signed_abs_sum = 0.0;
+        double exc_abs_sum = 0.0;
+        double inh_abs_sum = 0.0;
+        std::size_t contribution_count = 0u;
+        for(unsigned int repeat_index = 0; repeat_index < video_config.repeat_count; repeat_index++) {
+            for(unsigned int frame_index = 0;
+                frame_index + delay_frames < video_config.effective_frame_count;
+                frame_index++) {
+                const unsigned int target_frame = frame_index + delay_frames;
+                if(isHeldoutTargetFrame(target_frame)
+                   || !validPredictionFrames(frame_index, target_frame)) {
+                    continue;
+                }
+                for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
+                    double exc = 0.0;
+                    double inh = 0.0;
+                    const unsigned int active_radius =
+                        result.ctx_to_pred_suppressive_enabled
+                            ? std::max(
+                                spiking_hva_config.ctx_to_pred_radius,
+                                spiking_hva_config.ctx_to_pred_suppressive_radius)
+                            : spiking_hva_config.ctx_to_pred_radius;
+                    for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
+                        const unsigned int distance = manhattanDistance(pre_tile, post_tile);
+                        if(distance > active_radius) {
+                            continue;
+                        }
+                        const double pre_norm =
+                            normRate(hva_context_tile_rates[tileOffset(repeat_index, frame_index, pre_tile)]);
+                        if(distance <= spiking_hva_config.ctx_to_pred_radius) {
+                            exc += ctx_to_pred_tile_weights[weightIndex(post_tile, pre_tile)] * pre_norm;
+                        }
+                        if(result.ctx_to_pred_suppressive_enabled
+                           && distance <= spiking_hva_config.ctx_to_pred_suppressive_radius) {
+                            inh += ctx_to_pred_suppressive_tile_weights[weightIndex(post_tile, pre_tile)]
+                                * pre_norm;
+                        }
+                    }
+                    exc_abs_sum += std::fabs(exc);
+                    inh_abs_sum += std::fabs(inh);
+                    signed_abs_sum += std::fabs(exc - inh);
+                    contribution_count++;
+                }
+            }
+        }
+        if(contribution_count > 0u) {
+            const double denom = static_cast<double>(contribution_count);
+            result.ctx_to_pred_signed_contribution_abs_mean_norm = signed_abs_sum / denom;
+            result.ctx_to_pred_exc_contribution_abs_mean_norm = exc_abs_sum / denom;
+            result.ctx_to_pred_suppressive_contribution_abs_mean_norm = inh_abs_sum / denom;
+        }
+    }
     if(result.multi_timescale_actual_genn_state_enabled) {
         double e_sum = 0.0;
         double e_max = 0.0;
@@ -10927,6 +11316,9 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     const std::vector<double> &l23e_history_ablation_exc_current_tile_state_norm,
     const std::vector<double> &l23e_history_ablation_inh_current_tile_state_norm,
     const std::vector<double> &l23e_history_ablation_signed_residual_tile_state_norm,
+    const std::vector<double> &ctx_to_pred_ablation_exc_current_tile_state_norm,
+    const std::vector<double> &ctx_to_pred_ablation_inh_current_tile_state_norm,
+    const std::vector<double> &ctx_to_pred_ablation_signed_residual_tile_state_norm,
     const std::vector<double> &hva_ctx_transition_tile_state_norm,
     unsigned int hva_e_neurons_per_site,
     unsigned int hva_slow_context_neurons_per_site,
@@ -10978,6 +11370,9 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     validateTileStateVector(l23e_history_ablation_exc_current_tile_state_norm, "L23E-history-ablation-excitatory-current");
     validateTileStateVector(l23e_history_ablation_inh_current_tile_state_norm, "L23E-history-ablation-inhibitory-current");
     validateTileStateVector(l23e_history_ablation_signed_residual_tile_state_norm, "L23E-history-ablation-signed-residual-current");
+    validateTileStateVector(ctx_to_pred_ablation_exc_current_tile_state_norm, "CTX-to-PRED-ablation-excitatory-current");
+    validateTileStateVector(ctx_to_pred_ablation_inh_current_tile_state_norm, "CTX-to-PRED-ablation-inhibitory-current");
+    validateTileStateVector(ctx_to_pred_ablation_signed_residual_tile_state_norm, "CTX-to-PRED-ablation-signed-residual-current");
     validateTileStateVector(hva_ctx_transition_tile_state_norm, "HVA_CTX_E-transition-state");
     const bool l23e_history_ablation_available =
         config.l23e_history_ablation_diagnostic_enabled
@@ -10988,6 +11383,11 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         throw std::runtime_error(
             "L23E-history ablation diagnostic was enabled but ablated HVA_PRED_E state vectors are missing.");
     }
+    const bool ctx_to_pred_ablation_available =
+        actual_projection_training.ctx_to_pred_enabled
+        && !ctx_to_pred_ablation_exc_current_tile_state_norm.empty()
+        && !ctx_to_pred_ablation_inh_current_tile_state_norm.empty()
+        && !ctx_to_pred_ablation_signed_residual_tile_state_norm.empty();
     const std::size_t pair_count = static_cast<std::size_t>(tile_count) * tile_count;
     const std::size_t weight_count = kSpikingHVAPredictorDelayFrames.size() * pair_count;
     result.heldout_start_frame = spikingHVAPredictorHeldoutStartFrame(video_config, config);
@@ -11926,6 +12326,32 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                 hva_pred_e_inh_current_tile_state_norm,
                 l23e_history_ablation_inh_current_tile_state_norm)
             : 0.0});
+    result.metrics.push_back({"ctx_to_pred_ablation_diagnostic_enabled",
+        ctx_to_pred_ablation_available ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_ablation_actual_g_zeroed",
+        ctx_to_pred_ablation_available ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_ablation_sample_count",
+        ctx_to_pred_ablation_available
+            ? static_cast<double>(ctx_to_pred_ablation_signed_residual_tile_state_norm.size())
+            : 0.0});
+    result.metrics.push_back({"ctx_to_pred_ablation_signed_residual_delta_abs_mean_norm",
+        ctx_to_pred_ablation_available
+            ? meanAbsDifference(
+                hva_pred_e_signed_residual_tile_state_norm,
+                ctx_to_pred_ablation_signed_residual_tile_state_norm)
+            : 0.0});
+    result.metrics.push_back({"ctx_to_pred_ablation_exc_current_delta_abs_mean_norm",
+        ctx_to_pred_ablation_available
+            ? meanAbsDifference(
+                hva_pred_e_exc_current_tile_state_norm,
+                ctx_to_pred_ablation_exc_current_tile_state_norm)
+            : 0.0});
+    result.metrics.push_back({"ctx_to_pred_ablation_inh_current_delta_abs_mean_norm",
+        ctx_to_pred_ablation_available
+            ? meanAbsDifference(
+                hva_pred_e_inh_current_tile_state_norm,
+                ctx_to_pred_ablation_inh_current_tile_state_norm)
+            : 0.0});
 
     for(unsigned int delay_index = 0; delay_index < kSpikingHVAPredictorDelayFrames.size(); delay_index++) {
         const unsigned int delay_frames = kSpikingHVAPredictorDelayFrames[delay_index];
@@ -11937,6 +12363,9 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         std::vector<double> heldout_ablation_model_corr;
         std::vector<double> heldout_ablation_model_mse;
         std::vector<double> heldout_ablation_predicted_state_delta_abs_mean_norm;
+        std::vector<double> heldout_ctx_ablation_model_corr;
+        std::vector<double> heldout_ctx_ablation_model_mse;
+        std::vector<double> heldout_ctx_ablation_predicted_state_delta_abs_mean_norm;
         std::vector<double> heldout_persistence_mse;
         std::vector<double> heldout_train_mean_mse;
         std::vector<double> heldout_no_learning_mse;
@@ -11955,6 +12384,7 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                 std::vector<double> target_vector(tile_count, 0.0);
                 std::vector<double> model_vector(tile_count, 0.0);
                 std::vector<double> ablation_model_vector(tile_count, 0.0);
+                std::vector<double> ctx_ablation_model_vector(tile_count, 0.0);
                 std::vector<double> persistence_vector(tile_count, 0.0);
                 std::vector<double> train_mean_vector(tile_count, 0.0);
                 std::vector<double> no_learning_vector(tile_count, 0.0);
@@ -12044,6 +12474,18 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                                 0.0,
                                 2.0)
                             : predicted_norm;
+                    const double ctx_ablation_signed_residual_state_norm =
+                        ctx_to_pred_ablation_available
+                            ? ctx_to_pred_ablation_signed_residual_tile_state_norm[current_tile_offset]
+                            : signed_residual_state_norm;
+                    const double ctx_ablation_predicted_norm =
+                        ctx_to_pred_ablation_available
+                            ? clippedValue(
+                                train_mean_norm
+                                    + (config.current_residual_gain * ctx_ablation_signed_residual_state_norm),
+                                0.0,
+                                2.0)
+                            : predicted_norm;
                     const unsigned int shuffled_tile = (post_tile + (tile_count / 2u)) % tile_count;
                     const double spatial_shuffle_norm = normRate(
                         l23e_tile_rates[tileOffset(repeat_index, frame_index, shuffled_tile)]);
@@ -12055,6 +12497,7 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                     target_vector[post_tile] = target_norm;
                     model_vector[post_tile] = predicted_norm;
                     ablation_model_vector[post_tile] = ablation_predicted_norm;
+                    ctx_ablation_model_vector[post_tile] = ctx_ablation_predicted_norm;
                     persistence_vector[post_tile] = current_norm;
                     train_mean_vector[post_tile] = train_mean_norm;
                     hva_dynamic_abs_sum += std::fabs(
@@ -12122,6 +12565,14 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                         heldout_ablation_predicted_state_delta_abs_mean_norm.push_back(
                             meanAbsDifference(model_vector, ablation_model_vector));
                     }
+                    if(ctx_to_pred_ablation_available) {
+                        heldout_ctx_ablation_model_corr.push_back(
+                            responseCorrelation(target_vector, ctx_ablation_model_vector));
+                        heldout_ctx_ablation_model_mse.push_back(
+                            meanSquaredError(target_vector, ctx_ablation_model_vector));
+                        heldout_ctx_ablation_predicted_state_delta_abs_mean_norm.push_back(
+                            meanAbsDifference(model_vector, ctx_ablation_model_vector));
+                    }
                     heldout_persistence_corr.push_back(responseCorrelation(target_vector, persistence_vector));
                     heldout_train_mean_corr.push_back(responseCorrelation(target_vector, train_mean_vector));
                     heldout_no_learning_corr.push_back(responseCorrelation(target_vector, no_learning_vector));
@@ -12160,6 +12611,21 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         appendMeanMetric(
             prefix + "heldout_l23e_history_ablation_predicted_state_delta_abs_mean_norm",
             heldout_ablation_predicted_state_delta_abs_mean_norm);
+        appendMeanMetric(prefix + "heldout_ctx_to_pred_ablation_model_corr", heldout_ctx_ablation_model_corr);
+        result.metrics.push_back({
+            prefix + "heldout_ctx_to_pred_ablation_model_corr_delta",
+            heldout_model_corr.empty() || heldout_ctx_ablation_model_corr.empty()
+                ? 0.0
+                : meanRate(heldout_model_corr) - meanRate(heldout_ctx_ablation_model_corr)});
+        appendMeanMetric(prefix + "heldout_ctx_to_pred_ablation_model_mse", heldout_ctx_ablation_model_mse);
+        result.metrics.push_back({
+            prefix + "heldout_ctx_to_pred_ablation_model_mse_delta",
+            heldout_model_mse.empty() || heldout_ctx_ablation_model_mse.empty()
+                ? 0.0
+                : meanRate(heldout_ctx_ablation_model_mse) - meanRate(heldout_model_mse)});
+        appendMeanMetric(
+            prefix + "heldout_ctx_to_pred_ablation_predicted_state_delta_abs_mean_norm",
+            heldout_ctx_ablation_predicted_state_delta_abs_mean_norm);
         appendMeanMetric(prefix + "heldout_persistence_mse", heldout_persistence_mse);
         appendMeanMetric(prefix + "heldout_train_mean_mse", heldout_train_mean_mse);
         appendMeanMetric(prefix + "heldout_no_learning_mse", heldout_no_learning_mse);
@@ -12408,6 +12874,68 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         static_cast<double>(actual_projection_training.pv_to_pred_homeostasis_update_count)});
     result.metrics.push_back({"pv_to_pred_homeostasis_heldout_update_count",
         static_cast<double>(actual_projection_training.pv_to_pred_homeostasis_heldout_update_count)});
+    result.metrics.push_back({"ctx_to_pred_enabled",
+        actual_projection_training.ctx_to_pred_enabled ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_actual_genn",
+        actual_projection_training.ctx_to_pred_actual_genn ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_radius_tiles",
+        static_cast<double>(actual_projection_training.ctx_to_pred_radius_tiles)});
+    result.metrics.push_back({"ctx_to_pred_connection_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_connection_count)});
+    result.metrics.push_back({"ctx_to_pred_weight_scale",
+        actual_projection_training.ctx_to_pred_weight_scale});
+    result.metrics.push_back({"ctx_to_pred_train_update_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_train_update_count)});
+    result.metrics.push_back({"ctx_to_pred_heldout_update_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_heldout_update_count)});
+    result.metrics.push_back({"ctx_to_pred_weight_mean_before",
+        actual_projection_training.ctx_to_pred_weight_mean_before});
+    result.metrics.push_back({"ctx_to_pred_weight_max_before",
+        actual_projection_training.ctx_to_pred_weight_max_before});
+    result.metrics.push_back({"ctx_to_pred_weight_nonzero_frac_before",
+        actual_projection_training.ctx_to_pred_weight_nonzero_frac_before});
+    result.metrics.push_back({"ctx_to_pred_weight_mean_after",
+        actual_projection_training.ctx_to_pred_weight_mean_after});
+    result.metrics.push_back({"ctx_to_pred_weight_max_after",
+        actual_projection_training.ctx_to_pred_weight_max_after});
+    result.metrics.push_back({"ctx_to_pred_weight_nonzero_frac_after",
+        actual_projection_training.ctx_to_pred_weight_nonzero_frac_after});
+    result.metrics.push_back({"ctx_to_pred_weight_changed_frac",
+        actual_projection_training.ctx_to_pred_weight_changed_frac});
+    result.metrics.push_back({"ctx_to_pred_suppressive_enabled",
+        actual_projection_training.ctx_to_pred_suppressive_enabled ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_suppressive_actual_genn",
+        actual_projection_training.ctx_to_pred_suppressive_actual_genn ? 1.0 : 0.0});
+    result.metrics.push_back({"ctx_to_pred_suppressive_radius_tiles",
+        static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_radius_tiles)});
+    result.metrics.push_back({"ctx_to_pred_suppressive_connection_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_connection_count)});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_scale",
+        actual_projection_training.ctx_to_pred_suppressive_weight_scale});
+    result.metrics.push_back({"ctx_to_pred_suppressive_train_update_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_train_update_count)});
+    result.metrics.push_back({"ctx_to_pred_suppressive_heldout_update_count",
+        static_cast<double>(actual_projection_training.ctx_to_pred_suppressive_heldout_update_count)});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_mean_before",
+        actual_projection_training.ctx_to_pred_suppressive_weight_mean_before});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_max_before",
+        actual_projection_training.ctx_to_pred_suppressive_weight_max_before});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_nonzero_frac_before",
+        actual_projection_training.ctx_to_pred_suppressive_weight_nonzero_frac_before});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_mean_after",
+        actual_projection_training.ctx_to_pred_suppressive_weight_mean_after});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_max_after",
+        actual_projection_training.ctx_to_pred_suppressive_weight_max_after});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_nonzero_frac_after",
+        actual_projection_training.ctx_to_pred_suppressive_weight_nonzero_frac_after});
+    result.metrics.push_back({"ctx_to_pred_suppressive_weight_changed_frac",
+        actual_projection_training.ctx_to_pred_suppressive_weight_changed_frac});
+    result.metrics.push_back({"ctx_to_pred_signed_contribution_abs_mean_norm",
+        actual_projection_training.ctx_to_pred_signed_contribution_abs_mean_norm});
+    result.metrics.push_back({"ctx_to_pred_exc_contribution_abs_mean_norm",
+        actual_projection_training.ctx_to_pred_exc_contribution_abs_mean_norm});
+    result.metrics.push_back({"ctx_to_pred_suppressive_contribution_abs_mean_norm",
+        actual_projection_training.ctx_to_pred_suppressive_contribution_abs_mean_norm});
     result.metrics.push_back({"weight_changed_frac", result.weights_after.empty()
         ? 0.0
         : static_cast<double>(changed_count) / static_cast<double>(result.weights_after.size())});
@@ -19056,6 +19584,18 @@ void writeSummaryFiles(
         << spiking_hva_predictor_config.l23e_history_weight_scale << "\n";
     csv << "spiking_hva_predictor_l23e_history_pv_weight_scale,"
         << spiking_hva_predictor_config.l23e_history_pv_weight_scale << "\n";
+    csv << "spiking_hva_ctx_to_pred_enabled,"
+        << (spiking_hva_config.ctx_to_pred_enabled ? 1.0 : 0.0) << "\n";
+    csv << "spiking_hva_ctx_to_pred_radius,"
+        << spiking_hva_config.ctx_to_pred_radius << "\n";
+    csv << "spiking_hva_ctx_to_pred_weight,"
+        << spiking_hva_config.ctx_to_pred_weight << "\n";
+    csv << "spiking_hva_ctx_to_pred_suppressive_enabled,"
+        << (spiking_hva_config.ctx_to_pred_suppressive_enabled ? 1.0 : 0.0) << "\n";
+    csv << "spiking_hva_ctx_to_pred_suppressive_radius,"
+        << spiking_hva_config.ctx_to_pred_suppressive_radius << "\n";
+    csv << "spiking_hva_ctx_to_pred_suppressive_weight,"
+        << spiking_hva_config.ctx_to_pred_suppressive_weight << "\n";
     csv << "spiking_hva_predictor_bias_learning_rate,"
         << spiking_hva_predictor_config.bias_learning_rate << "\n";
     csv << "spiking_hva_predictor_weight_decay,"
@@ -20490,6 +21030,18 @@ void writeSummaryFiles(
          << spiking_hva_predictor_config.l23e_history_weight_scale << "\n";
     text << "spiking_hva_predictor_l23e_history_pv_weight_scale="
          << spiking_hva_predictor_config.l23e_history_pv_weight_scale << "\n";
+    text << "spiking_hva_ctx_to_pred_enabled="
+         << (spiking_hva_config.ctx_to_pred_enabled ? 1 : 0) << "\n";
+    text << "spiking_hva_ctx_to_pred_radius="
+         << spiking_hva_config.ctx_to_pred_radius << "\n";
+    text << "spiking_hva_ctx_to_pred_weight="
+         << spiking_hva_config.ctx_to_pred_weight << "\n";
+    text << "spiking_hva_ctx_to_pred_suppressive_enabled="
+         << (spiking_hva_config.ctx_to_pred_suppressive_enabled ? 1 : 0) << "\n";
+    text << "spiking_hva_ctx_to_pred_suppressive_radius="
+         << spiking_hva_config.ctx_to_pred_suppressive_radius << "\n";
+    text << "spiking_hva_ctx_to_pred_suppressive_weight="
+         << spiking_hva_config.ctx_to_pred_suppressive_weight << "\n";
     text << "spiking_hva_predictor_bias_learning_rate="
          << spiking_hva_predictor_config.bias_learning_rate << "\n";
     text << "spiking_hva_predictor_weight_decay="
@@ -21248,6 +21800,18 @@ void modelDefinition(GeNN::ModelSpec &model)
             spiking_hva_config.slow_context_radius,
             false,
             hva_periodic_geometry);
+        const auto hva_context_hva_pred_e_patch = makePatchParameters(
+            spiking_hva_config.slow_context_per_site,
+            spiking_hva_config.pred_e_per_site,
+            spiking_hva_config.ctx_to_pred_radius,
+            false,
+            hva_periodic_geometry);
+        const auto hva_context_hva_pv_predictor_patch = makePatchParameters(
+            spiking_hva_config.slow_context_per_site,
+            spiking_hva_config.pv_per_site,
+            spiking_hva_config.ctx_to_pred_suppressive_radius,
+            false,
+            hva_periodic_geometry);
         const auto hva_context_transition_patch = makePatchParameters(
             spiking_hva_config.slow_context_per_site,
             spiking_hva_config.slow_context_per_site,
@@ -21365,6 +21929,26 @@ void modelDefinition(GeNN::ModelSpec &model)
                     0.0,
                     spiking_hva_config.slow_context_transition_tau_ms,
                     hva_context_transition_patch);
+            }
+            if(spiking_hva_config.ctx_to_pred_enabled) {
+                addLocalProjection(
+                    model,
+                    kSpikingHVAContextToPredGroupName,
+                    hva_context_e,
+                    hva_pred_e,
+                    0.0,
+                    spiking_hva_config.slow_context_tau_ms,
+                    hva_context_hva_pred_e_patch);
+                if(spiking_hva_config.ctx_to_pred_suppressive_enabled) {
+                    addLocalProjection(
+                        model,
+                        kSpikingHVAContextToPVGroupName,
+                        hva_context_e,
+                        hva_pv,
+                        0.0,
+                        spiking_hva_config.slow_context_tau_ms,
+                        hva_context_hva_pv_predictor_patch);
+                }
             }
         }
         if(spiking_hva_config.e_to_pv_enabled) {
@@ -21675,6 +22259,19 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
          && spiking_hva_config.slow_context_enabled
          && spiking_hva_config.slow_context_transition_enabled)
             ? &requireSynapseGroup(model, "HVA_CTX_E_to_HVA_CTX_E_transition")
+            : nullptr;
+    GeNN::SynapseGroup *hva_context_e_to_hva_pred_e =
+        (spiking_hva_config.enabled
+         && spiking_hva_config.slow_context_enabled
+         && spiking_hva_config.ctx_to_pred_enabled)
+            ? &requireSynapseGroup(model, kSpikingHVAContextToPredGroupName)
+            : nullptr;
+    GeNN::SynapseGroup *hva_context_e_to_hva_pv_predictor =
+        (spiking_hva_config.enabled
+         && spiking_hva_config.slow_context_enabled
+         && spiking_hva_config.ctx_to_pred_enabled
+         && spiking_hva_config.ctx_to_pred_suppressive_enabled)
+            ? &requireSynapseGroup(model, kSpikingHVAContextToPVGroupName)
             : nullptr;
     GeNN::SynapseGroup &l4e_to_l23e = requireSynapseGroup(model, "L4E_to_L23E");
     GeNN::SynapseGroup &l4e_to_l23pv = requireSynapseGroup(model, "L4E_to_L23PV");
@@ -22123,6 +22720,29 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 true,
                 periodic_local_geometry_config.global_enabled)
             : std::vector<std::pair<unsigned int, unsigned int>>();
+    const std::vector<std::pair<unsigned int, unsigned int>> hva_context_pred_edges =
+        (spiking_hva_config.enabled
+         && spiking_hva_config.slow_context_enabled
+         && spiking_hva_config.ctx_to_pred_enabled)
+            ? buildLocalPatchConnectivity(
+                spiking_hva_config.slow_context_per_site,
+                spiking_hva_config.pred_e_per_site,
+                spiking_hva_config.ctx_to_pred_radius,
+                false,
+                periodic_local_geometry_config.global_enabled)
+            : std::vector<std::pair<unsigned int, unsigned int>>();
+    const std::vector<std::pair<unsigned int, unsigned int>> hva_context_pv_predictor_edges =
+        (spiking_hva_config.enabled
+         && spiking_hva_config.slow_context_enabled
+         && spiking_hva_config.ctx_to_pred_enabled
+         && spiking_hva_config.ctx_to_pred_suppressive_enabled)
+            ? buildLocalPatchConnectivity(
+                spiking_hva_config.slow_context_per_site,
+                spiking_hva_config.pv_per_site,
+                spiking_hva_config.ctx_to_pred_suppressive_radius,
+                false,
+                periodic_local_geometry_config.global_enabled)
+            : std::vector<std::pair<unsigned int, unsigned int>>();
     applyL23EELognormalInitialWeights(
         runtime,
         l23e_to_l23e,
@@ -22186,6 +22806,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
     std::vector<double> spiking_hva_l23e_history_ablation_hva_pred_e_exc_current_tile_state_norm;
     std::vector<double> spiking_hva_l23e_history_ablation_hva_pred_e_inh_current_tile_state_norm;
     std::vector<double> spiking_hva_l23e_history_ablation_hva_pred_e_signed_residual_tile_state_norm;
+    std::vector<double> spiking_hva_ctx_to_pred_ablation_hva_pred_e_exc_current_tile_state_norm;
+    std::vector<double> spiking_hva_ctx_to_pred_ablation_hva_pred_e_inh_current_tile_state_norm;
+    std::vector<double> spiking_hva_ctx_to_pred_ablation_hva_pred_e_signed_residual_tile_state_norm;
     std::vector<double> previous_spiking_hva_pred_e_syn_current_accumulator;
     std::vector<double> previous_spiking_hva_pred_e_syn_exc_current_accumulator;
     std::vector<double> previous_spiking_hva_pred_e_syn_inh_current_accumulator;
@@ -24557,6 +25180,13 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             countSiteSpikesForTrials(l23e_recordings.at(0), video_replay_trials, v1_genn::kL23EPerSite);
         const std::vector<double> spiking_hva_training_hva_e_site_counts =
             countSiteSpikesForTrials(hva_e_recordings.at(0), video_replay_trials, spiking_hva_config.e_per_site);
+        const std::vector<double> spiking_hva_training_hva_context_site_counts =
+            (spiking_hva_config.ctx_to_pred_enabled && spiking_hva_config.slow_context_enabled)
+                ? countSiteSpikesForTrials(
+                    hva_context_e_recordings.at(0),
+                    video_replay_trials,
+                    spiking_hva_config.slow_context_per_site)
+                : std::vector<double>();
         spiking_hva_actual_prediction_training =
             trainActualSpikingHVAPredictionProjection(
                 spiking_hva_predictor_config,
@@ -24565,14 +25195,19 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 video_replay_trials,
                 spiking_hva_training_l23e_site_counts,
                 spiking_hva_training_hva_e_site_counts,
+                spiking_hva_training_hva_context_site_counts,
                 runtime,
                 *hva_pred_e,
                 *hva_e_to_hva_pred_e,
+                hva_context_e_to_hva_pred_e,
+                hva_context_e_to_hva_pv_predictor,
                 hva_e_to_hva_pred_e_multitau,
                 hva_e_to_hva_pv_multitau,
                 hva_pred_e_to_hva_pred_e_multitau,
                 hva_pred_e_to_hva_pv_multitau,
                 hva_e_pred_edges,
+                hva_context_pred_edges,
+                hva_context_pv_predictor_edges,
                 hva_e_pv_edges,
                 hva_pred_e_pred_e_edges,
                 hva_pred_e_pv_edges);
@@ -25250,17 +25885,22 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         const bool run_l23e_history_ablation_diagnostic =
             spiking_hva_predictor_config.l23e_history_ablation_diagnostic_enabled
             && spiking_hva_actual_prediction_training.l23e_history_branch_actual_genn;
+        const bool run_ctx_to_pred_ablation_diagnostic =
+            spiking_hva_actual_prediction_training.ctx_to_pred_enabled
+            && hva_context_e_to_hva_pred_e != nullptr;
+        const bool run_any_spiking_hva_ablation_diagnostic =
+            run_l23e_history_ablation_diagnostic || run_ctx_to_pred_ablation_diagnostic;
         runSpikingHVAPredictionReplay(
             spiking_hva_prediction_trials,
             spiking_hva_prediction_frame_records,
-            run_l23e_history_ablation_diagnostic);
+            run_any_spiking_hva_ablation_diagnostic);
         std::vector<double> active_spiking_hva_synaptic_current_tile_state_norm;
         std::vector<double> active_spiking_hva_exc_current_tile_state_norm;
         std::vector<double> active_spiking_hva_inh_current_tile_state_norm;
         std::vector<double> active_spiking_hva_baseline_current_tile_state_norm;
         std::vector<double> active_spiking_hva_signed_residual_tile_state_norm;
         std::vector<double> active_spiking_hva_membrane_tile_state_norm;
-        if(run_l23e_history_ablation_diagnostic) {
+        if(run_any_spiking_hva_ablation_diagnostic) {
             active_spiking_hva_synaptic_current_tile_state_norm =
                 spiking_hva_prediction_hva_pred_e_synaptic_current_tile_state_norm;
             active_spiking_hva_exc_current_tile_state_norm =
@@ -25275,10 +25915,6 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 spiking_hva_prediction_hva_pred_e_membrane_tile_state_norm;
             flushRecordingWindow();
 
-            std::vector<std::vector<float>> saved_pred_weights;
-            std::vector<std::vector<float>> saved_pv_weights;
-            saved_pred_weights.reserve(l23e_to_hva_pred_e_history_lag.size());
-            saved_pv_weights.reserve(l23e_to_hva_pv_history_lag.size());
             const auto zeroSynapseGroups = [&](const std::vector<GeNN::SynapseGroup *> &groups,
                                                std::vector<std::vector<float>> &saved) {
                 for(GeNN::SynapseGroup *group : groups) {
@@ -25296,26 +25932,78 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                     setSynapseWeights(runtime, *groups[group_index], saved[group_index]);
                 }
             };
-            zeroSynapseGroups(l23e_to_hva_pred_e_history_lag, saved_pred_weights);
-            zeroSynapseGroups(l23e_to_hva_pv_history_lag, saved_pv_weights);
+            if(run_l23e_history_ablation_diagnostic) {
+                std::vector<std::vector<float>> saved_pred_weights;
+                std::vector<std::vector<float>> saved_pv_weights;
+                saved_pred_weights.reserve(l23e_to_hva_pred_e_history_lag.size());
+                saved_pv_weights.reserve(l23e_to_hva_pv_history_lag.size());
+                zeroSynapseGroups(l23e_to_hva_pred_e_history_lag, saved_pred_weights);
+                zeroSynapseGroups(l23e_to_hva_pv_history_lag, saved_pv_weights);
 
-            std::vector<TrialWindow> l23e_history_ablation_trials;
-            std::vector<VideoFrameRecord> l23e_history_ablation_records;
-            l23e_history_ablation_trials.reserve(video_replay_trial_count);
-            l23e_history_ablation_records.reserve(video_replay_trial_count);
-            runSpikingHVAPredictionReplay(
-                l23e_history_ablation_trials,
-                l23e_history_ablation_records,
-                true);
-            spiking_hva_l23e_history_ablation_hva_pred_e_exc_current_tile_state_norm =
-                spiking_hva_prediction_hva_pred_e_exc_current_tile_state_norm;
-            spiking_hva_l23e_history_ablation_hva_pred_e_inh_current_tile_state_norm =
-                spiking_hva_prediction_hva_pred_e_inh_current_tile_state_norm;
-            spiking_hva_l23e_history_ablation_hva_pred_e_signed_residual_tile_state_norm =
-                spiking_hva_prediction_hva_pred_e_signed_residual_tile_state_norm;
-            restoreSynapseGroups(l23e_to_hva_pred_e_history_lag, saved_pred_weights);
-            restoreSynapseGroups(l23e_to_hva_pv_history_lag, saved_pv_weights);
-            flushRecordingWindow();
+                std::vector<TrialWindow> l23e_history_ablation_trials;
+                std::vector<VideoFrameRecord> l23e_history_ablation_records;
+                l23e_history_ablation_trials.reserve(video_replay_trial_count);
+                l23e_history_ablation_records.reserve(video_replay_trial_count);
+                runSpikingHVAPredictionReplay(
+                    l23e_history_ablation_trials,
+                    l23e_history_ablation_records,
+                    true);
+                spiking_hva_l23e_history_ablation_hva_pred_e_exc_current_tile_state_norm =
+                    spiking_hva_prediction_hva_pred_e_exc_current_tile_state_norm;
+                spiking_hva_l23e_history_ablation_hva_pred_e_inh_current_tile_state_norm =
+                    spiking_hva_prediction_hva_pred_e_inh_current_tile_state_norm;
+                spiking_hva_l23e_history_ablation_hva_pred_e_signed_residual_tile_state_norm =
+                    spiking_hva_prediction_hva_pred_e_signed_residual_tile_state_norm;
+                restoreSynapseGroups(l23e_to_hva_pred_e_history_lag, saved_pred_weights);
+                restoreSynapseGroups(l23e_to_hva_pv_history_lag, saved_pv_weights);
+                flushRecordingWindow();
+            }
+            if(run_ctx_to_pred_ablation_diagnostic) {
+                std::vector<float> saved_ctx_to_pred_weights =
+                    copyWeights(runtime, *hva_context_e_to_hva_pred_e);
+                std::vector<float> zero_weights(saved_ctx_to_pred_weights.size(), 0.0f);
+                setSynapseWeights(runtime, *hva_context_e_to_hva_pred_e, zero_weights);
+                std::vector<float> saved_ctx_to_pv_suppressive_weights;
+                if(spiking_hva_actual_prediction_training.ctx_to_pred_suppressive_enabled
+                   && hva_context_e_to_hva_pv_predictor != nullptr) {
+                    saved_ctx_to_pv_suppressive_weights =
+                        copyWeights(runtime, *hva_context_e_to_hva_pv_predictor);
+                    std::vector<float> zero_suppressive_weights(
+                        saved_ctx_to_pv_suppressive_weights.size(),
+                        0.0f);
+                    setSynapseWeights(
+                        runtime,
+                        *hva_context_e_to_hva_pv_predictor,
+                        zero_suppressive_weights);
+                }
+
+                std::vector<TrialWindow> ctx_to_pred_ablation_trials;
+                std::vector<VideoFrameRecord> ctx_to_pred_ablation_records;
+                ctx_to_pred_ablation_trials.reserve(video_replay_trial_count);
+                ctx_to_pred_ablation_records.reserve(video_replay_trial_count);
+                runSpikingHVAPredictionReplay(
+                    ctx_to_pred_ablation_trials,
+                    ctx_to_pred_ablation_records,
+                    true);
+                spiking_hva_ctx_to_pred_ablation_hva_pred_e_exc_current_tile_state_norm =
+                    spiking_hva_prediction_hva_pred_e_exc_current_tile_state_norm;
+                spiking_hva_ctx_to_pred_ablation_hva_pred_e_inh_current_tile_state_norm =
+                    spiking_hva_prediction_hva_pred_e_inh_current_tile_state_norm;
+                spiking_hva_ctx_to_pred_ablation_hva_pred_e_signed_residual_tile_state_norm =
+                    spiking_hva_prediction_hva_pred_e_signed_residual_tile_state_norm;
+                setSynapseWeights(
+                    runtime,
+                    *hva_context_e_to_hva_pred_e,
+                    saved_ctx_to_pred_weights);
+                if(!saved_ctx_to_pv_suppressive_weights.empty()
+                   && hva_context_e_to_hva_pv_predictor != nullptr) {
+                    setSynapseWeights(
+                        runtime,
+                        *hva_context_e_to_hva_pv_predictor,
+                        saved_ctx_to_pv_suppressive_weights);
+                }
+                flushRecordingWindow();
+            }
 
             spiking_hva_prediction_hva_pred_e_synaptic_current_tile_state_norm =
                 active_spiking_hva_synaptic_current_tile_state_norm;
@@ -25955,6 +26643,9 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             spiking_hva_l23e_history_ablation_hva_pred_e_exc_current_tile_state_norm,
             spiking_hva_l23e_history_ablation_hva_pred_e_inh_current_tile_state_norm,
             spiking_hva_l23e_history_ablation_hva_pred_e_signed_residual_tile_state_norm,
+            spiking_hva_ctx_to_pred_ablation_hva_pred_e_exc_current_tile_state_norm,
+            spiking_hva_ctx_to_pred_ablation_hva_pred_e_inh_current_tile_state_norm,
+            spiking_hva_ctx_to_pred_ablation_hva_pred_e_signed_residual_tile_state_norm,
             spiking_hva_prediction_hva_ctx_transition_tile_state_norm,
             spiking_hva_config.e_per_site,
             spiking_hva_config.slow_context_per_site,
