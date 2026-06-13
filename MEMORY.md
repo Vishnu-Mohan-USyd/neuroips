@@ -19,6 +19,11 @@
 - If agents are running, do not return an idle/final placeholder. Keep waiting
   on agents, re-task them when needed, and only report once there is a concrete
   implementation, validation result, or blocker with evidence.
+- Do not interrupt long-running probes or validation jobs just because they are
+  taking time. Wait patiently unless there is concrete evidence that the process
+  is hung, harmful, or blocking required resources. Avoid thrashing between
+  experiments; run one evidence-backed experiment to completion before changing
+  direction.
 - For the higher-area stage, validate a standalone predictor first: lower V1
   activity should drive an HVA-like module that predicts future lower-V1 state
   from natural video. Do not add HVA-to-V1 feedback, VIP/SOM feedback, or
@@ -94,3 +99,34 @@
   `python3 ~/research-auth/export-cookies.py <domain>`. Never mass-crawl PDFs
   through EZproxy or publisher sites; bulk full text must use publisher TDM
   APIs, and ScienceDirect/Elsevier content should use the Elsevier TDM API.
+- Higher-area predictor success checkpoint 2026-06-13: branch
+  `hva-spiking-stdp-predictor`, run
+  `.runs/spiking_hva_d5_32x32_64f_interleaved_daleei_reval_20260612T175947Z`.
+  Strict delay-5 predictor passed with `model_vector_corr_mean=0.702894`,
+  persistence `0.583537`, delta `0.119357`, cosine `0.788108`, MSE reduction
+  `0.400314`, and bootstrap corr-delta CI low `0.087640`. Lower-V1 preservation
+  also passed: post-video L2/3 OSI `0.833167`, repeat vector corr `0.742850`,
+  odd/even RSM corr `0.903920`, heldout decoder top-5 `0.989583`.
+- The accepted HVA predictor mechanism is not feedback yet. It is a local,
+  train-only, Dale-separated predictor from current L2/3 population tiles to
+  future L2/3 population tiles: baseline + nonnegative local excitatory branch
+  - nonnegative local suppressive branch. No L4 input, future features,
+  heldout updates, HVA-to-V1 feedback, signed excitatory weights, or host
+  softmax/listwise readout are allowed. Report the caveat honestly: the
+  suppressive branch is algorithmic/local rather than an explicit interneuron
+  circuit until feedback-stage implementation makes it fully spiking.
+- Correction from user 2026-06-13: do not call the higher-area predictor
+  milestone successful unless the prediction is carried by an explicit spiking
+  HVA/higher-area population and decoded from that population's spikes/state.
+  Direct learned L2/3-to-future-L2/3 readouts, weight matrices, host-side
+  predictors, or algorithmic E/I readout heads are diagnostic experiments only,
+  not completion of the requested model. Before any future "success" report,
+  require a contract check showing: HVA neurons exist, HVA spikes/state are the
+  prediction source, learning is local/STDP- or eligibility-based, no direct
+  L2/3 prediction head is used for the pass metric, no future/heldout leakage is
+  present, and the validator enforces these architectural constraints.
+- Correction from user 2026-06-13: do not let an unfinished scientific task go
+  idle. If the objective has not passed its strict validation, keep either a
+  concrete local command, a monitored long run, or a delegated agent task active;
+  otherwise checkpoint the exact blocker and next command instead of treating a
+  stale goal state or partial result as permission to stop.
