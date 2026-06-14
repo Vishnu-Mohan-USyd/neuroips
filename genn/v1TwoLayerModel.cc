@@ -1208,6 +1208,8 @@ struct SpikingHVAConfig {
     unsigned int pred_pv_homeostasis_epochs = 2u;
     double pred_pv_homeostasis_target_hz = 0.5;
     double pred_pv_homeostasis_eta_na_per_hz = 0.001;
+    double pred_pv_homeostasis_target_i_ext_na = 0.38;
+    double pred_pv_homeostasis_i_ext_eta = 1.0;
     double pred_pv_homeostasis_i_min_na = 0.0;
     double pred_pv_homeostasis_i_max_na = -1.0;
     bool pv_to_pred_homeostasis_enabled = false;
@@ -1375,11 +1377,13 @@ struct SpikingHVAPredictorRateRow {
     double hva_e_rate_hz = 0.0;
     double hva_e_slow_context_rate_hz = 0.0;
     double hva_pred_e_spike_rate_hz = 0.0;
+    double hva_pred_pv_rate_hz = 0.0;
     double hva_pred_e_spike_trace_hz = 0.0;
     double hva_pred_e_membrane_state_norm = 0.0;
     double hva_pred_e_synaptic_current_state_norm = 0.0;
     double hva_pred_e_exc_current_state_norm = 0.0;
     double hva_pred_e_inh_current_state_norm = 0.0;
+    double hva_pred_pv_to_pred_e_inh_current_state_norm = 0.0;
     double hva_pred_e_baseline_current_state_norm = 0.0;
     double hva_pred_e_signed_residual_state_norm = 0.0;
     double l23e_state_norm = 0.0;
@@ -1631,6 +1635,7 @@ struct HVAPredictorPredictionRow {
     double hva_pred_e_synaptic_current_state_norm = 0.0;
     double hva_pred_e_exc_current_state_norm = 0.0;
     double hva_pred_e_inh_current_state_norm = 0.0;
+    double hva_pred_pv_to_pred_e_inh_current_state_norm = 0.0;
     double hva_pred_e_baseline_current_state_norm = 0.0;
     double hva_pred_e_signed_residual_state_norm = 0.0;
     double hva_pred_readout_e_synaptic_current_state_norm = 0.0;
@@ -3969,6 +3974,12 @@ SpikingHVAConfig getSpikingHVAConfig()
     config.pred_pv_homeostasis_eta_na_per_hz = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_ETA_NA_PER_HZ",
         config.pred_pv_homeostasis_eta_na_per_hz);
+    config.pred_pv_homeostasis_target_i_ext_na = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_TARGET_IEXT_NA",
+        config.pred_pv_homeostasis_target_i_ext_na);
+    config.pred_pv_homeostasis_i_ext_eta = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_IEXT_ETA",
+        config.pred_pv_homeostasis_i_ext_eta);
     config.pred_pv_homeostasis_i_min_na = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_I_MIN_NA",
         config.pred_pv_homeostasis_i_min_na);
@@ -4176,6 +4187,17 @@ SpikingHVAConfig getSpikingHVAConfig()
        || config.pred_pv_homeostasis_eta_na_per_hz < 0.0) {
         throw std::runtime_error(
             "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_ETA_NA_PER_HZ must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.pred_pv_homeostasis_target_i_ext_na)
+       || config.pred_pv_homeostasis_target_i_ext_na < 0.0) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_TARGET_IEXT_NA must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.pred_pv_homeostasis_i_ext_eta)
+       || config.pred_pv_homeostasis_i_ext_eta < 0.0
+       || config.pred_pv_homeostasis_i_ext_eta > 1.0) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_IEXT_ETA must be finite in [0, 1].");
     }
     if(!std::isfinite(config.pred_pv_homeostasis_i_min_na)
        || config.pred_pv_homeostasis_i_min_na < 0.0) {
@@ -8722,6 +8744,9 @@ struct SpikingHVAPredictionProjectionTrainingResult {
     unsigned int pred_pv_homeostasis_epochs = 0u;
     double pred_pv_homeostasis_target_hz = 0.0;
     double pred_pv_homeostasis_eta_na_per_hz = 0.0;
+    double pred_pv_homeostasis_target_i_ext_na = 0.0;
+    double pred_pv_homeostasis_effective_target_i_ext_na = 0.0;
+    double pred_pv_homeostasis_i_ext_eta = 0.0;
     double pred_pv_homeostasis_i_min_na = 0.0;
     double pred_pv_homeostasis_i_max_na = 0.0;
     double pred_pv_homeostasis_i_ext_mean_before = 0.0;
@@ -9219,6 +9244,104 @@ std::vector<double> computeSpikingHVAContextTransitionTileStateNorm(
     return state_norm;
 }
 
+std::vector<double> computeSpikingHVAPredPVToPredEInhibitoryTileStateNorm(
+    const SpikingHVAConfig &spiking_hva_config,
+    const SpikingHVAPredictorConfig &predictor_config,
+    const VideoReplayConfig &video_config,
+    const std::vector<TrialWindow> &video_trials,
+    const std::vector<double> &hva_pred_pv_neuron_spike_counts,
+    const std::vector<std::pair<unsigned int, unsigned int>> &hva_pred_pv_pred_edges,
+    const std::vector<float> &pred_pv_to_pred_weights)
+{
+    if(!spiking_hva_config.enabled
+       || hva_pred_pv_neuron_spike_counts.empty()
+       || hva_pred_pv_pred_edges.empty()
+       || pred_pv_to_pred_weights.empty()) {
+        return {};
+    }
+    const unsigned int pred_pv_count = spiking_hva_config.pred_pv_count();
+    const unsigned int pred_e_count = spiking_hva_config.pred_e_count();
+    const unsigned int tile_count = predictor_config.tile_count();
+    const std::size_t expected_trial_count =
+        static_cast<std::size_t>(video_config.repeat_count) * video_config.effective_frame_count;
+    if(video_trials.size() != expected_trial_count) {
+        throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E state export received inconsistent trial count.");
+    }
+    if(pred_pv_count == 0u || pred_e_count == 0u || pred_pv_to_pred_weights.size() % pred_pv_count != 0u) {
+        throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E state weights are not row-major by pre neuron.");
+    }
+    if(hva_pred_pv_neuron_spike_counts.size()
+       != expected_trial_count * static_cast<std::size_t>(pred_pv_count)) {
+        throw std::runtime_error(
+            "HVA_PRED_PV->HVA_PRED_E state export received inconsistent PRED_PV count vector.");
+    }
+    const double rheobase_current_na = lifRheobaseCurrentNa(v1_genn::kExcitatoryLIF);
+    if(rheobase_current_na <= 0.0) {
+        throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E state export has invalid PRED_E rheobase.");
+    }
+
+    const std::size_t max_row_length = pred_pv_to_pred_weights.size() / pred_pv_count;
+    std::vector<std::size_t> row_active_index(pred_pv_count, 0u);
+    std::vector<std::size_t> edge_slots;
+    edge_slots.reserve(hva_pred_pv_pred_edges.size());
+    for(const auto &edge : hva_pred_pv_pred_edges) {
+        const unsigned int pre_id = edge.first;
+        const unsigned int post_id = edge.second;
+        if(pre_id >= pred_pv_count || post_id >= pred_e_count) {
+            throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E state edge index exceeds population size.");
+        }
+        const std::size_t slot =
+            (static_cast<std::size_t>(pre_id) * max_row_length) + row_active_index[pre_id];
+        row_active_index[pre_id]++;
+        if(slot >= pred_pv_to_pred_weights.size()) {
+            throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E state edge mapping exceeded sparse row capacity.");
+        }
+        edge_slots.push_back(slot);
+    }
+
+    const double tau_s = v1_genn::kPVInhTauSynMs / 1000.0;
+    std::vector<double> state_norm(
+        expected_trial_count * static_cast<std::size_t>(tile_count),
+        0.0);
+    for(std::size_t sample_index = 0; sample_index < expected_trial_count; sample_index++) {
+        const TrialWindow &trial = video_trials[sample_index];
+        const double duration_s = (trial.end_ms - trial.measure_start_ms) / 1000.0;
+        if(duration_s <= 0.0) {
+            throw std::runtime_error("HVA_PRED_PV->HVA_PRED_E state export encountered non-positive trial duration.");
+        }
+        std::vector<double> post_current_norm(pred_e_count, 0.0);
+        for(std::size_t edge_index = 0; edge_index < hva_pred_pv_pred_edges.size(); edge_index++) {
+            const unsigned int pre_id = hva_pred_pv_pred_edges[edge_index].first;
+            const unsigned int post_id = hva_pred_pv_pred_edges[edge_index].second;
+            const std::size_t slot = edge_slots[edge_index];
+            const double pre_rate_hz =
+                hva_pred_pv_neuron_spike_counts[
+                    (sample_index * static_cast<std::size_t>(pred_pv_count)) + pre_id]
+                / duration_s;
+            const double inhibitory_weight_na =
+                std::max(0.0, -static_cast<double>(pred_pv_to_pred_weights[slot]));
+            post_current_norm[post_id] +=
+                (inhibitory_weight_na * std::max(0.0, pre_rate_hz) * tau_s)
+                / rheobase_current_na;
+        }
+        std::vector<double> tile_sum(tile_count, 0.0);
+        std::vector<unsigned int> tile_cell_count(tile_count, 0u);
+        for(unsigned int post_id = 0; post_id < pred_e_count; post_id++) {
+            const unsigned int post_site = post_id / spiking_hva_config.pred_e_per_site;
+            const unsigned int post_tile = hvaTileIdForSite(post_site, predictor_config.tile_grid_side);
+            tile_sum[post_tile] += clippedValue(post_current_norm[post_id], 0.0, 2.0);
+            tile_cell_count[post_tile]++;
+        }
+        for(unsigned int tile_id = 0; tile_id < tile_count; tile_id++) {
+            state_norm[(sample_index * static_cast<std::size_t>(tile_count)) + tile_id] =
+                tile_cell_count[tile_id] == 0u
+                    ? 0.0
+                    : tile_sum[tile_id] / static_cast<double>(tile_cell_count[tile_id]);
+        }
+    }
+    return state_norm;
+}
+
 SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProjection(
     const SpikingHVAPredictorConfig &config,
     const SpikingHVAConfig &spiking_hva_config,
@@ -9269,6 +9392,10 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
         spiking_hva_config.pred_pv_homeostasis_target_hz;
     result.pred_pv_homeostasis_eta_na_per_hz =
         spiking_hva_config.pred_pv_homeostasis_eta_na_per_hz;
+    result.pred_pv_homeostasis_target_i_ext_na =
+        spiking_hva_config.pred_pv_homeostasis_target_i_ext_na;
+    result.pred_pv_homeostasis_i_ext_eta =
+        spiking_hva_config.pred_pv_homeostasis_i_ext_eta;
     result.pred_pv_homeostasis_i_min_na =
         spiking_hva_config.pred_pv_homeostasis_i_min_na;
     result.pred_pv_homeostasis_i_max_na =
@@ -11944,9 +12071,11 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     const std::vector<double> &hva_e_site_spike_counts,
     const std::vector<double> &hva_slow_context_site_spike_counts,
     const std::vector<double> &hva_pred_e_site_spike_counts,
+    const std::vector<double> &hva_pred_pv_site_spike_counts,
     const std::vector<double> &hva_pred_e_synaptic_current_tile_state_norm,
     const std::vector<double> &hva_pred_e_exc_current_tile_state_norm,
     const std::vector<double> &hva_pred_e_inh_current_tile_state_norm,
+    const std::vector<double> &hva_pred_pv_to_pred_e_inh_current_tile_state_norm,
     const std::vector<double> &hva_pred_e_baseline_current_tile_state_norm,
     const std::vector<double> &hva_pred_e_signed_residual_tile_state_norm,
     const std::vector<double> &hva_pred_e_membrane_tile_state_norm,
@@ -11970,6 +12099,7 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     double hva_slow_context_context_to_e_weight,
     double hva_slow_context_context_to_pv_weight,
     unsigned int hva_pred_e_neurons_per_site,
+    unsigned int hva_pred_pv_neurons_per_site,
     bool hva_pred_e_inhibitory_branch_real,
     const SpikingHVAPredictionProjectionTrainingResult &actual_projection_training)
 {
@@ -11987,7 +12117,8 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         expected_sample_count * static_cast<std::size_t>(v1_genn::kSiteCount);
     if(l23e_site_spike_counts.size() != expected_site_count_size
        || hva_e_site_spike_counts.size() != expected_site_count_size
-       || hva_pred_e_site_spike_counts.size() != expected_site_count_size) {
+       || hva_pred_e_site_spike_counts.size() != expected_site_count_size
+       || hva_pred_pv_site_spike_counts.size() != expected_site_count_size) {
         throw std::runtime_error("Spiking HVA predictor site count vectors have unexpected size.");
     }
     if(hva_slow_context_enabled
@@ -12006,6 +12137,9 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     validateTileStateVector(hva_pred_e_synaptic_current_tile_state_norm, "synaptic-current");
     validateTileStateVector(hva_pred_e_exc_current_tile_state_norm, "excitatory-current");
     validateTileStateVector(hva_pred_e_inh_current_tile_state_norm, "inhibitory-current");
+    validateTileStateVector(
+        hva_pred_pv_to_pred_e_inh_current_tile_state_norm,
+        "PRED_PV-to-PRED_E-inhibitory-current");
     validateTileStateVector(hva_pred_e_baseline_current_tile_state_norm, "baseline-current");
     validateTileStateVector(hva_pred_e_signed_residual_tile_state_norm, "signed-residual-current");
     validateTileStateVector(hva_pred_readout_e_synaptic_current_tile_state_norm, "readout-synaptic-current");
@@ -12081,6 +12215,12 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         config.tile_grid_side,
         hva_pred_e_neurons_per_site,
         "Spiking HVA predictor HVA_PRED_E");
+    const std::vector<double> hva_pred_pv_tile_rates = makePopulationTileRatesForVideoTrials(
+        video_trials,
+        hva_pred_pv_site_spike_counts,
+        config.tile_grid_side,
+        hva_pred_pv_neurons_per_site,
+        "Spiking HVA predictor HVA_PRED_PV");
     std::vector<double> hva_pred_e_state_tile_rates(hva_pred_e_tile_rates.size(), 0.0);
     const double pred_state_alpha =
         1.0 - std::exp(-1.0 / actual_projection_training.pred_e_state_trace_tau_frames);
@@ -12194,6 +12334,7 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                 row.hva_e_rate_hz = hva_e_tile_rates[offset];
                 row.hva_e_slow_context_rate_hz = hva_slow_context_tile_rates[offset];
                 row.hva_pred_e_spike_rate_hz = hva_pred_e_tile_rates[offset];
+                row.hva_pred_pv_rate_hz = hva_pred_pv_tile_rates[offset];
                 row.hva_pred_e_spike_trace_hz = hva_pred_e_state_tile_rates[offset];
                 row.hva_pred_e_membrane_state_norm =
                     hva_pred_e_membrane_tile_state_norm.empty()
@@ -12211,6 +12352,10 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                     hva_pred_e_inh_current_tile_state_norm.empty()
                         ? 0.0
                         : hva_pred_e_inh_current_tile_state_norm[offset];
+                row.hva_pred_pv_to_pred_e_inh_current_state_norm =
+                    hva_pred_pv_to_pred_e_inh_current_tile_state_norm.empty()
+                        ? 0.0
+                        : hva_pred_pv_to_pred_e_inh_current_tile_state_norm[offset];
                 row.hva_pred_e_baseline_current_state_norm =
                     hva_pred_e_baseline_current_tile_state_norm.empty()
                         ? 0.0
@@ -12781,6 +12926,9 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     result.metrics.push_back({"pred_e_raw_tile_rate_mean_hz", meanRate(hva_pred_e_tile_rates)});
     result.metrics.push_back({"pred_e_raw_tile_rate_p99_hz", percentile(hva_pred_e_tile_rates, 99.0)});
     result.metrics.push_back({"pred_e_raw_tile_rate_nonzero_frac", nonzeroFraction(hva_pred_e_tile_rates)});
+    result.metrics.push_back({"pred_pv_tile_rate_mean_hz", meanRate(hva_pred_pv_tile_rates)});
+    result.metrics.push_back({"pred_pv_tile_rate_p99_hz", percentile(hva_pred_pv_tile_rates, 99.0)});
+    result.metrics.push_back({"pred_pv_tile_rate_nonzero_frac", nonzeroFraction(hva_pred_pv_tile_rates)});
     result.metrics.push_back({"pred_e_state_trace_mean_hz", meanRate(hva_pred_e_state_tile_rates)});
     result.metrics.push_back({"pred_e_state_trace_p99_hz", percentile(hva_pred_e_state_tile_rates, 99.0)});
     result.metrics.push_back({"pred_e_state_trace_nonzero_frac", nonzeroFraction(hva_pred_e_state_tile_rates)});
@@ -13105,6 +13253,12 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         percentile(hva_pred_e_inh_current_tile_state_norm, 99.0)});
     result.metrics.push_back({"pred_e_inh_current_state_nonzero_frac",
         nonzeroFraction(hva_pred_e_inh_current_tile_state_norm)});
+    result.metrics.push_back({"pred_pv_to_pred_e_inh_current_state_mean_norm",
+        meanRate(hva_pred_pv_to_pred_e_inh_current_tile_state_norm)});
+    result.metrics.push_back({"pred_pv_to_pred_e_inh_current_state_p99_norm",
+        percentile(hva_pred_pv_to_pred_e_inh_current_tile_state_norm, 99.0)});
+    result.metrics.push_back({"pred_pv_to_pred_e_inh_current_state_nonzero_frac",
+        nonzeroFraction(hva_pred_pv_to_pred_e_inh_current_tile_state_norm)});
     result.metrics.push_back({"pred_e_baseline_current_state_mean_norm",
         meanRate(hva_pred_e_baseline_current_tile_state_norm)});
     result.metrics.push_back({"pred_e_baseline_current_state_p99_norm",
@@ -13261,6 +13415,10 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                         hva_pred_e_inh_current_tile_state_norm.empty()
                             ? 0.0
                             : hva_pred_e_inh_current_tile_state_norm[current_tile_offset];
+                    const double pred_pv_to_pred_e_inh_current_state_norm =
+                        hva_pred_pv_to_pred_e_inh_current_tile_state_norm.empty()
+                            ? 0.0
+                            : hva_pred_pv_to_pred_e_inh_current_tile_state_norm[current_tile_offset];
                     const double baseline_current_state_norm =
                         hva_pred_e_baseline_current_tile_state_norm.empty()
                             ? 0.0
@@ -13381,6 +13539,8 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                     row.hva_pred_e_synaptic_current_state_norm = synaptic_current_state_norm;
                     row.hva_pred_e_exc_current_state_norm = exc_current_state_norm;
                     row.hva_pred_e_inh_current_state_norm = inh_current_state_norm;
+                    row.hva_pred_pv_to_pred_e_inh_current_state_norm =
+                        pred_pv_to_pred_e_inh_current_state_norm;
                     row.hva_pred_e_baseline_current_state_norm = baseline_current_state_norm;
                     row.hva_pred_e_signed_residual_state_norm = signed_residual_state_norm;
                     row.hva_pred_readout_e_synaptic_current_state_norm =
@@ -13774,6 +13934,12 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         actual_projection_training.pred_pv_homeostasis_target_hz});
     result.metrics.push_back({"pred_pv_homeostasis_eta_na_per_hz",
         actual_projection_training.pred_pv_homeostasis_eta_na_per_hz});
+    result.metrics.push_back({"pred_pv_homeostasis_target_i_ext_na",
+        actual_projection_training.pred_pv_homeostasis_target_i_ext_na});
+    result.metrics.push_back({"pred_pv_homeostasis_effective_target_i_ext_na",
+        actual_projection_training.pred_pv_homeostasis_effective_target_i_ext_na});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_eta",
+        actual_projection_training.pred_pv_homeostasis_i_ext_eta});
     result.metrics.push_back({"pred_pv_homeostasis_i_min_na",
         actual_projection_training.pred_pv_homeostasis_i_min_na});
     result.metrics.push_back({"pred_pv_homeostasis_i_max_na",
@@ -17929,6 +18095,7 @@ void writeHVAPredictorPredictionsCsv(
            << "hva_pred_e_membrane_state_norm,hva_pred_e_spike_trace_state_norm,"
            << "hva_pred_e_synaptic_current_state_norm,"
            << "hva_pred_e_exc_current_state_norm,hva_pred_e_inh_current_state_norm,"
+           << "hva_pred_pv_to_pred_e_inh_current_state_norm,"
            << "hva_pred_e_baseline_current_state_norm,hva_pred_e_signed_residual_state_norm,"
            << "hva_pred_readout_e_synaptic_current_state_norm,"
            << "hva_pred_readout_e_exc_current_state_norm,"
@@ -17970,6 +18137,7 @@ void writeHVAPredictorPredictionsCsv(
                << row.hva_pred_e_synaptic_current_state_norm << ","
                << row.hva_pred_e_exc_current_state_norm << ","
                << row.hva_pred_e_inh_current_state_norm << ","
+               << row.hva_pred_pv_to_pred_e_inh_current_state_norm << ","
                << row.hva_pred_e_baseline_current_state_norm << ","
                << row.hva_pred_e_signed_residual_state_norm << ","
                << row.hva_pred_readout_e_synaptic_current_state_norm << ","
@@ -18124,9 +18292,10 @@ void writeSpikingHVAPredictorRatesCsv(
     output << std::fixed << std::setprecision(6);
     output << "sample_index,repeat_index,frame_index,tile_id,tile_x,tile_y,"
            << "l23e_rate_hz,hva_e_rate_hz,hva_e_slow_context_rate_hz,hva_pred_e_spike_rate_hz,"
-           << "hva_pred_e_spike_trace_hz,hva_pred_e_membrane_state_norm,"
+           << "hva_pred_pv_rate_hz,hva_pred_e_spike_trace_hz,hva_pred_e_membrane_state_norm,"
            << "hva_pred_e_synaptic_current_state_norm,"
            << "hva_pred_e_exc_current_state_norm,hva_pred_e_inh_current_state_norm,"
+           << "hva_pred_pv_to_pred_e_inh_current_state_norm,"
            << "hva_pred_e_baseline_current_state_norm,hva_pred_e_signed_residual_state_norm,"
            << "l23e_state_norm,hva_e_state_norm,hva_e_slow_context_state_norm,"
            << "hva_ctx_transition_state_norm\n";
@@ -18141,11 +18310,13 @@ void writeSpikingHVAPredictorRatesCsv(
                << row.hva_e_rate_hz << ","
                << row.hva_e_slow_context_rate_hz << ","
                << row.hva_pred_e_spike_rate_hz << ","
+               << row.hva_pred_pv_rate_hz << ","
                << row.hva_pred_e_spike_trace_hz << ","
                << row.hva_pred_e_membrane_state_norm << ","
                << row.hva_pred_e_synaptic_current_state_norm << ","
                << row.hva_pred_e_exc_current_state_norm << ","
                << row.hva_pred_e_inh_current_state_norm << ","
+               << row.hva_pred_pv_to_pred_e_inh_current_state_norm << ","
                << row.hva_pred_e_baseline_current_state_norm << ","
                << row.hva_pred_e_signed_residual_state_norm << ","
                << row.l23e_state_norm << ","
@@ -26800,7 +26971,8 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 throw std::runtime_error("HVA_PRED_PV homeostasis Iext array has unexpected size.");
             }
 
-            const double automatic_i_max_na = 0.98 * lifRheobaseCurrentNa(v1_genn::kPVLIF);
+            const double automatic_i_max_na =
+                std::min(0.40, 0.98 * lifRheobaseCurrentNa(v1_genn::kPVLIF));
             const double homeostasis_i_min_na = spiking_hva_config.pred_pv_homeostasis_i_min_na;
             const double homeostasis_i_max_na =
                 spiking_hva_config.pred_pv_homeostasis_i_max_na >= 0.0
@@ -26809,10 +26981,16 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             if(homeostasis_i_max_na < homeostasis_i_min_na) {
                 throw std::runtime_error("HVA_PRED_PV homeostasis max current is below min current.");
             }
+            const double effective_target_i_ext_na = clippedValue(
+                spiking_hva_config.pred_pv_homeostasis_target_i_ext_na,
+                homeostasis_i_min_na,
+                homeostasis_i_max_na);
             spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_min_na =
                 homeostasis_i_min_na;
             spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_max_na =
                 homeostasis_i_max_na;
+            spiking_hva_actual_prediction_training.pred_pv_homeostasis_effective_target_i_ext_na =
+                effective_target_i_ext_na;
 
             hva_pred_pv_iext.pullFromDevice();
             const float *initial_i_ext = hva_pred_pv_iext.getHostPointer<float>();
@@ -26932,11 +27110,20 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 hva_pred_pv_iext.pullFromDevice();
                 float *i_ext = hva_pred_pv_iext.getHostPointer<float>();
                 for(unsigned int pred_pv_id = 0; pred_pv_id < pred_pv_count; pred_pv_id++) {
-                    const double raw_i_ext_na =
-                        static_cast<double>(i_ext[pred_pv_id])
+                    const double current_i_ext_na = static_cast<double>(i_ext[pred_pv_id]);
+                    const double local_rate_adjusted_target_na =
+                        effective_target_i_ext_na
                         + (spiking_hva_config.pred_pv_homeostasis_eta_na_per_hz
                            * (spiking_hva_config.pred_pv_homeostasis_target_hz
                               - pred_pv_rates_hz[pred_pv_id]));
+                    const double bounded_local_target_na = clippedValue(
+                        local_rate_adjusted_target_na,
+                        homeostasis_i_min_na,
+                        homeostasis_i_max_na);
+                    const double raw_i_ext_na =
+                        current_i_ext_na
+                        + (spiking_hva_config.pred_pv_homeostasis_i_ext_eta
+                           * (bounded_local_target_na - current_i_ext_na));
                     const double clipped_i_ext_na =
                         clippedValue(raw_i_ext_na, homeostasis_i_min_na, homeostasis_i_max_na);
                     if(clipped_i_ext_na != raw_i_ext_na) {
@@ -28041,6 +28228,33 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 spiking_hva_prediction_trials,
                 spiking_hva_config.pred_e_per_site)
             : std::vector<double>();
+    const std::vector<double> spiking_hva_prediction_hva_pred_pv_site_counts =
+        (spiking_hva_predictor_config.enabled && !spiking_hva_prediction_trials.empty())
+            ? countSiteSpikesForTrials(
+                hva_pred_pv_recordings.at(0),
+                spiking_hva_prediction_trials,
+                spiking_hva_config.pred_pv_per_site)
+            : std::vector<double>();
+    const std::vector<double> spiking_hva_prediction_hva_pred_pv_neuron_counts =
+        (spiking_hva_predictor_config.enabled && !spiking_hva_prediction_trials.empty())
+            ? countNeuronSpikesForTrials(
+                hva_pred_pv_recordings.at(0),
+                spiking_hva_prediction_trials,
+                spiking_hva_config.pred_pv_count())
+            : std::vector<double>();
+    const std::vector<double> spiking_hva_prediction_pred_pv_to_pred_e_inh_current_tile_state_norm =
+        (spiking_hva_predictor_config.enabled
+         && !spiking_hva_prediction_trials.empty()
+         && hva_pred_pv_to_hva_pred_e != nullptr)
+            ? computeSpikingHVAPredPVToPredEInhibitoryTileStateNorm(
+                spiking_hva_config,
+                spiking_hva_predictor_config,
+                video_replay_config,
+                spiking_hva_prediction_trials,
+                spiking_hva_prediction_hva_pred_pv_neuron_counts,
+                hva_pred_pv_pred_edges,
+                copyWeights(runtime, *hva_pred_pv_to_hva_pred_e))
+            : std::vector<double>();
     const std::vector<double> spiking_hva_prediction_hva_pred_readout_e_site_counts =
         (spiking_hva_predictor_config.enabled
          && spiking_hva_config.pred_readout_enabled
@@ -28318,9 +28532,11 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                 ? spiking_hva_prediction_hva_slow_context_site_counts
                 : video_hva_slow_context_site_counts,
             spiking_hva_prediction_hva_pred_e_site_counts,
+            spiking_hva_prediction_hva_pred_pv_site_counts,
             spiking_hva_prediction_hva_pred_e_synaptic_current_tile_state_norm,
             spiking_hva_prediction_hva_pred_e_exc_current_tile_state_norm,
             spiking_hva_prediction_hva_pred_e_inh_current_tile_state_norm,
+            spiking_hva_prediction_pred_pv_to_pred_e_inh_current_tile_state_norm,
             spiking_hva_prediction_hva_pred_e_baseline_current_tile_state_norm,
             spiking_hva_prediction_hva_pred_e_signed_residual_tile_state_norm,
             spiking_hva_prediction_hva_pred_e_membrane_tile_state_norm,
@@ -28344,6 +28560,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             spiking_hva_config.slow_context_context_to_e_weight,
             spiking_hva_config.slow_context_context_to_pv_weight,
             spiking_hva_config.pred_e_per_site,
+            spiking_hva_config.pred_pv_per_site,
             spiking_hva_config.pv_to_pred_enabled
                 || spiking_hva_actual_prediction_training.ctx_to_pred_suppressive_enabled
                 || spiking_hva_actual_prediction_training.hva_e_to_pred_suppressive_enabled,
