@@ -1204,6 +1204,12 @@ struct SpikingHVAConfig {
     unsigned int pred_e_homeostasis_epochs = 3u;
     double pred_e_homeostasis_eta_na_per_hz = 0.003;
     double pred_e_homeostasis_i_max_na = -1.0;
+    bool pred_pv_homeostasis_enabled = true;
+    unsigned int pred_pv_homeostasis_epochs = 2u;
+    double pred_pv_homeostasis_target_hz = 0.5;
+    double pred_pv_homeostasis_eta_na_per_hz = 0.001;
+    double pred_pv_homeostasis_i_min_na = 0.0;
+    double pred_pv_homeostasis_i_max_na = -1.0;
     bool pv_to_pred_homeostasis_enabled = false;
     unsigned int pv_to_pred_homeostasis_epochs = 1u;
     double pv_to_pred_homeostasis_eta = 0.0001;
@@ -1258,6 +1264,7 @@ struct SpikingHVAMetrics {
     double video_hva_pv_mean_rate_hz = 0.0;
     double video_hva_pred_e_mean_rate_hz = 0.0;
     double video_hva_pred_pv_mean_rate_hz = 0.0;
+    double video_hva_pred_pv_p99_rate_hz = 0.0;
     double video_hva_pred_readout_e_mean_rate_hz = 0.0;
     double video_hva_slow_context_mean_rate_hz = 0.0;
     unsigned int video_rate_sample_count = 0u;
@@ -3949,6 +3956,25 @@ SpikingHVAConfig getSpikingHVAConfig()
     config.pred_e_homeostasis_i_max_na = getEnvDoubleOrDefault(
         "V1_SPIKING_HVA_PRED_E_HOMEOSTASIS_I_MAX_NA",
         config.pred_e_homeostasis_i_max_na);
+    config.pred_pv_homeostasis_enabled =
+        getEnvUnsignedOrDefault(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_ENABLE",
+            config.pred_pv_homeostasis_enabled ? 1u : 0u) != 0u;
+    config.pred_pv_homeostasis_epochs = getEnvUnsignedOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_EPOCHS",
+        config.pred_pv_homeostasis_epochs);
+    config.pred_pv_homeostasis_target_hz = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_TARGET_HZ",
+        config.pred_pv_homeostasis_target_hz);
+    config.pred_pv_homeostasis_eta_na_per_hz = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_ETA_NA_PER_HZ",
+        config.pred_pv_homeostasis_eta_na_per_hz);
+    config.pred_pv_homeostasis_i_min_na = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_I_MIN_NA",
+        config.pred_pv_homeostasis_i_min_na);
+    config.pred_pv_homeostasis_i_max_na = getEnvDoubleOrDefault(
+        "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_I_MAX_NA",
+        config.pred_pv_homeostasis_i_max_na);
     config.pv_to_pred_homeostasis_enabled = getEnvUnsignedOrDefault(
         "V1_SPIKING_HVA_PV_TO_PRED_HOMEOSTASIS_ENABLE",
         config.pv_to_pred_homeostasis_enabled ? 1u : 0u) != 0u;
@@ -4136,6 +4162,33 @@ SpikingHVAConfig getSpikingHVAConfig()
        || (config.pred_e_homeostasis_i_max_na < 0.0 && config.pred_e_homeostasis_i_max_na != -1.0)) {
         throw std::runtime_error(
             "V1_SPIKING_HVA_PRED_E_HOMEOSTASIS_I_MAX_NA must be finite, non-negative, or -1 for automatic.");
+    }
+    if(config.pred_pv_homeostasis_enabled && config.pred_pv_homeostasis_epochs == 0u) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_EPOCHS must be at least 1 when enabled.");
+    }
+    if(!std::isfinite(config.pred_pv_homeostasis_target_hz)
+       || config.pred_pv_homeostasis_target_hz < 0.0) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_TARGET_HZ must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.pred_pv_homeostasis_eta_na_per_hz)
+       || config.pred_pv_homeostasis_eta_na_per_hz < 0.0) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_ETA_NA_PER_HZ must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.pred_pv_homeostasis_i_min_na)
+       || config.pred_pv_homeostasis_i_min_na < 0.0) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_I_MIN_NA must be finite and non-negative.");
+    }
+    if(!std::isfinite(config.pred_pv_homeostasis_i_max_na)
+       || (config.pred_pv_homeostasis_i_max_na < 0.0
+           && config.pred_pv_homeostasis_i_max_na != -1.0)
+       || (config.pred_pv_homeostasis_i_max_na >= 0.0
+           && config.pred_pv_homeostasis_i_max_na < config.pred_pv_homeostasis_i_min_na)) {
+        throw std::runtime_error(
+            "V1_SPIKING_HVA_PRED_PV_HOMEOSTASIS_I_MAX_NA must be -1 or finite with max >= min.");
     }
     if(config.pv_to_pred_homeostasis_enabled && !config.pv_to_pred_enabled) {
         throw std::runtime_error(
@@ -8665,6 +8718,25 @@ struct SpikingHVAPredictionProjectionTrainingResult {
     std::uint64_t pred_e_homeostasis_update_count = 0u;
     std::uint64_t pred_e_homeostasis_heldout_update_count = 0u;
     std::vector<double> pred_e_homeostasis_target_rate_hz_by_tile;
+    bool pred_pv_homeostasis_enabled = false;
+    unsigned int pred_pv_homeostasis_epochs = 0u;
+    double pred_pv_homeostasis_target_hz = 0.0;
+    double pred_pv_homeostasis_eta_na_per_hz = 0.0;
+    double pred_pv_homeostasis_i_min_na = 0.0;
+    double pred_pv_homeostasis_i_max_na = 0.0;
+    double pred_pv_homeostasis_i_ext_mean_before = 0.0;
+    double pred_pv_homeostasis_i_ext_min_before = 0.0;
+    double pred_pv_homeostasis_i_ext_max_before = 0.0;
+    double pred_pv_homeostasis_i_ext_mean_after = 0.0;
+    double pred_pv_homeostasis_i_ext_min_after = 0.0;
+    double pred_pv_homeostasis_i_ext_max_after = 0.0;
+    double pred_pv_homeostasis_i_ext_clipped_frac = 0.0;
+    double pred_pv_homeostasis_train_rate_mean_before = 0.0;
+    double pred_pv_homeostasis_train_rate_p99_before = 0.0;
+    double pred_pv_homeostasis_train_rate_mean_after = 0.0;
+    double pred_pv_homeostasis_train_rate_p99_after = 0.0;
+    std::uint64_t pred_pv_homeostasis_update_count = 0u;
+    std::uint64_t pred_pv_homeostasis_heldout_update_count = 0u;
     bool pv_to_pred_homeostasis_enabled = false;
     unsigned int pv_to_pred_homeostasis_epochs = 0u;
     double pv_to_pred_homeostasis_eta = 0.0;
@@ -9189,6 +9261,18 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
     result.pred_e_homeostasis_epochs = spiking_hva_config.pred_e_homeostasis_epochs;
     result.pred_e_homeostasis_eta_na_per_hz =
         spiking_hva_config.pred_e_homeostasis_eta_na_per_hz;
+    result.pred_pv_homeostasis_enabled =
+        spiking_hva_config.pred_pv_homeostasis_enabled;
+    result.pred_pv_homeostasis_epochs =
+        spiking_hva_config.pred_pv_homeostasis_epochs;
+    result.pred_pv_homeostasis_target_hz =
+        spiking_hva_config.pred_pv_homeostasis_target_hz;
+    result.pred_pv_homeostasis_eta_na_per_hz =
+        spiking_hva_config.pred_pv_homeostasis_eta_na_per_hz;
+    result.pred_pv_homeostasis_i_min_na =
+        spiking_hva_config.pred_pv_homeostasis_i_min_na;
+    result.pred_pv_homeostasis_i_max_na =
+        spiking_hva_config.pred_pv_homeostasis_i_max_na;
     result.pv_to_pred_homeostasis_enabled =
         spiking_hva_config.pv_to_pred_homeostasis_enabled;
     result.pv_to_pred_homeostasis_epochs =
@@ -13682,6 +13766,44 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         static_cast<double>(actual_projection_training.pred_e_homeostasis_update_count)});
     result.metrics.push_back({"pred_e_homeostasis_heldout_update_count",
         static_cast<double>(actual_projection_training.pred_e_homeostasis_heldout_update_count)});
+    result.metrics.push_back({"pred_pv_homeostasis_enabled",
+        actual_projection_training.pred_pv_homeostasis_enabled ? 1.0 : 0.0});
+    result.metrics.push_back({"pred_pv_homeostasis_epochs",
+        static_cast<double>(actual_projection_training.pred_pv_homeostasis_epochs)});
+    result.metrics.push_back({"pred_pv_homeostasis_target_hz",
+        actual_projection_training.pred_pv_homeostasis_target_hz});
+    result.metrics.push_back({"pred_pv_homeostasis_eta_na_per_hz",
+        actual_projection_training.pred_pv_homeostasis_eta_na_per_hz});
+    result.metrics.push_back({"pred_pv_homeostasis_i_min_na",
+        actual_projection_training.pred_pv_homeostasis_i_min_na});
+    result.metrics.push_back({"pred_pv_homeostasis_i_max_na",
+        actual_projection_training.pred_pv_homeostasis_i_max_na});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_mean_before",
+        actual_projection_training.pred_pv_homeostasis_i_ext_mean_before});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_min_before",
+        actual_projection_training.pred_pv_homeostasis_i_ext_min_before});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_max_before",
+        actual_projection_training.pred_pv_homeostasis_i_ext_max_before});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_mean_after",
+        actual_projection_training.pred_pv_homeostasis_i_ext_mean_after});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_min_after",
+        actual_projection_training.pred_pv_homeostasis_i_ext_min_after});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_max_after",
+        actual_projection_training.pred_pv_homeostasis_i_ext_max_after});
+    result.metrics.push_back({"pred_pv_homeostasis_i_ext_clipped_frac",
+        actual_projection_training.pred_pv_homeostasis_i_ext_clipped_frac});
+    result.metrics.push_back({"pred_pv_homeostasis_train_rate_mean_before",
+        actual_projection_training.pred_pv_homeostasis_train_rate_mean_before});
+    result.metrics.push_back({"pred_pv_homeostasis_train_rate_p99_before",
+        actual_projection_training.pred_pv_homeostasis_train_rate_p99_before});
+    result.metrics.push_back({"pred_pv_homeostasis_train_rate_mean_after",
+        actual_projection_training.pred_pv_homeostasis_train_rate_mean_after});
+    result.metrics.push_back({"pred_pv_homeostasis_train_rate_p99_after",
+        actual_projection_training.pred_pv_homeostasis_train_rate_p99_after});
+    result.metrics.push_back({"pred_pv_homeostasis_update_count",
+        static_cast<double>(actual_projection_training.pred_pv_homeostasis_update_count)});
+    result.metrics.push_back({"pred_pv_homeostasis_heldout_update_count",
+        static_cast<double>(actual_projection_training.pred_pv_homeostasis_heldout_update_count)});
     result.metrics.push_back({"pv_to_pred_homeostasis_enabled",
         actual_projection_training.pv_to_pred_homeostasis_enabled ? 1.0 : 0.0});
     result.metrics.push_back({"pv_to_pred_homeostasis_epochs",
@@ -20417,6 +20539,8 @@ void writeSummaryFiles(
     csv << "spiking_hva_video_hva_pred_e_mean_rate_hz," << spiking_hva_metrics.video_hva_pred_e_mean_rate_hz << "\n";
     csv << "spiking_hva_video_hva_pred_pv_mean_rate_hz,"
         << spiking_hva_metrics.video_hva_pred_pv_mean_rate_hz << "\n";
+    csv << "spiking_hva_video_hva_pred_pv_p99_rate_hz,"
+        << spiking_hva_metrics.video_hva_pred_pv_p99_rate_hz << "\n";
     csv << "spiking_hva_video_hva_pred_readout_e_mean_rate_hz,"
         << spiking_hva_metrics.video_hva_pred_readout_e_mean_rate_hz << "\n";
     csv << "spiking_hva_video_hva_slow_context_mean_rate_hz,"
@@ -21894,6 +22018,8 @@ void writeSummaryFiles(
          << spiking_hva_metrics.video_hva_pred_e_mean_rate_hz << "\n";
     text << "spiking_hva_video_hva_pred_pv_mean_rate_hz="
          << spiking_hva_metrics.video_hva_pred_pv_mean_rate_hz << "\n";
+    text << "spiking_hva_video_hva_pred_pv_p99_rate_hz="
+         << spiking_hva_metrics.video_hva_pred_pv_p99_rate_hz << "\n";
     text << "spiking_hva_video_hva_pred_readout_e_mean_rate_hz="
          << spiking_hva_metrics.video_hva_pred_readout_e_mean_rate_hz << "\n";
     text << "spiking_hva_video_hva_slow_context_mean_rate_hz="
@@ -23442,6 +23568,14 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
             ? (video_replay_trial_count
                * (static_cast<std::size_t>(spiking_hva_config.pred_e_homeostasis_epochs) + 1u))
             : 0u;
+    const std::size_t spiking_hva_pred_pv_homeostasis_trial_count =
+        (spiking_hva_predictor_config.enabled
+         && spiking_hva_config.hva_e_to_pred_suppressive_enabled
+         && spiking_hva_config.pred_pv_homeostasis_enabled
+         && spiking_hva_config.pred_pv_homeostasis_epochs > 0u)
+            ? (video_replay_trial_count
+               * (static_cast<std::size_t>(spiking_hva_config.pred_pv_homeostasis_epochs) + 1u))
+            : 0u;
     const std::size_t spiking_hva_pv_to_pred_homeostasis_trial_count =
         (spiking_hva_predictor_config.enabled
          && spiking_hva_config.pv_to_pred_homeostasis_enabled
@@ -23507,6 +23641,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         + post_video_inhibitory_stabilization_trial_count
         + video_replay_trial_count
         + spiking_hva_pred_e_homeostasis_trial_count
+        + spiking_hva_pred_pv_homeostasis_trial_count
         + spiking_hva_pv_to_pred_homeostasis_trial_count
         + spiking_hva_prediction_replay_trial_count
         + video_event_timing_trial_count;
@@ -23522,6 +23657,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         + (post_video_inhibitory_stabilization_trial_count * static_cast<std::size_t>(trial_steps))
         + (video_replay_trial_count * static_cast<std::size_t>(video_frame_steps))
         + (spiking_hva_pred_e_homeostasis_trial_count * static_cast<std::size_t>(video_frame_steps))
+        + (spiking_hva_pred_pv_homeostasis_trial_count * static_cast<std::size_t>(video_frame_steps))
         + (spiking_hva_pv_to_pred_homeostasis_trial_count * static_cast<std::size_t>(video_frame_steps))
         + (spiking_hva_prediction_replay_trial_count * static_cast<std::size_t>(video_frame_steps))
         + (video_event_timing_trial_count * static_cast<std::size_t>(video_event_total_steps));
@@ -26652,6 +26788,203 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
                         + spiking_hva_actual_prediction_training.pred_e_homeostasis_update_count);
             }
         }
+        if(spiking_hva_actual_prediction_training.hva_e_to_pred_suppressive_enabled
+           && spiking_hva_config.pred_pv_homeostasis_enabled
+           && spiking_hva_config.pred_pv_homeostasis_epochs > 0u) {
+            if(hva_pred_pv_recordings.empty()) {
+                throw std::runtime_error("Spiking HVA_PRED_PV homeostasis expected recording storage.");
+            }
+            const unsigned int pred_pv_count = spiking_hva_config.pred_pv_count();
+            GeNN::Runtime::ArrayBase &hva_pred_pv_iext = requireArray(runtime, *hva_pred_pv, "Iext");
+            if(hva_pred_pv_iext.getCount() != pred_pv_count) {
+                throw std::runtime_error("HVA_PRED_PV homeostasis Iext array has unexpected size.");
+            }
+
+            const double automatic_i_max_na = 0.98 * lifRheobaseCurrentNa(v1_genn::kPVLIF);
+            const double homeostasis_i_min_na = spiking_hva_config.pred_pv_homeostasis_i_min_na;
+            const double homeostasis_i_max_na =
+                spiking_hva_config.pred_pv_homeostasis_i_max_na >= 0.0
+                    ? spiking_hva_config.pred_pv_homeostasis_i_max_na
+                    : automatic_i_max_na;
+            if(homeostasis_i_max_na < homeostasis_i_min_na) {
+                throw std::runtime_error("HVA_PRED_PV homeostasis max current is below min current.");
+            }
+            spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_min_na =
+                homeostasis_i_min_na;
+            spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_max_na =
+                homeostasis_i_max_na;
+
+            hva_pred_pv_iext.pullFromDevice();
+            const float *initial_i_ext = hva_pred_pv_iext.getHostPointer<float>();
+            spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_min_before =
+                pred_pv_count == 0u ? 0.0 : std::numeric_limits<double>::infinity();
+            for(unsigned int pred_pv_id = 0; pred_pv_id < pred_pv_count; pred_pv_id++) {
+                const double value = static_cast<double>(initial_i_ext[pred_pv_id]);
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_mean_before += value;
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_min_before =
+                    std::min(
+                        spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_min_before,
+                        value);
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_max_before =
+                    std::max(
+                        spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_max_before,
+                        value);
+            }
+            if(pred_pv_count > 0u) {
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_mean_before /=
+                    static_cast<double>(pred_pv_count);
+            }
+
+            const unsigned int delay_frames = kSpikingHVAPredictorDelayFrames.back();
+            const unsigned int heldout_start_frame =
+                spikingHVAPredictorHeldoutStartFrame(video_replay_config, spiking_hva_predictor_config);
+            const auto isHeldoutTargetFrame = [&](unsigned int frame_index) {
+                if(spiking_hva_predictor_config.interleaved_split_enabled()) {
+                    return (frame_index % spiking_hva_predictor_config.interleaved_period)
+                        == (spiking_hva_predictor_config.interleaved_period - 1u);
+                }
+                return frame_index >= heldout_start_frame;
+            };
+            const auto trainMeanPredPVRates =
+                [&](std::vector<double> &rates_hz) -> unsigned int {
+                    std::vector<TrialWindow> calibration_trials;
+                    std::vector<VideoFrameRecord> calibration_records;
+                    calibration_trials.reserve(video_replay_trial_count);
+                    calibration_records.reserve(video_replay_trial_count);
+                    resetNeuronTrialState(runtime, *hva_e, v1_genn::kExcitatoryLIF);
+                    resetNeuronTrialState(runtime, *hva_pv, v1_genn::kPVLIF);
+                    resetNeuronTrialState(runtime, *hva_pred_e, v1_genn::kExcitatoryLIF);
+                    resetNeuronTrialState(runtime, *hva_pred_pv, v1_genn::kPVLIF);
+                    resetSpikingHVAPredReadoutState();
+                    if(hva_context_e != nullptr) {
+                        resetNeuronTrialState(runtime, *hva_context_e, v1_genn::kExcitatoryLIF);
+                    }
+                    runVideoBlock(
+                        &calibration_trials,
+                        &calibration_records,
+                        video_replay_config.repeat_count,
+                        0u,
+                        video_replay_config.effective_frame_count,
+                        false,
+                        false,
+                        l23ee_stdp_aplus,
+                        l23ee_stdp_aminus);
+                    flushRecordingWindow();
+                    const std::vector<double> neuron_counts =
+                        countNeuronSpikesForTrials(
+                            hva_pred_pv_recordings.at(0),
+                            calibration_trials,
+                            pred_pv_count);
+                    if(neuron_counts.size()
+                           != calibration_trials.size() * static_cast<std::size_t>(pred_pv_count)
+                       || calibration_records.size() != calibration_trials.size()) {
+                        throw std::runtime_error(
+                            "HVA_PRED_PV homeostasis calibration replay dimensions are inconsistent.");
+                    }
+                    rates_hz.assign(pred_pv_count, 0.0);
+                    unsigned int train_sample_count = 0u;
+                    for(std::size_t trial_index = 0; trial_index < calibration_trials.size(); trial_index++) {
+                        const unsigned int frame_index = calibration_records[trial_index].frame_index;
+                        if(frame_index + delay_frames >= video_replay_config.effective_frame_count) {
+                            continue;
+                        }
+                        const unsigned int target_frame = frame_index + delay_frames;
+                        if(isHeldoutTargetFrame(target_frame)
+                           || !videoFramesInSameClip(video_replay_config, frame_index, target_frame)) {
+                            continue;
+                        }
+                        const TrialWindow &trial = calibration_trials[trial_index];
+                        const double duration_s = (trial.end_ms - trial.measure_start_ms) / 1000.0;
+                        if(duration_s <= 0.0) {
+                            throw std::runtime_error(
+                                "HVA_PRED_PV homeostasis encountered non-positive trial duration.");
+                        }
+                        const std::size_t base =
+                            trial_index * static_cast<std::size_t>(pred_pv_count);
+                        for(unsigned int pred_pv_id = 0; pred_pv_id < pred_pv_count; pred_pv_id++) {
+                            rates_hz[pred_pv_id] += neuron_counts[base + pred_pv_id] / duration_s;
+                        }
+                        train_sample_count++;
+                    }
+                    if(train_sample_count > 0u) {
+                        for(double &rate_hz : rates_hz) {
+                            rate_hz /= static_cast<double>(train_sample_count);
+                        }
+                    }
+                    return train_sample_count;
+                };
+
+            std::vector<double> pred_pv_rates_hz;
+            bool measured_before = false;
+            std::uint64_t clipped_current_count = 0u;
+            for(unsigned int epoch = 0; epoch < spiking_hva_config.pred_pv_homeostasis_epochs; epoch++) {
+                const unsigned int train_sample_count = trainMeanPredPVRates(pred_pv_rates_hz);
+                if(train_sample_count == 0u) {
+                    break;
+                }
+                if(!measured_before) {
+                    spiking_hva_actual_prediction_training.pred_pv_homeostasis_train_rate_mean_before =
+                        meanRate(pred_pv_rates_hz);
+                    spiking_hva_actual_prediction_training.pred_pv_homeostasis_train_rate_p99_before =
+                        percentile(pred_pv_rates_hz, 99.0);
+                    measured_before = true;
+                }
+                hva_pred_pv_iext.pullFromDevice();
+                float *i_ext = hva_pred_pv_iext.getHostPointer<float>();
+                for(unsigned int pred_pv_id = 0; pred_pv_id < pred_pv_count; pred_pv_id++) {
+                    const double raw_i_ext_na =
+                        static_cast<double>(i_ext[pred_pv_id])
+                        + (spiking_hva_config.pred_pv_homeostasis_eta_na_per_hz
+                           * (spiking_hva_config.pred_pv_homeostasis_target_hz
+                              - pred_pv_rates_hz[pred_pv_id]));
+                    const double clipped_i_ext_na =
+                        clippedValue(raw_i_ext_na, homeostasis_i_min_na, homeostasis_i_max_na);
+                    if(clipped_i_ext_na != raw_i_ext_na) {
+                        clipped_current_count++;
+                    }
+                    i_ext[pred_pv_id] = static_cast<float>(clipped_i_ext_na);
+                    spiking_hva_actual_prediction_training.pred_pv_homeostasis_update_count++;
+                }
+                hva_pred_pv_iext.pushToDevice();
+            }
+            const unsigned int final_train_sample_count = trainMeanPredPVRates(pred_pv_rates_hz);
+            if(final_train_sample_count > 0u) {
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_train_rate_mean_after =
+                    meanRate(pred_pv_rates_hz);
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_train_rate_p99_after =
+                    percentile(pred_pv_rates_hz, 99.0);
+            }
+            hva_pred_pv_iext.pullFromDevice();
+            const float *final_i_ext = hva_pred_pv_iext.getHostPointer<float>();
+            spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_min_after =
+                pred_pv_count == 0u ? 0.0 : std::numeric_limits<double>::infinity();
+            std::uint64_t boundary_current_count = 0u;
+            for(unsigned int pred_pv_id = 0; pred_pv_id < pred_pv_count; pred_pv_id++) {
+                const double value = static_cast<double>(final_i_ext[pred_pv_id]);
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_mean_after += value;
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_min_after =
+                    std::min(
+                        spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_min_after,
+                        value);
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_max_after =
+                    std::max(
+                        spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_max_after,
+                        value);
+                if(value <= homeostasis_i_min_na || value >= homeostasis_i_max_na) {
+                    boundary_current_count++;
+                }
+            }
+            if(pred_pv_count > 0u) {
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_mean_after /=
+                    static_cast<double>(pred_pv_count);
+                spiking_hva_actual_prediction_training.pred_pv_homeostasis_i_ext_clipped_frac =
+                    static_cast<double>(boundary_current_count + clipped_current_count)
+                    / static_cast<double>(
+                        pred_pv_count
+                        + spiking_hva_actual_prediction_training.pred_pv_homeostasis_update_count);
+            }
+            spiking_hva_actual_prediction_training.pred_pv_homeostasis_heldout_update_count = 0u;
+        }
         if(spiking_hva_config.pv_to_pred_homeostasis_enabled
            && spiking_hva_config.pv_to_pred_homeostasis_epochs > 0u) {
             if(hva_pv_to_hva_pred_e == nullptr) {
@@ -27845,6 +28178,7 @@ void simulate(GeNN::ModelSpec &model, GeNN::Runtime::Runtime &runtime)
         meanRate(video_hva_pv_population_rates),
         meanRate(video_hva_pred_e_population_rates),
         meanRate(video_hva_pred_pv_population_rates),
+        percentile(video_hva_pred_pv_population_rates, 99.0),
         meanRate(video_hva_pred_readout_e_population_rates),
         meanRate(video_hva_slow_context_population_rates),
         static_cast<unsigned int>(video_hva_e_population_rates.size()),
