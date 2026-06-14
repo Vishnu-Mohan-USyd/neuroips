@@ -8755,6 +8755,13 @@ struct SpikingHVAPredictionProjectionTrainingResult {
     double l23e_history_signed_contribution_abs_mean_norm = 0.0;
     double l23e_history_exc_contribution_abs_mean_norm = 0.0;
     double l23e_history_inh_contribution_abs_mean_norm = 0.0;
+    bool hva_e_to_pred_enabled = false;
+    bool hva_e_to_pred_actual_genn = false;
+    unsigned int hva_e_to_pred_radius_tiles = 0u;
+    std::size_t hva_e_to_pred_connection_count = 0u;
+    std::uint64_t hva_e_to_pred_train_update_count = 0u;
+    std::uint64_t hva_e_to_pred_heldout_update_count = 0u;
+    double hva_e_to_pred_weight_scale = 0.0;
     bool ctx_to_pred_enabled = false;
     bool ctx_to_pred_actual_genn = false;
     unsigned int ctx_to_pred_radius_tiles = 0u;
@@ -9155,6 +9162,11 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
         spiking_hva_config.pv_to_pred_homeostasis_min_weight;
     result.pv_to_pred_homeostasis_max_weight =
         spiking_hva_config.pv_to_pred_homeostasis_max_weight;
+    result.hva_e_to_pred_enabled = true;
+    result.hva_e_to_pred_actual_genn = true;
+    result.hva_e_to_pred_radius_tiles = spiking_hva_config.e_to_pred_radius;
+    result.hva_e_to_pred_connection_count = hva_e_pred_edges.size();
+    result.hva_e_to_pred_weight_scale = spiking_hva_config.e_to_pred_weight;
     result.ctx_to_pred_enabled =
         spiking_hva_config.ctx_to_pred_enabled
         && spiking_hva_config.slow_context_enabled
@@ -9474,13 +9486,14 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
     std::vector<double> ctx_to_pred_suppressive_tile_weights(pair_count, 0.0);
     std::vector<double> pred_readout_exc_tile_weights(pair_count, 0.0);
     std::vector<double> pred_readout_inh_tile_weights(pair_count, 0.0);
+    const unsigned int hva_e_to_pred_active_radius = spiking_hva_config.e_to_pred_radius;
     const auto weightIndex = [&](unsigned int post_tile, unsigned int pre_tile) -> std::size_t {
         return (static_cast<std::size_t>(post_tile) * tile_count) + pre_tile;
     };
     const auto predictResidual = [&](unsigned int repeat_index, unsigned int frame_index, unsigned int post_tile) {
         double prediction = 0.0;
         for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
-            if(manhattanDistance(pre_tile, post_tile) > config.local_radius_tiles) {
+            if(manhattanDistance(pre_tile, post_tile) > hva_e_to_pred_active_radius) {
                 continue;
             }
             prediction += tile_weights[weightIndex(post_tile, pre_tile)]
@@ -9561,7 +9574,7 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
                     const double residual_error =
                         (target_norm - target_mean[post_tile]) - predictResidual(repeat_index, frame_index, post_tile);
                     for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
-                        if(manhattanDistance(pre_tile, post_tile) > config.local_radius_tiles) {
+                        if(manhattanDistance(pre_tile, post_tile) > hva_e_to_pred_active_radius) {
                             continue;
                         }
                         const double pre_norm =
@@ -9575,7 +9588,7 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
         for(unsigned int post_tile = 0; post_tile < tile_count; post_tile++) {
             const double row_norm = std::max(1.0e-4, row_pre_energy[post_tile]);
             for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
-                if(manhattanDistance(pre_tile, post_tile) > config.local_radius_tiles) {
+                if(manhattanDistance(pre_tile, post_tile) > hva_e_to_pred_active_radius) {
                     continue;
                 }
                 const std::size_t index = weightIndex(post_tile, pre_tile);
@@ -9585,9 +9598,11 @@ SpikingHVAPredictionProjectionTrainingResult trainActualSpikingHVAPredictionProj
                     0.0,
                     config.weight_clip);
                 result.train_update_count++;
+                result.hva_e_to_pred_train_update_count++;
             }
         }
     }
+    result.hva_e_to_pred_heldout_update_count = 0u;
 
     if(result.ctx_to_pred_enabled) {
         for(unsigned int epoch = 0; epoch < config.training_epochs; epoch++) {
@@ -12214,13 +12229,17 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
         }
     }
 
+    const unsigned int hva_e_to_pred_metric_radius =
+        actual_projection_training.hva_e_to_pred_radius_tiles > 0u
+            ? actual_projection_training.hva_e_to_pred_radius_tiles
+            : config.local_radius_tiles;
     const auto excitatoryPredictionFromHVAE = [&](unsigned int delay_index,
                                                   unsigned int repeat_index,
                                                   unsigned int frame_index,
                                                   unsigned int post_tile) {
         double predicted_norm = 0.0;
         for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
-            if(manhattanDistance(pre_tile, post_tile) > config.local_radius_tiles) {
+            if(manhattanDistance(pre_tile, post_tile) > hva_e_to_pred_metric_radius) {
                 continue;
             }
             predicted_norm += result.weights_after[weightIndex(delay_index, post_tile, pre_tile)]
@@ -12234,7 +12253,7 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
                                                    unsigned int post_tile) {
         double predicted_norm = 0.0;
         for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
-            if(manhattanDistance(pre_tile, post_tile) > config.local_radius_tiles) {
+            if(manhattanDistance(pre_tile, post_tile) > hva_e_to_pred_metric_radius) {
                 continue;
             }
             predicted_norm += result.suppressive_weights_after[weightIndex(delay_index, post_tile, pre_tile)]
@@ -13272,7 +13291,7 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
             double row_sum = 0.0;
             double suppressive_row_sum = 0.0;
             for(unsigned int pre_tile = 0; pre_tile < tile_count; pre_tile++) {
-                if(manhattanDistance(pre_tile, post_tile) > config.local_radius_tiles) {
+                if(manhattanDistance(pre_tile, post_tile) > hva_e_to_pred_metric_radius) {
                     continue;
                 }
                 const double weight = result.weights_after[weightIndex(delay_index, post_tile, pre_tile)];
@@ -13343,6 +13362,25 @@ SpikingHVAPredictorResult trainSpikingHVAPredictor(
     }
     result.metrics.push_back({"heldout_start_frame", static_cast<double>(result.heldout_start_frame)});
     result.metrics.push_back({"train_update_count", static_cast<double>(result.train_update_count)});
+    result.metrics.push_back({"hva_e_to_pred_enabled",
+        actual_projection_training.hva_e_to_pred_enabled ? 1.0 : 0.0});
+    result.metrics.push_back({"hva_e_to_pred_actual_genn",
+        actual_projection_training.hva_e_to_pred_actual_genn ? 1.0 : 0.0});
+    result.metrics.push_back({"hva_e_to_pred_source_hva_e", 1.0});
+    result.metrics.push_back({"hva_e_to_pred_radius_tiles",
+        static_cast<double>(actual_projection_training.hva_e_to_pred_radius_tiles)});
+    result.metrics.push_back({"hva_e_to_pred_connection_count",
+        static_cast<double>(actual_projection_training.hva_e_to_pred_connection_count)});
+    result.metrics.push_back({"hva_e_to_pred_train_update_count",
+        static_cast<double>(actual_projection_training.hva_e_to_pred_train_update_count)});
+    result.metrics.push_back({"hva_e_to_pred_heldout_update_count",
+        static_cast<double>(actual_projection_training.hva_e_to_pred_heldout_update_count)});
+    result.metrics.push_back({"hva_e_to_pred_weight_scale",
+        actual_projection_training.hva_e_to_pred_weight_scale});
+    result.metrics.push_back({"hva_e_to_pred_source_hva_e_rate_mean_hz", meanRate(hva_e_tile_rates)});
+    result.metrics.push_back({"hva_e_to_pred_source_hva_e_rate_p99_hz", percentile(hva_e_tile_rates, 99.0)});
+    result.metrics.push_back({"hva_e_to_pred_target_hva_pred_e_rate_mean_hz", meanRate(hva_pred_e_tile_rates)});
+    result.metrics.push_back({"hva_e_to_pred_target_hva_pred_e_rate_p99_hz", percentile(hva_pred_e_tile_rates, 99.0)});
     result.metrics.push_back({"actual_g_weight_count", static_cast<double>(actual_projection_training.weights_after.size())});
     result.metrics.push_back({"actual_g_weight_changed_frac",
         actual_projection_training.weights_after.empty()
