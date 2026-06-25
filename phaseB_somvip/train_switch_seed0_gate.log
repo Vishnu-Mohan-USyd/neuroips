@@ -1,0 +1,23 @@
+=== NOISY-READOUT FIX: seed-0 KILL-GATE (sigma=1.0, lam_read=1.0, lam_save=0.2) ===
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.588  rep_acc   6.2%  mean|r| 0.077
+  step   200  loss 1.567  rep_acc  81.2%  mean|r| 0.506
+  step   400  loss 0.960  rep_acc 100.0%  mean|r| 0.737
+  step   600  loss 0.668  rep_acc 100.0%  mean|r| 0.881
+  step   800  loss 0.480  rep_acc 100.0%  mean|r| 1.020
+  step  1000  loss 0.332  rep_acc 100.0%  mean|r| 1.091
+  step  1200  loss 0.236  rep_acc 100.0%  mean|r| 1.205
+  step  1400  loss 0.176  rep_acc 100.0%  mean|r| 1.273
+  step  1600  loss 0.136  rep_acc 100.0%  mean|r| 1.337
+  step  1800  loss 0.107  rep_acc 100.0%  mean|r| 1.388
+  step  2000  loss 0.090  rep_acc 100.0%  mean|r| 1.435
+  step 1000 loss 1.650 g_ctx 1.200
+  step 2000 loss 1.209 g_ctx 1.536
+  step 3000 loss 1.060 g_ctx 1.730
+  step 4000 loss 1.026 g_ctx 1.916
+  [seed0 ctx=+1 attend] exp_r=2.251 floor=1.239 exp-floor=+1.012 held=81.0% -> SHARPEN
+  [seed0 ctx=-1 save] exp_r=0.000 floor=1.288 exp-floor=-1.288 held=80.6% -> DAMPEN
+  seed0: g_ctx=1.916  SWITCH=YES (attend-margin +1.01, save-margin -1.29)
+SEED0_SWITCH=True
+GATE0DONE

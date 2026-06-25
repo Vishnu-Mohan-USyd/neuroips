@@ -1,0 +1,14 @@
+
+===== SHARPEN  (ckpt_circuit_sharpen.pt) =====
+   [sanity] instrumented r vs forward_seq r at step K: max|diff|=0.00e+00 (expect ~0)
+[SHARPEN] predicted channel, fb ON:  drive=0.087  fb=14.515  VIP=11.435  SOM=0.000  r=7.265
+[SHARPEN] KILL VIP -> SOM 0.000=>6.752 ,  r 7.265=>2.004
+[SHARPEN] KILL SOM -> r 7.265=>7.294   (drive/floor=0.087)
+
+===== DAMPEN  (ckpt_circuit_dampen.pt) =====
+   [sanity] instrumented r vs forward_seq r at step K: max|diff|=0.00e+00 (expect ~0)
+[DAMPEN] predicted channel, fb ON:  drive=0.097  fb=13.834  VIP=6.050  SOM=12.422  r=0.000
+[DAMPEN] KILL VIP -> SOM 12.422=>14.137 ,  r 0.000=>0.000
+[DAMPEN] KILL SOM -> r 0.000=>4.432   (drive/floor=0.097)
+
+MECH_DONE

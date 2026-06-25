@@ -1,0 +1,54 @@
+=== INDEPENDENT AUDIT: noisy-readout context switch (seeds 0 anchor, 7 fresh) ===
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.588  rep_acc   6.2%  mean|r| 0.077
+  step   200  loss 1.567  rep_acc  81.2%  mean|r| 0.506
+  step   400  loss 0.960  rep_acc 100.0%  mean|r| 0.737
+  step   600  loss 0.668  rep_acc 100.0%  mean|r| 0.881
+  step   800  loss 0.480  rep_acc 100.0%  mean|r| 1.020
+  step  1000  loss 0.332  rep_acc 100.0%  mean|r| 1.091
+  step  1200  loss 0.236  rep_acc 100.0%  mean|r| 1.205
+  step  1400  loss 0.176  rep_acc 100.0%  mean|r| 1.273
+  step  1600  loss 0.136  rep_acc 100.0%  mean|r| 1.337
+  step  1800  loss 0.107  rep_acc 100.0%  mean|r| 1.388
+  step  2000  loss 0.090  rep_acc 100.0%  mean|r| 1.435
+    [train seed0] step 1000 loss 1.650 g_ctx 1.200
+    [train seed0] step 2000 loss 1.209 g_ctx 1.536
+    [train seed0] step 3000 loss 1.060 g_ctx 1.730
+    [train seed0] step 4000 loss 1.026 g_ctx 1.916
+
+==================== SEED 0 ====================
+  g_ctx(softplus)=1.9158   gains[g_v,g_s,g_sv,g_e,g_ps]=[0.415, 1.141, 1.164, 0.903, 1.571]
+  [ctx=+1 attend] exp_r=2.251 floor=1.239 exp-floor=+1.012 | unexp_r=1.300 mean|r|@K=2.183 | held fb_on=81.0% fb_off=71.2%  -> SHARPEN
+  [ctx=-1 save  ] exp_r=0.000 floor=1.288 exp-floor=-1.288 | unexp_r=0.776 mean|r|@K=0.856 | held fb_on=80.6% fb_off=71.2%  -> DAMPEN
+  SWITCH(fresh RNG)=YES
+  [T2 fixed-input] floor(ctx+1)=1.23382 floor(ctx-1)=1.23382 |Δfloor|=0.00e+00  (expect ~0 => floor is ctx-INDEPENDENT)
+           attend exp_r=2.238>1.234? True ; save exp_r=0.000<1.234? True  (switch on IDENTICAL inputs)
+  [T3 ctx=0 neutral] exp_r=0.537 floor=1.234 exp-floor=-0.697 -> DAMPEN  (shared-gain default with NO context)
+  [T4 g_ctx LESION~0] attend exp-floor=-0.697 save exp-floor=-0.697 |attend-save|=0.00e+00  (expect ~0 => switch is 100% carried by g_ctx, no leak)
+  VERDICT-INPUTS seed0: switch=True | floor_ctx_indep=True | lesion_collapses=True | save_alive(mean|r|@K=0.86) | unexp~floor(att 1.30/1.24, sav 0.78/1.29)
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.594  rep_acc   1.6%  mean|r| 0.092
+  step   200  loss 1.648  rep_acc  75.0%  mean|r| 0.480
+  step   400  loss 1.020  rep_acc 100.0%  mean|r| 0.681
+  step   600  loss 0.720  rep_acc 100.0%  mean|r| 0.826
+  step   800  loss 0.527  rep_acc 100.0%  mean|r| 0.931
+  step  1000  loss 0.372  rep_acc 100.0%  mean|r| 1.050
+  step  1200  loss 0.273  rep_acc 100.0%  mean|r| 1.156
+  step  1400  loss 0.205  rep_acc 100.0%  mean|r| 1.219
+  step  1600  loss 0.156  rep_acc 100.0%  mean|r| 1.292
+  step  1800  loss 0.125  rep_acc 100.0%  mean|r| 1.336
+  step  2000  loss 0.098  rep_acc 100.0%  mean|r| 1.384
+
+==================== SEED 7 ====================
+  g_ctx(softplus)=1.8649   gains[g_v,g_s,g_sv,g_e,g_ps]=[0.513, 1.056, 1.311, 0.924, 1.732]
+  [ctx=+1 attend] exp_r=8.140 floor=1.329 exp-floor=+6.812 | unexp_r=1.408 mean|r|@K=2.929 | held fb_on=80.5% fb_off=57.4%  -> SHARPEN
+  [ctx=-1 save  ] exp_r=0.840 floor=1.358 exp-floor=-0.519 | unexp_r=1.069 mean|r|@K=1.008 | held fb_on=80.5% fb_off=57.3%  -> DAMPEN
+  SWITCH(fresh RNG)=YES
+  [T2 fixed-input] floor(ctx+1)=1.36285 floor(ctx-1)=1.36285 |Δfloor|=0.00e+00  (expect ~0 => floor is ctx-INDEPENDENT)
+           attend exp_r=8.168>1.363? True ; save exp_r=0.850<1.363? True  (switch on IDENTICAL inputs)
+  [T3 ctx=0 neutral] exp_r=3.843 floor=1.363 exp-floor=+2.480 -> SHARPEN  (shared-gain default with NO context)
+  [T4 g_ctx LESION~0] attend exp-floor=+2.480 save exp-floor=+2.480 |attend-save|=0.00e+00  (expect ~0 => switch is 100% carried by g_ctx, no leak)
+  VERDICT-INPUTS seed7: switch=True | floor_ctx_indep=True | lesion_collapses=True | save_alive(mean|r|@K=1.01) | unexp~floor(att 1.41/1.33, sav 1.07/1.36)
+AUDIT_DONE

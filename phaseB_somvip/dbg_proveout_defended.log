@@ -1,0 +1,15 @@
+=== CORRECTED DEFENDED GATE: load ck['net'] strict=True ===
+cfg: {'sigma': 1.0, 'lam_read': 1.0, 'lam_save': 0.2, 'seed': 1, 'ctx_coding': '+1 attend / -1 save'}
+strict load of ck['net'] OK (no missing/unexpected)
+
+----- GATE: DEFENDED saved seed-1 (CORRECT ck['net'] load) -----
+  attend ctx=+1: exp_r=7.614 floor=1.689 exp-floor=+5.925 held=79.6% -> SHARPEN
+  save   ctx=-1: exp_r=0.536 floor=1.699 exp-floor=-1.163 held=80.5% -> DAMPEN
+  K1 attend-sharpens=True | K2 save-dampens=True | K3 held>=75% both=True (att 79.6, sav 80.5)
+  [K4 CRUX fixed-weights, identical inputs, flip ONLY ctx]  +1 -> SHARPEN (exp 7.631/fl 1.704) ; -1 -> DAMPEN (exp 0.542/fl 1.704) ; |Δfloor|=0.0e+00
+  K4 regime-FLIPS-on-context-bit=True
+  [corrob] g_ctx=1.975 (>0.693? True) | ctx=0 exp-floor=+1.696 between? True | g_ctx-lesion -> both ctx identical? True (|Δ|=0.0e+00)
+  ===> DEFENDED saved seed-1 (CORRECT ck['net'] load): PASS (GO)   [K1=True K2=True K3=True K4=True]
+
+DEFENDED_CORRECT_PASS=True
+DEFENDED_DONE

@@ -1,0 +1,6 @@
+# Sole dependency: PyTorch. The model is pure torch + Python stdlib (copy/os/sys/
+# contextlib) — no numpy/scipy/sklearn/matplotlib/seaborn/yaml are used anywhere.
+# A CPU-only torch build works (the device auto-falls back to CPU); a CUDA build is
+# recommended for the Phase-A grid / Phase-B training (forward-only re-probes are cheap on CPU).
+# Tested with torch 2.x; requires Python >= 3.8.
+torch>=2.0

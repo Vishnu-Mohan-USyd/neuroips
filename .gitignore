@@ -1,0 +1,15 @@
+# .gitignore for the SOM/VIP sharpen/dampen release.
+#
+# The four trained checkpoints — phaseA_somvip/ckpt_circuit_sharpen.pt,
+# phaseA_somvip/ckpt_circuit_dampen.pt, phaseA_somvip/ckpt_momentum.pt, and
+# phaseB_somvip/ckpt_ctxswitch_seed1.pt — ARE the durable result of this package and are
+# committed deliberately as part of the release, so a fresh clone ships with the trained
+# nets ready to run. This repo has no blanket `*.pt` ignore, so regenerated or scratch
+# checkpoints are NOT auto-ignored: write them elsewhere via each script's `--out` flag
+# (e.g. `grid_circuit.py --out grid_output`, `train_switch.py --out <path>`) so you never
+# overwrite the shipped checkpoints.
+
+# Keep the usual Python noise out of the package.
+__pycache__/
+*.pyc
+*.pyo

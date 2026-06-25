@@ -1,0 +1,35 @@
+=== NOISY-READOUT ROBUSTNESS: seeds 1,2 ===
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.616  rep_acc   2.3%  mean|r| 0.092
+  step   200  loss 1.615  rep_acc  85.2%  mean|r| 0.476
+  step   400  loss 0.976  rep_acc 100.0%  mean|r| 0.689
+  step   600  loss 0.696  rep_acc 100.0%  mean|r| 0.832
+  step   800  loss 0.485  rep_acc 100.0%  mean|r| 0.963
+  step  1000  loss 0.351  rep_acc 100.0%  mean|r| 1.083
+  step  1200  loss 0.249  rep_acc 100.0%  mean|r| 1.167
+  step  1400  loss 0.185  rep_acc 100.0%  mean|r| 1.250
+  step  1600  loss 0.140  rep_acc 100.0%  mean|r| 1.313
+  step  1800  loss 0.112  rep_acc 100.0%  mean|r| 1.375
+  step  2000  loss 0.091  rep_acc 100.0%  mean|r| 1.393
+  [seed1 ctx=+1 attend] exp_r=7.601 floor=1.664 exp-floor=+5.938 held=79.6% -> SHARPEN
+  [seed1 ctx=-1 save] exp_r=0.543 floor=1.695 exp-floor=-1.152 held=80.3% -> DAMPEN
+  seed1: g_ctx=1.975 SWITCH=YES
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.591  rep_acc   4.7%  mean|r| 0.068
+  step   200  loss 1.697  rep_acc  77.3%  mean|r| 0.469
+  step   400  loss 1.069  rep_acc 100.0%  mean|r| 0.673
+  step   600  loss 0.765  rep_acc 100.0%  mean|r| 0.821
+  step   800  loss 0.558  rep_acc 100.0%  mean|r| 0.941
+  step  1000  loss 0.402  rep_acc 100.0%  mean|r| 1.054
+  step  1200  loss 0.284  rep_acc 100.0%  mean|r| 1.134
+  step  1400  loss 0.215  rep_acc 100.0%  mean|r| 1.220
+  step  1600  loss 0.164  rep_acc 100.0%  mean|r| 1.273
+  step  1800  loss 0.129  rep_acc 100.0%  mean|r| 1.340
+  step  2000  loss 0.105  rep_acc 100.0%  mean|r| 1.402
+  [seed2 ctx=+1 attend] exp_r=6.950 floor=1.749 exp-floor=+5.202 held=80.3% -> SHARPEN
+  [seed2 ctx=-1 save] exp_r=0.998 floor=1.764 exp-floor=-0.766 held=80.0% -> DAMPEN
+  seed2: g_ctx=1.815 SWITCH=YES
+ROBUST seeds[1,2] switches=[True, True]
+ROBDONE

@@ -1,0 +1,41 @@
+=== PRE-REGISTERED PROVE-OUT: K1-K4 (defended seed-1 reload + fresh seed-11) ===
+reloaded phaseB_somvip/ckpt_ctxswitch_seed1.pt
+  missing=['circ_raw', 'g_ctx_raw', 'W_ff.weight', 'W_ff.bias', 'gru.weight_ih', 'gru.weight_hh', 'gru.bias_ih', 'gru.bias_hh', 'W_fb.weight', 'W_fb.bias', 'decoder.weight', 'decoder.bias'] unexpected=['net', 'read', 'cfg']
+
+----- GATE: DEFENDED saved seed-1 (reload-from-disk) -----
+  attend ctx=+1: exp_r=0.070 floor=0.064 exp-floor=+0.006 held=1.9% -> SHARPEN
+  save   ctx=-1: exp_r=0.065 floor=0.063 exp-floor=+0.002 held=1.4% -> SHARPEN
+  K1 attend-sharpens=True | K2 save-dampens=False | K3 held>=75% both=False (att 1.9, sav 1.4)
+  [K4 CRUX fixed-weights, identical inputs, flip ONLY ctx]  +1 -> SHARPEN (exp 0.068/fl 0.062) ; -1 -> SHARPEN (exp 0.064/fl 0.062) ; |Δfloor|=0.0e+00
+  K4 regime-FLIPS-on-context-bit=False
+  [corrob] g_ctx=0.693 (>0.693? True) | ctx=0 exp-floor=+0.005 between two regimes? True | g_ctx-lesion -> both ctx identical? True (|Δ|=0.0e+00)
+  ===> DEFENDED saved seed-1 (reload-from-disk): FAIL (NO-GO)   [K1=True K2=False K3=False K4=False]
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.591  rep_acc   3.1%  mean|r| 0.072
+  step   200  loss 1.572  rep_acc  82.0%  mean|r| 0.513
+  step   400  loss 0.936  rep_acc 100.0%  mean|r| 0.728
+  step   600  loss 0.644  rep_acc 100.0%  mean|r| 0.871
+  step   800  loss 0.447  rep_acc 100.0%  mean|r| 1.000
+  step  1000  loss 0.320  rep_acc 100.0%  mean|r| 1.114
+  step  1200  loss 0.229  rep_acc 100.0%  mean|r| 1.181
+  step  1400  loss 0.170  rep_acc 100.0%  mean|r| 1.261
+  step  1600  loss 0.131  rep_acc 100.0%  mean|r| 1.318
+  step  1800  loss 0.106  rep_acc 100.0%  mean|r| 1.378
+  step  2000  loss 0.087  rep_acc 100.0%  mean|r| 1.416
+    [train seed11] step 1000 loss 1.607 g_ctx 1.299
+    [train seed11] step 2000 loss 1.227 g_ctx 1.631
+    [train seed11] step 3000 loss 1.094 g_ctx 1.774
+    [train seed11] step 4000 loss 1.074 g_ctx 1.870
+
+----- GATE: FRESH retrain seed-11 -----
+  attend ctx=+1: exp_r=7.301 floor=2.056 exp-floor=+5.245 held=79.9% -> SHARPEN
+  save   ctx=-1: exp_r=0.460 floor=2.024 exp-floor=-1.564 held=80.6% -> DAMPEN
+  K1 attend-sharpens=True | K2 save-dampens=True | K3 held>=75% both=True (att 79.9, sav 80.6)
+  [K4 CRUX fixed-weights, identical inputs, flip ONLY ctx]  +1 -> SHARPEN (exp 7.269/fl 2.033) ; -1 -> DAMPEN (exp 0.456/fl 2.033) ; |Δfloor|=0.0e+00
+  K4 regime-FLIPS-on-context-bit=True
+  [corrob] g_ctx=1.870 (>0.693? True) | ctx=0 exp-floor=+1.302 between two regimes? True | g_ctx-lesion -> both ctx identical? True (|Δ|=0.0e+00)
+  ===> FRESH retrain seed-11: PASS (GO)   [K1=True K2=True K3=True K4=True]
+
+PROVEOUT_SUMMARY  defended_seed1_PASS=False  fresh_seed11_PASS=True
+PROVEOUT_DONE

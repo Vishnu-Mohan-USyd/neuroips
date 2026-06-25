@@ -1,0 +1,68 @@
+
+=== PHASE 1: learn L4->L2/3 representation (static orientations) ===
+  step     1  loss 3.588  rep_acc   6.2%  mean|r| 0.077
+  step   200  loss 1.567  rep_acc  81.2%  mean|r| 0.506
+  step   400  loss 0.960  rep_acc 100.0%  mean|r| 0.737
+  step   600  loss 0.668  rep_acc 100.0%  mean|r| 0.881
+  step   800  loss 0.480  rep_acc 100.0%  mean|r| 1.020
+  step  1000  loss 0.332  rep_acc 100.0%  mean|r| 1.091
+  step  1200  loss 0.236  rep_acc 100.0%  mean|r| 1.205
+  step  1400  loss 0.176  rep_acc 100.0%  mean|r| 1.273
+  step  1600  loss 0.136  rep_acc 100.0%  mean|r| 1.337
+  step  1800  loss 0.107  rep_acc 100.0%  mean|r| 1.388
+  step  2000  loss 0.090  rep_acc 100.0%  mean|r| 1.435
+
+=== PHASE 2 (momentum, p_stay=0.9, S=12): RNN predicts next element -> fed DOWN into L2/3 ===
+  step     1  pred_error(CE) 3.641  held-out_acc   3.9%  mean|r| 1.476  (chance 2.8%)
+  step   200  pred_error(CE) 1.523  held-out_acc  56.7%  mean|r| 2.071  (chance 2.8%)
+  step   400  pred_error(CE) 1.101  held-out_acc  65.2%  mean|r| 2.281  (chance 2.8%)
+  step   600  pred_error(CE) 0.896  held-out_acc  70.7%  mean|r| 2.354  (chance 2.8%)
+  step   800  pred_error(CE) 0.826  held-out_acc  73.3%  mean|r| 2.362  (chance 2.8%)
+  step  1000  pred_error(CE) 0.718  held-out_acc  75.7%  mean|r| 2.385  (chance 2.8%)
+  step  1200  pred_error(CE) 0.725  held-out_acc  77.2%  mean|r| 2.389  (chance 2.8%)
+  step  1400  pred_error(CE) 0.661  held-out_acc  77.8%  mean|r| 2.374  (chance 2.8%)
+  step  1600  pred_error(CE) 0.625  held-out_acc  78.9%  mean|r| 2.396  (chance 2.8%)
+  step  1800  pred_error(CE) 0.633  held-out_acc  79.7%  mean|r| 2.386  (chance 2.8%)
+  step  2000  pred_error(CE) 0.599  held-out_acc  80.4%  mean|r| 2.382  (chance 2.8%)
+  step  2200  pred_error(CE) 0.605  held-out_acc  80.6%  mean|r| 2.393  (chance 2.8%)
+  step  2400  pred_error(CE) 0.596  held-out_acc  80.5%  mean|r| 2.377  (chance 2.8%)
+  step  2600  pred_error(CE) 0.585  held-out_acc  81.4%  mean|r| 2.369  (chance 2.8%)
+  step  2800  pred_error(CE) 0.564  held-out_acc  81.5%  mean|r| 2.375  (chance 2.8%)
+  step  3000  pred_error(CE) 0.543  held-out_acc  81.5%  mean|r| 2.372  (chance 2.8%)
+  step  3200  pred_error(CE) 0.556  held-out_acc  82.0%  mean|r| 2.361  (chance 2.8%)
+  step  3400  pred_error(CE) 0.527  held-out_acc  81.5%  mean|r| 2.359  (chance 2.8%)
+  step  3600  pred_error(CE) 0.556  held-out_acc  81.6%  mean|r| 2.350  (chance 2.8%)
+  step  3800  pred_error(CE) 0.537  held-out_acc  81.6%  mean|r| 2.359  (chance 2.8%)
+  step  4000  pred_error(CE) 0.509  held-out_acc  81.5%  mean|r| 2.342  (chance 2.8%)
+
+[lam=0.0] gains g_v,g_s,g_sv,g_e,g_ps = [0.787, 0.61, 0.787, 0.517, 0.628]
+[lam=0.0] net_fb_gain (predicted ch)  = +0.517  -> SHARPEN
+[lam=0.0] expected r=7.788  unexpected r=1.340  FF-floor=1.254  | exp-floor=+6.533
+
+=== PHASE 2 (momentum, p_stay=0.9, S=12): RNN predicts next element -> fed DOWN into L2/3 ===
+  step     1  pred_error(CE) 3.637  held-out_acc   3.8%  mean|r| 1.472  (chance 2.8%)
+  step   200  pred_error(CE) 1.544  held-out_acc  56.0%  mean|r| 1.498  (chance 2.8%)
+  step   400  pred_error(CE) 1.109  held-out_acc  64.7%  mean|r| 1.353  (chance 2.8%)
+  step   600  pred_error(CE) 0.965  held-out_acc  68.7%  mean|r| 1.288  (chance 2.8%)
+  step   800  pred_error(CE) 0.806  held-out_acc  73.5%  mean|r| 1.235  (chance 2.8%)
+  step  1000  pred_error(CE) 0.765  held-out_acc  74.8%  mean|r| 1.210  (chance 2.8%)
+  step  1200  pred_error(CE) 0.677  held-out_acc  78.0%  mean|r| 1.180  (chance 2.8%)
+  step  1400  pred_error(CE) 0.637  held-out_acc  79.0%  mean|r| 1.164  (chance 2.8%)
+  step  1600  pred_error(CE) 0.635  held-out_acc  80.1%  mean|r| 1.150  (chance 2.8%)
+  step  1800  pred_error(CE) 0.594  held-out_acc  81.1%  mean|r| 1.131  (chance 2.8%)
+  step  2000  pred_error(CE) 0.588  held-out_acc  81.4%  mean|r| 1.110  (chance 2.8%)
+  step  2200  pred_error(CE) 0.583  held-out_acc  81.3%  mean|r| 1.094  (chance 2.8%)
+  step  2400  pred_error(CE) 0.554  held-out_acc  81.5%  mean|r| 1.075  (chance 2.8%)
+  step  2600  pred_error(CE) 0.563  held-out_acc  81.8%  mean|r| 1.066  (chance 2.8%)
+  step  2800  pred_error(CE) 0.502  held-out_acc  81.8%  mean|r| 1.066  (chance 2.8%)
+  step  3000  pred_error(CE) 0.512  held-out_acc  81.7%  mean|r| 1.054  (chance 2.8%)
+  step  3200  pred_error(CE) 0.542  held-out_acc  82.0%  mean|r| 1.036  (chance 2.8%)
+  step  3400  pred_error(CE) 0.541  held-out_acc  81.8%  mean|r| 1.034  (chance 2.8%)
+  step  3600  pred_error(CE) 0.546  held-out_acc  82.0%  mean|r| 1.029  (chance 2.8%)
+  step  3800  pred_error(CE) 0.527  held-out_acc  82.1%  mean|r| 1.012  (chance 2.8%)
+  step  4000  pred_error(CE) 0.534  held-out_acc  81.9%  mean|r| 0.999  (chance 2.8%)
+
+[lam=0.2] gains g_v,g_s,g_sv,g_e,g_ps = [0.441, 1.081, 0.441, 0.442, 1.12]
+[lam=0.2] net_fb_gain (predicted ch)  = -0.551  -> DAMPEN
+[lam=0.2] expected r=0.000  unexpected r=1.031  FF-floor=1.254  | exp-floor=-1.254
+PROVEOUT_DONE
