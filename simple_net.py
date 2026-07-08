@@ -91,6 +91,49 @@ class SimpleNet(nn.Module):
         self.feedback_mode = 'additive'         # #41: 'additive' = reinforce prediction (ORIGINAL); 'subtractive' = cancel it
         self.use_circuit = use_circuit          # #43: SOM/VIP Dale microcircuit -> sharpen/dampen emerges from learned gains
         self.context = context                  # #43B: runtime context drive into VIP -> regime switches live (no retrain)
+        # Optional L2/3 divisive competition. Defaults are inactive so the
+        # committed checkpoints and canonical reproduction scripts keep the
+        # original model path unless a driver explicitly opts in.
+        self.l23_competition_strength = 0.0
+        self.l23_competition_sigma_channels = 2.0
+        self.l23_competition_radius = 4
+        self.l23_competition_global_strength = 0.0
+        # Optional local recurrent L2/3 inhibition. This is a default-off,
+        # topology-only channel interaction applied before the firing-rate
+        # ReLU, using the same circular kernel for every stimulus and regime.
+        self.l23_local_inhibition_strength = 0.0
+        self.l23_local_inhibition_sigma_channels = 1.5
+        self.l23_local_inhibition_radius = 3
+        self.l23_local_inhibition_center_weight = 0.0
+        # Optional feedback-gated L2/3 inhibition. Defaults inactive; when
+        # enabled, the top-down prediction recruits the same circular local
+        # inhibitory kernel at every timestep and for every stimulus.
+        self.l23_feedback_gated_inhibition_strength = 0.0
+        self.l23_feedback_gated_inhibition_sigma_channels = 1.5
+        self.l23_feedback_gated_inhibition_radius = 3
+        self.l23_feedback_gated_inhibition_center_weight = 1.0
+        # Optional feedback-to-SOM local inhibitory projection. Defaults
+        # inactive; when enabled, top-down feedback is pooled over the circular
+        # orientation topology and recruits SOM inhibition at every timestep.
+        self.som_feedback_pool_strength = 0.0
+        self.som_feedback_pool_sigma_channels = 1.5
+        self.som_feedback_pool_radius = 3
+        self.som_feedback_pool_center_weight = 0.0
+        # Optional topographic SOM/VIP routing. Defaults inactive; when
+        # enabled, feedback recruits a narrow SOM inhibitory drive and a
+        # broader VIP/disinhibitory drive through fixed circular kernels.
+        self.somvip_topographic_som_strength = 0.0
+        self.somvip_topographic_som_sigma_channels = 0.75
+        self.somvip_topographic_som_radius = 2
+        self.somvip_topographic_som_center_weight = 1.0
+        self.somvip_topographic_vip_strength = 0.0
+        self.somvip_topographic_vip_sigma_channels = 2.5
+        self.somvip_topographic_vip_radius = 5
+        self.somvip_topographic_vip_center_weight = 0.0
+        # Optional prediction-error-style feedback inside the circuit path.
+        # Defaults inactive; when enabled, the same predicted top-down drive
+        # subtracts from feedforward input before the learned SOM/VIP balance.
+        self.l23_prediction_error_strength = 0.0
         if use_circuit:
             # 5 non-negative gains via softplus(raw): [g_v, g_s, g_sv, g_e, g_ps]. Signs are STRUCTURAL (cell type),
             # only magnitudes learn:  g_v top-down->VIP,  g_s top-down->SOM,  g_sv VIP-|SOM,  g_e top-down->Pyr(exc),
@@ -100,6 +143,123 @@ class SimpleNet(nn.Module):
                 # #43B: external context EXCITES VIP (softplus>=0 drive). ctx high -> VIP up -> SOM off -> sharpen;
                 # ctx low -> SOM dominates -> dampen. The ONLY context->output path is through VIP.
                 self.g_ctx_raw = nn.Parameter(torch.zeros(1))
+
+    def _apply_l23_competition(self, r):
+        """General local divisive normalization over the L2/3 orientation ring."""
+        local_strength = float(getattr(self, 'l23_competition_strength', 0.0))
+        global_strength = float(getattr(self, 'l23_competition_global_strength', 0.0))
+        if local_strength <= 0.0 and global_strength <= 0.0:
+            return r
+
+        denom = torch.ones_like(r)
+        if local_strength > 0.0:
+            sigma = max(float(getattr(self, 'l23_competition_sigma_channels', 2.0)), 1e-6)
+            radius = max(0, int(getattr(self, 'l23_competition_radius', 4)))
+            local = torch.zeros_like(r)
+            norm = 0.0
+            for off in range(-radius, radius + 1):
+                w = torch.exp(torch.tensor(-0.5 * (off / sigma) ** 2, device=r.device, dtype=r.dtype))
+                local = local + w * torch.roll(r, shifts=off, dims=1)
+                norm += float(w.item())
+            denom = denom + local_strength * (local / max(norm, 1e-6))
+
+        if global_strength > 0.0:
+            denom = denom + global_strength * r.mean(dim=1, keepdim=True)
+        return r / denom.clamp_min(1e-6)
+
+    def _apply_l23_local_inhibition(self, pre):
+        """Subtractive local recurrent inhibition over the orientation ring."""
+        strength = float(getattr(self, 'l23_local_inhibition_strength', 0.0))
+        if strength <= 0.0:
+            return F.relu(pre)
+
+        sigma = max(float(getattr(self, 'l23_local_inhibition_sigma_channels', 1.5)), 1e-6)
+        radius = max(0, int(getattr(self, 'l23_local_inhibition_radius', 3)))
+        center_weight = max(0.0, float(getattr(self, 'l23_local_inhibition_center_weight', 0.0)))
+        source = F.relu(pre)
+        inhibition = torch.zeros_like(source)
+        norm = 0.0
+        for off in range(-radius, radius + 1):
+            w = torch.exp(torch.tensor(-0.5 * (off / sigma) ** 2, device=source.device, dtype=source.dtype))
+            if off == 0:
+                w = w * center_weight
+            inhibition = inhibition + w * torch.roll(source, shifts=off, dims=1)
+            norm += float(w.item())
+        if norm <= 1e-6:
+            return source
+        return F.relu(pre - strength * (inhibition / norm))
+
+    def _apply_l23_feedback_gated_inhibition(self, pre, fb):
+        """Prediction-driven local inhibitory recruitment over the L2/3 ring."""
+        strength = float(getattr(self, 'l23_feedback_gated_inhibition_strength', 0.0))
+        if strength <= 0.0:
+            return pre
+
+        sigma = max(float(getattr(self, 'l23_feedback_gated_inhibition_sigma_channels', 1.5)), 1e-6)
+        radius = max(0, int(getattr(self, 'l23_feedback_gated_inhibition_radius', 3)))
+        center_weight = max(0.0, float(getattr(self, 'l23_feedback_gated_inhibition_center_weight', 1.0)))
+        source = F.relu(fb)
+        inhibition = torch.zeros_like(source)
+        norm = 0.0
+        for off in range(-radius, radius + 1):
+            w = torch.exp(torch.tensor(-0.5 * (off / sigma) ** 2, device=source.device, dtype=source.dtype))
+            if off == 0:
+                w = w * center_weight
+            inhibition = inhibition + w * torch.roll(source, shifts=off, dims=1)
+            norm += float(w.item())
+        if norm <= 1e-6:
+            return pre
+        return pre - strength * (inhibition / norm)
+
+    def _circular_feedback_pool(self, fb, sigma, radius, center_weight):
+        """Fixed nonnegative circular pooling of top-down feedback."""
+        source = F.relu(fb)
+        pool = torch.zeros_like(source)
+        norm = 0.0
+        for off in range(-radius, radius + 1):
+            w = torch.exp(torch.tensor(-0.5 * (off / sigma) ** 2, device=source.device, dtype=source.dtype))
+            if off == 0:
+                w = w * center_weight
+            pool = pool + w * torch.roll(source, shifts=off, dims=1)
+            norm += float(w.item())
+        if norm <= 1e-6:
+            return torch.zeros_like(source)
+        return pool / norm
+
+    def _som_feedback_pool(self, fb):
+        """Circular feedback pool for prediction-driven SOM recruitment."""
+        strength = max(0.0, float(getattr(self, 'som_feedback_pool_strength', 0.0)))
+        if strength <= 0.0:
+            return torch.zeros_like(fb)
+
+        sigma = max(float(getattr(self, 'som_feedback_pool_sigma_channels', 1.5)), 1e-6)
+        radius = max(0, int(getattr(self, 'som_feedback_pool_radius', 3)))
+        center_weight = max(0.0, float(getattr(self, 'som_feedback_pool_center_weight', 0.0)))
+        return strength * self._circular_feedback_pool(fb, sigma, radius, center_weight)
+
+    def _topographic_somvip_feedback(self, fb):
+        """Shared narrow-SOM / broad-VIP routing of top-down feedback."""
+        som_strength = max(0.0, float(getattr(self, 'somvip_topographic_som_strength', 0.0)))
+        vip_strength = max(0.0, float(getattr(self, 'somvip_topographic_vip_strength', 0.0)))
+        if som_strength <= 0.0 and vip_strength <= 0.0:
+            z = torch.zeros_like(fb)
+            return z, z
+
+        som_drive = torch.zeros_like(fb)
+        if som_strength > 0.0:
+            som_sigma = max(float(getattr(self, 'somvip_topographic_som_sigma_channels', 0.75)), 1e-6)
+            som_radius = max(0, int(getattr(self, 'somvip_topographic_som_radius', 2)))
+            som_center = max(0.0, float(getattr(self, 'somvip_topographic_som_center_weight', 1.0)))
+            som_drive = som_strength * self._circular_feedback_pool(fb, som_sigma, som_radius, som_center)
+
+        vip_drive = torch.zeros_like(fb)
+        if vip_strength > 0.0:
+            vip_sigma = max(float(getattr(self, 'somvip_topographic_vip_sigma_channels', 2.5)), 1e-6)
+            vip_radius = max(0, int(getattr(self, 'somvip_topographic_vip_radius', 5)))
+            vip_center = max(0.0, float(getattr(self, 'somvip_topographic_vip_center_weight', 0.0)))
+            vip_drive = vip_strength * self._circular_feedback_pool(fb, vip_sigma, vip_radius, vip_center)
+
+        return som_drive, vip_drive
 
     def l23(self, l4, fb, ctx=0.0):
         # #41 feedback operator.  WIRING (forward_seq): the fed-down `fb` at step t is the prediction made
@@ -115,15 +275,28 @@ class SimpleNet(nn.Module):
             # (cell type), NOT a negative weight -- Dale-compliant. Sharpen vs dampen is whatever the learned
             # SOM-vs-VIP balance settles to; the architecture is identical in both regimes.
             g      = F.softplus(self.circ_raw)            # [5] = g_v,g_s,g_sv,g_e,g_ps (non-negative magnitudes)
-            vip_in = g[0] * fb                            # top-down -> VIP
+            topo_som, topo_vip = self._topographic_somvip_feedback(fb)
+            vip_in = g[0] * fb + topo_vip                 # top-down -> VIP plus broad topographic disinhibition
             if getattr(self, 'context', False):
                 vip_in = vip_in + F.softplus(self.g_ctx_raw) * ctx   # #43B context EXCITES VIP -> disinhibits SOM -> sharpen
             vip = F.relu(vip_in)
-            som = F.relu(g[1] * fb - g[2] * vip)           # top-down -> SOM, VIP -| SOM (disinhibition)
-            return F.relu(drive + g[3] * fb - g[4] * som)  # Pyr: FF drive + fb excitation - SOM inhibition
+            fb_pool = self._som_feedback_pool(fb)
+            som = F.relu(g[1] * fb + fb_pool + topo_som - g[2] * vip)  # top-down -> SOM, VIP -| SOM (disinhibition)
+            pe_strength = float(getattr(self, 'l23_prediction_error_strength', 0.0))
+            pe_drive = pe_strength * F.relu(fb)
+            pre = self._apply_l23_feedback_gated_inhibition(
+                drive - pe_drive + g[3] * fb - g[4] * som,
+                fb,
+            )
+            r = self._apply_l23_local_inhibition(
+                pre
+            )  # Pyr: FF drive + circuit feedback/error, then local L2/3 inhibition
+            return self._apply_l23_competition(r)
         if getattr(self, 'feedback_mode', 'additive') == 'subtractive':
-            return F.relu(drive - fb)
-        return F.relu(drive + fb)
+            pre = self._apply_l23_feedback_gated_inhibition(drive - fb, fb)
+            return self._apply_l23_competition(self._apply_l23_local_inhibition(pre))
+        pre = self._apply_l23_feedback_gated_inhibition(drive + fb, fb)
+        return self._apply_l23_competition(self._apply_l23_local_inhibition(pre))
 
 
 # ---------------- Phase 1: static representation ----------------

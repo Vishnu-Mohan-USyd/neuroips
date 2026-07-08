@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Strict paired energy/decoding validator for repaired Phase-A checkpoints.
+"""Strict raw-tuning validator for independent repaired SOM/VIP checkpoints.
 
-The validation set is deterministic: all 36 starts crossed with six velocities,
-with an expected continuation at t=4 and a 90-degree orthogonal unexpected
-continuation sharing the same prefix. The primary pass criterion is that every
-pair has lower mean L2/3 activity for the expected continuation.
+This validator keeps the existing paired expectation-energy contract and adds
+raw L2/3 tuning-shape checks. It uses feedback-on raw ``r_all[:, 4, :]`` aligned
+to the expected final orientation; no feedback-off floor subtraction is used for
+shape pass/fail.
 """
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -125,66 +126,23 @@ def stats(x):
     return {
         "mean": float(x.mean().item()),
         "std": float(x.std(unbiased=False).item()),
+        "sem": float(x.std(unbiased=False).item() / math.sqrt(max(1, x.numel()))),
         "min": float(x.min().item()),
         "max": float(x.max().item()),
     }
-
-
-def align_profiles(r, center_idx):
-    return aligned_stack(r, center_idx).mean(0).detach().float().cpu().tolist()
 
 
 def aligned_stack(r, center_idx):
     return torch.stack([torch.roll(row, shifts=-int(center_idx[i].item()), dims=0) for i, row in enumerate(r)], 0)
 
 
-def shape_metrics(decode_mode, r_e, r_u, r_floor, e_idx, u_idx, margin):
-    aligned_e = aligned_stack(r_e, e_idx)
-    aligned_u = aligned_stack(r_u, u_idx)
-    aligned_floor = aligned_stack(r_floor, e_idx)
-    profile = aligned_e.mean(0)
-    floor_profile = aligned_floor.mean(0)
+def profile_summary(profile):
+    center = profile[0]
     near = profile[[1, -1]].mean()
     flank = profile[[2, -2]].mean()
-    far = profile[N // 2]
-    center = profile[0]
-    floor_center = floor_profile[0]
-
-    if decode_mode == "sharpen":
-        checks = {
-            "center_above_feedback_off_floor": bool(center.item() >= floor_center.item() + margin),
-            "center_above_near": bool(center.item() >= near.item() + margin),
-            "center_above_flank": bool(center.item() >= flank.item() + margin),
-            "center_above_far": bool(center.item() >= far.item() + margin),
-        }
-    elif decode_mode == "dampen":
-        checks = {
-            "center_below_feedback_off_floor": bool(center.item() <= floor_center.item() - margin),
-        }
-    else:
-        raise ValueError(f"unknown decode mode {decode_mode!r}")
-
-    return {
-        "pass": all(checks.values()),
-        "checks": checks,
-        "shape_margin": margin,
-        "expected_center": float(center.item()),
-        "expected_near_mean_offsets_1": float(near.item()),
-        "expected_flank_mean_offsets_2": float(flank.item()),
-        "expected_far_offset_18": float(far.item()),
-        "feedback_off_floor_center": float(floor_center.item()),
-        "feedback_off_floor_near_mean_offsets_1": float(floor_profile[[1, -1]].mean().item()),
-        "feedback_off_floor_flank_mean_offsets_2": float(floor_profile[[2, -2]].mean().item()),
-        "feedback_off_floor_far_offset_18": float(floor_profile[N // 2].item()),
-        "flank_minus_floor_flank": float((flank - floor_profile[[2, -2]].mean()).item()),
-        "far_minus_floor_far": float((far - floor_profile[N // 2]).item()),
-        "gains_g_v_g_s_g_sv_g_e_g_ps": None,
-        "expected_profile_aligned_to_expected_channel": profile.detach().float().cpu().tolist(),
-        "unexpected_profile_aligned_to_unexpected_channel": aligned_u.mean(0).detach().float().cpu().tolist(),
-        "feedback_off_floor_profile_aligned_to_expected_channel": floor_profile.detach().float().cpu().tolist(),
-        "expected_nonzero_count": stats((r_e != 0).float().sum(dim=1)),
-        "unexpected_nonzero_count": stats((r_u != 0).float().sum(dim=1)),
-    }
+    shoulder = profile[[3, 4, -3, -4]].mean()
+    far = profile[[10, 11, 12, -10, -11, -12]].mean()
+    return center, near, flank, shoulder, far
 
 
 @torch.no_grad()
@@ -197,22 +155,35 @@ def held_acc(net, seed, batch, S=12):
 
 
 @torch.no_grad()
-def validate_one(label, path, decode_mode, args):
+def noisy_decoder(net, r, target, sigma, repeats, seed):
+    torch.manual_seed(seed)
+    B = r.shape[0]
+    noise = sigma * torch.randn(repeats, B, N, device=device)
+    logits = net.decoder((r.unsqueeze(0) + noise).reshape(repeats * B, N))
+    target_rep = target.repeat(repeats)
+    ce = F.cross_entropy(logits, target_rep, reduction="none")
+    prob = logits.softmax(-1).gather(1, target_rep.view(-1, 1)).squeeze(1)
+    acc = logits.argmax(-1) == target_rep
+    return {
+        "ce": stats(ce),
+        "target_prob": stats(prob),
+        "acc": float(acc.float().mean().item()),
+    }
+
+
+@torch.no_grad()
+def validate_one(label, path, mode, args, seed_offset):
     net = load_net(path)
     theta_e, theta_u, e_idx, u_idx = build_pairs()
     _, r_all_e = forward_seq(net, theta_e, 1.0)
     _, r_all_u = forward_seq(net, theta_u, 1.0)
-    _, r_all_floor = forward_seq(net, theta_e, 0.0)
     r_e = r_all_e[:, K, :]
     r_u = r_all_u[:, K, :]
-    r_floor = r_all_floor[:, K, :]
 
     E_e = r_e.abs().mean(dim=1)
     E_u = r_u.abs().mean(dim=1)
     dE = E_e - E_u
-    sq_e = (r_e * r_e).sum(dim=1)
-    sq_u = (r_u * r_u).sum(dim=1)
-    d_sq = sq_e - sq_u
+    energy_pass = bool((dE <= -args.energy_margin).all().item())
 
     logits_e = net.decoder(r_e)
     logits_u = net.decoder(r_u)
@@ -220,35 +191,90 @@ def validate_one(label, path, decode_mode, args):
     ce_u = F.cross_entropy(logits_u, u_idx, reduction="none")
     prob_e = logits_e.softmax(-1).gather(1, e_idx.view(-1, 1)).squeeze(1)
     prob_u = logits_u.softmax(-1).gather(1, u_idx.view(-1, 1)).squeeze(1)
-    acc_e = logits_e.argmax(-1) == e_idx
-    acc_u = logits_u.argmax(-1) == u_idx
-
-    energy_pass = bool((dE <= -args.energy_margin).all().item())
-    if decode_mode == "sharpen":
-        decode_pass = bool(
+    clean = {
+        "ce_expected_target": stats(ce_e),
+        "ce_unexpected_target": stats(ce_u),
+        "target_prob_expected": stats(prob_e),
+        "target_prob_unexpected": stats(prob_u),
+    }
+    if mode == "sharpen":
+        clean_pass = bool(
             ce_e.mean().item() + args.decode_margin <= ce_u.mean().item()
             and prob_e.mean().item() >= prob_u.mean().item() + args.decode_margin
         )
-    elif decode_mode == "dampen":
-        decode_pass = bool(
+    elif mode == "dampen":
+        clean_pass = bool(
             ce_e.mean().item() >= ce_u.mean().item() + args.decode_margin
             and prob_e.mean().item() + args.decode_margin <= prob_u.mean().item()
         )
     else:
-        raise ValueError(f"unknown decode mode {decode_mode!r}")
+        raise ValueError(f"unknown mode {mode!r}")
+    clean["pass"] = clean_pass
 
-    held = held_acc(net, args.seed, args.held_batch)
-    held_pass = bool(held >= args.held_min)
+    noisy_e = noisy_decoder(net, r_e, e_idx, args.noise_sigma, args.noise_repeats, args.seed + seed_offset)
+    noisy_u = noisy_decoder(net, r_u, u_idx, args.noise_sigma, args.noise_repeats, args.seed + seed_offset + 1)
+    if mode == "sharpen":
+        noisy_pass = bool(
+            noisy_e["ce"]["mean"] + args.noisy_decode_margin <= noisy_u["ce"]["mean"]
+            and noisy_e["target_prob"]["mean"] >= noisy_u["target_prob"]["mean"] + args.noisy_prob_margin
+        )
+    else:
+        noisy_pass = bool(
+            noisy_e["ce"]["mean"] >= noisy_u["ce"]["mean"] + args.noisy_decode_margin
+            and noisy_e["target_prob"]["mean"] + args.noisy_prob_margin <= noisy_u["target_prob"]["mean"]
+        )
+
+    aligned = aligned_stack(r_e, e_idx)
+    profile = aligned.mean(0)
+    profile_sem = aligned.std(0, unbiased=False) / math.sqrt(aligned.shape[0])
+    center, near, flank, shoulder, far = profile_summary(profile)
+
+    if mode == "sharpen":
+        checks = {
+            "center_above_near": bool(center.item() >= near.item() + args.shape_margin),
+            "center_above_flank": bool(center.item() >= flank.item() + args.shape_margin),
+            "center_above_far": bool(center.item() >= far.item() + args.shape_margin),
+            "far_low_relative_to_center": bool(far.item() <= args.sharpen_far_max_frac * center.item()),
+        }
+    else:
+        checks = {
+            "center_nonzero": bool(center.item() >= args.dampen_center_min),
+            "center_below_flank": bool(center.item() + args.shape_margin <= flank.item()),
+            "center_below_shoulder": bool(center.item() + args.shape_margin <= shoulder.item()),
+            "far_not_pathological_vs_flank": bool(far.item() <= flank.item() + args.dampen_far_flank_slack),
+        }
+
+    shape = {
+        "pass": all(checks.values()),
+        "checks": checks,
+        "raw_center": float(center.item()),
+        "raw_near_mean_offsets_5deg": float(near.item()),
+        "raw_flank_mean_offsets_10deg": float(flank.item()),
+        "raw_shoulder_mean_offsets_15_20deg": float(shoulder.item()),
+        "raw_far_mean_offsets_50_55_60deg": float(far.item()),
+        "raw_profile_aligned_to_expected": profile.detach().float().cpu().tolist(),
+        "raw_profile_sem_aligned_to_expected": profile_sem.detach().float().cpu().tolist(),
+    }
+
+    held = held_acc(net, args.seed + seed_offset, args.held_batch)
+    prediction = {
+        "held_acc_percent": held,
+        "held_min_percent": args.held_min,
+        "pass": bool(held >= args.held_min),
+    }
     gains = F.softplus(net.circ_raw).detach().float().cpu().tolist()
-    shape = shape_metrics(decode_mode, r_e, r_u, r_floor, e_idx, u_idx, args.shape_margin)
-    shape["gains_g_v_g_s_g_sv_g_e_g_ps"] = gains
-
     return {
         "label": label,
         "path": path,
-        "decode_mode": decode_mode,
-        "simple_net_config": model_config(net),
+        "mode": mode,
         "n_pairs": int(theta_e.shape[0]),
+        "architecture_contract": {
+            "simple_net_use_circuit": True,
+            "simple_net_context": False,
+            "simple_net_config": model_config(net),
+            "state_dict_keys": sorted(net.state_dict().keys()),
+            "gains_g_v_g_s_g_sv_g_e_g_ps": gains,
+        },
         "energy_mean_abs": {
             "expected": stats(E_e),
             "unexpected": stats(E_u),
@@ -257,43 +283,39 @@ def validate_one(label, path, decode_mode, args):
             "max_allowed_delta": float(-args.energy_margin),
             "pass": energy_pass,
         },
-        "energy_sum_sq": {
-            "expected": stats(sq_e),
-            "unexpected": stats(sq_u),
-            "delta_expected_minus_unexpected": stats(d_sq),
-            "frac_delta_lt_0": float((d_sq < 0).float().mean().item()),
+        "current_decoder_clean": clean,
+        "current_decoder_noisy": {
+            "sigma": args.noise_sigma,
+            "repeats": args.noise_repeats,
+            "expected": noisy_e,
+            "unexpected": noisy_u,
+            "pass": noisy_pass,
         },
-        "current_decoder": {
-            "ce_expected_target": stats(ce_e),
-            "ce_unexpected_target": stats(ce_u),
-            "target_prob_expected": stats(prob_e),
-            "target_prob_unexpected": stats(prob_u),
-            "acc_expected_target": float(acc_e.float().mean().item()),
-            "acc_unexpected_target": float(acc_u.float().mean().item()),
-            "frac_expected_ce_lt_unexpected_ce": float((ce_e < ce_u).float().mean().item()),
-            "pass": decode_pass,
-        },
-        "prediction": {
-            "held_acc_percent": held,
-            "held_min_percent": args.held_min,
-            "pass": held_pass,
-        },
-        "shape": shape,
-        "pass": energy_pass and decode_pass and held_pass and shape["pass"],
+        "prediction": prediction,
+        "raw_tuning_shape": shape,
+        "pass": bool(energy_pass and clean_pass and noisy_pass and prediction["pass"] and shape["pass"]),
     }
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Validate repaired SOM/VIP checkpoints on paired expected-vs-orthogonal energy and decoding.")
-    ap.add_argument("--sharpen", required=True, help="path to sharpen checkpoint")
-    ap.add_argument("--dampen", required=True, help="path to dampen checkpoint")
-    ap.add_argument("--energy-margin", type=float, default=1e-4, help="require E_expected - E_unexpected <= -margin for every pair")
-    ap.add_argument("--decode-margin", type=float, default=1e-4, help="mean decoder CE/probability separation margin")
-    ap.add_argument("--shape-margin", type=float, default=1e-3, help="margin for shape pass/fail checks")
-    ap.add_argument("--held-min", type=float, default=75.0, help="minimum held-out next-step prediction accuracy in percent")
-    ap.add_argument("--held-batch", type=int, default=8192, help="held-out batch size")
-    ap.add_argument("--seed", type=int, default=12345, help="seed for held-out prediction check")
-    ap.add_argument("--no-fail", action="store_true", help="print JSON but exit 0 even if validation fails")
+    ap = argparse.ArgumentParser(description="Strict raw-tuning validation for independent repaired checkpoints.")
+    ap.add_argument("--sharpen", required=True)
+    ap.add_argument("--dampen", required=True)
+    ap.add_argument("--json-out")
+    ap.add_argument("--energy-margin", type=float, default=1e-4)
+    ap.add_argument("--decode-margin", type=float, default=1e-4)
+    ap.add_argument("--noisy-decode-margin", type=float, default=1e-4)
+    ap.add_argument("--noisy-prob-margin", type=float, default=1e-4)
+    ap.add_argument("--shape-margin", type=float, default=1e-3)
+    ap.add_argument("--held-min", type=float, default=75.0)
+    ap.add_argument("--held-batch", type=int, default=8192)
+    ap.add_argument("--noise-sigma", type=float, default=1.0)
+    ap.add_argument("--noise-repeats", type=int, default=16)
+    ap.add_argument("--sharpen-far-max-frac", type=float, default=0.65)
+    ap.add_argument("--dampen-center-min", type=float, default=0.05)
+    ap.add_argument("--dampen-far-flank-slack", type=float, default=0.15)
+    ap.add_argument("--seed", type=int, default=12345)
+    ap.add_argument("--no-fail", action="store_true")
     args = ap.parse_args()
 
     result = {
@@ -302,22 +324,32 @@ def main():
         "K": K,
         "velocities": list(VELS),
         "criteria": {
+            "n_pairs": 216,
             "energy_every_pair_delta_lte": -args.energy_margin,
             "held_min_percent": args.held_min,
-            "decode_margin": args.decode_margin,
             "shape_margin": args.shape_margin,
+            "sharpen_far_max_frac": args.sharpen_far_max_frac,
+            "dampen_center_min": args.dampen_center_min,
+            "dampen_far_flank_slack": args.dampen_far_flank_slack,
+            "noise_sigma": args.noise_sigma,
+            "noise_repeats": args.noise_repeats,
         },
         "checkpoints": [
-            validate_one("sharpen", args.sharpen, "sharpen", args),
-            validate_one("dampen", args.dampen, "dampen", args),
+            validate_one("sharpen", args.sharpen, "sharpen", args, 100),
+            validate_one("dampen", args.dampen, "dampen", args, 200),
         ],
     }
     result["pass"] = all(item["pass"] for item in result["checkpoints"])
-    print(json.dumps(result, indent=2, sort_keys=True))
+    text = json.dumps(result, indent=2, sort_keys=True)
+    print(text)
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.write("\n")
     if not result["pass"] and not args.no_fail:
-        print("VALIDATION_PASS=False", file=sys.stderr)
+        print("STRICT_TUNING_VALIDATION_PASS=False", file=sys.stderr)
         return 1
-    print(f"VALIDATION_PASS={result['pass']}", file=sys.stderr)
+    print(f"STRICT_TUNING_VALIDATION_PASS={result['pass']}", file=sys.stderr)
     return 0
 
 
