@@ -17,6 +17,16 @@ import torch.nn.functional as F
 from simple_net import N, STEP_DEG, chan, device, l4_code, make_sequences  # noqa: F401
 
 
+FEEDBACK_MODE_BASELINE = "baseline"
+FEEDBACK_MODE_CENTERED = "centered"
+FEEDBACK_MODE_POSTERIOR_PRIOR_EXCESS = "posterior_prior_excess"
+FEEDBACK_MODES = (
+    FEEDBACK_MODE_BASELINE,
+    FEEDBACK_MODE_CENTERED,
+    FEEDBACK_MODE_POSTERIOR_PRIOR_EXCESS,
+)
+
+
 def circular_distance_channels() -> torch.Tensor:
     idx = torch.arange(N, device=device)
     d = (idx[:, None] - idx[None, :]).abs()
@@ -172,7 +182,51 @@ class SimpleTunedNet(nn.Module):
         return decay * adapt_state + (1.0 - decay) * smooth_r
 
 
-def forward_seq_tuned(net: SimpleTunedNet, theta: torch.Tensor, fb_scale: float = 1.0):
+def resolve_feedback_mode(
+    center_over_classes: bool = False,
+    feedback_mode: str | None = None,
+) -> str:
+    """Resolve legacy centering into one explicit shared feedback mode."""
+
+    if feedback_mode is None:
+        return (
+            FEEDBACK_MODE_CENTERED
+            if center_over_classes
+            else FEEDBACK_MODE_BASELINE
+        )
+    if feedback_mode not in FEEDBACK_MODES:
+        raise ValueError(f"unknown feedback mode {feedback_mode!r}")
+    if center_over_classes and feedback_mode != FEEDBACK_MODE_CENTERED:
+        raise ValueError(
+            "center_over_classes=True conflicts with explicit feedback mode "
+            f"{feedback_mode!r}"
+        )
+    return feedback_mode
+
+
+def predictive_feedback_evidence(
+    raw_logits: torch.Tensor,
+    center_over_classes: bool = False,
+    feedback_mode: str | None = None,
+) -> torch.Tensor:
+    """Return nonnegative feedback evidence without changing raw CE logits."""
+
+    mode = resolve_feedback_mode(center_over_classes, feedback_mode)
+    if mode == FEEDBACK_MODE_POSTERIOR_PRIOR_EXCESS:
+        posterior = F.softmax(raw_logits, dim=-1)
+        return F.relu(float(N) * posterior - 1.0)
+    if mode == FEEDBACK_MODE_CENTERED:
+        raw_logits = raw_logits - raw_logits.mean(dim=-1, keepdim=True)
+    return F.relu(raw_logits)
+
+
+def forward_seq_tuned(
+    net: SimpleTunedNet,
+    theta: torch.Tensor,
+    fb_scale: float = 1.0,
+    center_feedback: bool = False,
+    feedback_mode: str | None = None,
+):
     """Unroll tuned network over [B,S] orientations."""
     batch = theta.shape[0]
     h = torch.zeros(batch, net.hidden, device=device)
@@ -186,7 +240,11 @@ def forward_seq_tuned(net: SimpleTunedNet, theta: torch.Tensor, fb_scale: float 
         h = net.gru(r, h)
         pred = net.W_fb(h)
         preds.append(pred)
-        pred_down = F.relu(pred)
+        pred_down = predictive_feedback_evidence(
+            pred,
+            center_feedback,
+            feedback_mode,
+        )
     return torch.stack(preds, 1), torch.stack(r_seq, 1)
 
 
