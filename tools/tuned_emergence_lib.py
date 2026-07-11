@@ -1,9 +1,11 @@
-"""Fixed orientation-tuned L2/3 basis for natural emergence experiments.
+"""Fixed orientation-tuned L2/3 basis for task–energy experiments.
 
 This module is intentionally separate from ``simple_net.py``.  It keeps the
 same L4 code and sequence generator, but replaces learned dense L4->L2/3 and
 dense decoder maps with a fixed local feedforward basis and constrained
-orientation readouts.  Training remains ordinary momentum sequences only.
+orientation readouts. The recurrent GRU/``W_fb`` predictor and a
+Dale-sign-constrained SOM/VIP-inspired rate motif supply feedback one abstract
+time step later. Training remains ordinary momentum sequences only.
 """
 
 from __future__ import annotations
@@ -138,6 +140,16 @@ class SimpleTunedNet(nn.Module):
         raise ValueError(f"unknown tuned readout {self.readout!r}")
 
     def l23(self, l4: torch.Tensor, fb: torch.Tensor, adapt_state: torch.Tensor | None = None) -> torch.Tensor:
+        """Map ``[B,36]`` L4/feedback tensors to nonnegative L2/3 rates.
+
+        Inputs and outputs use arbitrary activity units. With the configured
+        zero auxiliary strengths, the pre-competition motif is
+        ``vip=relu(g0*fb)``, ``som=relu(g1*fb-g2*vip)``, and
+        ``u=relu(feedforward+g3*fb-g4*som)``. Fixed local competition is applied
+        afterward. These are sign-constrained rate variables, not identified
+        interneuron membrane or spike dynamics.
+        """
+
         drive = self.feedforward(l4)
         fb_pos = F.relu(fb)
         g = F.softplus(self.circ_raw)
@@ -209,7 +221,12 @@ def predictive_feedback_evidence(
     center_over_classes: bool = False,
     feedback_mode: str | None = None,
 ) -> torch.Tensor:
-    """Return nonnegative feedback evidence without changing raw CE logits."""
+    """Return nonnegative ``[B,36]`` evidence without changing CE logits.
+
+    ``posterior_prior_excess`` computes ``relu(36*softmax(logits)-1)``. The
+    result is used only as the next time step's fed-down state; the raw logits
+    remain the next-channel prediction output.
+    """
 
     mode = resolve_feedback_mode(center_over_classes, feedback_mode)
     if mode == FEEDBACK_MODE_POSTERIOR_PRIOR_EXCESS:
@@ -227,7 +244,15 @@ def forward_seq_tuned(
     center_feedback: bool = False,
     feedback_mode: str | None = None,
 ):
-    """Unroll tuned network over [B,S] orientations."""
+    """Unroll the tuned network over degree-valued ``theta[B,S]``.
+
+    Returns predictor logits ``[B,S,36]`` and L2/3 rates ``[B,S,36]``. Hidden,
+    feedback, and adaptation states start at zero. At each time step L2/3 is
+    evaluated first, then adaptation and GRU state update, then ``W_fb`` logits
+    are transformed for the following step. Therefore the first-stimulus
+    response has zero prior feedback context without disabling normal feedback
+    execution.
+    """
     batch = theta.shape[0]
     h = torch.zeros(batch, net.hidden, device=device)
     pred_down = torch.zeros(batch, N, device=device)

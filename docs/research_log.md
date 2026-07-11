@@ -1,5 +1,30 @@
 # Research Log
 
+> **HISTORICAL / NONCANONICAL.** This file is retained as development lineage.
+> The canonical current workflow, equations, results, and reproduction guide are
+> [`emergent_task_energy_axis.md`](emergent_task_energy_axis.md). The brief
+> pointer below is non-normative; the remainder records legacy repair work.
+
+## Current-workflow pointer (non-normative)
+
+The current four-seed workflow is documented in
+[`emergent_task_energy_axis.md`](emergent_task_energy_axis.md). It uses one
+fixed orientation substrate, a recurrent predictor, a SOM/VIP-inspired
+Dale-sign-constrained rate motif, and frozen divisive local competition. The
+only arm coordinate is the task-versus-normalized-L2/3-mean-rate weight; matched
+operational continuation/reversal geometry is post-training only.
+
+Biological mappings are deliberately limited. VIP/SOM signs are motivated by
+Pi et al. (2013, doi:10.1038/nature12676) and Pfeffer et al. (2013,
+doi:10.1038/nn.3446); divisive competition is motivated by normalization work
+including Heeger (1992, doi:10.1017/S0952523800009640) and Carandini et al.
+(1997, doi:10.1523/JNEUROSCI.17-21-08621.1997). The GRU, mean-rate proxy,
+fixed circular basis, and exact loss/assay definitions remain engineering
+approximations. The high-alpha endpoint is broad attenuation with preferential
+center suppression, not absolute flank-preserving dampening.
+
+## Legacy remainder
+
 ## Expectation-Suppression Repair
 
 Mechanism summary:

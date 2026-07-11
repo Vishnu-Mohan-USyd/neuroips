@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Train one common task initialization and five task-energy alpha arms."""
+"""Train one common task initialization and six task–energy alpha arms.
+
+All arms clone one seed-specific task pretrain and differ only in ``alpha`` for
+``L=(1-alpha)*T+alpha*E``. ``T`` combines normalized next-channel cross entropy
+with noisy current-orientation population-vector precision; ``E`` is the
+normalized L2/3 mean-rate proxy. The fixed-step finals, not validation-selected
+checkpoints, are the experiment endpoints.
+"""
 
 from __future__ import annotations
 
@@ -236,6 +243,33 @@ def task_energy_losses(
     center_feedback: bool = False,
     feedback_mode: str | None = None,
 ) -> dict[str, torch.Tensor]:
+    """Compute the task and normalized mean-rate terms for one sequence batch.
+
+    Parameters
+    ----------
+    theta:
+        Degree-valued orientation bins with shape ``[B,S]``. One channel is
+        ``5`` nominal degrees.
+    channels:
+        Matching zero-based integer channel labels with shape ``[B,S]``.
+    noise_generator:
+        Arm-local generator used for exactly one ``[B,S,36]`` Gaussian draw.
+    references:
+        Positive scalar activity references in arbitrary units: ``R_ref`` and
+        ``sigma_train``.
+
+    Returns
+    -------
+    dict[str, torch.Tensor]
+        Scalar dimensionless tensors. With logits ``[B,S,36]`` and raw L2/3
+        rates ``r[B,S,36]`` in arbitrary activity units,
+        ``Lpred=CE(logits[:,:-1], channels[:,1:])`` and noisy rectified rates
+        define ``Lpv=mean(1-circular_alignment)``. The returned terms are
+        ``task=0.5*Lpred/log(36)+0.5*Lpv/2`` and
+        ``energy=mean(r)/R_ref``. Feedback computed after time ``t`` affects
+        L2/3 only at ``t+1``; the first response has zero feedback state.
+    """
+
     predictions, rates = tuned.forward_seq_tuned(
         net,
         theta,
@@ -707,29 +741,70 @@ def run_alpha(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", default="auto")
-    parser.add_argument(
-        "--out", type=Path, default=ROOT / "outputs" / "emergent_task_energy_axis"
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--pretrain-steps", type=int, default=3000)
-    parser.add_argument("--axis-steps", type=int, default=8000)
-    parser.add_argument("--batch", type=int, default=128)
-    parser.add_argument("--sequence-length", type=int, default=12)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--clip", type=float, default=5.0)
-    parser.add_argument("--log-every", type=int, default=100)
-    parser.add_argument("--checkpoint-every", type=int, default=250)
-    parser.add_argument("--alphas", nargs="+", type=float, default=list(ALPHAS))
+    parser.add_argument("--seed", type=int, default=0, help="Experimental seed.")
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="PyTorch device, for example cuda:0, cpu, or auto.",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=ROOT / "outputs" / "emergent_task_energy_axis",
+        help="Parent output directory; artifacts are written below seed_<seed>/.",
+    )
+    parser.add_argument(
+        "--pretrain-steps", type=int, default=3000, help="Common task-only steps."
+    )
+    parser.add_argument(
+        "--axis-steps", type=int, default=8000, help="Steps in every alpha arm."
+    )
+    parser.add_argument("--batch", type=int, default=128, help="Sequence batch size.")
+    parser.add_argument(
+        "--sequence-length", type=int, default=12, help="Abstract time steps per sequence."
+    )
+    parser.add_argument("--lr", type=float, default=1e-3, help="Adam learning rate.")
+    parser.add_argument("--clip", type=float, default=5.0, help="Gradient-norm clip.")
+    parser.add_argument(
+        "--log-every", type=int, default=100, help="Training JSONL log cadence."
+    )
+    parser.add_argument(
+        "--checkpoint-every", type=int, default=250, help="Latest-checkpoint cadence."
+    )
+    parser.add_argument(
+        "--alphas",
+        nargs="+",
+        type=float,
+        default=list(ALPHAS),
+        help="Unique task–energy coordinates in [0,1].",
+    )
     parser.add_argument(
         "--freeze-local-comp",
         action=argparse.BooleanOptionalAction,
         default=True,
+        help="Keep local competition identical to the common pretrain.",
     )
-    parser.add_argument("--center-feedback", action="store_true")
-    parser.add_argument("--feedback-mode", choices=tuned.FEEDBACK_MODES)
+    parser.add_argument(
+        "--center-feedback",
+        action="store_true",
+        help="Legacy alias selecting centered feedback evidence.",
+    )
+    parser.add_argument(
+        "--feedback-mode",
+        choices=tuned.FEEDBACK_MODES,
+        default=argparse.SUPPRESS,
+        help=(
+            "Omitting this option selects posterior_prior_excess unless "
+            "--center-feedback is used."
+        ),
+    )
     args = parser.parse_args()
+    if not hasattr(args, "feedback_mode"):
+        args.feedback_mode = None
     if args.pretrain_steps < 1 or args.axis_steps < 1:
         parser.error("step counts must be positive")
     if not args.alphas or len(args.alphas) != len(set(args.alphas)):

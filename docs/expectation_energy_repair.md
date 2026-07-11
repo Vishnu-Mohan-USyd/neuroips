@@ -1,5 +1,12 @@
 # Expectation Energy Repair Validation
 
+> **HISTORICAL / NONCANONICAL.** This note documents an earlier repair program
+> and is not the source of truth for the current figures. Use the canonical
+> [emergent task–energy axis guide](emergent_task_energy_axis.md) for the current
+> model, protocol, results, and reproduction commands.
+
+## Legacy remainder
+
 This note records the repaired expectation-suppression result for the SOM/VIP
 models. Expected stimuli now use lower L2/3 activity than matched 90-degree
 unexpected stimuli while preserving the intended precision tradeoff:

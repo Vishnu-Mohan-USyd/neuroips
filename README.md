@@ -1,5 +1,39 @@
 # SOM/VIP sharpen ↔ dampen: expectation effects in a V1/V2-style cortical circuit
 
+## Current validated workflow
+
+> **Start here:** the current result is the four-seed
+> [emergent task–energy axis](docs/emergent_task_energy_axis.md), not the older
+> Phase A/Phase B experiments documented below. The current workflow trains six
+> arms from one common task pretrain, assays fixed operational
+> continuation/reversal pairs, and regenerates the tracked comparison figures.
+
+| Entry point | Purpose |
+| --- | --- |
+| [`docs/emergent_task_energy_axis.md`](docs/emergent_task_energy_axis.md) | Canonical architecture, equations, protocol, four-seed results, limitations, and exact RTX 5090 reproduction |
+| [`tools/tuned_emergence_lib.py`](tools/tuned_emergence_lib.py) | Current fixed orientation basis, L2/3 circuit, recurrent predictor, and feedback timing |
+| [`tools/train_emergent_task_energy_axis.py`](tools/train_emergent_task_energy_axis.py) | Common pretrain and six task–energy alpha arms |
+| [`tools/assay_emergent_task_energy_axis.py`](tools/assay_emergent_task_energy_axis.py) | Fixed 216-pair assay and decoding/rate/shape metrics |
+| [`tools/plot_emergent_reference_figures.py`](tools/plot_emergent_reference_figures.py) | Four-seed checkpoint replay, literal first-stimulus comparator, JSON, and plots |
+| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Machine-readable aggregate data and the four current figures |
+
+For this workflow, executable code and checkpoint contents are primary;
+per-seed summaries/assays feed `plot_data.json`, which feeds the PNGs. The
+plotter remeasures checkpoints but is not a phenotype pass gate.
+
+This organization patch intentionally makes the validated six-alpha,
+posterior-excess, frozen-local-competition protocol the trainer CLI default.
+The numerical kernels and losses are unchanged for explicit validated
+commands. Legacy behavior is selected explicitly with
+`--feedback-mode baseline --no-freeze-local-comp --alphas 0.1 0.3 0.5 0.7 0.9`;
+see the [canonical CLI note](docs/emergent_task_energy_axis.md#current-and-legacy-cli-defaults).
+
+## Historical Phase A/Phase B lineage
+
+The remainder of this README records the repository's earlier Phase A/Phase B
+experiments. It is retained for provenance and is not the source of truth for
+the current task–energy figures.
+
 A small, from-scratch model of how *top-down expectation* reshapes a sensory representation. The whole
 model is one short, pure-PyTorch file (`simple_net.py`) plus two self-contained experiment folders.
 
@@ -81,12 +115,13 @@ net excitation → sharpen; SOM-dominant → net inhibition → dampen.** Phase 
 ## 4. Install
 
 ```bash
-pip install -r requirements.txt        # the only dependency is torch>=2.0
+pip install -r requirements.txt
 ```
 
-Pure PyTorch + Python stdlib — no numpy/scipy/sklearn. A **CPU-only** torch build works (the device
-auto-falls back to CPU); a CUDA GPU is recommended for the Phase-A grid and Phase-B training, while the
-forward-only re-probes are cheap on CPU. Requires Python ≥ 3.8.
+The model and assay code use PyTorch plus the Python standard library; the
+current reference-figure entry point also uses Matplotlib. A **CPU-only** torch
+build works (the device auto-falls back to CPU); a CUDA GPU is recommended for
+training, while forward-only re-probes are cheap on CPU. Requires Python ≥ 3.10.
 
 ## 5. How to run
 

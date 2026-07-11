@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Run the fixed 216 matched-final validation pairs for all alpha arms."""
+"""Measure fixed operational continuation/reversal pairs for alpha arms.
+
+For every final channel and six signed velocities, condition A continues a
+constant velocity and condition B reverses at its final transition. B's final
+velocity change is outside the training acceleration support. The three primary
+readout families are final L2/3 mean rate, noise-held-out condition-blind
+decoding, and aligned center/flank shape. This executable reports measurements;
+it does not apply a phenotype acceptance gate.
+"""
 
 from __future__ import annotations
 
@@ -52,6 +60,14 @@ def alpha_slug(alpha: float) -> str:
 
 
 def matched_pairs(device: torch.device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return 216 matched length-five A/B histories and their final channels.
+
+    A is ``[y-4v,y-3v,y-2v,y-v,y]`` (operational continuation) and B is
+    ``[y+2v,y+v,y,y-v,y]`` (operational OOD reversal), for all 36 ``y`` and
+    ``v in {-3,-2,-1,1,2,3}``. Degree-valued histories have shape ``[216,5]``;
+    final channel indices have shape ``[216]``.
+    """
+
     rows_a: list[list[int]] = []
     rows_b: list[list[int]] = []
     final_channels: list[int] = []
@@ -177,6 +193,14 @@ def condition_blind_held_out_decoding(
     finals: torch.Tensor,
     sigma: float,
 ) -> dict[str, float | int | str]:
+    """Fit one pooled A+B centroid readout and test independent noise draws.
+
+    The underlying 216 histories occur in both splits. Only additive noise is
+    held out; this is not stimulus-held-out or history-held-out decoding.
+    Rates have shape ``[216,36]`` in arbitrary activity units and ``finals``
+    contains their 36-class targets.
+    """
+
     train_a, train_b = paired_noisy_features(
         rates_a,
         rates_b,
@@ -246,6 +270,14 @@ def synthetic_construct_check(device: torch.device) -> dict[str, float]:
 def shape_quantities(
     rates: torch.Tensor, finals: torch.Tensor, r_ref: float
 ) -> dict[str, torch.Tensor]:
+    """Return per-history aligned center, flank, normalized flank, and Q.
+
+    Raw rates have shape ``[216,36]`` in arbitrary activity units. Profiles are
+    circularly aligned to ``finals``. Center uses offsets ``{-1,0,+1}`` and
+    flank uses ``{±3,±4,±5,±6}`` channels. ``Fq`` and ``Q`` are dimensionless;
+    center and flank retain activity units.
+    """
+
     aligned = align_rates(rates, finals).to(torch.float64)
     offset_to_index = {offset: index for index, offset in enumerate(OFFSETS)}
     center_indices = torch.tensor(
@@ -281,6 +313,14 @@ def assay_arm(
     device: torch.device,
     common_local_comp_raw: torch.Tensor,
 ) -> tuple[dict, dict]:
+    """Replay one final checkpoint and summarize its three assay families.
+
+    Both A and B use the checkpoint's normal feedback-on unroll. Only final-step
+    ``[216,36]`` L2/3 rates enter the mean-rate, decoder, and shape summaries.
+    The common local-competition tensor is checked when the checkpoint declares
+    it frozen.
+    """
+
     net, checkpoint = load_arm(path, device)
     center_feedback = bool(checkpoint.get("center_feedback", False))
     feedback_mode = tuned.resolve_feedback_mode(
@@ -393,11 +433,31 @@ def atomic_json_save(payload: dict, path: Path) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--device", default="auto")
-    parser.add_argument("--out", type=Path)
-    parser.add_argument("--alphas", nargs="+", type=float, default=list(ALPHAS))
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help="One seed directory containing common and alpha final checkpoints.",
+    )
+    parser.add_argument(
+        "--device", default="auto", help="PyTorch device, for example cuda:0, cpu, or auto."
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help="Output JSON path; defaults to <run-dir>/assay.json.",
+    )
+    parser.add_argument(
+        "--alphas",
+        nargs="+",
+        type=float,
+        default=list(ALPHAS),
+        help="Unique checkpoint alpha values to assay.",
+    )
     args = parser.parse_args()
     if not args.alphas or len(args.alphas) != len(set(args.alphas)):
         parser.error("alphas must be a nonempty unique list")

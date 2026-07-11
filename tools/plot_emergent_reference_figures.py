@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Plot measured task/energy endpoints in the four reference figure layouts.
+"""Plot measured task–energy endpoints in four reference figure layouts.
 
 The script reuses the fixed 216-pair assay and checkpoint loader from
-``assay_emergent_task_energy_axis.py``.  For each seed and optimization arm it
-extracts feedback-on final-step L2/3 rates for matched expected (A) and
-unexpected (B) sequences.  Tuning curves are averaged over the 216 pairs
-within a seed before computing the mean and sample SEM across seeds.
+``assay_emergent_task_energy_axis.py``. For each seed and endpoint it replays
+feedback-on operational continuation A and reversal B histories. Colored
+tuning curves are final A responses; the gray comparator pools ordinary-unroll
+timestep-zero A/B responses aligned to their own first presented orientation,
+where prior feedback state is naturally zero. It is not reversal B.
 
-Decoding uses the assay's existing condition-blind, held-out 36-class cosine
-centroid protocol.  All plotted uncertainty is SEM across independent seeds;
-trial/pair variability is never used as the plotted error bar.
+Decoding uses the assay's condition-blind, noise-held-out 36-class cosine
+centroid protocol; histories are not held out. Tuning first averages 216 rows
+within a seed. All plotted uncertainty is sample SEM across four independent
+seeds, never pair-level variability. The script remeasures checkpoints but does
+not apply a phenotype acceptance gate.
 """
 
 from __future__ import annotations
@@ -53,8 +56,10 @@ EXPECTED_RUN_DIRS = 4
 class SeedArmMeasurement:
     """One seed's endpoint measurements for one optimization arm.
 
-    Curves contain raw L2/3 rates averaged over the 216 matched sequences at
-    each final-orientation-aligned offset.  Scalar rate quantities are in the
+    Curves contain raw L2/3 rates averaged over the 216 matched sequences. The
+    expected and unexpected curves are aligned to the shared final orientation;
+    the zero-context curve pools A/B timestep-zero responses aligned to each
+    sequence's presented first orientation. Scalar rate quantities are in the
     same arbitrary rate units; decoding quantities are fractions in [0, 1].
     """
 
@@ -65,10 +70,13 @@ class SeedArmMeasurement:
     feedback_mode: str
     expected_curve: torch.Tensor
     unexpected_curve: torch.Tensor
+    zero_context_curve: torch.Tensor
     expected_center: float
     expected_flank: float
     unexpected_center: float
     unexpected_flank: float
+    zero_context_center: float
+    zero_context_flank: float
     delta_fq: float
     delta_q: float
     decode_expected: float
@@ -87,29 +95,53 @@ class SeedArmMeasurement:
         return self.unexpected_center / self.unexpected_flank
 
     @property
+    def zero_context_center_flank_ratio(self) -> float:
+        return self.zero_context_center / self.zero_context_flank
+
+    @property
     def decode_delta(self) -> float:
         return self.decode_expected - self.decode_unexpected
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "--run-dir",
         action="append",
         type=Path,
         required=True,
         help=(
-            "Validated seed run directory. Repeat exactly four times; each "
-            "directory must contain the common and requested arm checkpoints."
+            "Seed directory containing common_pretrain_final.pt and requested "
+            "alpha finals. Repeat exactly four times for distinct seeds."
         ),
     )
-    parser.add_argument("--task-alpha", type=float, default=0.0)
-    parser.add_argument("--energy-alpha", type=float, default=0.9)
-    parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--task-alpha",
+        type=float,
+        default=0.0,
+        help="Low-rate-pressure endpoint used for task/sharpening displays.",
+    )
+    parser.add_argument(
+        "--energy-alpha",
+        type=float,
+        default=0.9,
+        help="High-rate-pressure endpoint used for energy/attenuation displays.",
+    )
+    parser.add_argument(
+        "--device", default="cuda:0", help="PyTorch replay device, for example cuda:0 or cpu."
+    )
     parser.add_argument(
         "--out-dir",
         type=Path,
         default=ROOT / "figures" / "emergent_reference_comparison",
+        help=(
+            "Directory for plot_data.json, tuning_dampening.png, "
+            "tuning_sharpening.png, 1_decode_signflip.png, and "
+            "3_decode_energy_phasespace.png."
+        ),
     )
     args = parser.parse_args()
     if len(args.run_dir) != EXPECTED_RUN_DIRS:
@@ -269,6 +301,18 @@ def measure_seed_arm(
 
     aligned_a = assay.align_rates(rates_a, finals).to(torch.float64)
     aligned_b = assay.align_rates(rates_b, finals).to(torch.float64)
+    first_channels_a = (
+        (theta_a[:, 0] / assay.STEP_DEG).round().to(torch.long) % assay.N
+    )
+    first_channels_b = (
+        (theta_b[:, 0] / assay.STEP_DEG).round().to(torch.long) % assay.N
+    )
+    aligned_zero_context_a = assay.align_rates(
+        rates_a_all[:, 0, :], first_channels_a
+    ).to(torch.float64)
+    aligned_zero_context_b = assay.align_rates(
+        rates_b_all[:, 0, :], first_channels_b
+    ).to(torch.float64)
     offset_to_index = {
         offset: index for index, offset in enumerate(assay.OFFSETS)
     }
@@ -279,8 +323,15 @@ def measure_seed_arm(
     )
     expected_curve = aligned_a.index_select(1, plot_indices).mean(dim=0)
     unexpected_curve = aligned_b.index_select(1, plot_indices).mean(dim=0)
+    zero_context_curve = 0.5 * (
+        aligned_zero_context_a.index_select(1, plot_indices).mean(dim=0)
+        + aligned_zero_context_b.index_select(1, plot_indices).mean(dim=0)
+    )
     exp_center, exp_flank, _ = center_flank(expected_curve.cpu().tolist())
     unx_center, unx_flank, _ = center_flank(unexpected_curve.cpu().tolist())
+    zero_center, zero_flank, _ = center_flank(
+        zero_context_curve.cpu().tolist()
+    )
 
     r_ref = float(checkpoint["references"]["R_ref"])
     sigma = float(checkpoint["references"]["sigma_train"])
@@ -306,10 +357,13 @@ def measure_seed_arm(
         feedback_mode=feedback_mode,
         expected_curve=expected_curve.cpu(),
         unexpected_curve=unexpected_curve.cpu(),
+        zero_context_curve=zero_context_curve.cpu(),
         expected_center=exp_center,
         expected_flank=exp_flank,
         unexpected_center=unx_center,
         unexpected_flank=unx_flank,
+        zero_context_center=zero_center,
+        zero_context_flank=zero_flank,
         delta_fq=float((shape_a["Fq"] - shape_b["Fq"]).mean().item()),
         delta_q=float((shape_a["Q"] - shape_b["Q"]).mean().item()),
         decode_expected=float(
@@ -349,12 +403,27 @@ def measurement_json(measurement: SeedArmMeasurement) -> dict[str, Any]:
         "checkpoint": str(measurement.checkpoint),
         "feedback_mode": measurement.feedback_mode,
         "tuning": {
+            "first_stimulus_zero_context_center_C": (
+                measurement.zero_context_center
+            ),
+            "first_stimulus_zero_context_flank_F": (
+                measurement.zero_context_flank
+            ),
+            "first_stimulus_zero_context_C_over_F": (
+                measurement.zero_context_center_flank_ratio
+            ),
             "expected_center_C": measurement.expected_center,
             "expected_flank_F": measurement.expected_flank,
             "expected_C_over_F": measurement.expected_center_flank_ratio,
             "unexpected_center_C": measurement.unexpected_center,
             "unexpected_flank_F": measurement.unexpected_flank,
             "unexpected_C_over_F": measurement.unexpected_center_flank_ratio,
+            "delta_C_expected_minus_zero_context": (
+                measurement.expected_center - measurement.zero_context_center
+            ),
+            "delta_F_expected_minus_zero_context": (
+                measurement.expected_flank - measurement.zero_context_flank
+            ),
             "delta_C_expected_minus_unexpected": (
                 measurement.expected_center - measurement.unexpected_center
             ),
@@ -389,8 +458,12 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
     unexpected_mean, unexpected_sem = curve_mean_sem(
         [measurement.unexpected_curve for measurement in measurements]
     )
+    zero_context_mean, zero_context_sem = curve_mean_sem(
+        [measurement.zero_context_curve for measurement in measurements]
+    )
     exp_c, exp_f, exp_ratio = center_flank(expected_mean)
     unx_c, unx_f, unx_ratio = center_flank(unexpected_mean)
+    zero_c, zero_f, zero_ratio = center_flank(zero_context_mean)
 
     scalar_fields = {
         "expected_C": [m.expected_center for m in measurements],
@@ -402,6 +475,21 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
         "unexpected_F": [m.unexpected_flank for m in measurements],
         "unexpected_C_over_F": [
             m.unexpected_center_flank_ratio for m in measurements
+        ],
+        "first_stimulus_zero_context_C": [
+            m.zero_context_center for m in measurements
+        ],
+        "first_stimulus_zero_context_F": [
+            m.zero_context_flank for m in measurements
+        ],
+        "first_stimulus_zero_context_C_over_F": [
+            m.zero_context_center_flank_ratio for m in measurements
+        ],
+        "displayed_delta_C_expected_minus_zero_context": [
+            m.expected_center - m.zero_context_center for m in measurements
+        ],
+        "displayed_delta_F_expected_minus_zero_context": [
+            m.expected_flank - m.zero_context_flank for m in measurements
         ],
         "delta_C": [
             m.expected_center - m.unexpected_center for m in measurements
@@ -422,7 +510,17 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
             "expected_sem": expected_sem,
             "unexpected_mean": unexpected_mean,
             "unexpected_sem": unexpected_sem,
+            "first_stimulus_zero_context_mean": zero_context_mean,
+            "first_stimulus_zero_context_sem": zero_context_sem,
             "displayed_mean_curve_C_F": {
+                "expected_C": exp_c,
+                "expected_F": exp_f,
+                "expected_C_over_F": exp_ratio,
+                "first_stimulus_zero_context_C": zero_c,
+                "first_stimulus_zero_context_F": zero_f,
+                "first_stimulus_zero_context_C_over_F": zero_ratio,
+            },
+            "assay_expected_unexpected_mean_curve_C_F": {
                 "expected_C": exp_c,
                 "expected_F": exp_f,
                 "expected_C_over_F": exp_ratio,
@@ -483,8 +581,8 @@ def plot_tuning(
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
     ax.errorbar(
         curve["offset_deg"],
-        curve["unexpected_mean"],
-        yerr=curve["unexpected_sem"],
+        curve["first_stimulus_zero_context_mean"],
+        yerr=curve["first_stimulus_zero_context_sem"],
         fmt="-o",
         ms=3,
         lw=1.2,
@@ -493,10 +591,7 @@ def plot_tuning(
         elinewidth=0.8,
         capsize=2,
         alpha=0.9,
-        label=(
-            "Unexpected (matched; feedback on)  "
-            f"(C/F = {ratios['unexpected_C_over_F']:.3f})"
-        ),
+        label="First stimulus (no prior context; feedback state = 0)",
     )
     ax.errorbar(
         curve["offset_deg"],
@@ -511,17 +606,22 @@ def plot_tuning(
         capsize=2,
         alpha=0.95,
         label=(
-            f"Expected — {arm_label} optimized (feedback on)  "
-            f"(C/F = {ratios['expected_C_over_F']:.3f})"
+            f"Expected after {arm_label} optimization "
+            f"(α={aggregate['alpha']:g})"
         ),
     )
     ax.axvline(0.0, linestyle=":", color="black", linewidth=0.8)
-    ax.set_xlabel("Orientation relative to expected (°)")
-    ax.set_ylabel("L2/3 response (a.u.)")
+    ax.set_xlabel(
+        "nominal fixed feedforward orientation preference relative to "
+        "presented orientation (°)"
+    )
+    ax.set_ylabel("Mean L2/3 response (a.u.)")
     ax.set_ylim(0.0, shared_ymax)
     ax.set_title(
         f"{arm_label.capitalize()}-optimized endpoint "
-        f"(α={aggregate['alpha']:.1f}; mean ± seed SEM, n=4)"
+        f"(mean ± seed SEM, n=4; C/F: first = "
+        f"{ratios['first_stimulus_zero_context_C_over_F']:.3f}, "
+        f"expected = {ratios['expected_C_over_F']:.3f})"
     )
     ax.legend(frameon=False, fontsize=9)
     fig.tight_layout()
@@ -713,6 +813,16 @@ def main() -> int:
 
     for measurements in arms.values():
         measurements.sort(key=lambda measurement: measurement.seed)
+    baseline_reference = arms["task_optimized"][0].zero_context_curve
+    for arm_name, measurements in arms.items():
+        for measurement in measurements:
+            if not torch.equal(
+                measurement.zero_context_curve, baseline_reference
+            ):
+                raise RuntimeError(
+                    "independently recomputed zero-context baselines differ: "
+                    f"arm={arm_name}, seed={measurement.seed}"
+                )
     task_aggregate = aggregate_arm(arms["task_optimized"])
     energy_aggregate = aggregate_arm(arms["energy_optimized"])
 
@@ -737,7 +847,8 @@ def main() -> int:
         all_curve_upper.extend(
             mean + sem
             for mean, sem in zip(
-                curve["unexpected_mean"], curve["unexpected_sem"]
+                curve["first_stimulus_zero_context_mean"],
+                curve["first_stimulus_zero_context_sem"],
             )
         )
     shared_ymax = max(all_curve_upper) * 1.16
@@ -776,17 +887,38 @@ def main() -> int:
             "matched_pair_count_per_seed_condition": (
                 assay.N * len(assay.VELOCITIES)
             ),
-            "condition_A": "expected",
-            "condition_B": "unexpected_matched",
+            "condition_A": "operational_continuation_A (code label: expected)",
+            "condition_B": "operational_OOD_reversal_B (code label: unexpected)",
             "feedback": "on",
+            "plotter_role": (
+                "checkpoint remeasurement and presentation; no phenotype "
+                "acceptance gate"
+            ),
             "error_bars": (
                 "sample standard deviation across four independent seed-level "
                 "values divided by sqrt(4); tuning first averages 216 rows "
                 "within each seed"
             ),
-            "tuning": {
-                "quantity": "raw final-step L2/3 rates",
-                "alignment": "circularly aligned to final y",
+            "tuning_baseline": {
+                "kind": "literal_first_stimulus_no_context",
+                "source": (
+                    "pooled_balanced_A_B_t0_aligned_to_own_first_orientation"
+                ),
+                "feedback_execution": (
+                    "normal_feedback_on_unroll_with_naturally_zero_pred_down_at_t0"
+                ),
+                "alignment_reference": "presented_orientation_at_same_timepoint",
+                "offset_degrees": [
+                    offset * assay.STEP_DEG for offset in PLOT_OFFSETS
+                ],
+                "equality_check": (
+                    "bit-identical across all four seeds and both endpoint arms"
+                ),
+            },
+            "colored_tuning_curve": {
+                "kind": "operational_continuation_A_final_contextual_response",
+                "alignment_reference": "matched_final_orientation",
+                "quantity": "raw L2/3 rates",
                 "offset_range_deg": [-60.0, 60.0],
                 "offset_step_deg": assay.STEP_DEG,
                 "center_C_deg": [-5.0, 0.0, 5.0],
@@ -802,10 +934,23 @@ def main() -> int:
                 ],
                 "C_over_F": "mean(center_C_deg) / mean(flank_F_deg)",
             },
-            "decoding": (
-                "existing assay condition-blind held-out 36-class balanced "
-                "pooled A+B cosine nearest-centroid accuracy"
-            ),
+            "decoding": {
+                "classifier": (
+                    "condition-blind balanced pooled A+B cosine nearest-centroid"
+                ),
+                "held_out_scope": (
+                    "independent additive noise tables only; histories and "
+                    "stimuli are not held out"
+                ),
+                "classes": assay.N,
+            },
+            "endpoint_interpretation": {
+                "task": "center enhancement with modest flank suppression",
+                "energy": (
+                    "broad attenuation with preferential center suppression; "
+                    "absolute flanks are not preserved versus t0"
+                ),
+            },
             "phase_x": "expected_A_accuracy - unexpected_B_accuracy",
             "phase_y": (
                 "(expected_A_mean_rate - unexpected_B_mean_rate) / "

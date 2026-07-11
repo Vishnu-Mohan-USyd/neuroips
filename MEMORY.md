@@ -17,3 +17,5 @@
   diverge only through training under different objective pressures. Allowed
   regime differences are objective weights such as energy, task, precision, and
   homeostasis weights.
+- For reference-style tuning plots, the gray baseline is the same trained arm's
+  first-stimulus response with zero prior context, not matched unexpected B.
