@@ -1,29 +1,71 @@
-# SOM/VIP sharpen ↔ dampen: expectation effects in a V1/V2-style cortical circuit
+# Recurrent orientation circuit: task–energy trade-offs
 
-## Current validated workflow
+## Current workflow
 
-> **Start here:** the current result is the four-seed
+> **Start here:** the current experiment is the four-seed
 > [emergent task–energy axis](docs/emergent_task_energy_axis.md), not the older
 > Phase A/Phase B experiments documented below. The current workflow trains six
-> arms from one common task pretrain, assays fixed operational
+> objective-weight arms from one common task pretrain, assays fixed operational
 > continuation/reversal pairs, and regenerates the tracked comparison figures.
+> Terms such as sharpening or attenuation describe measured response profiles;
+> they are not objective labels or training targets.
 
 | Entry point | Purpose |
 | --- | --- |
-| [`docs/emergent_task_energy_axis.md`](docs/emergent_task_energy_axis.md) | Canonical architecture, equations, protocol, four-seed results, limitations, and exact RTX 5090 reproduction |
+| [`docs/emergent_task_energy_axis.md`](docs/emergent_task_energy_axis.md) | Canonical architecture, equations, protocol, four-seed measurements, limitations, and RTX 5090 reproduction |
 | [`tools/tuned_emergence_lib.py`](tools/tuned_emergence_lib.py) | Current fixed orientation basis, L2/3 circuit, recurrent predictor, and feedback timing |
 | [`tools/train_emergent_task_energy_axis.py`](tools/train_emergent_task_energy_axis.py) | Common pretrain and six task–energy alpha arms |
 | [`tools/assay_emergent_task_energy_axis.py`](tools/assay_emergent_task_energy_axis.py) | Fixed 216-pair assay and decoding/rate/shape metrics |
+| [`tools/aggregate_emergent_task_energy_assays.py`](tools/aggregate_emergent_task_energy_assays.py) | Portable all-alpha summary from four standalone assay records |
 | [`tools/plot_emergent_reference_figures.py`](tools/plot_emergent_reference_figures.py) | Four-seed checkpoint replay, literal first-stimulus comparator, JSON, and plots |
-| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Machine-readable aggregate data and the four current figures |
+| [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Four-seed, six-alpha scalar assay metrics and provenance (no reconstructed raw profiles) |
+| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Portable assay summary, plot data, and the four current figures |
 
-For this workflow, executable code and checkpoint contents are primary;
-per-seed summaries/assays feed `plot_data.json`, which feeds the PNGs. The
-plotter remeasures checkpoints but is not a phenotype pass gate.
+All six arms use one 36-channel architecture and differ only through
+`Jα=(1−α)T+αE`, where `T` combines next-step prediction with noisy
+current-orientation precision and `E` is a normalized L2/3 mean-rate proxy.
+The task-only endpoint (α=0.0) shows an A-over-B decoding advantage and a
+sharpening-like profile. The rate-cost-weighted endpoint (α=0.9; 10% task,
+90% rate proxy) reverses that decoding contrast and uses less final mean rate
+for operational continuation A than matched operational OOD reversal B. Its
+shape is broad attenuation with preferential center suppression; absolute
+flanks are not preserved. Decoding is condition-blind and noise-held-out only,
+not history- or orientation-held-out.
 
-This organization patch intentionally makes the validated six-alpha,
+The current artifacts have two separate, auditable provenance branches:
+
+```text
+trained checkpoints
+  └─ assay_emergent_task_energy_axis.py replay
+      └─ per-seed endpoint_assay.json audit records
+          └─ aggregate_emergent_task_energy_assays.py
+              └─ all_alpha_assay_summary.json
+                  └─ canonical six-alpha table
+
+selected alpha=0.0 and alpha=0.9 checkpoints
+  └─ plot_emergent_reference_figures.py direct replay
+      └─ in-memory aggregates
+          ├─ plot_data.json
+          └─ four PNG figures
+```
+
+`training_summary.json` records run configuration and state hashes. It is an
+audit record, not a measurement or plotter input; the aggregator reads it only
+to corroborate protocol and provenance. The plotter independently replays
+selected checkpoints and is not a phenotype acceptance gate. See the
+[canonical provenance description](docs/emergent_task_energy_axis.md#artifact-provenance)
+before interpreting either the table or figures.
+
+The aggregate's generator provenance separates three facts:
+`repository_base_commit` identifies the checked-out repository base,
+`repository_worktree_dirty_at_generation` records whether local changes were
+present, and `source_file_sha256` identifies the exact generator bytes that
+ran. The base commit alone must not be read as containing those generator
+bytes.
+
+This organization patch intentionally makes the reported six-alpha,
 posterior-excess, frozen-local-competition protocol the trainer CLI default.
-The numerical kernels and losses are unchanged for explicit validated
+The numerical kernels and losses are unchanged for explicit reported
 commands. Legacy behavior is selected explicitly with
 `--feedback-mode baseline --no-freeze-local-comp --alphas 0.1 0.3 0.5 0.7 0.9`;
 see the [canonical CLI note](docs/emergent_task_energy_axis.md#current-and-legacy-cli-defaults).
@@ -198,7 +240,7 @@ the one trained context knob, not by shared-gain drift. Sign-agreement spans **5
 | path | what |
 |------|------|
 | `simple_net.py` | the shared core — L4 ring, L2/3, GRU predictor, and the Dale SOM/VIP feedback operator; imported by both phases |
-| `requirements.txt` | the single dependency (`torch>=2.0`) |
+| `requirements.txt` | runtime dependencies (`torch>=2.0`; `matplotlib>=3.6` for the current figure generator) |
 | `phaseA_somvip/` | **emergent regime.** `grid_circuit.py` (entry: 15-cell grid), `mech_probe.py`, `proveout_circuit.py`, `reprobe_save_integrity.py`, `smoke_circuit.py`, `mech_debug.py`; checkpoints `ckpt_circuit_sharpen.pt`, `ckpt_circuit_dampen.pt`, `ckpt_momentum.pt` (baseline fixture); `RESULTS.md` (full deep-dive) |
 | `phaseB_somvip/` | **runtime switch.** `train_switch.py` (canonical generator that saves the checkpoint), `train_switch_seed0_gate.py`, `train_switch_robustness.py`, `audit_switch.py`, `proveout_switch.py`, `reprobe_save_integrity_B.py`; checkpoint `ckpt_ctxswitch_seed1.pt`; `RESULTS.md` (full deep-dive) |
 

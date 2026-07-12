@@ -18,6 +18,7 @@ not apply a phenotype acceptance gate.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -46,6 +47,11 @@ import tuned_emergence_lib as tuned  # noqa: E402
 ENERGY_COLOR = "#4C72B0"
 TASK_COLOR = "#C44E52"
 BASE_COLOR = "#888888"
+TASK_ENDPOINT_LABEL = "task-only endpoint (α=0.0)"
+RATE_COST_ENDPOINT_LABEL = "rate-cost-weighted endpoint (α=0.9)"
+RATE_COST_OBJECTIVE_DETAIL = (
+    "10% task + 90% normalized L2/3 mean-rate proxy"
+)
 PLOT_OFFSETS = tuple(range(-12, 13))
 CENTER_OFFSETS = (-1, 0, 1)
 FLANK_OFFSETS = (-6, -5, -4, -3, 3, 4, 5, 6)
@@ -57,15 +63,15 @@ class SeedArmMeasurement:
     """One seed's endpoint measurements for one optimization arm.
 
     Curves contain raw L2/3 rates averaged over the 216 matched sequences. The
-    expected and unexpected curves are aligned to the shared final orientation;
-    the zero-context curve pools A/B timestep-zero responses aligned to each
-    sequence's presented first orientation. Scalar rate quantities are in the
-    same arbitrary rate units; decoding quantities are fractions in [0, 1].
+    continuation A and OOD reversal B curves are aligned to their shared final
+    orientation; the zero-context curve pools A/B timestep-zero responses
+    aligned to each sequence's presented first orientation. Scalar rate
+    quantities are in arbitrary units; decoding quantities are fractions.
     """
 
     seed: int
-    run_dir: Path
     checkpoint: Path
+    checkpoint_sha256: str
     alpha: float
     feedback_mode: str
     expected_curve: torch.Tensor
@@ -122,13 +128,13 @@ def parse_args() -> argparse.Namespace:
         "--task-alpha",
         type=float,
         default=0.0,
-        help="Low-rate-pressure endpoint used for task/sharpening displays.",
+        help="Task-only endpoint alpha used in the endpoint displays.",
     )
     parser.add_argument(
         "--energy-alpha",
         type=float,
         default=0.9,
-        help="High-rate-pressure endpoint used for energy/attenuation displays.",
+        help="Rate-cost-weighted endpoint alpha used in the displays.",
     )
     parser.add_argument(
         "--device", default="cuda:0", help="PyTorch replay device, for example cuda:0 or cpu."
@@ -205,6 +211,16 @@ def center_flank(curve: Sequence[float]) -> tuple[float, float, float]:
     if not flank > 0.0:
         raise ValueError("C/F requires positive mean flank activity")
     return center, flank, center / flank
+
+
+def sha256_file(path: Path) -> str:
+    """Return a streaming SHA-256 digest without exposing the source path."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def validate_checkpoint(
@@ -351,8 +367,8 @@ def measure_seed_arm(
 
     return SeedArmMeasurement(
         seed=seed,
-        run_dir=run_dir,
         checkpoint=checkpoint_path,
+        checkpoint_sha256=sha256_file(checkpoint_path),
         alpha=alpha,
         feedback_mode=feedback_mode,
         expected_curve=expected_curve.cpu(),
@@ -399,8 +415,13 @@ def measurement_json(measurement: SeedArmMeasurement) -> dict[str, Any]:
 
     return {
         "seed": measurement.seed,
-        "run_dir": str(measurement.run_dir),
-        "checkpoint": str(measurement.checkpoint),
+        "checkpoint": {
+            "logical_id": (
+                f"seed_{measurement.seed}/{measurement.checkpoint.name}"
+            ),
+            "basename": measurement.checkpoint.name,
+            "file_sha256": measurement.checkpoint_sha256,
+        },
         "feedback_mode": measurement.feedback_mode,
         "tuning": {
             "first_stimulus_zero_context_center_C": (
@@ -412,35 +433,35 @@ def measurement_json(measurement: SeedArmMeasurement) -> dict[str, Any]:
             "first_stimulus_zero_context_C_over_F": (
                 measurement.zero_context_center_flank_ratio
             ),
-            "expected_center_C": measurement.expected_center,
-            "expected_flank_F": measurement.expected_flank,
-            "expected_C_over_F": measurement.expected_center_flank_ratio,
-            "unexpected_center_C": measurement.unexpected_center,
-            "unexpected_flank_F": measurement.unexpected_flank,
-            "unexpected_C_over_F": measurement.unexpected_center_flank_ratio,
-            "delta_C_expected_minus_zero_context": (
+            "continuation_A_center_C": measurement.expected_center,
+            "continuation_A_flank_F": measurement.expected_flank,
+            "continuation_A_C_over_F": measurement.expected_center_flank_ratio,
+            "OOD_reversal_B_center_C": measurement.unexpected_center,
+            "OOD_reversal_B_flank_F": measurement.unexpected_flank,
+            "OOD_reversal_B_C_over_F": measurement.unexpected_center_flank_ratio,
+            "delta_C_A_minus_zero_context": (
                 measurement.expected_center - measurement.zero_context_center
             ),
-            "delta_F_expected_minus_zero_context": (
+            "delta_F_A_minus_zero_context": (
                 measurement.expected_flank - measurement.zero_context_flank
             ),
-            "delta_C_expected_minus_unexpected": (
+            "delta_C_A_minus_B": (
                 measurement.expected_center - measurement.unexpected_center
             ),
-            "delta_F_expected_minus_unexpected": (
+            "delta_F_A_minus_B": (
                 measurement.expected_flank - measurement.unexpected_flank
             ),
-            "delta_Fq_expected_minus_unexpected": measurement.delta_fq,
-            "delta_Q_expected_minus_unexpected": measurement.delta_q,
+            "delta_Fq_A_minus_B": measurement.delta_fq,
+            "delta_Q_A_minus_B": measurement.delta_q,
         },
         "decoding": {
-            "expected_A_accuracy": measurement.decode_expected,
-            "unexpected_B_accuracy": measurement.decode_unexpected,
+            "continuation_A_accuracy": measurement.decode_expected,
+            "OOD_reversal_B_accuracy": measurement.decode_unexpected,
             "delta_accuracy_A_minus_B": measurement.decode_delta,
         },
         "rates": {
-            "expected_A_mean": measurement.mean_rate_expected,
-            "unexpected_B_mean": measurement.mean_rate_unexpected,
+            "continuation_A_mean": measurement.mean_rate_expected,
+            "OOD_reversal_B_mean": measurement.mean_rate_unexpected,
             "phase_y_A_minus_B_over_B": measurement.phase_y,
             "stored_saving_B_minus_A_over_B": measurement.stored_saving,
         },
@@ -466,14 +487,14 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
     zero_c, zero_f, zero_ratio = center_flank(zero_context_mean)
 
     scalar_fields = {
-        "expected_C": [m.expected_center for m in measurements],
-        "expected_F": [m.expected_flank for m in measurements],
-        "expected_C_over_F": [
+        "continuation_A_C": [m.expected_center for m in measurements],
+        "continuation_A_F": [m.expected_flank for m in measurements],
+        "continuation_A_C_over_F": [
             m.expected_center_flank_ratio for m in measurements
         ],
-        "unexpected_C": [m.unexpected_center for m in measurements],
-        "unexpected_F": [m.unexpected_flank for m in measurements],
-        "unexpected_C_over_F": [
+        "OOD_reversal_B_C": [m.unexpected_center for m in measurements],
+        "OOD_reversal_B_F": [m.unexpected_flank for m in measurements],
+        "OOD_reversal_B_C_over_F": [
             m.unexpected_center_flank_ratio for m in measurements
         ],
         "first_stimulus_zero_context_C": [
@@ -485,10 +506,10 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
         "first_stimulus_zero_context_C_over_F": [
             m.zero_context_center_flank_ratio for m in measurements
         ],
-        "displayed_delta_C_expected_minus_zero_context": [
+        "displayed_delta_C_A_minus_zero_context": [
             m.expected_center - m.zero_context_center for m in measurements
         ],
-        "displayed_delta_F_expected_minus_zero_context": [
+        "displayed_delta_F_A_minus_zero_context": [
             m.expected_flank - m.zero_context_flank for m in measurements
         ],
         "delta_C": [
@@ -506,37 +527,37 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
         "per_seed": [measurement_json(m) for m in measurements],
         "tuning_curve": {
             "offset_deg": [offset * assay.STEP_DEG for offset in PLOT_OFFSETS],
-            "expected_mean": expected_mean,
-            "expected_sem": expected_sem,
-            "unexpected_mean": unexpected_mean,
-            "unexpected_sem": unexpected_sem,
+            "continuation_A_mean": expected_mean,
+            "continuation_A_sem": expected_sem,
+            "OOD_reversal_B_mean": unexpected_mean,
+            "OOD_reversal_B_sem": unexpected_sem,
             "first_stimulus_zero_context_mean": zero_context_mean,
             "first_stimulus_zero_context_sem": zero_context_sem,
             "displayed_mean_curve_C_F": {
-                "expected_C": exp_c,
-                "expected_F": exp_f,
-                "expected_C_over_F": exp_ratio,
+                "continuation_A_C": exp_c,
+                "continuation_A_F": exp_f,
+                "continuation_A_C_over_F": exp_ratio,
                 "first_stimulus_zero_context_C": zero_c,
                 "first_stimulus_zero_context_F": zero_f,
                 "first_stimulus_zero_context_C_over_F": zero_ratio,
             },
-            "assay_expected_unexpected_mean_curve_C_F": {
-                "expected_C": exp_c,
-                "expected_F": exp_f,
-                "expected_C_over_F": exp_ratio,
-                "unexpected_C": unx_c,
-                "unexpected_F": unx_f,
-                "unexpected_C_over_F": unx_ratio,
+            "assay_A_B_mean_curve_C_F": {
+                "continuation_A_C": exp_c,
+                "continuation_A_F": exp_f,
+                "continuation_A_C_over_F": exp_ratio,
+                "OOD_reversal_B_C": unx_c,
+                "OOD_reversal_B_F": unx_f,
+                "OOD_reversal_B_C_over_F": unx_ratio,
             },
         },
         "shape_seed_summary": {
             name: mean_sem(values) for name, values in scalar_fields.items()
         },
         "decoding": {
-            "expected_A_accuracy": mean_sem(
+            "continuation_A_accuracy": mean_sem(
                 [m.decode_expected for m in measurements]
             ),
-            "unexpected_B_accuracy": mean_sem(
+            "OOD_reversal_B_accuracy": mean_sem(
                 [m.decode_unexpected for m in measurements]
             ),
             "delta_accuracy_A_minus_B": mean_sem(
@@ -572,10 +593,13 @@ def plot_tuning(
     aggregate: dict[str, Any],
     output_path: Path,
     *,
-    arm_label: str,
+    endpoint_label: str,
+    objective_detail: str | None = None,
     color: str,
     shared_ymax: float,
 ) -> None:
+    """Render one tuning panel with publication-neutral endpoint labels."""
+
     curve = aggregate["tuning_curve"]
     ratios = curve["displayed_mean_curve_C_F"]
     fig, ax = plt.subplots(figsize=(7.5, 5.0))
@@ -591,12 +615,15 @@ def plot_tuning(
         elinewidth=0.8,
         capsize=2,
         alpha=0.9,
-        label="First stimulus (no prior context; feedback state = 0)",
+        label=(
+            "first stimulus (no prior context; normal feedback-on unroll, "
+            "feedback state=0)"
+        ),
     )
     ax.errorbar(
         curve["offset_deg"],
-        curve["expected_mean"],
-        yerr=curve["expected_sem"],
+        curve["continuation_A_mean"],
+        yerr=curve["continuation_A_sem"],
         fmt="-o",
         ms=3,
         lw=1.2,
@@ -605,25 +632,25 @@ def plot_tuning(
         elinewidth=0.8,
         capsize=2,
         alpha=0.95,
-        label=(
-            f"Expected after {arm_label} optimization "
-            f"(α={aggregate['alpha']:g})"
-        ),
+        label=f"{endpoint_label} — operational continuation A at final step",
     )
     ax.axvline(0.0, linestyle=":", color="black", linewidth=0.8)
     ax.set_xlabel(
-        "nominal fixed feedforward orientation preference relative to "
-        "presented orientation (°)"
+        "nominal fixed feedforward orientation preference\n"
+        "relative to presented orientation (°)"
     )
     ax.set_ylabel("Mean L2/3 response (a.u.)")
     ax.set_ylim(0.0, shared_ymax)
-    ax.set_title(
-        f"{arm_label.capitalize()}-optimized endpoint "
-        f"(mean ± seed SEM, n=4; C/F: first = "
+    title_lines = [endpoint_label]
+    if objective_detail is not None:
+        title_lines.append(objective_detail)
+    title_lines.append(
+        "mean ± seed SEM, n=4; C/F: first = "
         f"{ratios['first_stimulus_zero_context_C_over_F']:.3f}, "
-        f"expected = {ratios['expected_C_over_F']:.3f})"
+        f"continuation A = {ratios['continuation_A_C_over_F']:.3f}"
     )
-    ax.legend(frameon=False, fontsize=9)
+    ax.set_title("\n".join(title_lines))
+    ax.legend(frameon=False, fontsize=8)
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
@@ -634,16 +661,21 @@ def plot_decoding(
 ) -> None:
     groups = (energy, task)
     colors = (ENERGY_COLOR, TASK_COLOR)
-    labels = ("Energy optimized", "Task optimized")
-    expected = [group["decoding"]["expected_A_accuracy"]["mean"] for group in groups]
+    labels = (
+        "rate-cost-weighted endpoint\n(α=0.9)",
+        "task-only endpoint\n(α=0.0)",
+    )
+    expected = [
+        group["decoding"]["continuation_A_accuracy"]["mean"] for group in groups
+    ]
     unexpected = [
-        group["decoding"]["unexpected_B_accuracy"]["mean"] for group in groups
+        group["decoding"]["OOD_reversal_B_accuracy"]["mean"] for group in groups
     ]
     expected_sem = [
-        group["decoding"]["expected_A_accuracy"]["sem"] for group in groups
+        group["decoding"]["continuation_A_accuracy"]["sem"] for group in groups
     ]
     unexpected_sem = [
-        group["decoding"]["unexpected_B_accuracy"]["sem"] for group in groups
+        group["decoding"]["OOD_reversal_B_accuracy"]["sem"] for group in groups
     ]
     x = torch.arange(2, dtype=torch.float64).tolist()
     width = 0.34
@@ -686,15 +718,17 @@ def plot_decoding(
     )
     ax.set_ylim(0.0, min(1.0, max(0.20, observed_top * 1.18)))
     ax.set_title(
-        "Condition-blind held-out decoding (mean ± seed SEM, n=4)"
+        "condition-blind, noise-held-out orientation decoding\n"
+        "independent test noise; same histories/orientations; "
+        "mean ± seed SEM, n=4"
     )
     ax.legend(
         handles=[
-            Patch(facecolor="#555555", label="Expected (feedback on)"),
+            Patch(facecolor="#555555", label="operational continuation A"),
             Patch(
                 facecolor="#555555",
                 alpha=0.45,
-                label="Unexpected (matched; feedback on)",
+                label="matched operational OOD reversal B",
             ),
         ],
         frameon=False,
@@ -718,8 +752,8 @@ def plot_phase_space(
     energy: dict[str, Any], task: dict[str, Any], output_path: Path
 ) -> None:
     points = (
-        ("Energy optimized", energy, ENERGY_COLOR),
-        ("Task optimized", task, TASK_COLOR),
+        ("rate-cost-weighted endpoint\n(α=0.9)", energy, ENERGY_COLOR),
+        ("task-only endpoint\n(α=0.0)", task, TASK_COLOR),
     )
     xs = [point[1]["phase_space"]["x_delta_accuracy_A_minus_B"]["mean"] for point in points]
     xerrs = [point[1]["phase_space"]["x_delta_accuracy_A_minus_B"]["sem"] for point in points]
@@ -753,11 +787,12 @@ def plot_phase_space(
         )
     ax.set_xlim(*padded_limits(xs, xerrs, minimum_span=0.10))
     ax.set_ylim(*padded_limits(ys, yerrs, minimum_span=0.10))
-    ax.set_xlabel("Δ decode accuracy (expected−unexpected)")
-    ax.set_ylabel(
-        "Δ mean L2/3 rate (expected−unexpected, fraction)"
+    ax.set_xlabel("Δ decode accuracy (continuation A − reversal B)")
+    ax.set_ylabel("Δ final mean L2/3 rate ((A−B)/B)")
+    ax.set_title(
+        "task-only and rate-cost-weighted endpoints\n"
+        "mean ± seed SEM, n=4"
     )
-    ax.set_title("Task–energy endpoint phase space (mean ± seed SEM, n=4)")
     fig.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
@@ -804,7 +839,6 @@ def main() -> int:
                 {
                     "status": "measured_seed",
                     "seed": common_seed,
-                    "run_dir": str(run_dir),
                 },
                 sort_keys=True,
             ),
@@ -842,7 +876,9 @@ def main() -> int:
         curve = aggregate["tuning_curve"]
         all_curve_upper.extend(
             mean + sem
-            for mean, sem in zip(curve["expected_mean"], curve["expected_sem"])
+            for mean, sem in zip(
+                curve["continuation_A_mean"], curve["continuation_A_sem"]
+            )
         )
         all_curve_upper.extend(
             mean + sem
@@ -858,14 +894,15 @@ def main() -> int:
     plot_tuning(
         energy_aggregate,
         output_paths["tuning_dampening"],
-        arm_label="energy",
+        endpoint_label=RATE_COST_ENDPOINT_LABEL,
+        objective_detail=RATE_COST_OBJECTIVE_DETAIL,
         color=ENERGY_COLOR,
         shared_ymax=shared_ymax,
     )
     plot_tuning(
         task_aggregate,
         output_paths["tuning_sharpening"],
-        arm_label="task",
+        endpoint_label=TASK_ENDPOINT_LABEL,
         color=TASK_COLOR,
         shared_ymax=shared_ymax,
     )
@@ -880,15 +917,15 @@ def main() -> int:
 
     payload = {
         "metadata": {
-            "script": str(Path(__file__).resolve()),
+            "script": Path(__file__).resolve().relative_to(ROOT).as_posix(),
             "device": str(device),
             "seed_count": len(seen_seeds),
             "seed_ids": sorted(seen_seeds),
             "matched_pair_count_per_seed_condition": (
                 assay.N * len(assay.VELOCITIES)
             ),
-            "condition_A": "operational_continuation_A (code label: expected)",
-            "condition_B": "operational_OOD_reversal_B (code label: unexpected)",
+            "condition_A": "operational continuation A",
+            "condition_B": "matched operational OOD reversal B",
             "feedback": "on",
             "plotter_role": (
                 "checkpoint remeasurement and presentation; no phenotype "
@@ -945,25 +982,40 @@ def main() -> int:
                 "classes": assay.N,
             },
             "endpoint_interpretation": {
-                "task": "center enhancement with modest flank suppression",
-                "energy": (
+                "task_only_alpha_0p0": (
+                    "center enhancement with modest flank suppression"
+                ),
+                "rate_cost_weighted_alpha_0p9": (
                     "broad attenuation with preferential center suppression; "
                     "absolute flanks are not preserved versus t0"
                 ),
             },
-            "phase_x": "expected_A_accuracy - unexpected_B_accuracy",
+            "phase_x": "continuation_A_accuracy - OOD_reversal_B_accuracy",
             "phase_y": (
-                "(expected_A_mean_rate - unexpected_B_mean_rate) / "
-                "unexpected_B_mean_rate; numerically negative stored saving"
+                "(continuation_A_mean_rate - OOD_reversal_B_mean_rate) / "
+                "OOD_reversal_B_mean_rate; numerically negative stored saving"
             ),
+            "compatibility_filenames": {
+                "tuning_dampening.png": (
+                    "historical filename; panel shows the rate-cost-weighted "
+                    "endpoint and does not claim flank-preserving dampening"
+                ),
+                "tuning_sharpening.png": (
+                    "historical filename; panel shows the task-only endpoint"
+                ),
+                "1_decode_signflip.png": "historical compatibility filename",
+                "3_decode_energy_phasespace.png": (
+                    "historical compatibility filename; y is final mean L2/3 rate"
+                ),
+            },
             "chance_accuracy": 1.0 / assay.N,
             "output_files": {
                 name: path.relative_to(args.out_dir).as_posix()
                 for name, path in output_paths.items()
             },
         },
-        "energy_optimized": energy_aggregate,
-        "task_optimized": task_aggregate,
+        "rate_cost_weighted_endpoint": energy_aggregate,
+        "task_only_endpoint": task_aggregate,
     }
     atomic_json_save(payload, output_paths["plot_data"])
     print(
@@ -973,8 +1025,8 @@ def main() -> int:
                 "output_files": {
                     name: str(path) for name, path in output_paths.items()
                 },
-                "energy_phase": energy_aggregate["phase_space"],
-                "task_phase": task_aggregate["phase_space"],
+                "rate_cost_weighted_phase": energy_aggregate["phase_space"],
+                "task_only_phase": task_aggregate["phase_space"],
             },
             sort_keys=True,
         ),

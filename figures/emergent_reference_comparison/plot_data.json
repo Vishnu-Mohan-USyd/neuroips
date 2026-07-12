@@ -1,469 +1,4 @@
 {
-  "energy_optimized": {
-    "alpha": 0.9,
-    "decoding": {
-      "delta_accuracy_A_minus_B": {
-        "mean": -0.09899450652301311,
-        "n_seeds": 4,
-        "sem": 0.01437050203490186
-      },
-      "expected_A_accuracy": {
-        "mean": 0.14688223414123058,
-        "n_seeds": 4,
-        "sem": 0.012202961697709422
-      },
-      "unexpected_B_accuracy": {
-        "mean": 0.2458767406642437,
-        "n_seeds": 4,
-        "sem": 0.006880480498403305
-      }
-    },
-    "per_seed": [
-      {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_full/seed_0/alpha_0p9_final.pt",
-        "decoding": {
-          "delta_accuracy_A_minus_B": -0.12037038803100586,
-          "expected_A_accuracy": 0.1453993022441864,
-          "unexpected_B_accuracy": 0.26576969027519226
-        },
-        "feedback_mode": "posterior_prior_excess",
-        "rates": {
-          "expected_A_mean": 0.024481094163074504,
-          "phase_y_A_minus_B_over_B": -0.5968448938580068,
-          "stored_saving_B_minus_A_over_B": 0.5968448938580068,
-          "unexpected_B_mean": 0.060723849464693565
-        },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_full/seed_0",
-        "seed": 0,
-        "tuning": {
-          "delta_C_expected_minus_unexpected": -0.17602091411237866,
-          "delta_C_expected_minus_zero_context": -0.7300212808229304,
-          "delta_F_expected_minus_unexpected": -0.052492811125072564,
-          "delta_F_expected_minus_zero_context": -0.21079899468275942,
-          "delta_Fq_expected_minus_unexpected": 0.0186631831141434,
-          "delta_Q_expected_minus_unexpected": -0.5396275638778916,
-          "expected_C_over_F": 0.7188309983156369,
-          "expected_center_C": 0.04933174064865819,
-          "expected_flank_F": 0.0686277313641902,
-          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
-          "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.8605651042308877,
-          "unexpected_center_C": 0.22535265476103686,
-          "unexpected_flank_F": 0.12112054248926277
-        }
-      },
-      {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed1/seed_1/alpha_0p9_final.pt",
-        "decoding": {
-          "delta_accuracy_A_minus_B": -0.0690104216337204,
-          "expected_A_accuracy": 0.17332175374031067,
-          "unexpected_B_accuracy": 0.24233217537403107
-        },
-        "feedback_mode": "posterior_prior_excess",
-        "rates": {
-          "expected_A_mean": 0.027465456099827697,
-          "phase_y_A_minus_B_over_B": -0.5022529906864875,
-          "stored_saving_B_minus_A_over_B": 0.5022529906864875,
-          "unexpected_B_mean": 0.05517961077256609
-        },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed1/seed_1",
-        "seed": 1,
-        "tuning": {
-          "delta_C_expected_minus_unexpected": -0.14038897041277384,
-          "delta_C_expected_minus_zero_context": -0.736515952044247,
-          "delta_F_expected_minus_unexpected": -0.039793033795393534,
-          "delta_F_expected_minus_zero_context": -0.2005058264380582,
-          "delta_Fq_expected_minus_unexpected": 0.012934914655743184,
-          "delta_Q_expected_minus_unexpected": -0.4175974945602148,
-          "expected_C_over_F": 0.5427848597726255,
-          "expected_center_C": 0.04283706942734159,
-          "expected_flank_F": 0.07892089960889144,
-          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
-          "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.5434248919723006,
-          "unexpected_center_C": 0.18322603984011543,
-          "unexpected_flank_F": 0.11871393340428497
-        }
-      },
-      {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed2/seed_2/alpha_0p9_final.pt",
-        "decoding": {
-          "delta_accuracy_A_minus_B": -0.08000577986240387,
-          "expected_A_accuracy": 0.154079869389534,
-          "unexpected_B_accuracy": 0.23408564925193787
-        },
-        "feedback_mode": "posterior_prior_excess",
-        "rates": {
-          "expected_A_mean": 0.02697596208794501,
-          "phase_y_A_minus_B_over_B": -0.5418064599491766,
-          "stored_saving_B_minus_A_over_B": 0.5418064599491766,
-          "unexpected_B_mean": 0.0588746724705651
-        },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed2/seed_2",
-        "seed": 2,
-        "tuning": {
-          "delta_C_expected_minus_unexpected": -0.1538369117217012,
-          "delta_C_expected_minus_zero_context": -0.7271980392562661,
-          "delta_F_expected_minus_unexpected": -0.04537885668125656,
-          "delta_F_expected_minus_zero_context": -0.20315236785865165,
-          "delta_Fq_expected_minus_unexpected": 0.013049027662099822,
-          "delta_Q_expected_minus_unexpected": -0.43569206868631755,
-          "expected_C_over_F": 0.683781331683812,
-          "expected_center_C": 0.052154982215322464,
-          "expected_flank_F": 0.07627435818829797,
-          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
-          "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.6932712724271464,
-          "unexpected_center_C": 0.20599189393702366,
-          "unexpected_flank_F": 0.12165321486955454
-        }
-      },
-      {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed3/seed_3/alpha_0p9_final.pt",
-        "decoding": {
-          "delta_accuracy_A_minus_B": -0.12659143656492233,
-          "expected_A_accuracy": 0.11472801119089127,
-          "unexpected_B_accuracy": 0.2413194477558136
-        },
-        "feedback_mode": "posterior_prior_excess",
-        "rates": {
-          "expected_A_mean": 0.024361953417435828,
-          "phase_y_A_minus_B_over_B": -0.5277774450746728,
-          "stored_saving_B_minus_A_over_B": 0.5277774450746728,
-          "unexpected_B_mean": 0.05159004971747701
-        },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed3/seed_3",
-        "seed": 3,
-        "tuning": {
-          "delta_C_expected_minus_unexpected": -0.12394785931686739,
-          "delta_C_expected_minus_zero_context": -0.7383322090393414,
-          "delta_F_expected_minus_unexpected": -0.04768860987843693,
-          "delta_F_expected_minus_zero_context": -0.21171551577302766,
-          "delta_Fq_expected_minus_unexpected": 0.005922208179886306,
-          "delta_Q_expected_minus_unexpected": -0.29985276516798437,
-          "expected_C_over_F": 0.6058201037361428,
-          "expected_center_C": 0.04102081243224718,
-          "expected_flank_F": 0.06771121027392196,
-          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
-          "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.429540111339094,
-          "unexpected_center_C": 0.16496867174911456,
-          "unexpected_flank_F": 0.11539982015235889
-        }
-      }
-    ],
-    "phase_space": {
-      "stored_saving_B_minus_A_over_B": {
-        "mean": 0.5421704473920859,
-        "n_seeds": 4,
-        "sem": 0.0199791337999712
-      },
-      "x_delta_accuracy_A_minus_B": {
-        "mean": -0.09899450652301311,
-        "n_seeds": 4,
-        "sem": 0.01437050203490186
-      },
-      "y_mean_rate_A_minus_B_over_B": {
-        "mean": -0.5421704473920859,
-        "n_seeds": 4,
-        "sem": 0.0199791337999712
-      }
-    },
-    "seed_ids": [
-      0,
-      1,
-      2,
-      3
-    ],
-    "shape_seed_summary": {
-      "delta_C": {
-        "mean": -0.14854866389093027,
-        "n_seeds": 4,
-        "sem": 0.011009353147431152
-      },
-      "delta_F": {
-        "mean": -0.0463383278700399,
-        "n_seeds": 4,
-        "sem": 0.0026372710820780935
-      },
-      "delta_Fq": {
-        "mean": 0.012642333402968178,
-        "n_seeds": 4,
-        "sem": 0.002608666937159443
-      },
-      "delta_Q": {
-        "mean": -0.42319247307310204,
-        "n_seeds": 4,
-        "sem": 0.049123447890572006
-      },
-      "displayed_delta_C_expected_minus_zero_context": {
-        "mean": -0.7330168702906963,
-        "n_seeds": 4,
-        "sem": 0.002635158913574871
-      },
-      "displayed_delta_F_expected_minus_zero_context": {
-        "mean": -0.20654317618812423,
-        "n_seeds": 4,
-        "sem": 0.0027810708514988875
-      },
-      "expected_C": {
-        "mean": 0.046336151180892356,
-        "n_seeds": 4,
-        "sem": 0.0026351589135748736
-      },
-      "expected_C_over_F": {
-        "mean": 0.6378043233770543,
-        "n_seeds": 4,
-        "sem": 0.03950832835634559
-      },
-      "expected_F": {
-        "mean": 0.07288354985882539,
-        "n_seeds": 4,
-        "sem": 0.0027810708514988897
-      },
-      "first_stimulus_zero_context_C": {
-        "mean": 0.7793530214715886,
-        "n_seeds": 4,
-        "sem": 0.0
-      },
-      "first_stimulus_zero_context_C_over_F": {
-        "mean": 2.789114099775269,
-        "n_seeds": 4,
-        "sem": 0.0
-      },
-      "first_stimulus_zero_context_F": {
-        "mean": 0.2794267260469496,
-        "n_seeds": 4,
-        "sem": 0.0
-      },
-      "unexpected_C": {
-        "mean": 0.19488481507182262,
-        "n_seeds": 4,
-        "sem": 0.013173708435914231
-      },
-      "unexpected_C_over_F": {
-        "mean": 1.6317003449923573,
-        "n_seeds": 4,
-        "sem": 0.09346629196450487
-      },
-      "unexpected_F": {
-        "mean": 0.11922187772886529,
-        "n_seeds": 4,
-        "sem": 0.0014254373515718342
-      }
-    },
-    "tuning_curve": {
-      "assay_expected_unexpected_mean_curve_C_F": {
-        "expected_C": 0.04633615118089235,
-        "expected_C_over_F": 0.6357559596183905,
-        "expected_F": 0.07288354985882539,
-        "unexpected_C": 0.19488481507182262,
-        "unexpected_C_over_F": 1.6346397052647517,
-        "unexpected_F": 0.11922187772886529
-      },
-      "displayed_mean_curve_C_F": {
-        "expected_C": 0.04633615118089235,
-        "expected_C_over_F": 0.6357559596183905,
-        "expected_F": 0.07288354985882539,
-        "first_stimulus_zero_context_C": 0.7793530214715886,
-        "first_stimulus_zero_context_C_over_F": 2.789114099775269,
-        "first_stimulus_zero_context_F": 0.2794267260469496
-      },
-      "expected_mean": [
-        4.699521580446512e-05,
-        0.00024179677331159362,
-        0.0010632261918443772,
-        0.003953816886577342,
-        0.012150787496702158,
-        0.028786517590223985,
-        0.05460234338426272,
-        0.07899747452595168,
-        0.08530464129149481,
-        0.07962964416812475,
-        0.06113067401397361,
-        0.046417852479929994,
-        0.04642782058497822,
-        0.04616278047776884,
-        0.054613400432572234,
-        0.06257756364357192,
-        0.08624060955588464,
-        0.08107950729404197,
-        0.05463661500727068,
-        0.028609542590048578,
-        0.011706044556545007,
-        0.003832999525777133,
-        0.0010439442696763392,
-        0.00023866101293134744,
-        4.666640265643056e-05
-      ],
-      "expected_sem": [
-        2.3686450605542426e-07,
-        1.9986771216656497e-06,
-        1.374803307207076e-05,
-        6.123456281156157e-05,
-        0.00035988030283306725,
-        0.0011977016265689812,
-        0.0017443016266202032,
-        0.0032591673194680548,
-        0.0033136719676497444,
-        0.005636442786518689,
-        0.004541408639698558,
-        0.002259562412253533,
-        0.0027964002189740764,
-        0.005153695569300015,
-        0.006434120573089024,
-        0.008089209410925174,
-        0.00556278564500672,
-        0.0036683712774732468,
-        0.0022713730493734226,
-        0.0005567676124382339,
-        0.00017829952455183045,
-        2.0569422023211115e-05,
-        5.7011683769230815e-06,
-        1.2254120787496743e-06,
-        4.433904883114825e-07
-      ],
-      "first_stimulus_zero_context_mean": [
-        4.742053382263596e-05,
-        0.0002463830161205907,
-        0.0011056445687750562,
-        0.004271523677743971,
-        0.014136539720412757,
-        0.03983482480463054,
-        0.09512277485595809,
-        0.19251461285683844,
-        0.3326520067122247,
-        0.4974174979660246,
-        0.6538233309984207,
-        0.7658127231730355,
-        0.8064336362812253,
-        0.7658127049605051,
-        0.6538233293427361,
-        0.49741751369502807,
-        0.3326520174741745,
-        0.19251460954546928,
-        0.09512277526987924,
-        0.039834824183748826,
-        0.0141365397721529,
-        0.004271523587198721,
-        0.0011056445429049845,
-        0.0002463830161205907,
-        4.7420533519471064e-05
-      ],
-      "first_stimulus_zero_context_sem": [
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0
-      ],
-      "offset_deg": [
-        -60.0,
-        -55.0,
-        -50.0,
-        -45.0,
-        -40.0,
-        -35.0,
-        -30.0,
-        -25.0,
-        -20.0,
-        -15.0,
-        -10.0,
-        -5.0,
-        0.0,
-        5.0,
-        10.0,
-        15.0,
-        20.0,
-        25.0,
-        30.0,
-        35.0,
-        40.0,
-        45.0,
-        50.0,
-        55.0,
-        60.0
-      ],
-      "unexpected_mean": [
-        4.4199476982848186e-05,
-        0.00021525786417408163,
-        0.0008764614479635687,
-        0.0030232291839503746,
-        0.009119255602989276,
-        0.02336984138323546,
-        0.0517396158495642,
-        0.09582216018396947,
-        0.1512144308987815,
-        0.19339324527256258,
-        0.21758139921843797,
-        0.20415130488496894,
-        0.1809967213224876,
-        0.19950641900801133,
-        0.20862575412913295,
-        0.18311610358439256,
-        0.141822230384504,
-        0.08843603252898902,
-        0.048231203128159025,
-        0.022884335981130047,
-        0.008912018591891628,
-        0.0030718474499062047,
-        0.000884406284226484,
-        0.00021355528325430997,
-        4.474932005130675e-05
-      ],
-      "unexpected_sem": [
-        6.298449147212535e-07,
-        4.3095751172422375e-06,
-        1.4731296071365827e-05,
-        0.0001077151573606695,
-        0.00013860209686668154,
-        0.0003513535799883899,
-        0.0008213440589423073,
-        0.0016623194499515584,
-        0.0028077125921707464,
-        0.005094194401504864,
-        0.013705125637062453,
-        0.015462040967456181,
-        0.008678824890658233,
-        0.018618607983400603,
-        0.010436994596922823,
-        0.00638480971967694,
-        0.005905880375898922,
-        0.002669425815067302,
-        0.0008956590526675017,
-        0.0007508234578430452,
-        0.0004337113419625733,
-        0.00011872234926300933,
-        3.541054508070816e-05,
-        5.193006741591985e-06,
-        8.234694430109357e-07
-      ]
-    }
-  },
   "metadata": {
     "chance_accuracy": 0.027777777777777776,
     "colored_tuning_curve": {
@@ -492,8 +27,14 @@
       "offset_step_deg": 5.0,
       "quantity": "raw L2/3 rates"
     },
-    "condition_A": "operational_continuation_A (code label: expected)",
-    "condition_B": "operational_OOD_reversal_B (code label: unexpected)",
+    "compatibility_filenames": {
+      "1_decode_signflip.png": "historical compatibility filename",
+      "3_decode_energy_phasespace.png": "historical compatibility filename; y is final mean L2/3 rate",
+      "tuning_dampening.png": "historical filename; panel shows the rate-cost-weighted endpoint and does not claim flank-preserving dampening",
+      "tuning_sharpening.png": "historical filename; panel shows the task-only endpoint"
+    },
+    "condition_A": "operational continuation A",
+    "condition_B": "matched operational OOD reversal B",
     "decoding": {
       "classes": 36,
       "classifier": "condition-blind balanced pooled A+B cosine nearest-centroid",
@@ -501,8 +42,8 @@
     },
     "device": "cuda:0",
     "endpoint_interpretation": {
-      "energy": "broad attenuation with preferential center suppression; absolute flanks are not preserved versus t0",
-      "task": "center enhancement with modest flank suppression"
+      "rate_cost_weighted_alpha_0p9": "broad attenuation with preferential center suppression; absolute flanks are not preserved versus t0",
+      "task_only_alpha_0p0": "center enhancement with modest flank suppression"
     },
     "error_bars": "sample standard deviation across four independent seed-level values divided by sqrt(4); tuning first averages 216 rows within each seed",
     "feedback": "on",
@@ -514,10 +55,10 @@
       "tuning_dampening": "tuning_dampening.png",
       "tuning_sharpening": "tuning_sharpening.png"
     },
-    "phase_x": "expected_A_accuracy - unexpected_B_accuracy",
-    "phase_y": "(expected_A_mean_rate - unexpected_B_mean_rate) / unexpected_B_mean_rate; numerically negative stored saving",
+    "phase_x": "continuation_A_accuracy - OOD_reversal_B_accuracy",
+    "phase_y": "(continuation_A_mean_rate - OOD_reversal_B_mean_rate) / OOD_reversal_B_mean_rate; numerically negative stored saving",
     "plotter_role": "checkpoint remeasurement and presentation; no phenotype acceptance gate",
-    "script": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_reference_plots/tools/plot_emergent_reference_figures.py",
+    "script": "tools/plot_emergent_reference_figures.py",
     "seed_count": 4,
     "seed_ids": [
       0,
@@ -560,178 +101,190 @@
       "source": "pooled_balanced_A_B_t0_aligned_to_own_first_orientation"
     }
   },
-  "task_optimized": {
-    "alpha": 0.0,
+  "rate_cost_weighted_endpoint": {
+    "alpha": 0.9,
     "decoding": {
+      "OOD_reversal_B_accuracy": {
+        "mean": 0.2458767406642437,
+        "n_seeds": 4,
+        "sem": 0.006880480498403305
+      },
+      "continuation_A_accuracy": {
+        "mean": 0.14688223414123058,
+        "n_seeds": 4,
+        "sem": 0.012202961697709422
+      },
       "delta_accuracy_A_minus_B": {
-        "mean": 0.6535373330116272,
+        "mean": -0.09899450652301311,
         "n_seeds": 4,
-        "sem": 0.01362393853118213
-      },
-      "expected_A_accuracy": {
-        "mean": 0.9974681735038757,
-        "n_seeds": 4,
-        "sem": 0.00046694661103796126
-      },
-      "unexpected_B_accuracy": {
-        "mean": 0.34393084049224854,
-        "n_seeds": 4,
-        "sem": 0.013299876193126597
+        "sem": 0.01437050203490186
       }
     },
     "per_seed": [
       {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_full/seed_0/alpha_0p0_final.pt",
+        "checkpoint": {
+          "basename": "alpha_0p9_final.pt",
+          "file_sha256": "45e170663a2b53f2f69a5d02582e9607ccd5f24de8741aa7e9bf0a5e354f98b7",
+          "logical_id": "seed_0/alpha_0p9_final.pt"
+        },
         "decoding": {
-          "delta_accuracy_A_minus_B": 0.6297743022441864,
-          "expected_A_accuracy": 0.9962384104728699,
-          "unexpected_B_accuracy": 0.36646410822868347
+          "OOD_reversal_B_accuracy": 0.26576969027519226,
+          "continuation_A_accuracy": 0.1453993022441864,
+          "delta_accuracy_A_minus_B": -0.12037038803100586
         },
         "feedback_mode": "posterior_prior_excess",
         "rates": {
-          "expected_A_mean": 0.18254794402311514,
-          "phase_y_A_minus_B_over_B": -0.0738670738269701,
-          "stored_saving_B_minus_A_over_B": 0.0738670738269701,
-          "unexpected_B_mean": 0.1971077188776528
+          "OOD_reversal_B_mean": 0.060723849464693565,
+          "continuation_A_mean": 0.024481094163074504,
+          "phase_y_A_minus_B_over_B": -0.5968448938580068,
+          "stored_saving_B_minus_A_over_B": 0.5968448938580068
         },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_full/seed_0",
         "seed": 0,
         "tuning": {
-          "delta_C_expected_minus_unexpected": 0.30057585423375344,
-          "delta_C_expected_minus_zero_context": 0.27042233079303923,
-          "delta_F_expected_minus_unexpected": -0.11991458061513388,
-          "delta_F_expected_minus_zero_context": -0.01200408419525184,
-          "delta_Fq_expected_minus_unexpected": -0.013508357056573717,
-          "delta_Q_expected_minus_unexpected": 0.2668078330919158,
-          "expected_C_over_F": 3.925529061397847,
-          "expected_center_C": 1.0497753522646278,
-          "expected_flank_F": 0.2674226418516978,
+          "OOD_reversal_B_C_over_F": 1.8605651042308877,
+          "OOD_reversal_B_center_C": 0.22535265476103686,
+          "OOD_reversal_B_flank_F": 0.12112054248926277,
+          "continuation_A_C_over_F": 0.7188309983156369,
+          "continuation_A_center_C": 0.04933174064865819,
+          "continuation_A_flank_F": 0.0686277313641902,
+          "delta_C_A_minus_B": -0.17602091411237866,
+          "delta_C_A_minus_zero_context": -0.7300212808229304,
+          "delta_F_A_minus_B": -0.052492811125072564,
+          "delta_F_A_minus_zero_context": -0.21079899468275942,
+          "delta_Fq_A_minus_B": 0.0186631831141434,
+          "delta_Q_A_minus_B": -0.5396275638778916,
           "first_stimulus_zero_context_C_over_F": 2.789114099775269,
           "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.9342305737090104,
-          "unexpected_center_C": 0.7491994980308744,
-          "unexpected_flank_F": 0.38733722246683167
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
         }
       },
       {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed1/seed_1/alpha_0p0_final.pt",
+        "checkpoint": {
+          "basename": "alpha_0p9_final.pt",
+          "file_sha256": "5d8322e196e1bcd7c3b50941a254ffc3b99a03ea2ef0304db4ca0f7cfbd57c13",
+          "logical_id": "seed_1/alpha_0p9_final.pt"
+        },
         "decoding": {
-          "delta_accuracy_A_minus_B": 0.6925636827945709,
-          "expected_A_accuracy": 0.9981192350387573,
-          "unexpected_B_accuracy": 0.3055555522441864
+          "OOD_reversal_B_accuracy": 0.24233217537403107,
+          "continuation_A_accuracy": 0.17332175374031067,
+          "delta_accuracy_A_minus_B": -0.0690104216337204
         },
         "feedback_mode": "posterior_prior_excess",
         "rates": {
-          "expected_A_mean": 0.18392333005937256,
-          "phase_y_A_minus_B_over_B": -0.07930356136682466,
-          "stored_saving_B_minus_A_over_B": 0.07930356136682466,
-          "unexpected_B_mean": 0.1997654461344127
+          "OOD_reversal_B_mean": 0.05517961077256609,
+          "continuation_A_mean": 0.027465456099827697,
+          "phase_y_A_minus_B_over_B": -0.5022529906864875,
+          "stored_saving_B_minus_A_over_B": 0.5022529906864875
         },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed1/seed_1",
         "seed": 1,
         "tuning": {
-          "delta_C_expected_minus_unexpected": 0.3295401323724675,
-          "delta_C_expected_minus_zero_context": 0.2949455422751698,
-          "delta_F_expected_minus_unexpected": -0.12896654886814451,
-          "delta_F_expected_minus_zero_context": -0.013233395948730131,
-          "delta_Fq_expected_minus_unexpected": -0.014304855693675836,
-          "delta_Q_expected_minus_unexpected": 0.28582095272146874,
-          "expected_C_over_F": 4.035783178152382,
-          "expected_center_C": 1.0742985637467584,
-          "expected_flank_F": 0.2661933300982195,
+          "OOD_reversal_B_C_over_F": 1.5434248919723006,
+          "OOD_reversal_B_center_C": 0.18322603984011543,
+          "OOD_reversal_B_flank_F": 0.11871393340428497,
+          "continuation_A_C_over_F": 0.5427848597726255,
+          "continuation_A_center_C": 0.04283706942734159,
+          "continuation_A_flank_F": 0.07892089960889144,
+          "delta_C_A_minus_B": -0.14038897041277384,
+          "delta_C_A_minus_zero_context": -0.736515952044247,
+          "delta_F_A_minus_B": -0.039793033795393534,
+          "delta_F_A_minus_zero_context": -0.2005058264380582,
+          "delta_Fq_A_minus_B": 0.012934914655743184,
+          "delta_Q_A_minus_B": -0.4175974945602148,
           "first_stimulus_zero_context_C_over_F": 2.789114099775269,
           "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.8847015373179743,
-          "unexpected_center_C": 0.7447584313742909,
-          "unexpected_flank_F": 0.395159878966364
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
         }
       },
       {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed2/seed_2/alpha_0p0_final.pt",
+        "checkpoint": {
+          "basename": "alpha_0p9_final.pt",
+          "file_sha256": "cfdf774905edb5542c48b3262ae246518616c2cae2ac4a76532a4cf2ff6a0640",
+          "logical_id": "seed_2/alpha_0p9_final.pt"
+        },
         "decoding": {
-          "delta_accuracy_A_minus_B": 0.6425057947635651,
-          "expected_A_accuracy": 0.9972511529922485,
-          "unexpected_B_accuracy": 0.35474535822868347
+          "OOD_reversal_B_accuracy": 0.23408564925193787,
+          "continuation_A_accuracy": 0.154079869389534,
+          "delta_accuracy_A_minus_B": -0.08000577986240387
         },
         "feedback_mode": "posterior_prior_excess",
         "rates": {
-          "expected_A_mean": 0.18292198946500393,
-          "phase_y_A_minus_B_over_B": -0.07561261009909723,
-          "stored_saving_B_minus_A_over_B": 0.07561261009909723,
-          "unexpected_B_mean": 0.19788456225229306
+          "OOD_reversal_B_mean": 0.0588746724705651,
+          "continuation_A_mean": 0.02697596208794501,
+          "phase_y_A_minus_B_over_B": -0.5418064599491766,
+          "stored_saving_B_minus_A_over_B": 0.5418064599491766
         },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed2/seed_2",
         "seed": 2,
         "tuning": {
-          "delta_C_expected_minus_unexpected": 0.30809499636108495,
-          "delta_C_expected_minus_zero_context": 0.2773557934496139,
-          "delta_F_expected_minus_unexpected": -0.12114105189512309,
-          "delta_F_expected_minus_zero_context": -0.012339188682812252,
-          "delta_Fq_expected_minus_unexpected": -0.013534405927096404,
-          "delta_Q_expected_minus_unexpected": 0.2701863454494978,
-          "expected_C_over_F": 3.956413786093375,
-          "expected_center_C": 1.0567088149212025,
-          "expected_flank_F": 0.2670875373641374,
+          "OOD_reversal_B_C_over_F": 1.6932712724271464,
+          "OOD_reversal_B_center_C": 0.20599189393702366,
+          "OOD_reversal_B_flank_F": 0.12165321486955454,
+          "continuation_A_C_over_F": 0.683781331683812,
+          "continuation_A_center_C": 0.052154982215322464,
+          "continuation_A_flank_F": 0.07627435818829797,
+          "delta_C_A_minus_B": -0.1538369117217012,
+          "delta_C_A_minus_zero_context": -0.7271980392562661,
+          "delta_F_A_minus_B": -0.04537885668125656,
+          "delta_F_A_minus_zero_context": -0.20315236785865165,
+          "delta_Fq_A_minus_B": 0.013049027662099822,
+          "delta_Q_A_minus_B": -0.43569206868631755,
           "first_stimulus_zero_context_C_over_F": 2.789114099775269,
           "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.9282810160593056,
-          "unexpected_center_C": 0.7486138185601175,
-          "unexpected_flank_F": 0.38822858925926046
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
         }
       },
       {
-        "checkpoint": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed3/seed_3/alpha_0p0_final.pt",
+        "checkpoint": {
+          "basename": "alpha_0p9_final.pt",
+          "file_sha256": "b4d0e1194e5c594fd6eda8430ff1fdaab94b46952d9e80e4834a95deec6dff18",
+          "logical_id": "seed_3/alpha_0p9_final.pt"
+        },
         "decoding": {
-          "delta_accuracy_A_minus_B": 0.6493055522441864,
-          "expected_A_accuracy": 0.9982638955116272,
-          "unexpected_B_accuracy": 0.3489583432674408
+          "OOD_reversal_B_accuracy": 0.2413194477558136,
+          "continuation_A_accuracy": 0.11472801119089127,
+          "delta_accuracy_A_minus_B": -0.12659143656492233
         },
         "feedback_mode": "posterior_prior_excess",
         "rates": {
-          "expected_A_mean": 0.1828888275418726,
-          "phase_y_A_minus_B_over_B": -0.07559977839145732,
-          "stored_saving_B_minus_A_over_B": 0.07559977839145732,
-          "unexpected_B_mean": 0.19784594140396783
+          "OOD_reversal_B_mean": 0.05159004971747701,
+          "continuation_A_mean": 0.024361953417435828,
+          "phase_y_A_minus_B_over_B": -0.5277774450746728,
+          "stored_saving_B_minus_A_over_B": 0.5277774450746728
         },
-        "run_dir": "/home/vishnu/coding_proj/codex_exp/neuroips_emergent_task_energy_axis/runs/emergent_task_energy_axis_posterior_excess_replication_seed3/seed_3",
         "seed": 3,
         "tuning": {
-          "delta_C_expected_minus_unexpected": 0.30881316398764846,
-          "delta_C_expected_minus_zero_context": 0.2766812315877575,
-          "delta_F_expected_minus_unexpected": -0.12223843248405802,
-          "delta_F_expected_minus_zero_context": -0.01230486030086736,
-          "delta_Fq_expected_minus_unexpected": -0.01368934305409611,
-          "delta_Q_expected_minus_unexpected": 0.27199984864070725,
-          "expected_C_over_F": 3.953380042887164,
-          "expected_center_C": 1.056034253059346,
-          "expected_flank_F": 0.26712186574608227,
+          "OOD_reversal_B_C_over_F": 1.429540111339094,
+          "OOD_reversal_B_center_C": 0.16496867174911456,
+          "OOD_reversal_B_flank_F": 0.11539982015235889,
+          "continuation_A_C_over_F": 0.6058201037361428,
+          "continuation_A_center_C": 0.04102081243224718,
+          "continuation_A_flank_F": 0.06771121027392196,
+          "delta_C_A_minus_B": -0.12394785931686739,
+          "delta_C_A_minus_zero_context": -0.7383322090393414,
+          "delta_F_A_minus_B": -0.04768860987843693,
+          "delta_F_A_minus_zero_context": -0.21171551577302766,
+          "delta_Fq_A_minus_B": 0.005922208179886306,
+          "delta_Q_A_minus_B": -0.29985276516798437,
           "first_stimulus_zero_context_C_over_F": 2.789114099775269,
           "first_stimulus_zero_context_center_C": 0.7793530214715886,
-          "first_stimulus_zero_context_flank_F": 0.2794267260469496,
-          "unexpected_C_over_F": 1.9190993341340505,
-          "unexpected_center_C": 0.7472210890716976,
-          "unexpected_flank_F": 0.3893602982301403
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
         }
       }
     ],
     "phase_space": {
       "stored_saving_B_minus_A_over_B": {
-        "mean": 0.07609575592108733,
+        "mean": 0.5421704473920859,
         "n_seeds": 4,
-        "sem": 0.0011451514910535217
+        "sem": 0.0199791337999712
       },
       "x_delta_accuracy_A_minus_B": {
-        "mean": 0.6535373330116272,
+        "mean": -0.09899450652301311,
         "n_seeds": 4,
-        "sem": 0.01362393853118213
+        "sem": 0.01437050203490186
       },
       "y_mean_rate_A_minus_B_over_B": {
-        "mean": -0.07609575592108733,
+        "mean": -0.5421704473920859,
         "n_seeds": 4,
-        "sem": 0.0011451514910535217
+        "sem": 0.0199791337999712
       }
     },
     "seed_ids": [
@@ -741,50 +294,65 @@
       3
     ],
     "shape_seed_summary": {
-      "delta_C": {
-        "mean": 0.3117560367387386,
+      "OOD_reversal_B_C": {
+        "mean": 0.19488481507182262,
         "n_seeds": 4,
-        "sem": 0.006213790141225605
+        "sem": 0.013173708435914231
+      },
+      "OOD_reversal_B_C_over_F": {
+        "mean": 1.6317003449923573,
+        "n_seeds": 4,
+        "sem": 0.09346629196450487
+      },
+      "OOD_reversal_B_F": {
+        "mean": 0.11922187772886529,
+        "n_seeds": 4,
+        "sem": 0.0014254373515718342
+      },
+      "continuation_A_C": {
+        "mean": 0.046336151180892356,
+        "n_seeds": 4,
+        "sem": 0.0026351589135748736
+      },
+      "continuation_A_C_over_F": {
+        "mean": 0.6378043233770543,
+        "n_seeds": 4,
+        "sem": 0.03950832835634559
+      },
+      "continuation_A_F": {
+        "mean": 0.07288354985882539,
+        "n_seeds": 4,
+        "sem": 0.0027810708514988897
+      },
+      "delta_C": {
+        "mean": -0.14854866389093027,
+        "n_seeds": 4,
+        "sem": 0.011009353147431152
       },
       "delta_F": {
-        "mean": -0.12306515346561488,
+        "mean": -0.0463383278700399,
         "n_seeds": 4,
-        "sem": 0.002023573806785518
+        "sem": 0.0026372710820780935
       },
       "delta_Fq": {
-        "mean": -0.013759240432860517,
+        "mean": 0.012642333402968178,
         "n_seeds": 4,
-        "sem": 0.00018620657880249566
+        "sem": 0.002608666937159443
       },
       "delta_Q": {
-        "mean": 0.2737037449758974,
+        "mean": -0.42319247307310204,
         "n_seeds": 4,
-        "sem": 0.0041798692803559755
+        "sem": 0.049123447890572006
       },
-      "displayed_delta_C_expected_minus_zero_context": {
-        "mean": 0.2798512245263951,
+      "displayed_delta_C_A_minus_zero_context": {
+        "mean": -0.7330168702906963,
         "n_seeds": 4,
-        "sem": 0.005267973177812867
+        "sem": 0.002635158913574871
       },
-      "displayed_delta_F_expected_minus_zero_context": {
-        "mean": -0.012470382281915396,
+      "displayed_delta_F_A_minus_zero_context": {
+        "mean": -0.20654317618812423,
         "n_seeds": 4,
-        "sem": 0.00026524093575902254
-      },
-      "expected_C": {
-        "mean": 1.0592042459979836,
-        "n_seeds": 4,
-        "sem": 0.005267973177812867
-      },
-      "expected_C_over_F": {
-        "mean": 3.967776517132692,
-        "n_seeds": 4,
-        "sem": 0.02371027130888064
-      },
-      "expected_F": {
-        "mean": 0.26695634376503424,
-        "n_seeds": 4,
-        "sem": 0.00026524093575902254
+        "sem": 0.0027810708514988875
       },
       "first_stimulus_zero_context_C": {
         "mean": 0.7793530214715886,
@@ -800,94 +368,133 @@
         "mean": 0.2794267260469496,
         "n_seeds": 4,
         "sem": 0.0
-      },
-      "unexpected_C": {
-        "mean": 0.7474482092592452,
-        "n_seeds": 4,
-        "sem": 0.000987933282746343
-      },
-      "unexpected_C_over_F": {
-        "mean": 1.9165781153050852,
-        "n_seeds": 4,
-        "sem": 0.011071886102185928
-      },
-      "unexpected_F": {
-        "mean": 0.3900214972306491,
-        "n_seeds": 4,
-        "sem": 0.001762101041884812
       }
     },
     "tuning_curve": {
-      "assay_expected_unexpected_mean_curve_C_F": {
-        "expected_C": 1.0592042459979838,
-        "expected_C_over_F": 3.9677058468041464,
-        "expected_F": 0.2669563437650342,
-        "unexpected_C": 0.747448209259245,
-        "unexpected_C_over_F": 1.9164282342550534,
-        "unexpected_F": 0.3900214972306491
+      "OOD_reversal_B_mean": [
+        4.4199476982848186e-05,
+        0.00021525786417408163,
+        0.0008764614479635687,
+        0.0030232291839503746,
+        0.009119255602989276,
+        0.02336984138323546,
+        0.0517396158495642,
+        0.09582216018396947,
+        0.1512144308987815,
+        0.19339324527256258,
+        0.21758139921843797,
+        0.20415130488496894,
+        0.1809967213224876,
+        0.19950641900801133,
+        0.20862575412913295,
+        0.18311610358439256,
+        0.141822230384504,
+        0.08843603252898902,
+        0.048231203128159025,
+        0.022884335981130047,
+        0.008912018591891628,
+        0.0030718474499062047,
+        0.000884406284226484,
+        0.00021355528325430997,
+        4.474932005130675e-05
+      ],
+      "OOD_reversal_B_sem": [
+        6.298449147212535e-07,
+        4.3095751172422375e-06,
+        1.4731296071365827e-05,
+        0.0001077151573606695,
+        0.00013860209686668154,
+        0.0003513535799883899,
+        0.0008213440589423073,
+        0.0016623194499515584,
+        0.0028077125921707464,
+        0.005094194401504864,
+        0.013705125637062453,
+        0.015462040967456181,
+        0.008678824890658233,
+        0.018618607983400603,
+        0.010436994596922823,
+        0.00638480971967694,
+        0.005905880375898922,
+        0.002669425815067302,
+        0.0008956590526675017,
+        0.0007508234578430452,
+        0.0004337113419625733,
+        0.00011872234926300933,
+        3.541054508070816e-05,
+        5.193006741591985e-06,
+        8.234694430109357e-07
+      ],
+      "assay_A_B_mean_curve_C_F": {
+        "OOD_reversal_B_C": 0.19488481507182262,
+        "OOD_reversal_B_C_over_F": 1.6346397052647517,
+        "OOD_reversal_B_F": 0.11922187772886529,
+        "continuation_A_C": 0.04633615118089235,
+        "continuation_A_C_over_F": 0.6357559596183905,
+        "continuation_A_F": 0.07288354985882539
       },
+      "continuation_A_mean": [
+        4.699521580446512e-05,
+        0.00024179677331159362,
+        0.0010632261918443772,
+        0.003953816886577342,
+        0.012150787496702158,
+        0.028786517590223985,
+        0.05460234338426272,
+        0.07899747452595168,
+        0.08530464129149481,
+        0.07962964416812475,
+        0.06113067401397361,
+        0.046417852479929994,
+        0.04642782058497822,
+        0.04616278047776884,
+        0.054613400432572234,
+        0.06257756364357192,
+        0.08624060955588464,
+        0.08107950729404197,
+        0.05463661500727068,
+        0.028609542590048578,
+        0.011706044556545007,
+        0.003832999525777133,
+        0.0010439442696763392,
+        0.00023866101293134744,
+        4.666640265643056e-05
+      ],
+      "continuation_A_sem": [
+        2.3686450605542426e-07,
+        1.9986771216656497e-06,
+        1.374803307207076e-05,
+        6.123456281156157e-05,
+        0.00035988030283306725,
+        0.0011977016265689812,
+        0.0017443016266202032,
+        0.0032591673194680548,
+        0.0033136719676497444,
+        0.005636442786518689,
+        0.004541408639698558,
+        0.002259562412253533,
+        0.0027964002189740764,
+        0.005153695569300015,
+        0.006434120573089024,
+        0.008089209410925174,
+        0.00556278564500672,
+        0.0036683712774732468,
+        0.0022713730493734226,
+        0.0005567676124382339,
+        0.00017829952455183045,
+        2.0569422023211115e-05,
+        5.7011683769230815e-06,
+        1.2254120787496743e-06,
+        4.433904883114825e-07
+      ],
       "displayed_mean_curve_C_F": {
-        "expected_C": 1.0592042459979838,
-        "expected_C_over_F": 3.9677058468041464,
-        "expected_F": 0.2669563437650342,
+        "continuation_A_C": 0.04633615118089235,
+        "continuation_A_C_over_F": 0.6357559596183905,
+        "continuation_A_F": 0.07288354985882539,
         "first_stimulus_zero_context_C": 0.7793530214715886,
         "first_stimulus_zero_context_C_over_F": 2.789114099775269,
         "first_stimulus_zero_context_F": 0.2794267260469496
       },
-      "expected_mean": [
-        4.742053382263596e-05,
-        0.0002463829806502973,
-        0.0011056424796320411,
-        0.004271445566835744,
-        0.014134566953914516,
-        0.03980190003359759,
-        0.09476478948878744,
-        0.18999349896761555,
-        0.321071972725568,
-        0.46194097065125345,
-        0.5789321792070512,
-        0.7049972498444497,
-        1.769056803236405,
-        0.7035586849130966,
-        0.5791099558549898,
-        0.46202078144307485,
-        0.3210935690612704,
-        0.18999942019581792,
-        0.09476574758688608,
-        0.039801987241608675,
-        0.014134570769750063,
-        0.004271445466589217,
-        0.0011056424425785532,
-        0.00024638297987554254,
-        4.7420533498417945e-05
-      ],
-      "expected_sem": [
-        0.0,
-        6.280843154322199e-13,
-        5.194110246422139e-11,
-        1.7035610640072126e-09,
-        4.187428095938275e-08,
-        7.007687005009187e-07,
-        7.756625804900647e-06,
-        5.5558525592033904e-05,
-        0.0002557453961026015,
-        0.0007679251303638339,
-        0.0014548285969236115,
-        0.0038245063719223125,
-        0.02339134086574538,
-        0.004536363500549721,
-        0.0015569596698794615,
-        0.0007461824475677064,
-        0.0002349825241506119,
-        4.894583079264863e-05,
-        6.424919776011497e-06,
-        5.310395794191357e-07,
-        2.8449632284739497e-08,
-        1.0930025044258022e-09,
-        3.8342613516215474e-11,
-        1.050914080505057e-12,
-        2.1053119382830776e-14
-      ],
       "first_stimulus_zero_context_mean": [
         4.742053382263596e-05,
         0.0002463830161205907,
@@ -968,8 +575,280 @@
         50.0,
         55.0,
         60.0
-      ],
-      "unexpected_mean": [
+      ]
+    }
+  },
+  "task_only_endpoint": {
+    "alpha": 0.0,
+    "decoding": {
+      "OOD_reversal_B_accuracy": {
+        "mean": 0.34393084049224854,
+        "n_seeds": 4,
+        "sem": 0.013299876193126597
+      },
+      "continuation_A_accuracy": {
+        "mean": 0.9974681735038757,
+        "n_seeds": 4,
+        "sem": 0.00046694661103796126
+      },
+      "delta_accuracy_A_minus_B": {
+        "mean": 0.6535373330116272,
+        "n_seeds": 4,
+        "sem": 0.01362393853118213
+      }
+    },
+    "per_seed": [
+      {
+        "checkpoint": {
+          "basename": "alpha_0p0_final.pt",
+          "file_sha256": "86dde2dabf23174b0184dca9933183abd8ac390f5fb1470708e2c4417047528e",
+          "logical_id": "seed_0/alpha_0p0_final.pt"
+        },
+        "decoding": {
+          "OOD_reversal_B_accuracy": 0.36646410822868347,
+          "continuation_A_accuracy": 0.9962384104728699,
+          "delta_accuracy_A_minus_B": 0.6297743022441864
+        },
+        "feedback_mode": "posterior_prior_excess",
+        "rates": {
+          "OOD_reversal_B_mean": 0.1971077188776528,
+          "continuation_A_mean": 0.18254794402311514,
+          "phase_y_A_minus_B_over_B": -0.0738670738269701,
+          "stored_saving_B_minus_A_over_B": 0.0738670738269701
+        },
+        "seed": 0,
+        "tuning": {
+          "OOD_reversal_B_C_over_F": 1.9342305737090104,
+          "OOD_reversal_B_center_C": 0.7491994980308744,
+          "OOD_reversal_B_flank_F": 0.38733722246683167,
+          "continuation_A_C_over_F": 3.925529061397847,
+          "continuation_A_center_C": 1.0497753522646278,
+          "continuation_A_flank_F": 0.2674226418516978,
+          "delta_C_A_minus_B": 0.30057585423375344,
+          "delta_C_A_minus_zero_context": 0.27042233079303923,
+          "delta_F_A_minus_B": -0.11991458061513388,
+          "delta_F_A_minus_zero_context": -0.01200408419525184,
+          "delta_Fq_A_minus_B": -0.013508357056573717,
+          "delta_Q_A_minus_B": 0.2668078330919158,
+          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
+          "first_stimulus_zero_context_center_C": 0.7793530214715886,
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
+        }
+      },
+      {
+        "checkpoint": {
+          "basename": "alpha_0p0_final.pt",
+          "file_sha256": "4f03b482c38c93d02207753cffaaa86f105f82d483b246ee69a69ad713739068",
+          "logical_id": "seed_1/alpha_0p0_final.pt"
+        },
+        "decoding": {
+          "OOD_reversal_B_accuracy": 0.3055555522441864,
+          "continuation_A_accuracy": 0.9981192350387573,
+          "delta_accuracy_A_minus_B": 0.6925636827945709
+        },
+        "feedback_mode": "posterior_prior_excess",
+        "rates": {
+          "OOD_reversal_B_mean": 0.1997654461344127,
+          "continuation_A_mean": 0.18392333005937256,
+          "phase_y_A_minus_B_over_B": -0.07930356136682466,
+          "stored_saving_B_minus_A_over_B": 0.07930356136682466
+        },
+        "seed": 1,
+        "tuning": {
+          "OOD_reversal_B_C_over_F": 1.8847015373179743,
+          "OOD_reversal_B_center_C": 0.7447584313742909,
+          "OOD_reversal_B_flank_F": 0.395159878966364,
+          "continuation_A_C_over_F": 4.035783178152382,
+          "continuation_A_center_C": 1.0742985637467584,
+          "continuation_A_flank_F": 0.2661933300982195,
+          "delta_C_A_minus_B": 0.3295401323724675,
+          "delta_C_A_minus_zero_context": 0.2949455422751698,
+          "delta_F_A_minus_B": -0.12896654886814451,
+          "delta_F_A_minus_zero_context": -0.013233395948730131,
+          "delta_Fq_A_minus_B": -0.014304855693675836,
+          "delta_Q_A_minus_B": 0.28582095272146874,
+          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
+          "first_stimulus_zero_context_center_C": 0.7793530214715886,
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
+        }
+      },
+      {
+        "checkpoint": {
+          "basename": "alpha_0p0_final.pt",
+          "file_sha256": "69767b5cea848bb6d932a38815f1de416c5388f0e4b71d75f43dec5f3d3faf9f",
+          "logical_id": "seed_2/alpha_0p0_final.pt"
+        },
+        "decoding": {
+          "OOD_reversal_B_accuracy": 0.35474535822868347,
+          "continuation_A_accuracy": 0.9972511529922485,
+          "delta_accuracy_A_minus_B": 0.6425057947635651
+        },
+        "feedback_mode": "posterior_prior_excess",
+        "rates": {
+          "OOD_reversal_B_mean": 0.19788456225229306,
+          "continuation_A_mean": 0.18292198946500393,
+          "phase_y_A_minus_B_over_B": -0.07561261009909723,
+          "stored_saving_B_minus_A_over_B": 0.07561261009909723
+        },
+        "seed": 2,
+        "tuning": {
+          "OOD_reversal_B_C_over_F": 1.9282810160593056,
+          "OOD_reversal_B_center_C": 0.7486138185601175,
+          "OOD_reversal_B_flank_F": 0.38822858925926046,
+          "continuation_A_C_over_F": 3.956413786093375,
+          "continuation_A_center_C": 1.0567088149212025,
+          "continuation_A_flank_F": 0.2670875373641374,
+          "delta_C_A_minus_B": 0.30809499636108495,
+          "delta_C_A_minus_zero_context": 0.2773557934496139,
+          "delta_F_A_minus_B": -0.12114105189512309,
+          "delta_F_A_minus_zero_context": -0.012339188682812252,
+          "delta_Fq_A_minus_B": -0.013534405927096404,
+          "delta_Q_A_minus_B": 0.2701863454494978,
+          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
+          "first_stimulus_zero_context_center_C": 0.7793530214715886,
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
+        }
+      },
+      {
+        "checkpoint": {
+          "basename": "alpha_0p0_final.pt",
+          "file_sha256": "7c4301bedd200e979b4fa45c46b99fa8dfa8508404e1ec3c6f25d2bdf84bfdb2",
+          "logical_id": "seed_3/alpha_0p0_final.pt"
+        },
+        "decoding": {
+          "OOD_reversal_B_accuracy": 0.3489583432674408,
+          "continuation_A_accuracy": 0.9982638955116272,
+          "delta_accuracy_A_minus_B": 0.6493055522441864
+        },
+        "feedback_mode": "posterior_prior_excess",
+        "rates": {
+          "OOD_reversal_B_mean": 0.19784594140396783,
+          "continuation_A_mean": 0.1828888275418726,
+          "phase_y_A_minus_B_over_B": -0.07559977839145732,
+          "stored_saving_B_minus_A_over_B": 0.07559977839145732
+        },
+        "seed": 3,
+        "tuning": {
+          "OOD_reversal_B_C_over_F": 1.9190993341340505,
+          "OOD_reversal_B_center_C": 0.7472210890716976,
+          "OOD_reversal_B_flank_F": 0.3893602982301403,
+          "continuation_A_C_over_F": 3.953380042887164,
+          "continuation_A_center_C": 1.056034253059346,
+          "continuation_A_flank_F": 0.26712186574608227,
+          "delta_C_A_minus_B": 0.30881316398764846,
+          "delta_C_A_minus_zero_context": 0.2766812315877575,
+          "delta_F_A_minus_B": -0.12223843248405802,
+          "delta_F_A_minus_zero_context": -0.01230486030086736,
+          "delta_Fq_A_minus_B": -0.01368934305409611,
+          "delta_Q_A_minus_B": 0.27199984864070725,
+          "first_stimulus_zero_context_C_over_F": 2.789114099775269,
+          "first_stimulus_zero_context_center_C": 0.7793530214715886,
+          "first_stimulus_zero_context_flank_F": 0.2794267260469496
+        }
+      }
+    ],
+    "phase_space": {
+      "stored_saving_B_minus_A_over_B": {
+        "mean": 0.07609575592108733,
+        "n_seeds": 4,
+        "sem": 0.0011451514910535217
+      },
+      "x_delta_accuracy_A_minus_B": {
+        "mean": 0.6535373330116272,
+        "n_seeds": 4,
+        "sem": 0.01362393853118213
+      },
+      "y_mean_rate_A_minus_B_over_B": {
+        "mean": -0.07609575592108733,
+        "n_seeds": 4,
+        "sem": 0.0011451514910535217
+      }
+    },
+    "seed_ids": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "shape_seed_summary": {
+      "OOD_reversal_B_C": {
+        "mean": 0.7474482092592452,
+        "n_seeds": 4,
+        "sem": 0.000987933282746343
+      },
+      "OOD_reversal_B_C_over_F": {
+        "mean": 1.9165781153050852,
+        "n_seeds": 4,
+        "sem": 0.011071886102185928
+      },
+      "OOD_reversal_B_F": {
+        "mean": 0.3900214972306491,
+        "n_seeds": 4,
+        "sem": 0.001762101041884812
+      },
+      "continuation_A_C": {
+        "mean": 1.0592042459979836,
+        "n_seeds": 4,
+        "sem": 0.005267973177812867
+      },
+      "continuation_A_C_over_F": {
+        "mean": 3.967776517132692,
+        "n_seeds": 4,
+        "sem": 0.02371027130888064
+      },
+      "continuation_A_F": {
+        "mean": 0.26695634376503424,
+        "n_seeds": 4,
+        "sem": 0.00026524093575902254
+      },
+      "delta_C": {
+        "mean": 0.3117560367387386,
+        "n_seeds": 4,
+        "sem": 0.006213790141225605
+      },
+      "delta_F": {
+        "mean": -0.12306515346561488,
+        "n_seeds": 4,
+        "sem": 0.002023573806785518
+      },
+      "delta_Fq": {
+        "mean": -0.013759240432860517,
+        "n_seeds": 4,
+        "sem": 0.00018620657880249566
+      },
+      "delta_Q": {
+        "mean": 0.2737037449758974,
+        "n_seeds": 4,
+        "sem": 0.0041798692803559755
+      },
+      "displayed_delta_C_A_minus_zero_context": {
+        "mean": 0.2798512245263951,
+        "n_seeds": 4,
+        "sem": 0.005267973177812867
+      },
+      "displayed_delta_F_A_minus_zero_context": {
+        "mean": -0.012470382281915396,
+        "n_seeds": 4,
+        "sem": 0.00026524093575902254
+      },
+      "first_stimulus_zero_context_C": {
+        "mean": 0.7793530214715886,
+        "n_seeds": 4,
+        "sem": 0.0
+      },
+      "first_stimulus_zero_context_C_over_F": {
+        "mean": 2.789114099775269,
+        "n_seeds": 4,
+        "sem": 0.0
+      },
+      "first_stimulus_zero_context_F": {
+        "mean": 0.2794267260469496,
+        "n_seeds": 4,
+        "sem": 0.0
+      }
+    },
+    "tuning_curve": {
+      "OOD_reversal_B_mean": [
         4.7384569602063154e-05,
         0.0002456671656242785,
         0.0010960587348597104,
@@ -996,7 +875,7 @@
         0.0002456703873239921,
         4.738469056064787e-05
       ],
-      "unexpected_sem": [
+      "OOD_reversal_B_sem": [
         1.0335067007613871e-09,
         1.9149129559892196e-08,
         2.389874369063541e-07,
@@ -1022,6 +901,157 @@
         2.904815362918422e-07,
         2.4942268012181927e-08,
         1.4153085582550616e-09
+      ],
+      "assay_A_B_mean_curve_C_F": {
+        "OOD_reversal_B_C": 0.747448209259245,
+        "OOD_reversal_B_C_over_F": 1.9164282342550534,
+        "OOD_reversal_B_F": 0.3900214972306491,
+        "continuation_A_C": 1.0592042459979838,
+        "continuation_A_C_over_F": 3.9677058468041464,
+        "continuation_A_F": 0.2669563437650342
+      },
+      "continuation_A_mean": [
+        4.742053382263596e-05,
+        0.0002463829806502973,
+        0.0011056424796320411,
+        0.004271445566835744,
+        0.014134566953914516,
+        0.03980190003359759,
+        0.09476478948878744,
+        0.18999349896761555,
+        0.321071972725568,
+        0.46194097065125345,
+        0.5789321792070512,
+        0.7049972498444497,
+        1.769056803236405,
+        0.7035586849130966,
+        0.5791099558549898,
+        0.46202078144307485,
+        0.3210935690612704,
+        0.18999942019581792,
+        0.09476574758688608,
+        0.039801987241608675,
+        0.014134570769750063,
+        0.004271445466589217,
+        0.0011056424425785532,
+        0.00024638297987554254,
+        4.7420533498417945e-05
+      ],
+      "continuation_A_sem": [
+        0.0,
+        6.280843154322199e-13,
+        5.194110246422139e-11,
+        1.7035610640072126e-09,
+        4.187428095938275e-08,
+        7.007687005009187e-07,
+        7.756625804900647e-06,
+        5.5558525592033904e-05,
+        0.0002557453961026015,
+        0.0007679251303638339,
+        0.0014548285969236115,
+        0.0038245063719223125,
+        0.02339134086574538,
+        0.004536363500549721,
+        0.0015569596698794615,
+        0.0007461824475677064,
+        0.0002349825241506119,
+        4.894583079264863e-05,
+        6.424919776011497e-06,
+        5.310395794191357e-07,
+        2.8449632284739497e-08,
+        1.0930025044258022e-09,
+        3.8342613516215474e-11,
+        1.050914080505057e-12,
+        2.1053119382830776e-14
+      ],
+      "displayed_mean_curve_C_F": {
+        "continuation_A_C": 1.0592042459979838,
+        "continuation_A_C_over_F": 3.9677058468041464,
+        "continuation_A_F": 0.2669563437650342,
+        "first_stimulus_zero_context_C": 0.7793530214715886,
+        "first_stimulus_zero_context_C_over_F": 2.789114099775269,
+        "first_stimulus_zero_context_F": 0.2794267260469496
+      },
+      "first_stimulus_zero_context_mean": [
+        4.742053382263596e-05,
+        0.0002463830161205907,
+        0.0011056445687750562,
+        0.004271523677743971,
+        0.014136539720412757,
+        0.03983482480463054,
+        0.09512277485595809,
+        0.19251461285683844,
+        0.3326520067122247,
+        0.4974174979660246,
+        0.6538233309984207,
+        0.7658127231730355,
+        0.8064336362812253,
+        0.7658127049605051,
+        0.6538233293427361,
+        0.49741751369502807,
+        0.3326520174741745,
+        0.19251460954546928,
+        0.09512277526987924,
+        0.039834824183748826,
+        0.0141365397721529,
+        0.004271523587198721,
+        0.0011056445429049845,
+        0.0002463830161205907,
+        4.7420533519471064e-05
+      ],
+      "first_stimulus_zero_context_sem": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "offset_deg": [
+        -60.0,
+        -55.0,
+        -50.0,
+        -45.0,
+        -40.0,
+        -35.0,
+        -30.0,
+        -25.0,
+        -20.0,
+        -15.0,
+        -10.0,
+        -5.0,
+        0.0,
+        5.0,
+        10.0,
+        15.0,
+        20.0,
+        25.0,
+        30.0,
+        35.0,
+        40.0,
+        45.0,
+        50.0,
+        55.0,
+        60.0
       ]
     }
   }

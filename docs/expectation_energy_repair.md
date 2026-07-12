@@ -3,7 +3,9 @@
 > **HISTORICAL / NONCANONICAL.** This note documents an earlier repair program
 > and is not the source of truth for the current figures. Use the canonical
 > [emergent task–energy axis guide](emergent_task_energy_axis.md) for the current
-> model, protocol, results, and reproduction commands.
+> model, minimal objective, protocol, results, and reproduction commands. The
+> legacy repair below used expected-versus-orthogonal and floor-relative terms;
+> it must not be presented as evidence for the current emergent objective.
 
 ## Legacy remainder
 
@@ -13,10 +15,12 @@ unexpected stimuli while preserving the intended precision tradeoff:
 sharpen/attend has smaller energy savings with better decoding, and
 dampen/save saves more energy with degraded expected precision.
 
-Generated checkpoints and logs are local artifacts and are not committed:
+Generated checkpoints and logs were external, developer-local artifacts and
+are not committed. Their machine-specific directories are intentionally not
+published. In the commands below, set these logical roots to regenerated copies:
 
-- Independent repair: `/home/vishnu/coding_proj/codex_exp/neuroips_energy_repair_20260627_stage4`
-- Combined Phase B repair: `/home/vishnu/coding_proj/codex_exp/neuroips_phaseB_energy_repair_20260627_stage4`
+- `INDEPENDENT_REPAIR_ROOT`: independent repair output directory;
+- `COMBINED_REPAIR_ROOT`: combined Phase B repair output directory.
 
 Canonical repository checkpoints were not overwritten.
 
@@ -26,22 +30,22 @@ Independent sharpen/dampen checkpoints:
 
 ```bash
 python tools/validate_energy_decoding_shape.py \
-  --sharpen /home/vishnu/coding_proj/codex_exp/neuroips_energy_repair_20260627_stage4/ckpt_energy_repair_sharpen.pt \
-  --dampen /home/vishnu/coding_proj/codex_exp/neuroips_energy_repair_20260627_stage4/ckpt_energy_repair_dampen.pt
+  --sharpen "$INDEPENDENT_REPAIR_ROOT/ckpt_energy_repair_sharpen.pt" \
+  --dampen "$INDEPENDENT_REPAIR_ROOT/ckpt_energy_repair_dampen.pt"
 ```
 
 Combined context checkpoint:
 
 ```bash
 python tools/validate_ctx_energy_decoding_shape.py \
-  --ckpt /home/vishnu/coding_proj/codex_exp/neuroips_phaseB_energy_repair_20260627_stage4/ckpt_ctx_energy_repair.pt
+  --ckpt "$COMBINED_REPAIR_ROOT/ckpt_ctx_energy_repair.pt"
 ```
 
-Recorded validation artifacts:
+Recorded validation artifact names were:
 
-- `/home/vishnu/coding_proj/codex_exp/neuroips_energy_repair_20260627_stage4/validate_energy_decoding_shape_stage4.log`
-- `/home/vishnu/coding_proj/codex_exp/neuroips_phaseB_energy_repair_20260627_stage4/validate_ctx_energy_repair.log`
-- `/home/vishnu/coding_proj/codex_exp/neuroips_phaseB_energy_repair_20260627_stage4/validate_ctx_energy_repair.json`
+- `$INDEPENDENT_REPAIR_ROOT/validate_energy_decoding_shape_stage4.log`;
+- `$COMBINED_REPAIR_ROOT/validate_ctx_energy_repair.log`;
+- `$COMBINED_REPAIR_ROOT/validate_ctx_energy_repair.json`.
 
 ## Primary Validation Table
 
