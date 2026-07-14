@@ -1,8 +1,10 @@
 # Current task–energy axis workflow
 
-This is the canonical guide to the repository's current four-seed workflow.
-The older Phase A/Phase B and repair notes remain useful historical lineage, but
-they do not define the model, checkpoints, assays, or figures described here.
+This is the canonical guide to the repository's current task–energy experiment.
+It separates the exploratory six-alpha sweep, endpoint calibration, and
+independent four-seed confirmation so that development observations are not
+mistaken for fresh evidence. The older Phase A/Phase B and repair notes remain
+historical lineage; they do not define the model or confirmation described here.
 
 ## Newcomer overview
 
@@ -13,47 +15,89 @@ same architecture. The only arm coordinate is
 
 `J(alpha) = (1 - alpha) T + alpha E`,
 
-for `alpha in {0.0, 0.1, 0.3, 0.5, 0.7, 0.9}`. Training never receives the
-post-hoc continuation/reversal labels, matched assay pairs, endpoint names, or
-target response shapes.
+with no additional objective at any endpoint. Training never receives the
+post-hoc continuation/reversal labels, matched assay pairs, endpoint names,
+center/flank windows, amplitude thresholds, or target response shapes.
 
-Across four development seeds, the **task-only endpoint (α=0.0)** decodes
-operational continuation A better than matched operational OOD reversal B and
-has a sharpening-like aligned profile. The **rate-cost-weighted endpoint
-(α=0.9; 10% task, 90% normalized L2/3 mean-rate proxy)** has a lower A/B
-mean-rate ratio and decodes A less accurately than B. Its absolute profile is
-broad attenuation with preferential center suppression; absolute flanks are
-not preserved relative to the first-stimulus baseline. Intermediate arms are
-mixed rather than two clean categories. These are post-training measurements,
-not labels supplied to the loss.
+The task-only **`alpha=0.0`** endpoint is the sharpening-like comparator. The
+current dampening endpoint is the balanced **`alpha=0.5`** coordinate: 50% of
+the normalized task term and 50% of the normalized mean-rate term. It is not a
+new loss, fitted amplitude target, or regime-specific circuit. On independent
+fresh seeds `8,9,10,11`, `alpha=0.5` passed all three scientific validation
+families:
+
+- operational continuation A used less final mean L2/3 activity than matched
+  operational OOD reversal B;
+- one condition-blind noise-held-out decoder was less accurate for A than B,
+  while both remained above 36-way chance;
+- the aligned A profile had a suppressed center with relatively spared flanks
+  against both B and the literal first-stimulus baseline.
+
+Here **relative flank sparing** means that flanks retain a larger fraction of
+their `t=0` baseline than the center. It does not claim that absolute flank
+activity exceeds baseline. These are post-training measurements, not labels
+supplied to the loss.
+
+The retained seeds `0–3` task-only comparator supplies the other regime: it
+kept A below B in mean activity
+(`(B-A)/(B+epsilon_rate)=.0761`, where
+`epsilon_rate=1e-8*N*R_ref`), decoded A better than B (`.9975` versus `.3439`),
+raised the center by `.279851 AU` from `t=0`, and changed the flanks by only
+`-.012470 AU`. These are exploratory-cohort values; the endpoint plotter
+replays the selected checkpoints rather than fitting a target curve.
+
+The endpoint was chosen through a transparent calibration path. `alpha=0.6`
+passed the development screen on seeds `0–3`, but on fresh seeds `4–7` it
+failed amplitude retention. Its stored assay leaves still passed energy,
+decoding, `dC<dF`, and `dQ<0`; no stored `Cret/Fret` claim is made for that
+cohort. It was rejected. `alpha=0.5` then passed development seeds `4–7` and a
+separate from-scratch confirmation on seeds `8–11`. The original seeds `0–3`
+six-alpha sweep is preserved below as exploratory lineage rather than recast as
+confirmation.
 
 ## Artifact provenance
 
-Executable code and checkpoint contents define the computation. The measured
-outputs then follow two distinct provenance branches:
+Executable code and checkpoint contents define the computation. Three result
+sets must be kept distinct:
 
 ```text
-(A) trained checkpoints
+(A) historical seeds 0–3, six-alpha checkpoints
     └─ tools/assay_emergent_task_energy_axis.py replay
        └─ per-seed endpoint_assay.json audit records
           └─ tools/aggregate_emergent_task_energy_assays.py
              └─ figures/emergent_reference_comparison/all_alpha_assay_summary.json
-                └─ canonical six-alpha table in this guide
+                └─ historical six-alpha table in this guide
 
-(B) selected alpha=0.0 and alpha=0.9 checkpoints
+(B) selected alpha=0.0 sharpening and alpha=0.5 dampening checkpoints
     └─ tools/plot_emergent_reference_figures.py direct replay
        └─ in-memory aggregates
           ├─ figures/emergent_reference_comparison/plot_data.json
           └─ four sibling PNG figures
+
+(C) fresh seeds 8–11, alpha=0.5 and alpha=0.9 checkpoints
+    └─ fixed 216-pair assay and literal-t0 replay
+       └─ corrected frozen gate evaluation
+          └─ 32-entry assay ledger
+             └─ final all-assays seal
 ```
+
+Branch C is the scientific confirmation. Its external run directory is not
+committed; identify it portably by final seal SHA-256
+`027feb665537e1f54628e9e7af1ff5b25bdb759e067ff02e6b751fb42e37cd51`
+and assay-ledger SHA-256
+`04404bd8efdaba8a506b686d746c79bbb03b4212799ced43fd3c8ef2c3fb77a4`.
+The 58-entry training ledger is
+`f248a263ea285cce5e0ad16db2fb95a357cee2c1705a35f66b9f6e6eae53b32b`
+and its training seal is
+`2de0c984c0346f39e4bf82aebad814bc76b03057b00ecf432819164669ea557b`.
 
 Per-seed `training_summary.json` files record configuration, state hashes, and
 training diagnostics. They are not measurement or plotter inputs; the compact
-aggregator reads them only to corroborate protocol and checkpoint provenance.
-Its numerical measurements come from `endpoint_assay.json`. The plotter
-directly remeasures the two displayed checkpoints, writes `plot_data.json` and
-the PNGs as sibling outputs, and does not apply a phenotype acceptance gate.
-Visual resemblance is therefore not itself a validation decision.
+six-alpha aggregator reads them only to corroborate protocol and checkpoint
+provenance. Its numerical measurements come from `endpoint_assay.json`. The
+plotter directly remeasures the two displayed checkpoints, writes
+`plot_data.json` and the PNGs as sibling outputs. Visual resemblance is not a
+validation decision; branch C's three scientific readout families are.
 
 The compact all-alpha artifact aggregates the 14 scalar fields already present
 in each standalone assay. Those assay files do not contain raw aligned
@@ -86,8 +130,8 @@ repository context, not a clean-snapshot guarantee.
 | [`tools/assay_emergent_task_energy_axis.py`](../tools/assay_emergent_task_energy_axis.py) | Fixed 216-pair operational continuation/reversal assay and its three readout families |
 | [`tools/aggregate_emergent_task_energy_assays.py`](../tools/aggregate_emergent_task_energy_assays.py) | Schema 1.0.0 portable summary of existing per-seed assay fields and aggregate mean/sample SEM, with logical artifact IDs and hashes |
 | [`tools/plot_emergent_reference_figures.py`](../tools/plot_emergent_reference_figures.py) | Four-seed checkpoint replay, literal first-stimulus tuning baseline, seed aggregation, JSON, and reference-layout figures |
-| [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](../figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Portable compact copy of 14 existing assay metrics for every seed×alpha, plus four-seed mean/sample SEM and provenance |
-| [`figures/emergent_reference_comparison/plot_data.json`](../figures/emergent_reference_comparison/plot_data.json) | Machine-readable values plotted from seeds 0–3 |
+| [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](../figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Historical seeds `0–3`: compact copy of 14 existing assay metrics for every seed×alpha, plus mean/sample SEM and provenance |
+| [`figures/emergent_reference_comparison/plot_data.json`](../figures/emergent_reference_comparison/plot_data.json) | Machine-readable values used by the current endpoint figures |
 | [`figures/emergent_reference_comparison/`](../figures/emergent_reference_comparison/) | Two tuning panels, grouped decoding bars, and decoding/rate phase space |
 
 ## Architecture, signs, and timing
@@ -258,9 +302,9 @@ installation auto-selects CPU; on a CUDA-visible host, use the reported
 orientation tensors are created on the auto-selected device before CLI device
 selection.
 
-## Four-seed protocol
+## Historical six-alpha development protocol
 
-- Development seeds: `0,1,2,3`.
+- Exploratory development seeds: `0,1,2,3`.
 - Device used for the reported run: `cuda:0` on an NVIDIA GeForce RTX 5090.
 - Common pretrain: 3,000 steps, batch 128, sequence length 12.
 - Each alpha arm: 8,000 steps, batch 128, sequence length 12.
@@ -275,7 +319,7 @@ selection.
 
 ### Current and legacy CLI defaults
 
-This organization patch intentionally makes the reported six-alpha,
+The trainer CLI makes the historical six-alpha,
 `posterior_prior_excess`, frozen-local-competition protocol the trainer CLI
 default. Thus an invocation that omits those three options resolves to
 `--alphas 0.0 0.1 0.3 0.5 0.7 0.9`,
@@ -319,13 +363,13 @@ span biological expected/unexpected stimuli in general.
 ### Three readout families
 
 1. **Mean-rate proxy.** Define the activity-unit guard
-   `eps_rate=1e-8*36*R_ref`. Within one seed and arm, first compute the two
+   `epsilon_rate=1e-8*N*R_ref`. Within one seed and arm, first compute the two
    condition means over all 216 final responses and all 36 L2/3 channels,
    `mu_A=mean_{p,i}(r_A[p,i])` and `mu_B=mean_{p,i}(r_B[p,i])`. Stored saving is
    the paired ratio of means
-   `saving=(mu_B-mu_A)/(mu_B+eps_rate)`. The phase-space y coordinate uses the
+   `saving=(mu_B-mu_A)/(mu_B+epsilon_rate)`. The phase-space y coordinate uses the
    identical denominator and opposite numerator,
-   `y=(mu_A-mu_B)/(mu_B+eps_rate)=-saving`. This is not the mean of 216
+   `y=(mu_A-mu_B)/(mu_B+epsilon_rate)=-saving`. This is not the mean of 216
    pair-specific ratios. Across seeds, the plot reports the mean and sample SEM
    of the four independently computed seed ratios.
 2. **Condition-blind, noise-held-out orientation decoding.** For each split,
@@ -346,7 +390,7 @@ span biological expected/unexpected stimuli in general.
    profiles, `C` is the mean at offsets `{-1,0,+1}` channels and `F` is the mean
    at `{-6,-5,-4,-3,+3,+4,+5,+6}`. With 5 degrees/channel these are
    `C={-5,0,+5}` degrees and `F={±15,±20,±25,±30}` degrees. For each aligned
-   profile, define `q_i=r_i/(sum_j r_j+eps_rate)`. `Cq` and `Fq` are the means
+   profile, define `q_i=r_i/(sum_j r_j+epsilon_rate)`. `Cq` and `Fq` are the means
    of `q` in the same center and flank windows, and
    `Q=(Cq-Fq)/(Cq+Fq+1e-8)`.
 
@@ -374,10 +418,144 @@ The x axis is the **nominal fixed feedforward orientation preference relative
 to presented orientation**. These are aligned population response profiles,
 not longitudinal single-neuron tuning-curve measurements.
 
-## Four-seed results
+## Dampening calibration and fresh confirmation
 
-Values below are mean ± sample SEM over seeds `0,1,2,3`. `Delta` means
-continuation A minus reversal B, except saving, which is `(B-A)/B`. `DeltaC`
+### What was and was not changed
+
+The architecture, training data, optimizer, task term, and rate term are the
+same in every arm. The only difference is the scalar `alpha` in
+
+`J(alpha) = (1 - alpha) T + alpha E`.
+
+Thus `alpha=0.5` is the balanced normalized task/mean-rate coordinate, not a
+third loss, a response fit, or an expected-stimulus-specific intervention. The
+assay labels, literal `t=0` baseline, center/flank windows, and acceptance
+thresholds are absent from training.
+
+The scientific decision uses three readout families:
+
+1. **Energy:** `rate_A < rate_B`.
+2. **Decoding:** one pooled condition-blind decoder has `decode_A < decode_B`,
+   with both accuracies above `1/36` chance.
+3. **Shape:** with `Cret=C_A/C_t0`, `Fret=F_A/F_t0`, and assay contrasts
+   `dC=C_A-C_B`, `dF=F_A-F_B`, `dQ=Q_A-Q_B` in their documented
+   normalizations, require `Cret<Fret`, `Cret<1`, `dC<dF`, and `dQ<0`.
+
+The shape family also guards against accepting near-total activity collapse.
+Define whole-profile retention
+
+`M = AUC(A final aligned 36-bin profile) / AUC(t0 aligned 36-bin profile)`
+
+which is exactly `rate_A/rate_t0` because the bins have equal width. Relative
+to the more energy-dominated `alpha=0.9` comparator, each `alpha=0.5` seed must
+have `M` ratio at least `1.25`, `M` difference at least `.040`, `Fret` ratio at
+least `1.15`, and `Fret` difference at least `.040`; the cohort mean `M` must be
+at least `.250`. These are post-training amplitude safeguards within the shape
+validation, not extra optimization terms.
+
+### Calibration lineage
+
+| Stage | Seeds | Coordinate | Outcome |
+| --- | --- | ---: | --- |
+| Development calibration | `0–3` | `.6` | Development screen passed; mean `M=.2740319260531955` |
+| First fresh cohort | `4–7` | `.6` vs `.9` | Stored energy, decoding, `dC<dF`, and `dQ<0` checks passed; amplitude retention failed, so `.6` was rejected |
+| Revised development | `4–7` | `.5` vs `.9` | All three families, including amplitude safeguards, passed |
+| Independent from-scratch confirmation | `8–11` | `.5` vs `.9` | Every per-seed criterion and the cohort criterion passed |
+
+For the fresh `.6` cohort, mean `M(.6)=.21336743856557555` and mean
+`M(.9)=.15607987727316153`. Seed 5 failed the `1.25` M-ratio boundary at
+`1.2243398680161324`; seed 7 failed it at `1.206259035990063` and also failed
+the `.040` M-difference boundary at `.029167501148376213`; cohort mean `M(.6)`
+was below `.250`. The read-only `.6` evaluation seal is
+`982248457917af129728694e732cfb83412c8ae3d54e770666b826a07afdd6ae`;
+the development assay-manifest hash is
+`9cd24742493d4ecab400a16149e52334a8e8d53d4a4a656497b8a40962358957`.
+Because `Cret/Fret` was not a stored verified leaf in that `.6` evaluation, no
+claim about those two quantities is made here.
+
+The revised-development assay seal is
+`81440ae260df5bebb39736417683b1b3803f0a1b7f73acba6b82532f29c301fc`
+and its training seal is
+`10c891e303f98d1d81459f496434b75fe6728e9f72a2a91db8c2afbfde09f57c`.
+The fresh cohort was not reused from either development stage.
+
+### Exact fresh values
+
+The following are the frozen corrected-evaluator values for seeds `8–11`.
+`rate` is final mean L2/3 activity in AU; decoding is top-1 accuracy.
+
+| Seed | rate A | rate B | B−A | decode A | decode B | B−A |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | .04836434524352033 | .08832483409471346 | .03996048885119313 | .2074652761220932 | .30975115299224854 | .10228587687015533 |
+| 9 | .04837169788107353 | .08525280885222897 | .036881110971155436 | .25231480598449707 | .30787035822868347 | .0555555522441864 |
+| 10 | .04537613037312018 | .08332933417317500 | .03795320380005481 | .20717592537403107 | .27994790673255920 | .07277198135852814 |
+| 11 | .05732431760151368 | .09762491445172103 | .04030059685020735 | .22714120149612427 | .32262730598449707 | .09548610448837280 |
+
+| Seed | Cret | Fret | Fret−Cret | dC | dF | dF−dC | dQ |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | .11900846191199754 | .49225945140670060 | .37325098949470303 | -1.9968568480174846 | -.04561513467238416 | 1.9512417133451005 | -.8198121729325180 |
+| 9 | .11548944034021766 | .49252814065387730 | .3770387003136596 | -1.7802617163520735 | -.07816464260593912 | 1.7020970737461345 | -.7093986943501684 |
+| 10 | .11391838910341391 | .45549921932916126 | .34158083022574737 | -1.6127748803014170 | -.13607883114835465 | 1.4766960491530623 | -.6465777749851730 |
+| 11 | .14345936502608167 | .57908956790514540 | .43563020287906373 | -2.2764149532311470 | +.06769186699907595 | 2.3441068202302230 | -.8795613449976969 |
+
+| Seed | M(.5) | M(.9) | M ratio | M difference | Fret(.5) | Fret(.9) | Fret ratio | Fret difference |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | .2901656344312839 | .1948357860747792 | 1.4892830535757764 | .09532984835650471 | .49225945140670060 | .30363745346831800 | 1.6212079431698425 | .18862199793838258 |
+| 9 | .29020974714964337 | .12392075590220045 | 2.3418978123300020 | .16628899124744292 | .49252814065387730 | .22144169945569578 | 2.2241887678089203 | .27108644119818150 |
+| 10 | .2722376079208284 | .1332041298063895 | 2.0437625193492300 | .13903347811443892 | .45549921932916126 | .23864778729485928 | 1.9086672643914901 | .21685143203430200 |
+| 11 | .34392168241773374 | .17233959879560087 | 1.9956045205004427 | .17158208362213287 | .57908956790514540 | .27084379648146545 | 2.1380942647684900 | .30824577142368000 |
+
+The weakest observed margins were still positive:
+
+| Criterion | Weakest margin above the passing boundary |
+| --- | ---: |
+| Energy `B−A > 0` | .036881110971155436 |
+| Decoding `B−A > 0` | .0555555522441864 |
+| Decode A above chance | .17939814759625328 |
+| Decode B above chance | .25217012895478140 |
+| `Fret−Cret > 0` | .34158083022574737 |
+| `dF−dC > 0` | 1.4766960491530623 |
+| `-dQ > 0` | .6465777749851730 |
+| `1−Cret > 0` | .8565406349739183 |
+| M ratio above `1.25` | .2392830535757764 |
+| M difference above `.040` | .05532984835650471 |
+| Fret ratio above `1.15` | .4712079431698426 |
+| Fret difference above `.040` | .14862199793838257 |
+| Cohort mean M above `.250` | .04913366797987234 |
+
+The four `M(.5)` values average to `0.29913366797987234`. All `48/48`
+per-seed checks and the cohort check passed.
+
+### Evaluator correction and sealed evidence
+
+The first frozen evaluator incorrectly bound the symbol `M` to the already
+stored A/B saving ratio. That was an evaluator-definition defect: the model,
+checkpoints, 216-pair assays, profiles, thresholds, and training were unchanged.
+The corrected evaluator restores the development definition shown above,
+`AUC(A final)/AUC(t0)`, equivalently `rate_A/rate_t0`. The original evaluator,
+result, and log are preserved; a hash-bound supersession records the correction.
+
+| Evidence | SHA-256 |
+| --- | --- |
+| Final all-assays seal | `027feb665537e1f54628e9e7af1ff5b25bdb759e067ff02e6b751fb42e37cd51` |
+| 32-entry assay ledger | `04404bd8efdaba8a506b686d746c79bbb03b4212799ced43fd3c8ef2c3fb77a4` |
+| Corrected frozen result | `8bd3c6dd13cd3770e86eed23ef7e0b1d8103990fcc31b6162cf6a043611b2d7d` |
+| Evaluator supersession | `c3fa958cba809e0aafef0c2a8db6de4224c05b8610ddf5320ac01feaba0284ee` |
+| M-definition regression result | `07a5874bce40819ef64eaf61055385307762b59d1df3ac0dac980222d480182e` |
+| Training seal | `2de0c984c0346f39e4bf82aebad814bc76b03057b00ecf432819164669ea557b` |
+| 58-entry training ledger | `f248a263ea285cce5e0ad16db2fb95a357cee2c1705a35f66b9f6e6eae53b32b` |
+
+Ledger verification was `32/32`; an independent read-only RTX 5090 replay
+matched all `376/376` official numeric leaves exactly and reproduced all frozen
+gate decisions. These hashes identify an external result bundle; no
+developer-specific absolute path is part of the scientific claim.
+
+## Historical six-alpha development sweep
+
+This retained exploratory sweep is not the fresh confirmation above. Values
+below are mean ± sample SEM over development seeds `0,1,2,3`. `Delta` means
+continuation A minus reversal B, except saving, which is
+`(B-A)/(B+epsilon_rate)`. `DeltaC`
 and `DeltaF` are normalized by `R_ref`. The table is rendered from the portable
 `figures/emergent_reference_comparison/all_alpha_assay_summary.json`, which is
 itself derived from the four per-seed `endpoint_assay.json` audit records in
@@ -418,12 +596,12 @@ dampening.
 
 The phase-space x coordinate is `Δ decode accuracy (continuation A − reversal
 B)`. Its y coordinate is `Δ final mean L2/3 rate ((continuation A − reversal
-B)/reversal B)`. The endpoint values are:
+B)/(reversal B + epsilon_rate))`. The endpoint values are:
 
 - task-only endpoint (α=0.0): `Delta decode=.653537 ± .013624`,
-  `(A-B)/B=-.076096 ± .001145`;
+  `(A-B)/(B+epsilon_rate)=-.076096 ± .001145`;
 - rate-cost-weighted endpoint (α=0.9): `Delta decode=-.098995 ± .014371`,
-  `(A-B)/B=-.542170 ± .019979`.
+  `(A-B)/(B+epsilon_rate)=-.542170 ± .019979`.
 
 ## Biology and engineering mapping
 
@@ -453,14 +631,136 @@ identified cell types, or turn operational A/B into subjective expectation:
   [doi:10.1016/j.neuron.2012.04.034](https://doi.org/10.1016/j.neuron.2012.04.034),
   and Alink et al. (2010),
   [doi:10.1523/JNEUROSCI.3730-10.2010](https://doi.org/10.1523/JNEUROSCI.3730-10.2010).
-- Neural activity is metabolically constrained, but mean rate is still only a
-  proxy here: Attwell & Laughlin (2001),
-  [doi:10.1097/00004647-200110000-00001](https://doi.org/10.1097/00004647-200110000-00001),
-  and Rangaraju, Calloway & Ryan (2014), *Activity-Driven Local ATP Synthesis Is
-  Required for Synaptic Function*,
-  [doi:10.1016/j.cell.2013.12.042](https://doi.org/10.1016/j.cell.2013.12.042).
+- Neural signaling has empirically measured energy–information trade-offs:
+  Laughlin, de Ruyter van Steveninck & Anderson (1998), *The metabolic cost of
+  neural information*, [PMID 10195106](https://pubmed.ncbi.nlm.nih.gov/10195106/),
+  and Niven, Anderson & Laughlin (2007), *Fly photoreceptors demonstrate
+  energy-information trade-offs in neural coding*,
+  [PMID 17373859](https://pubmed.ncbi.nlm.nih.gov/17373859/).
+- Activity also imposes local ATP demand at synapses: Rangaraju, Calloway & Ryan
+  (2014), *Activity-driven local ATP synthesis is required for synaptic
+  function*, [PMID 24529383](https://pubmed.ncbi.nlm.nih.gov/24529383/).
+  These studies motivate an energetic constraint; they do **not** validate
+  `mean(r)/R_ref` as ATP consumption. That term remains an engineering proxy.
 
-## Exact RTX 5090 reproduction
+## RTX 5090 reproduction recipes
+
+### Fresh alpha=0.5 confirmation
+
+Run from the repository root. Keep generated checkpoints outside the checkout.
+The command below reproduces the fresh two-arm training and assay protocol with
+portable operator-selected paths; it does not reuse development checkpoints.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONHASHSEED=0
+CONFIRM_ROOT="${CONFIRM_ROOT:-$HOME/neuroips_runs/task_energy_alpha_0p5_confirmation}"
+case "$CONFIRM_ROOT" in
+  "$PWD"|"$PWD"/*)
+    echo "CONFIRM_ROOT must be outside the repository: $CONFIRM_ROOT" >&2
+    exit 1
+    ;;
+esac
+if [ -e "$CONFIRM_ROOT" ]; then
+  echo "Refusing to reuse existing CONFIRM_ROOT: $CONFIRM_ROOT" >&2
+  exit 1
+fi
+mkdir -p "$CONFIRM_ROOT"
+
+for SEED in 8 9 10 11; do
+  python -B tools/train_emergent_task_energy_axis.py \
+    --seed "$SEED" \
+    --device cuda:0 \
+    --out "$CONFIRM_ROOT" \
+    --pretrain-steps 3000 \
+    --axis-steps 8000 \
+    --batch 128 \
+    --sequence-length 12 \
+    --lr 0.001 \
+    --clip 5.0 \
+    --log-every 100 \
+    --checkpoint-every 250 \
+    --alphas 0.5 0.9 \
+    --freeze-local-comp \
+    --feedback-mode posterior_prior_excess
+done
+
+for SEED in 8 9 10 11; do
+  python -B tools/assay_emergent_task_energy_axis.py \
+    --run-dir "$CONFIRM_ROOT/seed_$SEED" \
+    --device cuda:0 \
+    --out "$CONFIRM_ROOT/seed_$SEED/endpoint_assay.json" \
+    --alphas 0.5 0.9
+done
+```
+
+Each seed's two arms load the same common pretrain and use common random-number
+streams, but have separate fresh optimizers. Confirm that the trainer process
+has a live PID and its log has emitted output before describing a run as
+started; command submission alone is not evidence that GPU work is active.
+
+### Matched alpha=0.0 comparator and reference-layout plots
+
+The sharpening comparator must use each confirmation seed's byte-identical
+common pretrain. Build a separate plotting bundle so the sealed confirmation
+directory remains read-only:
+
+```bash
+PLOT_ROOT="${PLOT_ROOT:-$HOME/neuroips_runs/task_energy_alpha_0p5_plot_bundle}"
+FIGURE_OUT="${FIGURE_OUT:-$PWD/figures/emergent_reference_comparison}"
+case "$PLOT_ROOT" in
+  "$PWD"|"$PWD"/*)
+    echo "PLOT_ROOT must be outside the repository: $PLOT_ROOT" >&2
+    exit 1
+    ;;
+esac
+if [ -e "$PLOT_ROOT" ]; then
+  echo "Refusing to reuse existing PLOT_ROOT: $PLOT_ROOT" >&2
+  exit 1
+fi
+
+for SEED in 8 9 10 11; do
+  mkdir -p "$PLOT_ROOT/seed_$SEED"
+  cp "$CONFIRM_ROOT/seed_$SEED/common_pretrain_final.pt" \
+     "$PLOT_ROOT/seed_$SEED/common_pretrain_final.pt"
+  cp "$CONFIRM_ROOT/seed_$SEED/alpha_0p5_final.pt" \
+     "$PLOT_ROOT/seed_$SEED/alpha_0p5_final.pt"
+
+  python -B tools/train_emergent_task_energy_axis.py \
+    --seed "$SEED" \
+    --device cuda:0 \
+    --out "$PLOT_ROOT" \
+    --pretrain-steps 3000 \
+    --axis-steps 8000 \
+    --batch 128 \
+    --sequence-length 12 \
+    --lr 0.001 \
+    --clip 5.0 \
+    --log-every 100 \
+    --checkpoint-every 250 \
+    --alphas 0.0 \
+    --freeze-local-comp \
+    --feedback-mode posterior_prior_excess
+done
+
+python -B tools/plot_emergent_reference_figures.py \
+  --run-dir "$PLOT_ROOT/seed_8" \
+  --run-dir "$PLOT_ROOT/seed_9" \
+  --run-dir "$PLOT_ROOT/seed_10" \
+  --run-dir "$PLOT_ROOT/seed_11" \
+  --task-alpha 0.0 \
+  --energy-alpha 0.5 \
+  --device cuda:0 \
+  --out-dir "$FIGURE_OUT"
+```
+
+The plotter obtains the gray curve by replaying the literal `t=0` response; it
+does not substitute reversal B or a feedback-off final response. Expected
+outputs are `plot_data.json`, `tuning_dampening.png`,
+`tuning_sharpening.png`, `1_decode_signflip.png`, and
+`3_decode_energy_phasespace.png`.
+
+### Historical six-alpha sweep
 
 Run from the repository root with a fresh output directory. The guard prevents
 accidentally resuming or mixing with an existing run.
@@ -536,7 +836,7 @@ artifacts include `common_pretrain_final.pt`, six
 records, with training/checkpoint files read only for protocol and hash
 provenance, at
 `figures/emergent_reference_comparison/all_alpha_assay_summary.json`.
-Plotting branch B produces `plot_data.json` and:
+This historical `alpha=0.0` versus `0.9` replay produces `plot_data.json` and:
 
 - `tuning_dampening.png` (historical requested filename; content is the honest
   high-alpha broad-attenuation profile);
@@ -551,8 +851,9 @@ path is canonical. The tracked aggregate presentation lives under
 
 ## Limitations
 
-- Four development seeds establish reproducibility for this software run, not
-  confirmatory biological evidence.
+- Four development seeds plus four independent fresh seeds establish a
+  computational result for this implementation, not confirmatory biological
+  evidence.
 - Reversal B is OOD relative to the training acceleration support, while A is
   an in-support constant-velocity history. This asymmetry and the absence of a
   per-pair predictor-probability gate prevent general expected/unexpected-stimulus
@@ -566,13 +867,15 @@ path is canonical. The tracked aggregate presentation lives under
 - GRU, `W_fb`, and motif gains co-adapt. A gain-only explanation is invalid.
 - The alpha series is not monotonic in every metric, and intermediate arms are
   mixed regimes.
-- The rate-cost-weighted endpoint is broad attenuation with preferential center
-  suppression, not absolute flank preservation.
-- The plotted endpoints were selected coordinates (`alpha=0.0` and `0.9`), not
-  evidence of a sharp phase boundary. The six-alpha series is descriptive.
-- The plotter checks checkpoint schema and recomputes selected metrics, but it
-  has no phenotype acceptance gate. The separate compact all-alpha artifact is
-  derived from assay audit records rather than from `plot_data.json`.
+- At `alpha=0.5`, both center and flank retention are below one. The supported
+  statement is center suppression with **relative** flank sparing, not absolute
+  flank preservation or enhancement above baseline.
+- The plotted endpoints are selected coordinates (`alpha=0.0` and `0.5`), not
+  evidence of a sharp phase boundary. The historical six-alpha series is
+  descriptive and nonmonotonic in some metrics.
+- The plotter checks checkpoint schema and recomputes selected metrics, but the
+  scientific acceptance decision comes from the separate fresh-cohort assay
+  evaluation, not visual resemblance or `plot_data.json`.
 - Standalone assay records do not store raw aligned profiles. Consequently the
   all-alpha artifact contains their scalar metrics, not reconstructed profiles;
   36-bin profiles in `plot_data.json` cover only the displayed endpoints.

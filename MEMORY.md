@@ -19,3 +19,11 @@
   homeostasis weights.
 - For reference-style tuning plots, the gray baseline is the same trained arm's
   first-stimulus response with zero prior context, not matched unexpected B.
+- When the user asks for a scientific network result, prioritize actual GPU
+  training and the three requested biological readouts (energy, decoding, and
+  shape). Keep engineering checks proportional and subordinate; do not present
+  elaborate harnesses, registration, or test counts as substitutes for trained
+  scientific evidence.
+- Never report that a training job is running merely because a command was
+  submitted. First confirm a live process/PID and observable log or output
+  progress; report the scientific metrics as soon as they exist.

@@ -47,15 +47,81 @@ import tuned_emergence_lib as tuned  # noqa: E402
 ENERGY_COLOR = "#4C72B0"
 TASK_COLOR = "#C44E52"
 BASE_COLOR = "#888888"
-TASK_ENDPOINT_LABEL = "task-only endpoint (α=0.0)"
-RATE_COST_ENDPOINT_LABEL = "rate-cost-weighted endpoint (α=0.9)"
-RATE_COST_OBJECTIVE_DETAIL = (
-    "10% task + 90% normalized L2/3 mean-rate proxy"
-)
 PLOT_OFFSETS = tuple(range(-12, 13))
 CENTER_OFFSETS = (-1, 0, 1)
 FLANK_OFFSETS = (-6, -5, -4, -3, 3, 4, 5, 6)
 EXPECTED_RUN_DIRS = 4
+PHASE_Y_FIELD = (
+    "y_mean_rate_A_minus_mean_rate_B_over_mean_rate_B_plus_epsilon_rate"
+)
+STORED_SAVING_FIELD = (
+    "stored_saving_mean_rate_B_minus_mean_rate_A_over_"
+    "mean_rate_B_plus_epsilon_rate"
+)
+
+
+def number_text(value: float) -> str:
+    """Return a compact, stable decimal representation."""
+
+    return f"{value:.12g}"
+
+
+def alpha_text(alpha: float) -> str:
+    """Return a compact alpha label with an explicit decimal coordinate."""
+
+    rendered = number_text(alpha)
+    return rendered if "." in rendered else f"{rendered}.0"
+
+
+def endpoint_labels(task_alpha: float, energy_alpha: float) -> dict[str, str]:
+    """Build endpoint labels entirely from the requested CLI coordinates."""
+
+    task_label = f"task-only endpoint (α={alpha_text(task_alpha)})"
+    energy_label = (
+        f"rate-cost-weighted endpoint (α={alpha_text(energy_alpha)})"
+    )
+    return {
+        "task": task_label,
+        "energy": energy_label,
+        "task_multiline": task_label.replace(" (α=", "\n(α="),
+        "energy_multiline": energy_label.replace(" (α=", "\n(α="),
+        "energy_objective": (
+            f"{number_text(100.0 * (1.0 - energy_alpha))}% task + "
+            f"{number_text(100.0 * energy_alpha)}% normalized L2/3 "
+            "mean-rate proxy"
+        ),
+    }
+
+
+def portable_command_provenance(
+    seed_ids: Sequence[int],
+    task_alpha: float,
+    energy_alpha: float,
+    device: str,
+    output_directory: str,
+) -> dict[str, Any]:
+    """Describe the plotting invocation using logical, portable paths only."""
+
+    argv = ["python", "tools/plot_emergent_reference_figures.py"]
+    for seed in seed_ids:
+        argv.extend(("--run-dir", f"bundle:seed_{seed}"))
+    argv.extend(
+        (
+            "--task-alpha",
+            alpha_text(task_alpha),
+            "--energy-alpha",
+            alpha_text(energy_alpha),
+            "--device",
+            device,
+            "--out-dir",
+            output_directory,
+        )
+    )
+    return {
+        "argv": argv,
+        "working_directory": "repository_root",
+        "path_policy": "logical bundle identifiers; no host-specific paths",
+    }
 
 
 @dataclass(frozen=True)
@@ -89,6 +155,8 @@ class SeedArmMeasurement:
     decode_unexpected: float
     mean_rate_expected: float
     mean_rate_unexpected: float
+    rate_reference: float
+    epsilon_rate: float
     phase_y: float
     stored_saving: float
 
@@ -359,9 +427,9 @@ def measure_seed_arm(
 
     mean_rate_a = rates_a.to(torch.float64).mean()
     mean_rate_b = rates_b.to(torch.float64).mean()
-    epsilon = 1e-8 * assay.N * r_ref
-    phase_y = (mean_rate_a - mean_rate_b) / (mean_rate_b + epsilon)
-    stored_saving = (mean_rate_b - mean_rate_a) / (mean_rate_b + epsilon)
+    epsilon_rate = 1e-8 * assay.N * r_ref
+    phase_y = (mean_rate_a - mean_rate_b) / (mean_rate_b + epsilon_rate)
+    stored_saving = (mean_rate_b - mean_rate_a) / (mean_rate_b + epsilon_rate)
     if not torch.allclose(phase_y, -stored_saving, atol=1e-12, rtol=1e-12):
         raise RuntimeError("phase-space rate metric is not negative stored saving")
 
@@ -390,6 +458,8 @@ def measure_seed_arm(
         ),
         mean_rate_expected=float(mean_rate_a.item()),
         mean_rate_unexpected=float(mean_rate_b.item()),
+        rate_reference=r_ref,
+        epsilon_rate=epsilon_rate,
         phase_y=float(phase_y.item()),
         stored_saving=float(stored_saving.item()),
     )
@@ -415,6 +485,7 @@ def measurement_json(measurement: SeedArmMeasurement) -> dict[str, Any]:
 
     return {
         "seed": measurement.seed,
+        "alpha": measurement.alpha,
         "checkpoint": {
             "logical_id": (
                 f"seed_{measurement.seed}/{measurement.checkpoint.name}"
@@ -462,8 +533,10 @@ def measurement_json(measurement: SeedArmMeasurement) -> dict[str, Any]:
         "rates": {
             "continuation_A_mean": measurement.mean_rate_expected,
             "OOD_reversal_B_mean": measurement.mean_rate_unexpected,
-            "phase_y_A_minus_B_over_B": measurement.phase_y,
-            "stored_saving_B_minus_A_over_B": measurement.stored_saving,
+            "rate_reference": measurement.rate_reference,
+            "epsilon_rate": measurement.epsilon_rate,
+            PHASE_Y_FIELD: measurement.phase_y,
+            STORED_SAVING_FIELD: measurement.stored_saving,
         },
     }
 
@@ -568,11 +641,17 @@ def aggregate_arm(measurements: Sequence[SeedArmMeasurement]) -> dict[str, Any]:
             "x_delta_accuracy_A_minus_B": mean_sem(
                 [m.decode_delta for m in measurements]
             ),
-            "y_mean_rate_A_minus_B_over_B": mean_sem(
+            PHASE_Y_FIELD: mean_sem(
                 [m.phase_y for m in measurements]
             ),
-            "stored_saving_B_minus_A_over_B": mean_sem(
+            STORED_SAVING_FIELD: mean_sem(
                 [m.stored_saving for m in measurements]
+            ),
+            "rate_reference": mean_sem(
+                [m.rate_reference for m in measurements]
+            ),
+            "epsilon_rate": mean_sem(
+                [m.epsilon_rate for m in measurements]
             ),
         },
     }
@@ -616,8 +695,8 @@ def plot_tuning(
         capsize=2,
         alpha=0.9,
         label=(
-            "first stimulus (no prior context; normal feedback-on unroll, "
-            "feedback state=0)"
+            "literal t0 first stimulus (normal feedback-on unroll; "
+            "prior feedback state=0)"
         ),
     )
     ax.errorbar(
@@ -657,14 +736,16 @@ def plot_tuning(
 
 
 def plot_decoding(
-    energy: dict[str, Any], task: dict[str, Any], output_path: Path
+    energy: dict[str, Any],
+    task: dict[str, Any],
+    output_path: Path,
+    *,
+    energy_label: str,
+    task_label: str,
 ) -> None:
     groups = (energy, task)
     colors = (ENERGY_COLOR, TASK_COLOR)
-    labels = (
-        "rate-cost-weighted endpoint\n(α=0.9)",
-        "task-only endpoint\n(α=0.0)",
-    )
+    labels = (energy_label, task_label)
     expected = [
         group["decoding"]["continuation_A_accuracy"]["mean"] for group in groups
     ]
@@ -749,16 +830,21 @@ def padded_limits(
 
 
 def plot_phase_space(
-    energy: dict[str, Any], task: dict[str, Any], output_path: Path
+    energy: dict[str, Any],
+    task: dict[str, Any],
+    output_path: Path,
+    *,
+    energy_label: str,
+    task_label: str,
 ) -> None:
     points = (
-        ("rate-cost-weighted endpoint\n(α=0.9)", energy, ENERGY_COLOR),
-        ("task-only endpoint\n(α=0.0)", task, TASK_COLOR),
+        (energy_label, energy, ENERGY_COLOR),
+        (task_label, task, TASK_COLOR),
     )
     xs = [point[1]["phase_space"]["x_delta_accuracy_A_minus_B"]["mean"] for point in points]
     xerrs = [point[1]["phase_space"]["x_delta_accuracy_A_minus_B"]["sem"] for point in points]
-    ys = [point[1]["phase_space"]["y_mean_rate_A_minus_B_over_B"]["mean"] for point in points]
-    yerrs = [point[1]["phase_space"]["y_mean_rate_A_minus_B_over_B"]["sem"] for point in points]
+    ys = [point[1]["phase_space"][PHASE_Y_FIELD]["mean"] for point in points]
+    yerrs = [point[1]["phase_space"][PHASE_Y_FIELD]["sem"] for point in points]
 
     fig, ax = plt.subplots(figsize=(6.8, 6.0))
     ax.axhline(0.0, color="black", linewidth=0.8)
@@ -788,7 +874,7 @@ def plot_phase_space(
     ax.set_xlim(*padded_limits(xs, xerrs, minimum_span=0.10))
     ax.set_ylim(*padded_limits(ys, yerrs, minimum_span=0.10))
     ax.set_xlabel("Δ decode accuracy (continuation A − reversal B)")
-    ax.set_ylabel("Δ final mean L2/3 rate ((A−B)/B)")
+    ax.set_ylabel("Δ final mean L2/3 rate ((A−B)/(B+ε_rate))")
     ax.set_title(
         "task-only and rate-cost-weighted endpoints\n"
         "mean ± seed SEM, n=4"
@@ -809,6 +895,7 @@ def atomic_json_save(payload: dict[str, Any], path: Path) -> None:
 def main() -> int:
     args = parse_args()
     device = assay.choose_device(args.device)
+    labels = endpoint_labels(args.task_alpha, args.energy_alpha)
     torch.manual_seed(0)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
@@ -819,6 +906,7 @@ def main() -> int:
         "energy_optimized": [],
     }
     seen_seeds: set[int] = set()
+    checkpoint_sources: list[dict[str, Any]] = []
     for run_dir in args.run_dir:
         common_seed, common_local_comp_raw = load_common_local_comp(run_dir, device)
         task = measure_seed_arm(
@@ -832,6 +920,32 @@ def main() -> int:
         if common_seed in seen_seeds:
             raise ValueError(f"duplicate seed {common_seed} in input run dirs")
         seen_seeds.add(common_seed)
+        common_path = run_dir / "common_pretrain_final.pt"
+        checkpoint_sources.append(
+            {
+                "seed": common_seed,
+                "common_pretrain": {
+                    "logical_id": (
+                        f"seed_{common_seed}/common_pretrain_final.pt"
+                    ),
+                    "file_sha256": sha256_file(common_path),
+                },
+                "task_endpoint": {
+                    "alpha": task.alpha,
+                    "logical_id": (
+                        f"seed_{common_seed}/{task.checkpoint.name}"
+                    ),
+                    "file_sha256": task.checkpoint_sha256,
+                },
+                "rate_cost_weighted_endpoint": {
+                    "alpha": energy.alpha,
+                    "logical_id": (
+                        f"seed_{common_seed}/{energy.checkpoint.name}"
+                    ),
+                    "file_sha256": energy.checkpoint_sha256,
+                },
+            }
+        )
         arms["task_optimized"].append(task)
         arms["energy_optimized"].append(energy)
         print(
@@ -847,6 +961,7 @@ def main() -> int:
 
     for measurements in arms.values():
         measurements.sort(key=lambda measurement: measurement.seed)
+    checkpoint_sources.sort(key=lambda record: record["seed"])
     baseline_reference = arms["task_optimized"][0].zero_context_curve
     for arm_name, measurements in arms.items():
         for measurement in measurements:
@@ -894,33 +1009,73 @@ def main() -> int:
     plot_tuning(
         energy_aggregate,
         output_paths["tuning_dampening"],
-        endpoint_label=RATE_COST_ENDPOINT_LABEL,
-        objective_detail=RATE_COST_OBJECTIVE_DETAIL,
+        endpoint_label=labels["energy"],
+        objective_detail=labels["energy_objective"],
         color=ENERGY_COLOR,
         shared_ymax=shared_ymax,
     )
     plot_tuning(
         task_aggregate,
         output_paths["tuning_sharpening"],
-        endpoint_label=TASK_ENDPOINT_LABEL,
+        endpoint_label=labels["task"],
         color=TASK_COLOR,
         shared_ymax=shared_ymax,
     )
     plot_decoding(
-        energy_aggregate, task_aggregate, output_paths["decode_signflip"]
+        energy_aggregate,
+        task_aggregate,
+        output_paths["decode_signflip"],
+        energy_label=labels["energy_multiline"],
+        task_label=labels["task_multiline"],
     )
     plot_phase_space(
         energy_aggregate,
         task_aggregate,
         output_paths["decode_energy_phasespace"],
+        energy_label=labels["energy_multiline"],
+        task_label=labels["task_multiline"],
     )
+
+    try:
+        output_directory = args.out_dir.relative_to(ROOT).as_posix()
+    except ValueError:
+        output_directory = "external_output"
 
     payload = {
         "metadata": {
             "script": Path(__file__).resolve().relative_to(ROOT).as_posix(),
+            "source_sha256": {
+                "plotter": sha256_file(Path(__file__).resolve()),
+                "assay": sha256_file(
+                    TOOLS / "assay_emergent_task_energy_axis.py"
+                ),
+                "tuned_library": sha256_file(
+                    TOOLS / "tuned_emergence_lib.py"
+                ),
+                "model": sha256_file(ROOT / "simple_net.py"),
+            },
             "device": str(device),
             "seed_count": len(seen_seeds),
             "seed_ids": sorted(seen_seeds),
+            "endpoints": {
+                "task_only": {
+                    "alpha": args.task_alpha,
+                    "label": labels["task"],
+                },
+                "rate_cost_weighted": {
+                    "alpha": args.energy_alpha,
+                    "label": labels["energy"],
+                    "objective": labels["energy_objective"],
+                },
+            },
+            "checkpoint_sources": checkpoint_sources,
+            "command_provenance": portable_command_provenance(
+                sorted(seen_seeds),
+                args.task_alpha,
+                args.energy_alpha,
+                str(device),
+                output_directory,
+            ),
             "matched_pair_count_per_seed_condition": (
                 assay.N * len(assay.VELOCITIES)
             ),
@@ -982,19 +1137,38 @@ def main() -> int:
                 "classes": assay.N,
             },
             "endpoint_interpretation": {
-                "task_only_alpha_0p0": (
-                    "center enhancement with modest flank suppression"
-                ),
-                "rate_cost_weighted_alpha_0p9": (
-                    "broad attenuation with preferential center suppression; "
-                    "absolute flanks are not preserved versus t0"
-                ),
+                "task_only": {
+                    "alpha": args.task_alpha,
+                    "summary": (
+                        "center enhancement with modest flank suppression"
+                    ),
+                },
+                "rate_cost_weighted": {
+                    "alpha": args.energy_alpha,
+                    "summary": (
+                        "broad attenuation with preferential center suppression; "
+                        "absolute flanks are not preserved versus t0"
+                    ),
+                },
             },
             "phase_x": "continuation_A_accuracy - OOD_reversal_B_accuracy",
-            "phase_y": (
-                "(continuation_A_mean_rate - OOD_reversal_B_mean_rate) / "
-                "OOD_reversal_B_mean_rate; numerically negative stored saving"
-            ),
+            "phase_y": {
+                "field": PHASE_Y_FIELD,
+                "formula": (
+                    "(mean_rate_A - mean_rate_B) / "
+                    "(mean_rate_B + epsilon_rate)"
+                ),
+                "epsilon_rate": {
+                    "formula": "1e-8 * N * R_ref",
+                    "N": assay.N,
+                    "R_ref_source": "checkpoint.references.R_ref",
+                    "resolved_value_source": (
+                        "per-seed endpoint rates.epsilon_rate"
+                    ),
+                },
+                "stored_saving_field": STORED_SAVING_FIELD,
+                "sign_relationship": "phase_y == -stored_saving",
+            },
             "compatibility_filenames": {
                 "tuning_dampening.png": (
                     "historical filename; panel shows the rate-cost-weighted "

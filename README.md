@@ -1,14 +1,73 @@
 # Recurrent orientation circuit: task–energy trade-offs
 
-## Current workflow
+## Current scientific result
 
-> **Start here:** the current experiment is the four-seed
-> [emergent task–energy axis](docs/emergent_task_energy_axis.md), not the older
-> Phase A/Phase B experiments documented below. The current workflow trains six
-> objective-weight arms from one common task pretrain, assays fixed operational
-> continuation/reversal pairs, and regenerates the tracked comparison figures.
-> Terms such as sharpening or attenuation describe measured response profiles;
-> they are not objective labels or training targets.
+> **Start here:** the canonical account is
+> [the emergent task–energy axis guide](docs/emergent_task_energy_axis.md). It
+> gives the architecture, exact two-term objective, assay definitions, fresh
+> confirmation values, provenance hashes, limitations, and RTX 5090 commands.
+
+This repository asks whether **one recurrent orientation-circuit architecture**
+can express sharpening-like or dampening-like activity when only the relative
+pressure for task performance versus low activity changes. Every arm uses
+
+`J(alpha) = (1 - alpha) T + alpha E`,
+
+where `T` is next-step prediction plus noisy current-orientation precision and
+`E` is a normalized L2/3 mean-rate proxy. There is no expected/unexpected loss,
+center/flank loss, response-template fit, or regime-specific circuit. `alpha=0.5`
+is simply the balanced 50% task / 50% mean-rate coordinate of this same loss;
+it is not a new objective or a fitted response-shape intervention.
+
+The model is a fixed 36-channel orientation basis, nonnegative L2/3 rate
+population, 64-unit GRU predictor, and SOM/VIP-inspired
+**Dale-sign-constrained rate motif** with frozen local divisive competition.
+Operational continuation A and matched operational out-of-distribution reversal
+B are used only after training. The gray tuning baseline is the same arm's
+literal first response at `t=0`, when recurrent state and feedback are zero.
+
+The current dampening endpoint is `alpha=0.5`. It passed the three scientific
+validation families in an independent four-seed confirmation (`8,9,10,11`):
+
+1. **Energy:** final mean L2/3 rate was lower for A than B in every seed.
+2. **Decoding:** one condition-blind noise-held-out decoder was less accurate
+   for A than B, with both conditions above 36-way chance, in every seed.
+3. **Shape:** A showed center suppression and **relative flank sparing** versus
+   both B and the literal `t=0` baseline. Relative sparing means flanks retained
+   a larger fraction of baseline than the center; it does not mean absolute
+   flanks exceeded baseline.
+
+The retained seeds `0–3` task-only comparator shows the opposite decoding and
+shape regime while preserving A<B activity: mean saving
+`(B-A)/(B+epsilon_rate)=.0761`, with
+`epsilon_rate=1e-8*N*R_ref`,
+decoding `A=.9975` versus `B=.3439`, center change `+.279851 AU` from `t=0`,
+and flank change `-.012470 AU`. Those numbers belong to the exploratory
+six-alpha cohort; the current figures replay matched `alpha=0.0` and `.5`
+checkpoints directly.
+
+All 48 per-seed checks that instantiate those three families passed, as did the
+cohort amplitude check. Whole-profile retention
+`M=AUC(A final 36-bin profile)/AUC(t0 36-bin profile)` was
+`[0.2901656344312839, 0.29020974714964337, 0.2722376079208284,
+0.34392168241773374]`; its mean was `0.29913366797987234`, exceeding the
+`0.250` floor by `0.04913366797987234`. The final assay seal is
+`027feb665537e1f54628e9e7af1ff5b25bdb759e067ff02e6b751fb42e37cd51`;
+its 32-entry ledger is
+`04404bd8efdaba8a506b686d746c79bbb03b4212799ced43fd3c8ef2c3fb77a4`.
+
+Calibration was deliberately separated from confirmation. `alpha=0.6` passed
+the development screen on seeds `0–3` with mean whole-profile retention
+`M=.2740319260531955`. On fresh seeds `4–7`, its stored assay leaves still
+passed energy, decoding, `dC<dF`, and `dQ<0`, but amplitude retention failed:
+mean `M(.6)=.21336743856557555`, versus `M(.9)=.15607987727316153`; seed 5's
+M ratio was `1.2243398680161324<1.25`, seed 7's was
+`1.206259035990063<1.25` with difference
+`.029167501148376213<.040`, and the cohort mean was below `.250`. No stored
+`alpha=.6` claim about `Cret/Fret` is made. It was therefore not accepted.
+`alpha=0.5` then passed development seeds `4–7` and independent fresh seeds
+`8–11`. The earlier six-alpha seeds `0–3` sweep remains below and in the
+canonical guide as exploratory lineage, not as the fresh confirmation cohort.
 
 | Entry point | Purpose |
 | --- | --- |
@@ -18,21 +77,15 @@
 | [`tools/assay_emergent_task_energy_axis.py`](tools/assay_emergent_task_energy_axis.py) | Fixed 216-pair assay and decoding/rate/shape metrics |
 | [`tools/aggregate_emergent_task_energy_assays.py`](tools/aggregate_emergent_task_energy_assays.py) | Portable all-alpha summary from four standalone assay records |
 | [`tools/plot_emergent_reference_figures.py`](tools/plot_emergent_reference_figures.py) | Four-seed checkpoint replay, literal first-stimulus comparator, JSON, and plots |
-| [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Four-seed, six-alpha scalar assay metrics and provenance (no reconstructed raw profiles) |
-| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Portable assay summary, plot data, and the four current figures |
+| [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Historical seeds `0–3`, six-alpha scalar sweep and provenance (no reconstructed raw profiles) |
+| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Portable plot data and the four reference-layout figures |
 
-All six arms use one 36-channel architecture and differ only through
-`Jα=(1−α)T+αE`, where `T` combines next-step prediction with noisy
-current-orientation precision and `E` is a normalized L2/3 mean-rate proxy.
-The task-only endpoint (α=0.0) shows an A-over-B decoding advantage and a
-sharpening-like profile. The rate-cost-weighted endpoint (α=0.9; 10% task,
-90% rate proxy) reverses that decoding contrast and uses less final mean rate
-for operational continuation A than matched operational OOD reversal B. Its
-shape is broad attenuation with preferential center suppression; absolute
-flanks are not preserved. Decoding is condition-blind and noise-held-out only,
-not history- or orientation-held-out.
+The task-only `alpha=0.0` endpoint supplies the sharpening-like comparator. The
+confirmed `alpha=0.5` endpoint supplies dampening-like activity without changing
+the architecture or introducing another loss. Decoding is condition-blind and
+noise-held-out only, not history- or orientation-held-out.
 
-The current artifacts have two separate, auditable provenance branches:
+The current result has three distinct provenance branches:
 
 ```text
 trained checkpoints
@@ -42,11 +95,17 @@ trained checkpoints
               └─ all_alpha_assay_summary.json
                   └─ canonical six-alpha table
 
-selected alpha=0.0 and alpha=0.9 checkpoints
+selected alpha=0.0 and alpha=0.5 checkpoints
   └─ plot_emergent_reference_figures.py direct replay
       └─ in-memory aggregates
           ├─ plot_data.json
           └─ four PNG figures
+
+fresh seeds 8–11, alpha=0.5 and alpha=0.9 checkpoints
+  └─ fixed 216-pair assay plus literal-t0 replay
+      └─ corrected frozen gate evaluation
+          └─ 32-entry ledger
+              └─ final all-assays seal
 ```
 
 `training_summary.json` records run configuration and state hashes. It is an

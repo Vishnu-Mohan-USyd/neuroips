@@ -164,6 +164,21 @@ def make_generator(device: torch.device, seed: int) -> torch.Generator:
     return generator
 
 
+def restore_generator_state(
+    generator: torch.Generator,
+    state: torch.Tensor,
+) -> None:
+    """Restore a generator from a one-dimensional uint8 state tensor."""
+
+    if not isinstance(state, torch.Tensor):
+        raise TypeError("generator state must be a torch.Tensor")
+    if state.dtype != torch.uint8:
+        raise TypeError("generator state tensor must have dtype torch.uint8")
+    if state.ndim != 1:
+        raise ValueError("generator state tensor must be one-dimensional")
+    generator.set_state(state.detach().cpu().contiguous())
+
+
 def momentum_batch(
     batch: int,
     sequence_length: int,
@@ -454,8 +469,8 @@ def run_pretrain(
             raise RuntimeError("pretrain checkpoint metadata does not match this run")
         net.load_state_dict(saved["state_dict"])
         optimizer.load_state_dict(saved["optimizer_state_dict"])
-        data_generator.set_state(saved["data_generator_state"])
-        noise_generator.set_state(saved["noise_generator_state"])
+        restore_generator_state(data_generator, saved["data_generator_state"])
+        restore_generator_state(noise_generator, saved["noise_generator_state"])
         references = saved["references"]
         start_step = int(saved["step"]) + 1
         event_log.write({"event": "pretrain_resume", "step": start_step - 1})
@@ -625,8 +640,8 @@ def run_alpha(
             raise RuntimeError(f"alpha {alpha} checkpoint metadata does not match")
         net.load_state_dict(saved["state_dict"])
         optimizer.load_state_dict(saved["optimizer_state_dict"])
-        data_generator.set_state(saved["data_generator_state"])
-        noise_generator.set_state(saved["noise_generator_state"])
+        restore_generator_state(data_generator, saved["data_generator_state"])
+        restore_generator_state(noise_generator, saved["noise_generator_state"])
         start_step = int(saved["step"]) + 1
         event_log.write(
             {"event": "alpha_resume", "alpha": alpha, "step": start_step - 1}

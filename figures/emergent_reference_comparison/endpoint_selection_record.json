@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "status": "selected_and_freshly_confirmed",
+  "selected_endpoint": {
+    "alpha": 0.5,
+    "role": "rate_cost_weighted_endpoint",
+    "selection_basis": "Passed the frozen amplitude-sensitive M gates in development and in an independent four-seed fresh confirmation; alpha=0.6 failed those gates in fresh confirmation."
+  },
+  "M_definition": "whole_36_bin_expected_A_AUC_over_timestep0_AUC",
+  "frozen_gates": {
+    "per_seed": {
+      "energy_A_less_B": true,
+      "decoding_A_less_B": true,
+      "decoding_A_above_chance": 0.027777777777777776,
+      "decoding_B_above_chance": 0.027777777777777776,
+      "Cret_less_Fret": true,
+      "dC_less_dF": true,
+      "dQ_less_zero": true,
+      "Cret_less_one": true,
+      "M_comparator_ratio_min": 1.25,
+      "M_comparator_difference_min": 0.04,
+      "Fret_comparator_ratio_min": 1.15,
+      "Fret_comparator_difference_min": 0.04
+    },
+    "cohort": {
+      "mean_M_candidate_min": 0.25
+    },
+    "comparator_alpha": 0.9
+  },
+  "selection_history": {
+    "alpha_0p6_development": {
+      "logical_run_id": "alpha_0p6_development_seeds_0_3",
+      "seeds": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "M_alpha_0p6": [
+        0.28639360321648955,
+        0.26029834065545504,
+        0.32411040610987213,
+        0.2253253542309653
+      ],
+      "mean_M_alpha_0p6": 0.2740319260531955,
+      "status": "development_signal_advanced_to_fresh_confirmation",
+      "provenance": {
+        "assay_manifest_sha256": "9cd24742493d4ecab400a16149e52334a8e8d53d4a4a656497b8a40962358957",
+        "M_evaluator_sha256": "9df9f9f54abcb2ab1d7e175d2498c2af0847f60256941597aa28893ccfe15ef9"
+      }
+    },
+    "alpha_0p6_fresh_confirmation": {
+      "logical_run_id": "alpha_0p6_fresh_confirmation_seeds_4_7",
+      "seeds": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "per_seed": {
+        "4": {
+          "M_alpha_0p6": 0.2415171315090879,
+          "M_alpha_0p9": 0.1361447876892979,
+          "M_ratio": 1.773972662547059,
+          "M_difference": 0.10537234381979,
+          "M_ratio_gate": true,
+          "M_difference_gate": true
+        },
+        "5": {
+          "M_alpha_0p6": 0.22873233672372179,
+          "M_alpha_0p9": 0.18682094955737236,
+          "M_ratio": 1.2243398680161324,
+          "M_difference": 0.04191138716634943,
+          "M_ratio_gate": false,
+          "M_difference_gate": true
+        },
+        "6": {
+          "M_alpha_0p6": 0.21264079287616272,
+          "M_alpha_0p9": 0.1599417798410222,
+          "M_ratio": 1.3294887245066418,
+          "M_difference": 0.05269901303514052,
+          "M_ratio_gate": true,
+          "M_difference_gate": true
+        },
+        "7": {
+          "M_alpha_0p6": 0.17057949315332982,
+          "M_alpha_0p9": 0.1414119920049536,
+          "M_ratio": 1.206259035990063,
+          "M_difference": 0.029167501148376213,
+          "M_ratio_gate": false,
+          "M_difference_gate": false
+        }
+      },
+      "mean_M_alpha_0p6": 0.21336743856557555,
+      "mean_M_alpha_0p9": 0.15607987727316153,
+      "cohort_mean_M_gate": false,
+      "failed_gates": [
+        "seed_5.M_comparator_ratio_min",
+        "seed_7.M_comparator_ratio_min",
+        "seed_7.M_comparator_difference_min",
+        "cohort.mean_M_candidate_min"
+      ],
+      "stored_assay_leaf_checks_passed_all_seeds": [
+        "energy_A_less_B",
+        "decoding_A_less_B_and_both_above_chance",
+        "dC_less_dF",
+        "dQ_less_zero"
+      ],
+      "not_claimed_from_stored_assay_leaves": [
+        "Cret_less_Fret",
+        "Cret_less_one",
+        "Fret_comparator_ratio_min",
+        "Fret_comparator_difference_min"
+      ],
+      "comparator_alpha_0p9_stable": true,
+      "status": "failed_amplitude_sensitive_selection",
+      "provenance": {
+        "assay_seal_sha256": "982248457917af129728694e732cfb83412c8ae3d54e770666b826a07afdd6ae",
+        "pre_assay_manifest_sha256": "a0655dc9c940ef979190443bb01e22e469536b7b7d147c95e820b7c4b27dafc7",
+        "assay_ledger_sha256": "6120e2c59b21820f8cebd149eeb5715340236b40fc7af1dde112260ae8a676c5",
+        "M_evaluator_sha256": "9df9f9f54abcb2ab1d7e175d2498c2af0847f60256941597aa28893ccfe15ef9"
+      }
+    },
+    "alpha_0p5_development": {
+      "logical_run_id": "alpha_0p5_development_seeds_4_7",
+      "seeds": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "per_seed": {
+        "4": {
+          "M_alpha_0p5": 0.27799202261798,
+          "M_alpha_0p9": 0.1361447876892979,
+          "M_ratio": 2.0418851675203165,
+          "M_difference": 0.1418472349286821
+        },
+        "5": {
+          "M_alpha_0p5": 0.3047446283967996,
+          "M_alpha_0p9": 0.18682094955737236,
+          "M_ratio": 1.631212287052492,
+          "M_difference": 0.11792367883942725
+        },
+        "6": {
+          "M_alpha_0p5": 0.3031217175092183,
+          "M_alpha_0p9": 0.1599417798410222,
+          "M_ratio": 1.8952003523439158,
+          "M_difference": 0.1431799376681961
+        },
+        "7": {
+          "M_alpha_0p5": 0.30398460151773754,
+          "M_alpha_0p9": 0.1414119920049536,
+          "M_ratio": 2.1496380696418522,
+          "M_difference": 0.16257260951278393
+        }
+      },
+      "mean_M_alpha_0p5": 0.29746074251043386,
+      "M_ratio_gates_passed": 4,
+      "M_difference_gates_passed": 4,
+      "cohort_mean_M_gate": true,
+      "status": "development_M_gates_passed",
+      "provenance": {
+        "assay_seal_sha256": "81440ae260df5bebb39736417683b1b3803f0a1b7f73acba6b82532f29c301fc",
+        "pre_assay_manifest_sha256": "cadf71c7dbe17afea78f386aab4d5430999389c4f315bcd7ea01d6209012dece",
+        "assay_ledger_sha256": "42f5ff746d570a70b71aa2be4cc8fc0814fd4fabd591d33dcf3b56c7d589646c",
+        "M_regression_report_sha256": "07a5874bce40819ef64eaf61055385307762b59d1df3ac0dac980222d480182e"
+      }
+    },
+    "alpha_0p5_fresh_confirmation": {
+      "logical_run_id": "alpha_0p5_fresh_confirmation_seeds_8_11",
+      "seeds": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "per_seed": {
+        "8": {
+          "M_alpha_0p5": 0.2901656344312839,
+          "M_alpha_0p9": 0.1948357860747792,
+          "M_ratio": 1.4892830535757764,
+          "M_difference": 0.09532984835650471,
+          "Fret_ratio": 1.6212079431698425,
+          "Fret_difference": 0.18862199793838258,
+          "gates_passed": 12,
+          "gates_total": 12
+        },
+        "9": {
+          "M_alpha_0p5": 0.29020974714964337,
+          "M_alpha_0p9": 0.12392075590220045,
+          "M_ratio": 2.341897812330002,
+          "M_difference": 0.16628899124744292,
+          "Fret_ratio": 2.2241887678089203,
+          "Fret_difference": 0.2710864411981815,
+          "gates_passed": 12,
+          "gates_total": 12
+        },
+        "10": {
+          "M_alpha_0p5": 0.2722376079208284,
+          "M_alpha_0p9": 0.1332041298063895,
+          "M_ratio": 2.04376251934923,
+          "M_difference": 0.13903347811443892,
+          "Fret_ratio": 1.9086672643914901,
+          "Fret_difference": 0.216851432034302,
+          "gates_passed": 12,
+          "gates_total": 12
+        },
+        "11": {
+          "M_alpha_0p5": 0.34392168241773374,
+          "M_alpha_0p9": 0.17233959879560087,
+          "M_ratio": 1.9956045205004427,
+          "M_difference": 0.17158208362213287,
+          "Fret_ratio": 2.13809426476849,
+          "Fret_difference": 0.30824577142368,
+          "gates_passed": 12,
+          "gates_total": 12
+        }
+      },
+      "mean_M_alpha_0p5": 0.29913366797987234,
+      "per_seed_gates_passed": 48,
+      "per_seed_gates_total": 48,
+      "cohort_mean_M_gate": true,
+      "status": "passed_all_frozen_gates",
+      "provenance": {
+        "assay_seal_sha256": "027feb665537e1f54628e9e7af1ff5b25bdb759e067ff02e6b751fb42e37cd51",
+        "frozen_gate_result_sha256": "8bd3c6dd13cd3770e86eed23ef7e0b1d8103990fcc31b6162cf6a043611b2d7d",
+        "M_regression_report_sha256": "07a5874bce40819ef64eaf61055385307762b59d1df3ac0dac980222d480182e",
+        "evaluator_supersession_sha256": "c3fa958cba809e0aafef0c2a8db6de4224c05b8610ddf5320ac01feaba0284ee"
+      }
+    }
+  },
+  "portability": {
+    "paths": "logical run identifiers only",
+    "absolute_paths_present": false,
+    "checkpoint_selection": "fixed-step final checkpoints"
+  }
+}

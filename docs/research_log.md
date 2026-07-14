@@ -7,12 +7,56 @@
 
 ## Current-workflow pointer (non-normative)
 
-The current four-seed workflow is documented in
+The current workflow is documented in
 [`emergent_task_energy_axis.md`](emergent_task_energy_axis.md). It uses one
 fixed orientation substrate, a recurrent predictor, a SOM/VIP-inspired
 Dale-sign-constrained rate motif, and frozen divisive local competition. The
 only arm coordinate is the task-versus-normalized-L2/3-mean-rate weight; matched
 operational continuation/reversal geometry is post-training only.
+
+Every arm minimizes the same two-term objective,
+`J(alpha)=(1-alpha)T+alpha E`. `T` is normalized next-step prediction plus noisy
+current-orientation precision; `E=mean(r)/R_ref` is a normalized L2/3 mean-rate
+proxy. `alpha=.5` is the balanced coordinate, not a new loss. No loss knows the
+operational A/B labels, expected orientation, center/flank windows, desired
+shape, or amplitude threshold.
+
+### Dampening-amplitude calibration record
+
+- `alpha=.6` passed the development screen on seeds `0–3`, with mean
+  whole-profile retention `M=.2740319260531955`.
+- On the first fresh cohort, seeds `4–7`, `.6` passed the stored energy,
+  decoding, `dC<dF`, and `dQ<0` checks, but failed amplitude retention. Mean
+  `M(.6)=.21336743856557555` versus `M(.9)=.15607987727316153`; seed 5's M
+  ratio was `1.2243398680161324<1.25`; seed 7's ratio was
+  `1.206259035990063<1.25` and its difference was
+  `.029167501148376213<.040`; cohort `M(.6)<.250`. It was not accepted. No
+  stored `Cret/Fret` claim is made for this cohort.
+- `alpha=.5` passed revised development seeds `4–7` and an independent
+  from-scratch confirmation on seeds `8–11`.
+- In the fresh cohort, all `48/48` per-seed checks across the three scientific
+  readout families passed. Whole-profile retention values were
+  `.2901656344312839`, `.29020974714964337`, `.2722376079208284`, and
+  `.34392168241773374`; their mean `.29913366797987234` exceeded the `.250`
+  boundary by `.04913366797987234`.
+- Final all-assays seal:
+  `027feb665537e1f54628e9e7af1ff5b25bdb759e067ff02e6b751fb42e37cd51`.
+  Assay ledger:
+  `04404bd8efdaba8a506b686d746c79bbb03b4212799ced43fd3c8ef2c3fb77a4`
+  (`32/32` verified).
+
+The shape term **relative flank sparing** means `F_A/F_t0 > C_A/C_t0`; it does
+not mean that absolute flanks exceed the literal `t=0` response. The gray
+baseline is the ordinary first response of the same arm with recurrent state
+and feedback exactly zero.
+
+The initial fresh-cohort evaluator accidentally bound `M` to stored A/B saving.
+The corrected, development-consistent definition is
+`M=AUC(A final aligned 36-bin profile)/AUC(t0 aligned 36-bin profile)`, exactly
+equivalent to `rate_A/rate_t0`. This was an evaluator-only defect: no model,
+checkpoint, assay, profile, threshold, or training output changed. The
+hash-bound supersession is
+`c3fa958cba809e0aafef0c2a8db6de4224c05b8610ddf5320ac01feaba0284ee`.
 
 Biological mappings are deliberately limited. VIP/SOM signs are motivated by
 Pi et al. (2013, doi:10.1038/nature12676) and Pfeffer et al. (2013,
@@ -20,8 +64,16 @@ doi:10.1038/nn.3446); divisive competition is motivated by normalization work
 including Heeger (1992, doi:10.1017/S0952523800009640) and Carandini et al.
 (1997, doi:10.1523/JNEUROSCI.17-21-08621.1997). The GRU, mean-rate proxy,
 fixed circular basis, and exact loss/assay definitions remain engineering
-approximations. The high-alpha endpoint is broad attenuation with preferential
-center suppression, not absolute flank-preserving dampening.
+approximations. The energy–information premise is grounded qualitatively by
+Laughlin, de Ruyter van Steveninck & Anderson (1998,
+[PMID 10195106](https://pubmed.ncbi.nlm.nih.gov/10195106/)) and Niven, Anderson
+& Laughlin (2007,
+[PMID 17373859](https://pubmed.ncbi.nlm.nih.gov/17373859/)); activity-linked
+local ATP demand is supported by Rangaraju, Calloway & Ryan (2014,
+[PMID 24529383](https://pubmed.ncbi.nlm.nih.gov/24529383/)). None of those
+studies turns `mean(r)/R_ref` into a biophysical energy measurement. The
+current endpoint shows center suppression with relative flank sparing, not
+absolute flank preservation.
 
 ## Legacy remainder
 
