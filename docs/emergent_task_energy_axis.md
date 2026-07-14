@@ -53,7 +53,34 @@ decoding, `dC<dF`, and `dQ<0`; no stored `Cret/Fret` claim is made for that
 cohort. It was rejected. `alpha=0.5` then passed development seeds `4–7` and a
 separate from-scratch confirmation on seeds `8–11`. The original seeds `0–3`
 six-alpha sweep is preserved below as exploratory lineage rather than recast as
-confirmation.
+confirmation. The portable
+[`endpoint_selection_record.json`](../figures/emergent_reference_comparison/endpoint_selection_record.json)
+is the machine-readable selection history.
+
+## Newcomer reading path
+
+For a first pass, read these sections in order:
+
+1. [Architecture, signs, and timing](#architecture-signs-and-timing).
+2. [Training objective](#training-objective).
+3. [Operational assay](#operational-continuationreversal-assay) and its
+   [literal first-stimulus baseline](#literal-first-stimulus-tuning-baseline).
+4. [Calibration and fresh confirmation](#dampening-calibration-and-fresh-confirmation).
+5. [Reproduction recipes](#rtx-5090-reproduction-recipes) and
+   [limitations](#limitations).
+
+The current workflow is compact even though its audit record is detailed:
+
+```text
+ordinary momentum sequences
+  → common task pretrain for one seed
+  → identical architecture cloned into alpha arms
+  → J(alpha)=(1-alpha)T+alpha E
+  → fixed 216-pair continuation-A / OOD-reversal-B assay
+  → energy + decoding + aligned-shape readout families
+  → endpoint selection record
+  → checkpoint-replayed figures
+```
 
 ## Artifact provenance
 
@@ -90,6 +117,10 @@ The 58-entry training ledger is
 `f248a263ea285cce5e0ad16db2fb95a357cee2c1705a35f66b9f6e6eae53b32b`
 and its training seal is
 `2de0c984c0346f39e4bf82aebad814bc76b03057b00ecf432819164669ea557b`.
+The tracked
+[`endpoint_selection_record.json`](../figures/emergent_reference_comparison/endpoint_selection_record.json)
+condenses the `.6` rejection and `.5` selection into logical run identifiers
+and hashes; it does not replace the external sealed evidence.
 
 Per-seed `training_summary.json` files record configuration, state hashes, and
 training diagnostics. They are not measurement or plotter inputs; the compact
@@ -125,14 +156,24 @@ repository context, not a clean-snapshot guarantee.
 
 | Path | Role |
 | --- | --- |
+| [`tools/README.md`](../tools/README.md) | Current execution order and explicit boundary between canonical, repair, and legacy scripts |
 | [`tools/tuned_emergence_lib.py`](../tools/tuned_emergence_lib.py) | Fixed orientation basis, L2/3 rate circuit, recurrent predictor, feedback transform, and causal unroll timing |
-| [`tools/train_emergent_task_energy_axis.py`](../tools/train_emergent_task_energy_axis.py) | Common task pretrain, six task–energy arms, optimizer policy, deterministic streams, and checkpoints |
+| [`tools/train_emergent_task_energy_axis.py`](../tools/train_emergent_task_energy_axis.py) | Common task pretrain, configured task–energy alpha arms, optimizer policy, deterministic streams, and checkpoints |
 | [`tools/assay_emergent_task_energy_axis.py`](../tools/assay_emergent_task_energy_axis.py) | Fixed 216-pair operational continuation/reversal assay and its three readout families |
-| [`tools/aggregate_emergent_task_energy_assays.py`](../tools/aggregate_emergent_task_energy_assays.py) | Schema 1.0.0 portable summary of existing per-seed assay fields and aggregate mean/sample SEM, with logical artifact IDs and hashes |
+| [`tools/evaluate_emergent_task_energy_gates.py`](../tools/evaluate_emergent_task_energy_gates.py) | Validated portable frozen-gate replay; reproduces gate decisions but does not regenerate the historical external ledger or seal. Tests: [evaluator](../tests/test_evaluate_emergent_task_energy_gates.py), [schema/bindings](../tests/test_endpoint_selection_record_schema.py) |
+| [`tools/aggregate_emergent_task_energy_assays.py`](../tools/aggregate_emergent_task_energy_assays.py) | Historical seeds `0–3` six-alpha scalar summary; not the selected-endpoint evaluator |
 | [`tools/plot_emergent_reference_figures.py`](../tools/plot_emergent_reference_figures.py) | Four-seed checkpoint replay, literal first-stimulus tuning baseline, seed aggregation, JSON, and reference-layout figures |
+| [`figures/emergent_reference_comparison/README.md`](../figures/emergent_reference_comparison/README.md) | Artifact-by-artifact interpretation of the current PNG and JSON bundle |
+| [`figures/emergent_reference_comparison/endpoint_selection_record.json`](../figures/emergent_reference_comparison/endpoint_selection_record.json) | Portable `.6` rejection and `.5` selection history with frozen gates and evidence hashes |
 | [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](../figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Historical seeds `0–3`: compact copy of 14 existing assay metrics for every seed×alpha, plus mean/sample SEM and provenance |
 | [`figures/emergent_reference_comparison/plot_data.json`](../figures/emergent_reference_comparison/plot_data.json) | Machine-readable values used by the current endpoint figures |
 | [`figures/emergent_reference_comparison/`](../figures/emergent_reference_comparison/) | Two tuning panels, grouped decoding bars, and decoding/rate phase space |
+
+> **Model-module boundary:** the current tools instantiate
+> `tools.tuned_emergence_lib.SimpleTunedNet`. Root `simple_net.SimpleNet` is the
+> legacy Phase A/B model. The tuned library imports shared orientation constants,
+> L4 coding, and sequence utilities from `simple_net.py`; it does not instantiate
+> or inherit the legacy class.
 
 ## Architecture, signs, and timing
 
@@ -575,10 +616,11 @@ positive A-minus-B decoding contrast while already having negative `DeltaC`
 and `DeltaQ`; they are mixed arms. The decoding contrast crosses between `0.3`
 and `0.5`. Saving is also nonmonotone at `0.1` before rising from `0.3` onward.
 
-### Displayed endpoints relative to the t0 baseline
+### Historical alpha=.0 versus alpha=.9 curves relative to t0
 
-Ratios here are computed from the across-seed mean displayed curves. Delta
-uncertainties are seed SEM.
+This subsection belongs only to the retained seeds `0–3` historical replay;
+the current figures use `.0` and selected `.5`. Ratios here are computed from
+the historical across-seed mean curves. Delta uncertainties are seed SEM.
 
 | Curve | C (AU) | F (AU) | C/F | Delta C vs t0 | Delta F vs t0 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -699,15 +741,49 @@ streams, but have separate fresh optimizers. Confirm that the trainer process
 has a live PID and its log has emitted output before describing a run as
 started; command submission alone is not evidence that GPU work is active.
 
+Run the validated portable gate evaluator after the assays:
+
+```bash
+python -B tools/evaluate_emergent_task_energy_gates.py \
+  --run-dir "$CONFIRM_ROOT/seed_8" \
+  --run-dir "$CONFIRM_ROOT/seed_9" \
+  --run-dir "$CONFIRM_ROOT/seed_10" \
+  --run-dir "$CONFIRM_ROOT/seed_11" \
+  --candidate-alpha 0.5 \
+  --comparator-alpha 0.9 \
+  --device cuda:0 \
+  --out "$CONFIRM_ROOT/frozen_gate_decision.json"
+```
+
+The evaluator's 10 focused tests passed. An independent sealed CUDA replay on
+seeds `8–11` passed and matched the authoritative result exactly: `104` metric,
+`16` comparator, `48` gate, `4` seed-status, and `2` cohort leaves, plus `44`
+seal-binding leaves. See the
+[focused evaluator tests](../tests/test_evaluate_emergent_task_energy_gates.py)
+and [selection-record schema and binding
+tests](../tests/test_endpoint_selection_record_schema.py). The output is a
+portable gate-decision JSON without host paths. It reproduces the scientific
+gate decision; it does not regenerate the historical external assay ledger or
+final seal, which remain bound by the sealed evidence above.
+
 ### Matched alpha=0.0 comparator and reference-layout plots
 
 The sharpening comparator must use each confirmation seed's byte-identical
 common pretrain. Build a separate plotting bundle so the sealed confirmation
-directory remains read-only:
+directory remains read-only. This subsection defines all of its inputs; both
+default output locations are outside the checkout, so a reproduction does not
+overwrite tracked figures:
 
 ```bash
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONHASHSEED=0
+CONFIRM_ROOT="${CONFIRM_ROOT:-$HOME/neuroips_runs/task_energy_alpha_0p5_confirmation}"
 PLOT_ROOT="${PLOT_ROOT:-$HOME/neuroips_runs/task_energy_alpha_0p5_plot_bundle}"
-FIGURE_OUT="${FIGURE_OUT:-$PWD/figures/emergent_reference_comparison}"
+FIGURE_OUT="${FIGURE_OUT:-$HOME/neuroips_outputs/task_energy_reference_figures}"
+if [ ! -d "$CONFIRM_ROOT" ]; then
+  echo "Missing confirmation directory: $CONFIRM_ROOT" >&2
+  exit 1
+fi
 case "$PLOT_ROOT" in
   "$PWD"|"$PWD"/*)
     echo "PLOT_ROOT must be outside the repository: $PLOT_ROOT" >&2

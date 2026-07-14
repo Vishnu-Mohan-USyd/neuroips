@@ -1,332 +1,151 @@
-# Recurrent orientation circuit: task–energy trade-offs
+# Emergent sharpening and dampening on a task–energy axis
 
-## Current scientific result
+This repository tests whether one recurrent orientation-circuit architecture
+can express sharpening-like or dampening-like activity when only the balance
+between task performance and low neural activity changes.
 
-> **Start here:** the canonical account is
-> [the emergent task–energy axis guide](docs/emergent_task_energy_axis.md). It
-> gives the architecture, exact two-term objective, assay definitions, fresh
-> confirmation values, provenance hashes, limitations, and RTX 5090 commands.
+The current experiment is the
+[task–energy axis workflow](docs/emergent_task_energy_axis.md). Older Phase A,
+Phase B, and repair experiments remain available as scientific history, but
+they are not the current model or evidence base.
 
-This repository asks whether **one recurrent orientation-circuit architecture**
-can express sharpening-like or dampening-like activity when only the relative
-pressure for task performance versus low activity changes. Every arm uses
+## Scientific question
+
+Can a circuit learn two response regimes without a loss that names an expected
+stimulus or prescribes a response shape?
+
+- With greater task pressure and little rate pressure, the representation
+  should be sharpening-like: operational continuation A decodes better than
+  matched operational OOD reversal B, with center enhancement and flank
+  suppression relative to the first-stimulus response.
+- With balanced task and rate pressure, it should be dampening-like: A uses
+  less activity and decodes worse than B, while its center is suppressed more
+  strongly than its flanks.
+
+These are assay outcomes. They are not training labels or target curves.
+
+## Current architecture
+
+```text
+orientation
+  → fixed 36-channel L4 code
+  → fixed local nonnegative L4→L2/3 basis
+  → 36-channel nonnegative L2/3 rates
+  → 64-unit GRU predictor → W_fb
+  → posterior-over-prior feedback evidence one step later
+  → SOM/VIP-inspired Dale-sign-constrained rate motif
+  → fixed local divisive competition
+```
+
+The executable model class is `tools.tuned_emergence_lib.SimpleTunedNet`.
+Feedback changes through learned weights and nonnegative motif gains; the
+architecture and sign structure are identical across objective arms.
+
+> **Module boundary:** root `simple_net.SimpleNet` is the legacy Phase A/B
+> model. The current workflow does **not** instantiate it. `SimpleTunedNet`
+> imports only shared orientation constants, L4 coding, and sequence utilities
+> from `simple_net.py`. Do not infer the current architecture from the legacy
+> `SimpleNet` class or its module docstring.
+
+## Objective: one equation, two terms
+
+Every arm minimizes
 
 `J(alpha) = (1 - alpha) T + alpha E`,
 
-where `T` is next-step prediction plus noisy current-orientation precision and
-`E` is a normalized L2/3 mean-rate proxy. There is no expected/unexpected loss,
-center/flank loss, response-template fit, or regime-specific circuit. `alpha=0.5`
-is simply the balanced 50% task / 50% mean-rate coordinate of this same loss;
-it is not a new objective or a fitted response-shape intervention.
+where `T` averages normalized next-step prediction and noisy
+current-orientation precision, and `E=mean(r)/R_ref` is a normalized L2/3
+mean-rate proxy. `E` is an engineering proxy, not ATP, oxygen consumption, or a
+whole-brain energy measurement.
 
-The model is a fixed 36-channel orientation basis, nonnegative L2/3 rate
-population, 64-unit GRU predictor, and SOM/VIP-inspired
-**Dale-sign-constrained rate motif** with frozen local divisive competition.
-Operational continuation A and matched operational out-of-distribution reversal
-B are used only after training. The gray tuning baseline is the same arm's
-literal first response at `t=0`, when recurrent state and feedback are zero.
+Training never sees the post-hoc A/B assay labels, center/flank windows,
+literal-`t0` baseline, acceptance thresholds, or a desired tuning curve.
+`alpha=0.5` is simply 50% task and 50% rate-proxy pressure—not a new loss or a
+regime-specific intervention.
 
-The current dampening endpoint is `alpha=0.5`. It passed the three scientific
-validation families in an independent four-seed confirmation (`8,9,10,11`):
+## Selected result
 
-1. **Energy:** final mean L2/3 rate was lower for A than B in every seed.
-2. **Decoding:** one condition-blind noise-held-out decoder was less accurate
-   for A than B, with both conditions above 36-way chance, in every seed.
-3. **Shape:** A showed center suppression and **relative flank sparing** versus
-   both B and the literal `t=0` baseline. Relative sparing means flanks retained
-   a larger fraction of baseline than the center; it does not mean absolute
-   flanks exceeded baseline.
+`alpha=0.5` was selected after development and then confirmed from scratch on
+independent seeds `8–11`. It passed the three scientific validation families:
 
-The retained seeds `0–3` task-only comparator shows the opposite decoding and
-shape regime while preserving A<B activity: mean saving
-`(B-A)/(B+epsilon_rate)=.0761`, with
-`epsilon_rate=1e-8*N*R_ref`,
-decoding `A=.9975` versus `B=.3439`, center change `+.279851 AU` from `t=0`,
-and flank change `-.012470 AU`. Those numbers belong to the exploratory
-six-alpha cohort; the current figures replay matched `alpha=0.0` and `.5`
-checkpoints directly.
+1. **Energy:** final mean L2/3 rate was lower for continuation A than reversal B
+   in every seed.
+2. **Decoding:** one condition-blind, noise-held-out 36-class decoder was less
+   accurate for A than B, while both remained above chance, in every seed.
+3. **Shape:** A had center suppression with **relative flank sparing** against B
+   and the first-stimulus response. Both center and flanks remained below that
+   baseline; “relative” does not mean absolute flank enhancement.
 
-All 48 per-seed checks that instantiate those three families passed, as did the
-cohort amplitude check. Whole-profile retention
-`M=AUC(A final 36-bin profile)/AUC(t0 36-bin profile)` was
-`[0.2901656344312839, 0.29020974714964337, 0.2722376079208284,
-0.34392168241773374]`; its mean was `0.29913366797987234`, exceeding the
-`0.250` floor by `0.04913366797987234`. The final assay seal is
-`027feb665537e1f54628e9e7af1ff5b25bdb759e067ff02e6b751fb42e37cd51`;
-its 32-entry ledger is
-`04404bd8efdaba8a506b686d746c79bbb03b4212799ced43fd3c8ef2c3fb77a4`.
+All `48/48` per-seed checks implementing those three families passed. Mean
+whole-profile retention was `M=0.29913366797987234`, above the fixed `.250`
+cohort floor. The machine-readable
+[endpoint selection record](figures/emergent_reference_comparison/endpoint_selection_record.json)
+preserves the accepted `.5` result and the rejected `.6` calibration path.
 
-Calibration was deliberately separated from confirmation. `alpha=0.6` passed
-the development screen on seeds `0–3` with mean whole-profile retention
-`M=.2740319260531955`. On fresh seeds `4–7`, its stored assay leaves still
-passed energy, decoding, `dC<dF`, and `dQ<0`, but amplitude retention failed:
-mean `M(.6)=.21336743856557555`, versus `M(.9)=.15607987727316153`; seed 5's
-M ratio was `1.2243398680161324<1.25`, seed 7's was
-`1.206259035990063<1.25` with difference
-`.029167501148376213<.040`, and the cohort mean was below `.250`. No stored
-`alpha=.6` claim about `Cret/Fret` is made. It was therefore not accepted.
-`alpha=0.5` then passed development seeds `4–7` and independent fresh seeds
-`8–11`. The earlier six-alpha seeds `0–3` sweep remains below and in the
-canonical guide as exploratory lineage, not as the fresh confirmation cohort.
+The task-only `alpha=0.0` arm supplies the sharpening-like comparator in the
+current plots. It uses the same architecture and `J(alpha)`; only `alpha`
+changes. The plotted comparison uses matched seeds `8–11` and endpoints `.0`
+and `.5`.
 
-| Entry point | Purpose |
+### Literal first-stimulus baseline
+
+The gray tuning curve is the same arm's ordinary response at the first sequence
+step, with hidden state, prior feedback, and adaptation state equal to zero. It
+is not reversal B and not a feedback-off final response.
+
+## Quick start
+
+Python 3.10+ and PyTorch are required; an NVIDIA GPU is recommended for
+training.
+
+```bash
+python -m pip install -r requirements.txt
+
+export CUDA_VISIBLE_DEVICES=0
+RUN_ROOT="${RUN_ROOT:-$HOME/neuroips_runs/task_energy_quickstart}"
+
+python -B tools/train_emergent_task_energy_axis.py \
+  --seed 0 \
+  --device cuda:0 \
+  --out "$RUN_ROOT" \
+  --alphas 0.0 0.5 0.9 \
+  --freeze-local-comp \
+  --feedback-mode posterior_prior_excess
+
+python -B tools/assay_emergent_task_energy_axis.py \
+  --run-dir "$RUN_ROOT/seed_0" \
+  --device cuda:0 \
+  --out "$RUN_ROOT/seed_0/endpoint_assay.json" \
+  --alphas 0.0 0.5 0.9
+```
+
+That is a single-seed run, not reproduction of the confirmed cohort. Use the
+[RTX 5090 recipes](docs/emergent_task_energy_axis.md#rtx-5090-reproduction-recipes)
+for the complete four-seed train, assay, gate, and figure workflow. Tool order
+and historical-script boundaries are listed in [tools/README.md](tools/README.md).
+
+## Repository map
+
+| Path | Purpose |
 | --- | --- |
-| [`docs/emergent_task_energy_axis.md`](docs/emergent_task_energy_axis.md) | Canonical architecture, equations, protocol, four-seed measurements, limitations, and RTX 5090 reproduction |
-| [`tools/tuned_emergence_lib.py`](tools/tuned_emergence_lib.py) | Current fixed orientation basis, L2/3 circuit, recurrent predictor, and feedback timing |
-| [`tools/train_emergent_task_energy_axis.py`](tools/train_emergent_task_energy_axis.py) | Common pretrain and six task–energy alpha arms |
-| [`tools/assay_emergent_task_energy_axis.py`](tools/assay_emergent_task_energy_axis.py) | Fixed 216-pair assay and decoding/rate/shape metrics |
-| [`tools/aggregate_emergent_task_energy_assays.py`](tools/aggregate_emergent_task_energy_assays.py) | Portable all-alpha summary from four standalone assay records |
-| [`tools/plot_emergent_reference_figures.py`](tools/plot_emergent_reference_figures.py) | Four-seed checkpoint replay, literal first-stimulus comparator, JSON, and plots |
-| [`figures/emergent_reference_comparison/all_alpha_assay_summary.json`](figures/emergent_reference_comparison/all_alpha_assay_summary.json) | Historical seeds `0–3`, six-alpha scalar sweep and provenance (no reconstructed raw profiles) |
-| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Portable plot data and the four reference-layout figures |
+| [`docs/emergent_task_energy_axis.md`](docs/emergent_task_energy_axis.md) | Canonical architecture, exact losses, assay, results, provenance, limitations, and reproduction |
+| [`tools/`](tools/) | Current trainer/assay/plot pipeline plus clearly labeled historical scripts; see [`tools/README.md`](tools/README.md) |
+| [`figures/emergent_reference_comparison/`](figures/emergent_reference_comparison/) | Current `.0` versus `.5` figures, plotted values, and endpoint selection history; see its [`README.md`](figures/emergent_reference_comparison/README.md) |
+| [`docs/research_log.md`](docs/research_log.md) | Chronological discoveries and biological interpretation notes |
+| [`phaseA_somvip/RESULTS.md`](phaseA_somvip/RESULTS.md) | Legacy objective-grid Phase A result |
+| [`phaseB_somvip/RESULTS.md`](phaseB_somvip/RESULTS.md) | Legacy runtime-context Phase B result |
+| [`simple_net.py`](simple_net.py) | Legacy `SimpleNet` plus orientation utilities reused by the current tuned library |
+| [`requirements.txt`](requirements.txt) | Runtime dependencies |
 
-The task-only `alpha=0.0` endpoint supplies the sharpening-like comparator. The
-confirmed `alpha=0.5` endpoint supplies dampening-like activity without changing
-the architecture or introducing another loss. Decoding is condition-blind and
-noise-held-out only, not history- or orientation-held-out.
+## Current versus legacy
 
-The current result has three distinct provenance branches:
+Current scientific claims come from `SimpleTunedNet`,
+`train_emergent_task_energy_axis.py`, the fixed continuation/reversal assay,
+the selected `alpha=.5` confirmation, and the artifacts under
+`figures/emergent_reference_comparison/`.
 
-```text
-trained checkpoints
-  └─ assay_emergent_task_energy_axis.py replay
-      └─ per-seed endpoint_assay.json audit records
-          └─ aggregate_emergent_task_energy_assays.py
-              └─ all_alpha_assay_summary.json
-                  └─ canonical six-alpha table
-
-selected alpha=0.0 and alpha=0.5 checkpoints
-  └─ plot_emergent_reference_figures.py direct replay
-      └─ in-memory aggregates
-          ├─ plot_data.json
-          └─ four PNG figures
-
-fresh seeds 8–11, alpha=0.5 and alpha=0.9 checkpoints
-  └─ fixed 216-pair assay plus literal-t0 replay
-      └─ corrected frozen gate evaluation
-          └─ 32-entry ledger
-              └─ final all-assays seal
-```
-
-`training_summary.json` records run configuration and state hashes. It is an
-audit record, not a measurement or plotter input; the aggregator reads it only
-to corroborate protocol and provenance. The plotter independently replays
-selected checkpoints and is not a phenotype acceptance gate. See the
-[canonical provenance description](docs/emergent_task_energy_axis.md#artifact-provenance)
-before interpreting either the table or figures.
-
-The aggregate's generator provenance separates three facts:
-`repository_base_commit` identifies the checked-out repository base,
-`repository_worktree_dirty_at_generation` records whether local changes were
-present, and `source_file_sha256` identifies the exact generator bytes that
-ran. The base commit alone must not be read as containing those generator
-bytes.
-
-This organization patch intentionally makes the reported six-alpha,
-posterior-excess, frozen-local-competition protocol the trainer CLI default.
-The numerical kernels and losses are unchanged for explicit reported
-commands. Legacy behavior is selected explicitly with
-`--feedback-mode baseline --no-freeze-local-comp --alphas 0.1 0.3 0.5 0.7 0.9`;
-see the [canonical CLI note](docs/emergent_task_energy_axis.md#current-and-legacy-cli-defaults).
-
-## Historical Phase A/Phase B lineage
-
-The remainder of this README records the repository's earlier Phase A/Phase B
-experiments. It is retained for provenance and is not the source of truth for
-the current task–energy figures.
-
-A small, from-scratch model of how *top-down expectation* reshapes a sensory representation. The whole
-model is one short, pure-PyTorch file (`simple_net.py`) plus two self-contained experiment folders.
-
-> **Reproduction.** Independently verified by an end-to-end reproduction from a fresh package-root
-> invocation (no install, no `PYTHONPATH`): Phase A is **bit-identical**; Phase B shows the **4-seed**
-> runtime switch, confirmed by the decisive `g_ctx`-lesion control (`|attend − save| = 0`). The release
-> entry points `train_switch.py` and `proveout_switch.py` both reproduce — on the committed seed-1
-> checkpoint **and** a fresh seed-23 retrain.
-
-## 1. What this is
-
-Cortex receives top-down predictions about what it is about to see. A long-standing question is whether
-that feedback **sharpens** the representation of an *expected* stimulus (amplifies it, for precision) or
-**dampens** it (suppresses the already-predicted stimulus, to save activity). Both are reported in the
-biology, and they look contradictory.
-
-This package builds a minimal V1/V2-like circuit — a fixed sensory layer, a trainable cortical layer, and
-a recurrent predictor that feeds its prediction back down through a **Dale-compliant SOM/VIP inhibitory
-microcircuit** — and shows that *sharpen and dampen are two settings of one circuit*, not two different
-mechanisms. The result comes in two acts (Phase A → Phase B).
-
-## 2. The A → B story
-
-**Phase A — the regime *emerges*; nothing is hand-set.** One fixed SOM/VIP circuit is trained under a
-single objective that trades *task accuracy* against a *metabolic energy cost* on cortical activity.
-Sweeping that trade-off, the circuit **chooses for itself** whether feedback sharpens or dampens the
-expected stimulus: low energy pressure → sharpen, high energy pressure → dampen, sliding smoothly between
-them. No sign, no switch, and no regime is wired in — it is set entirely by the learned, non-negative
-inhibitory gains.
-
-**Phase B — *one* trained net switches at runtime, no retraining.** A single network learns *both*
-regimes at once and flips between them on the fly, controlled only by the **sign of one context input**
-(`+1` "attend" → sharpen, `−1` "save" → dampen). The same weights, the same circuit; only a context bit
-changes.
-
-**Critical framing (read this carefully).** Sharpen and dampen are an **energy-for-fidelity trade, not
-"on vs off."**
-- **Sharpen** = high-precision but metabolically costly: the expected channel is amplified several-fold.
-- **Dampen** = energy-economical at the cost of lower L2/3 decoding fidelity: the already-predicted
-  stimulus is encoded far more cheaply.
-- **Dampen does *not* mean ignoring or discarding the input.** Both modes still represent the
-  orientation — next-step prediction stays at ~80–82% either way. The dampened mode simply *spends less*
-  to encode a stimulus it already expected.
-
-## 3. Architecture (in words)
-
-```
- input orientation θ
-        │
-   ┌────▼─────┐   L4 ring: FIXED circular-Gaussian population code
-   │   L4     │   36 channels, 5°/channel.  No parameters.
-   └────┬─────┘
-        │  W_ff  (trainable, rectified)
-   ┌────▼─────┐   L2/3 ring: the cortical representation.
-   │  L2/3    │◄──────────────┐  top-down prediction fed back DOWN
-   └────┬─────┘               │  through the SOM/VIP microcircuit
-        │                     │
-   ┌────▼─────┐   W_fb  ┌─────┴─────┐
-   │   GRU    │────────►│ next-step │  predicts the NEXT orientation,
-   │ (hidden  │         │ prediction│  feeds it back one step later
-   │   = 64)  │         └───────────┘
-   └──────────┘
-```
-
-The L2/3 feedback operator is a **Dale SOM/VIP microcircuit** (with `drive = W_ff(L4)` and `fb` = the
-relu'd top-down prediction):
-
-```
-vip = relu(g_v·fb  [+ softplus(g_ctx)·ctx]   ← context term, Phase B only)
-som = relu(g_s·fb − g_sv·vip)                 ← top-down drives SOM; VIP disinhibits it
-r   = relu(drive + g_e·fb − g_ps·som)         ← L2/3 = feedforward + fb excitation − SOM inhibition
-```
-
-All five gains `g = softplus(·) ≥ 0`. **The minus signs are structural** — they encode cell types
-(Dale's law), never negative weights. The regime is one emergent scalar of the gains: **VIP-dominant →
-net excitation → sharpen; SOM-dominant → net inhibition → dampen.** Phase B adds a single context gain
-`g_ctx` on the VIP cell; flipping the sign of `ctx` moves the circuit across the VIP/SOM balance.
-
-## 4. Install
-
-```bash
-pip install -r requirements.txt
-```
-
-The model and assay code use PyTorch plus the Python standard library; the
-current reference-figure entry point also uses Matplotlib. A **CPU-only** torch
-build works (the device auto-falls back to CPU); a CUDA GPU is recommended for
-training, while forward-only re-probes are cheap on CPU. Requires Python ≥ 3.10.
-
-## 5. How to run
-
-> **Confirmed by an end-to-end reproduction of the cleaned package:** every script below runs from the package
-> root (or any neutral working directory) with **no `PYTHONPATH` and no install step** — each script
-> bootstraps its own import of `simple_net.py` from a `__file__`-relative path. **CPU works; a GPU is
-> optional** (it only speeds up the Phase-A grid and Phase-B training — all re-probes are cheap on CPU).
-> Run from the package root:
-
-**Phase A — emergent sharpen/dampen:**
-```bash
-python phaseA_somvip/grid_circuit.py            # 15-cell energy×task grid; regenerated ckpts -> grid_output/ (shipped ckpts untouched)
-python phaseA_somvip/grid_circuit.py --out DIR  #   ...or --out DIR; point --out at phaseA_somvip to overwrite the shipped ckpts in place
-python phaseA_somvip/mech_probe.py              # VIP/SOM causal knockouts on the saved ckpts
-python phaseA_somvip/proveout_circuit.py        # single-instance prove-out (sharpen vs dampen)
-python phaseA_somvip/reprobe_save_integrity.py  # reload ckpts from disk + re-probe (CPU-cheap)
-python phaseA_somvip/smoke_circuit.py           # shape/regression smoke (uses ckpt_momentum.pt fixture)
-```
-
-**Phase B — runtime context switch:**
-```bash
-python phaseB_somvip/train_switch.py              # canonical generator: regenerates the seed-1 checkpoint in place
-python phaseB_somvip/train_switch.py --out PATH   #   ...or pass --out PATH to write elsewhere (keep the shipped ckpt)
-python phaseB_somvip/train_switch_seed0_gate.py   # seed-0 kill-gate
-python phaseB_somvip/train_switch_robustness.py   # seeds 1–2 robustness
-python phaseB_somvip/audit_switch.py              # independent audit + artifact battery (seeds 0 & 7)
-python phaseB_somvip/proveout_switch.py           # pre-registered K1–K4 prove-out on the saved ckpt (CPU-ok)
-python phaseB_somvip/reprobe_save_integrity_B.py  # reload checkpoint from disk + re-probe (CPU-cheap)
-```
-
-## 6. Expected results
-
-All numbers are quoted from the two per-phase `RESULTS.md` (the source of truth), which read them
-straight from the saved logs.
-
-**Phase A — the regime tracks the energy/task ratio** (representative rows of the 15-cell grid;
-`exp−floor > 0` = sharpen, `< 0` = dampen; "floor" = same net with feedback off):
-
-| lam_energy | ce | ratio | net_fb_gain | regime | exp_r | floor | exp−floor | held % |
-|----:|----:|------:|------------:|--------|------:|------:|----------:|------:|
-| 0.00 | 1.0 | 0.000 | +0.495 | SHARPEN | 7.283 | 1.241 | **+6.04** | 81.8 |
-| 0.05 | 1.0 | 0.050 | +0.077 | SHARPEN | 1.890 | 1.242 | +0.65 | 82.1 |
-| 0.10 | 1.0 | 0.100 | −0.219 | DAMPEN | 0.185 | 1.231 | −1.05 | 81.9 |
-| 0.20 | 1.0 | 0.200 | −0.575 | DAMPEN | 0.000 | 1.239 | −1.24 | 82.1 |
-
-Across all 15 cells, `net_fb_gain` slides **monotonically +0.517 → −0.860**, crossing zero at the ratio
-`lam/ce ≈ 0.05–0.10`, while held-out next-step prediction stays **~82% in every cell** — the regime flip
-costs no accuracy. Sharpen amplifies the expected channel to **~6× the feedforward floor**; dampen
-**suppresses it to 0.000** while the *unexpected* channel stays near floor (the suppression is
-expectation-specific, not a global gain change). The saved checkpoints reproduce from disk: sharpen
-**7.265 vs 1.229 (5.91×)**, dampen **0.000 vs 1.231**. Causal knockouts confirm the mechanism — in the
-sharpener, removing VIP collapses the amplification (`r 7.27 → 2.00`); in the dampener, removing SOM
-restores the channel (`r 0.00 → 4.43`).
-
-**Phase B — one net, runtime switch, robust across seeds** (`ctx=+1` attend / `ctx=−1` save; same
-weights):
-
-| seed | attend `exp / floor / Δ` | save `exp / floor / Δ` | held att/save | g_ctx | switch |
-|----:|--------------------------|------------------------|--------------:|------:|:------:|
-| 0 | 2.251 / 1.239 / **+1.012** | 0.000 / 1.288 / **−1.288** | 81.0 / 80.6 | 1.916 | YES |
-| 1 | 7.601 / 1.664 / **+5.938** | 0.543 / 1.695 / **−1.152** | 79.6 / 80.3 | 1.975 | YES |
-| 2 | 6.950 / 1.749 / **+5.202** | 0.998 / 1.764 / **−0.766** | 80.3 / 80.0 | 1.815 | YES |
-| 7 | 8.140 / 1.329 / **+6.812** | 0.840 / 1.358 / **−0.519** | 80.5 / 80.5 | 1.865 | YES |
-
-Every seed switches the correct way, in one net at fixed weights; `g_ctx` **grew** from its 0.693 init to
-~1.8–2.0 (the context drive is load-bearing). Two decisive controls: the feedback-off **floor is
-context-independent** (`|Δ| = 0`), so the switch is not a baseline artifact; and **lesioning `g_ctx`
-collapses the two contexts to identical** (`|attend − save| = 0`), so the switch is carried *entirely* by
-the one trained context knob, not by shared-gain drift. Sign-agreement spans **5 distinct seeds**
-(0, 1, 2, 7, 11) plus an independent audit re-test.
-
-## 7. File manifest
-
-| path | what |
-|------|------|
-| `simple_net.py` | the shared core — L4 ring, L2/3, GRU predictor, and the Dale SOM/VIP feedback operator; imported by both phases |
-| `requirements.txt` | runtime dependencies (`torch>=2.0`; `matplotlib>=3.6` for the current figure generator) |
-| `phaseA_somvip/` | **emergent regime.** `grid_circuit.py` (entry: 15-cell grid), `mech_probe.py`, `proveout_circuit.py`, `reprobe_save_integrity.py`, `smoke_circuit.py`, `mech_debug.py`; checkpoints `ckpt_circuit_sharpen.pt`, `ckpt_circuit_dampen.pt`, `ckpt_momentum.pt` (baseline fixture); `RESULTS.md` (full deep-dive) |
-| `phaseB_somvip/` | **runtime switch.** `train_switch.py` (canonical generator that saves the checkpoint), `train_switch_seed0_gate.py`, `train_switch_robustness.py`, `audit_switch.py`, `proveout_switch.py`, `reprobe_save_integrity_B.py`; checkpoint `ckpt_ctxswitch_seed1.pt`; `RESULTS.md` (full deep-dive) |
-
-**Checkpoint load conventions.** Phase-A checkpoints are plain `state_dict`s — load into
-`SimpleNet(use_circuit=True)`. The **Phase-B checkpoint is a wrapper dict** `{'net','read','cfg'}` — load
-with `ck = torch.load(...); net.load_state_dict(ck['net'])` into
-`SimpleNet(use_circuit=True, context=True)`, **not** `load_state_dict` on the raw object (which silently
-leaves the net at init). `reprobe_save_integrity_B.py` shows the correct load.
-
-## 8. Caveats (honest scope)
-
-- **Phase A** is a single seed on one frozen feedforward substrate. The monotone surface across 15 cells
-  argues strongly against a fluke, but multi-seed robustness is the clean open follow-up. This is the
-  first version where the sharpen/dampen **sign is *learned*, not hand-set.**
-- **Phase B** is one substrate per seed. The switch **sign** is robust (4/4 seeds + audit), but the two
-  arms are **not magnitude-symmetric** (attend +1.0…+6.8, save −0.5…−1.3) and the **neutral `ctx=0`
-  baseline is off-center and seed-dependent** (e.g. seed 0 leans dampen, seed 7 leans sharpen). The ±1
-  context knob reliably swings the regime *across* the floor in every seed; a centered, magnitude-
-  symmetric switch is a further refinement, not part of the stated target.
-- `simple_net.py` also contains **alternative feedback operators** — `signed_fb` push-pull, a
-  `subtractive` Rao–Ballard predictive-coding variant — and alternative task regimes (`march`, `markov`).
-  These are **exploratory lineage kept for the record; none are used by the Phase A/B headline results**,
-  which all use the SOM/VIP circuit (`use_circuit=True`).
-
-## 9. Full detail
-
-Each phase's `RESULTS.md` is the authoritative, numbers-from-logs record, including the full grid, the
-mechanism knockouts, the artifact battery, and the reproduction recipes:
-- [`phaseA_somvip/RESULTS.md`](phaseA_somvip/RESULTS.md) — emergent sharpen/dampen from the objective.
-- [`phaseB_somvip/RESULTS.md`](phaseB_somvip/RESULTS.md) — one net switching regime at runtime.
+The Phase A/B directories and the remaining repair/tuning scripts are retained
+for provenance and earlier scientific hypotheses. Their checkpoints, context
+switches, feedback-off floors, and regime-specific objectives must not be mixed
+with the current experiment. Start with the canonical guide, then follow legacy
+links only when studying project history.

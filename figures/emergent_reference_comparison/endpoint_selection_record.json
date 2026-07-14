@@ -1,5 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": "2.0.0",
+  "schema": {
+    "id": "emergent_task_energy_endpoint_selection_record",
+    "version": "2.0.0"
+  },
+  "generator": {
+    "id": "tools/evaluate_emergent_task_energy_gates.py",
+    "version": "1.0.0",
+    "role": "portable decision evaluator bound to this curated selection record",
+    "source_file_sha256": "3d5e91024078c9df02439cdfa5aedea995896d21acdc3a4e09a7cae4f7a3fbbf",
+    "authoritative_external_evaluator_v2_sha256": "9df9f9f54abcb2ab1d7e175d2498c2af0847f60256941597aa28893ccfe15ef9"
+  },
   "status": "selected_and_freshly_confirmed",
   "selected_endpoint": {
     "alpha": 0.5,
@@ -11,8 +22,8 @@
     "per_seed": {
       "energy_A_less_B": true,
       "decoding_A_less_B": true,
-      "decoding_A_above_chance": 0.027777777777777776,
-      "decoding_B_above_chance": 0.027777777777777776,
+      "decoding_A_accuracy_min_exclusive": 0.027777777777777776,
+      "decoding_B_accuracy_min_exclusive": 0.027777777777777776,
       "Cret_less_Fret": true,
       "dC_less_dF": true,
       "dQ_less_zero": true,
