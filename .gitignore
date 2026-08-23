@@ -1,0 +1,15 @@
+# Bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Checkpoints / training outputs — data stays on scratch, referenced by
+# path + sha256 in docs/ARCHITECTURE_AND_SCIENCE.md, never committed.
+*.pt
+runs/
+outputs/
+
+# Rendered figures (regenerate with src/make_*_figs.py)
+*.png
+*.pdf
+*.svg
