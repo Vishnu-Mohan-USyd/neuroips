@@ -17,3 +17,36 @@ Reading order for the science: PROTOCOL → DESIGN → DIAGNOSTIC_REPORT →
 VERDICT (main + addenda) → DIAGNOSTIC_REPORT_PHASE4_M →
 DIAGNOSTIC_REPORT_PHASE4_LADDER. The narrative synthesis is
 `../ARCHITECTURE_AND_SCIENCE.md`.
+
+## Follow-up investigations (snapshot 2026-08-25)
+
+### `transplant_surround_20260823/` — weight-set strategy study
+
+Which trained weight sets (CELL / FB / GAINS) carry the sharpening and
+dampening phenotypes at s=0.04, via splicing + fresh FB controls (94 table
+cells, 89 nets, measurement-only). Originals:
+`/home/vishnu/neuroips_analysis/transplant_surround_20260823/` (docs) and
+`/home/vishnu/scratch/transplant_surround_20260823/` (tables). Scripts:
+`../../src/transplant/`.
+
+| file | role | sha256 (at copy) |
+|---|---|---|
+| `PROTOCOL.md` | Lead's protocol: goal, baseline map, provenance correction (original study had no fresh FB controls), phases, rulings | `1c49cf20f73c072a07d0ff03f680ade6bb1f9344b6d8e8b52faf226e456aa357` |
+| `DESIGN.md` | Pre-registered design: conventions, matrix, ρ machinery/floors/bands, gate chain, deeper analyses, labeled predictions | `3438e4c323acdfeb5da70560b5048e9f2afdf76298677cb7e5100634b0aa3d10` |
+| `VERDICT.md` | Validator: **GO** on the strategy map (independent end-to-end re-derivation of every load-bearing cell from raw donor checkpoints; E0 anchor bitwise 8/8) | `ee83b5ed62aaf40be7bfaffe6c518fea9be0f60b81b25418db75aed85e8507a2` |
+| `TABLES.md` | Full rendered results: raw markers, ρ tables, classifications, prediction confrontation, Q1–Q4/H-C1/H-C2, s→0, trip census | `55f24fd3a82a6c64d3cb341c3c1cdae9a6c92d8ab1f773438e7a7a65fdaf03df` |
+
+### `fromscratch_joint_20260825/` — from-scratch joint-training probes
+
+What happens when the two-stage protocol (3000 task-only pretrain → 8000
+joint arm) is replaced by dual training from step 0 (n=1 observational, seed
+8, both regimes). Run file: `../../src/train_fromscratch_joint.py`.
+Originals: `/home/vishnu/neuroips_analysis/fromscratch_joint_20260825/` and
+`/home/vishnu/scratch/fromscratch_joint_20260825/`.
+
+| file | role | sha256 (at copy) |
+|---|---|---|
+| `PROTOCOL.md` | Lead's protocol: question (collapse / generic suppression / self-sequencing), design, envelope | `19a27971ec8948a806f53dd1f1ca52094e7f7d0611fcf4db03ad7e9f8fbb2887` |
+| `RUN_LOG.md` | Coder's run log: source-harness sha proof, full diff audit (the exact two hunks), launch commands, measured summaries | `1c82b9dab5eebd39c0c18c5d879477614d8e50e110989b0df00972015933dc25` |
+| `results_joint.json` | α=0.5 run: trajectory (k / decode / rates / profile per 500-step snapshot), endpoint vs two-stage arm and host, event-log curves | `8d11965f79e723eaf6f93e04b12ac27e0bcdbc0da2d0dd89cec42f480ce1f3a9` |
+| `results_joint_alpha0p0.json` | α=0.0 run: same measurements | `d462e0da2a0e348cdaa829e4a6435c363e4ec75f5068619d19aa9544de070979` |
