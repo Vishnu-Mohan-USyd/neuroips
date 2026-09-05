@@ -24,9 +24,11 @@ import torch.nn.functional as F
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "harness"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import simple_net as simple  # noqa: E402
+import train_sweep  # noqa: E402
 import tuned_emergence_lib as tuned  # noqa: E402
 
 
@@ -51,12 +53,17 @@ def choose_device(requested: str) -> torch.device:
     if selected.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
     simple.device = selected
+    simple.prefs = torch.arange(N, device=selected).float() * STEP_DEG
     tuned.device = selected
     return selected
 
 
-def alpha_slug(alpha: float) -> str:
-    return f"{alpha:.1f}".replace(".", "p")
+def alpha_tag(alpha: float | str) -> str:
+    return train_sweep.alpha_tag(alpha)
+
+
+def alpha_slug(alpha: float | str) -> str:
+    return train_sweep.alpha_slug(alpha)
 
 
 def matched_pairs(device: torch.device) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -301,6 +308,10 @@ def shape_quantities(
 
 def load_arm(path: Path, device: torch.device) -> tuple[tuned.SimpleTunedNet, dict]:
     checkpoint = torch.load(path, map_location=device)
+    if checkpoint.get("model_architecture_version") != tuned.MODEL_ARCHITECTURE_VERSION:
+        raise RuntimeError(
+            "checkpoint architecture does not match current tuned circuit"
+        )
     net = tuned.build_tuned_from_config(checkpoint["tuned_net_config"]).to(device)
     net.load_state_dict(checkpoint["state_dict"])
     net.eval()
@@ -311,7 +322,7 @@ def load_arm(path: Path, device: torch.device) -> tuple[tuned.SimpleTunedNet, di
 def assay_arm(
     path: Path,
     device: torch.device,
-    common_local_comp_raw: torch.Tensor,
+    common_local_comp_raw: torch.Tensor | None,
 ) -> tuple[dict, dict]:
     """Replay one final checkpoint and summarize its three assay families.
 
@@ -328,9 +339,14 @@ def assay_arm(
         checkpoint.get("feedback_mode"),
     )
     freeze_local_comp = bool(checkpoint.get("freeze_local_comp", False))
-    local_comp_matches_common = torch.equal(
-        checkpoint["state_dict"]["local_comp_strength_raw"],
-        common_local_comp_raw,
+    local_comp_raw = checkpoint["state_dict"].get("local_comp_strength_raw")
+    local_comp_matches_common = (
+        local_comp_raw is None
+        and common_local_comp_raw is None
+    ) or (
+        local_comp_raw is not None
+        and common_local_comp_raw is not None
+        and torch.equal(local_comp_raw, common_local_comp_raw)
     )
     if freeze_local_comp and not local_comp_matches_common:
         raise RuntimeError("frozen local competition differs from common pretrain")
@@ -461,6 +477,10 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.alphas or len(args.alphas) != len(set(args.alphas)):
         parser.error("alphas must be a nonempty unique list")
+    try:
+        train_sweep.validate_unique_alpha_slugs(args.alphas)
+    except ValueError as error:
+        parser.error(str(error))
     return args
 
 
@@ -474,9 +494,9 @@ def main() -> None:
     common_checkpoint = torch.load(
         args.run_dir / "common_pretrain_final.pt", map_location=device
     )
-    common_local_comp_raw = common_checkpoint["state_dict"][
+    common_local_comp_raw = common_checkpoint["state_dict"].get(
         "local_comp_strength_raw"
-    ]
+    )
     common_center_feedback = bool(
         common_checkpoint.get("center_feedback", False)
     )
@@ -485,6 +505,7 @@ def main() -> None:
         common_checkpoint.get("feedback_mode"),
     )
     for alpha in args.alphas:
+        alpha_key = alpha_tag(alpha)
         checkpoint_path = args.run_dir / f"alpha_{alpha_slug(alpha)}_final.pt"
         metrics, execution_config = assay_arm(
             checkpoint_path, device, common_local_comp_raw
@@ -493,8 +514,8 @@ def main() -> None:
             raise RuntimeError(
                 "axis checkpoint feedback mode differs from common pretrain"
             )
-        per_alpha[f"{alpha:.1f}"] = metrics
-        checkpoint_config[f"{alpha:.1f}"] = execution_config
+        per_alpha[alpha_key] = metrics
+        checkpoint_config[alpha_key] = execution_config
     result = {
         "metadata": {
             "device": str(device),

@@ -1,2 +1,10 @@
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
+outputs/
+MEMORY.md
+BIOLOGY_ALIGNMENT_LOG.md
+# Historical checkpoint families remain local; this branch publishes v8 only.
+checkpoints/seed*/alpha0p0/
+checkpoints/seed*/alpha0p5/
