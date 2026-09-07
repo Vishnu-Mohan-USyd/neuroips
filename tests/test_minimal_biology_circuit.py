@@ -604,7 +604,8 @@ def test_split_sst_pools_use_exact_bounded_tanh_modulation() -> None:
         w_ef * drive * fb
     )
     basal = drive / (1.0 + m_effective * som_b)
-    modulation = w_ef * fb - m_effective * som_p
+    projected_som_p = som_p @ net.pred_inhib_weight.T
+    modulation = w_ef * fb - m_effective * projected_som_p
     expected_pre_pv_rate = basal * (
         1.0 + torch.tanh(modulation)
     )
@@ -643,9 +644,10 @@ def test_prediction_sst_can_suppress_below_basal_despite_positive_feedback() -> 
 
     drive = net.feedforward(l4)
     basal = drive / (1.0 + net.m_fixed_effective() * som_b)
+    projected_som_p = som_p @ net.pred_inhib_weight.T
     modulation = (
         net.circuit_gains()[tuned.CIRC_INDEX["w_ef"]] * fb
-        - net.m_fixed_effective() * som_p
+        - net.m_fixed_effective() * projected_som_p
     )
 
     assert fb[0, 0] > 0.0

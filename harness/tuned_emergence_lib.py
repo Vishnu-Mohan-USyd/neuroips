@@ -29,7 +29,7 @@ FEEDBACK_MODES = (
     FEEDBACK_MODE_POSTERIOR,
     FEEDBACK_MODE_POSTERIOR_PRIOR_EXCESS,
 )
-MODEL_ARCHITECTURE_VERSION = "split_som_tanh_modulation_v8"
+MODEL_ARCHITECTURE_VERSION = "split_som_projected_output_tanh_v9"
 
 
 def circular_distance_channels() -> torch.Tensor:
@@ -346,9 +346,10 @@ class SimpleTunedNet(nn.Module):
         coincidence ``drive * (fb_pos @ K_pred.T)`` reaches the prediction pool.
         VIP remains a 9-unit local disinhibitory motif and targets both pools.
         Basal drive is divided by the basal SST pool, then modulated within
-        ``[0, 2*basal]`` by ``1+tanh(w_ef*relu(f)-m*S_P)``. The existing broad
-        PV divisor acts on that modulated drive. ``S`` is the equal-mass mean
-        of both SST pools. ``return_internals`` additionally yields
+        ``[0, 2*basal]`` by the prediction pool's sigma-2 projected inhibitory
+        output. The existing broad PV divisor acts on that modulated drive.
+        ``S`` is the equal-mass mean of both raw SST firing pools, so activity
+        accounting remains raw. ``return_internals`` additionally yields
         ``(S, V, som_gain, pre_pv_rate, post_pv_rate, exc_feedback_work,``
         ``S_B, S_P)``.
         """
@@ -380,7 +381,8 @@ class SimpleTunedNet(nn.Module):
         som_gain = m_effective * som
         exc_feedback_work = g[CIRC_INDEX["w_ef"]] * drive * fb_pos
         basal = drive / (1.0 + m_effective * som_b).clamp_min(1e-6)
-        u = g[CIRC_INDEX["w_ef"]] * fb_pos - m_effective * som_p
+        projected_som_p = som_p @ self.pred_inhib_weight.T
+        u = g[CIRC_INDEX["w_ef"]] * fb_pos - m_effective * projected_som_p
         pre_pv_rate = basal * (1.0 + torch.tanh(u))
         pv = (
             g[CIRC_INDEX["w_pv"]]
@@ -523,7 +525,8 @@ def forward_seq_tuned(
     t=0) for the population circuit's ongoing-activity route. With
     ``return_internals=True`` a third element
     ``(S, V, som_gain, pre_pv_rate, post_pv_rate, exc_feedback_work, S_B, S_P)``
-    is returned, each stacked to ``[B,S,·]``; the default
+    is returned, each stacked to ``[B,S,·]``. ``S_P`` is raw firing, before
+    its inhibitory output projection; the default
     two-tuple path is unchanged.
     """
     batch = theta.shape[0]

@@ -1,31 +1,39 @@
 # Expectation suppression: sharpening and dampening in one circuit
 
-This branch contains the current **split-SST, tanh-RNN model**, its trained
-sharpening and dampening checkpoints for seeds **8, 9, and 10**, and the code
-needed to reproduce their activity–orientation curves.
+This local branch contains the current **projected-output split-SST, tanh-RNN
+model** and the code for reproducing sharpening and dampening checkpoints for
+seeds **8, 9, and 10**.
 
 Both outcomes use the same architecture. For each seed, two copies of a shared
 task-pretrained network are trained with different population-activity penalties:
-**alpha = 0.05** produces sharpening; **alpha = 0.20** produces dampening.
-The architecture identifier is `split_som_tanh_modulation_v8`.
+**alpha = 0.07** produces sharpening; **alpha = 0.70** produces dampening.
+Common pretraining and each arm run for 12,000 steps. Both arms retain the
+original population-vector task/readout and train only the RNN, `W_fb`, and
+`w_sf_fixed`; feedback-gain learning is not used. The architecture identifier
+is `split_som_projected_output_tanh_v9`.
+
+This work is on the local branch `c6-shared-task-energy-sharpening` and has not
+been pushed. Previous progress is preserved in local commit `34f9670` on
+`c6-biological-sharpening-dampening`.
 
 This is a minimal rate-level modeling hypothesis, not a claim that the circuit
 matches every aspect of cortical biology. In particular, sensory–prediction
 coincidence and the separation of SST into functional pools are explicit
 architectural assumptions, not discoveries made by training.
 
-## Reproduce the published results
+## Reproduce the checkpoint results
 
 ```bash
-git clone --branch c6-biological-sharpening-dampening https://github.com/Vishnu-Mohan-USyd/neuroips.git
-cd neuroips
+git switch c6-shared-task-energy-sharpening
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 CUDA_VISIBLE_DEVICES="" python reproduce_figures.py
 ```
 
-The last command loads the six included checkpoints on CPU; it does not train.
+Run these commands from the existing local checkout; the current branch cannot
+yet be obtained by cloning the remote repository. The last command loads the
+six packaged checkpoints on CPU; it does not train.
 It writes six PNGs, six SVGs, and `figures/c6_curves.json`, containing raw curves
 and numerical measurements. Missing or incompatible checkpoints cause failure.
 Seed-8 reference measurements are checked to tolerance `1e-3`. Paths resolve
@@ -55,7 +63,7 @@ assigned duration in milliseconds.
 | L2/3 excitatory population, E | 36 orientation channels. A fixed nonnegative feedforward map supplies sensory drive. These final E rates are plotted. |
 | Temporal predictor | A 64-unit, ungated `torch.nn.RNNCell` with `tanh` activation. A learned linear projection produces 36 next-orientation logits. |
 | Sensory-driven SST, `S_B` | A 36-channel inhibitory field receiving sensory drive pooled through a nine-channel basis. Divisively inhibits E. |
-| Prediction-recipient SST, `S_P` | A separate 36-channel inhibitory field driven by sensory input multiplied by spatially smoothed prediction. Lowers E gain. |
+| Prediction-recipient SST, `S_P` | A separate 36-channel inhibitory field driven by sensory input multiplied by orientation-smoothed prediction. Its raw firing enters activity accounting; its output is projected across E channels by an existing fixed positive, row-normalized Gaussian map. |
 | Prediction-driven inhibitory relay | Nine rectified SST-like channels, `s_ff`, that receive feedback and inhibit VIP. Separate from `S_P`. |
 | VIP | Nine sensory-excited channels. Inhibits both `S_B` and `S_P` through local orientation footprints. |
 | PV | One scalar driven by mean pre-PV E activity; uniformly divides the E response. Not an explicit population of PV neurons. |
@@ -70,8 +78,8 @@ The present stimulus is not used to compute its own incoming prediction.
 2. Sensory input recruits `S_B` and VIP. Prediction recruits the inhibitory
    relay, reducing VIP, and overlaps with sensory drive to recruit `S_P`.
 3. VIP inhibits both SST pools. Sensory-driven SST divides the sensory response.
-4. Direct excitatory feedback and prediction-recipient SST compete to increase
-   or decrease the remaining response.
+4. Direct excitatory feedback and the projected output of prediction-recipient
+   SST compete to increase or decrease the remaining response.
 5. The broad PV divisor scales the result. The final E response updates the
    RNN, which predicts the next orientation.
 
@@ -79,7 +87,8 @@ After the SST/VIP rates are computed, the core E calculation is:
 
 ```text
 basal = D / (1 + m * S_B)
-modulation = 1 + tanh(w_ef * feedback - m * S_P)
+S_P_output = S_P @ pred_inhib_weight.T
+modulation = 1 + tanh(w_ef * feedback - m * S_P_output)
 pre_PV = basal * modulation
 PV = w_pv * mean(pre_PV over orientation channels)
 E = pre_PV / (1 + PV)
@@ -87,19 +96,29 @@ E = pre_PV / (1 + PV)
 
 `S_P` receives `D * (feedback @ K_pred.T)`, followed by a threshold and VIP
 inhibition. `K_pred` is a fixed, circular, peak-normalized Gaussian map, applied
-identically at every orientation. No expected/unexpected flag is supplied.
-Nevertheless, **sensory–prediction multiplication is built into the circuit**.
-Modulation is bounded between zero and twice the basal response. Without
-sensory drive it cannot generate E activity.
+identically at every orientation. `pred_inhib_weight` is the already-existing
+positive, row-normalized circular Gaussian with sigma two orientation channels;
+the projection adds no parameter and preserves global mean. Its exact Gaussian
+width is an engineering approximation. Broad SOM targeting is qualitatively
+supported by [Wilson et al. (2012)](https://pmc.ncbi.nlm.nih.gov/articles/PMC3653570/),
+who found that SOM neurons affected targets spanning a broader range of
+orientation preferences. Both arms use this same projection and architecture.
+No expected/unexpected flag is supplied. Nevertheless,
+**sensory–prediction multiplication is built into the circuit**. Modulation is
+bounded between zero and twice the basal response. Without sensory drive it
+cannot generate E activity.
 
 Local pathway magnitudes are nonnegative, with signs assigned explicitly.
 This does not make the whole model Dale-compliant: the abstract RNN has
 unconstrained signed weights and states. There are no explicit dendritic
 compartments, spikes, within-step interneuron dynamics, or local recurrent
 E-to-E connections. Adaptation, extra local competition, and optional rate
-saturation are disabled. PV is weak in the fitted networks; VIP has the
-prescribed disinhibitory route, but the response shapes do not establish its
-necessity.
+saturation are disabled. PV and VIP have the prescribed signs but are weak in
+the fitted seed-8 networks: acute PV removal changes population means by less
+than 0.1%, and VIP-to-SST removal by less than 0.2%. Removing prediction-SST
+output abolishes both fitted shapes, while removing direct E feedback abolishes
+the sharp center boost; these are interventions on the model, not evidence that
+the biological pathways are necessary in vivo.
 
 ### What learns
 
@@ -110,10 +129,11 @@ its name, it is trainable in these arms. It controls both the prediction-driven
 relay and `S_P` recruitment.
 
 Feedforward maps, anatomical footprints, SST-to-E strength `m`, thresholds,
-and other local gains are fixed across arms. For example, `w_ef` is about
-0.546, `m` about 0.290, and `w_pv` is 0.0025. Learned `w_sf` is 0.824–0.840
-in sharpening and 3.360–3.400 in dampening. RNN and feedback weights also differ
-after training; these are not checkpoints with a manually switched SST gain.
+the SST output projection, and other local gains are fixed across arms. For
+example, `w_ef` is about 0.546, `m` about 0.290, and `w_pv` is 0.0025. Across
+the three seeds, learned `w_sf` is 1.6163–1.6600 for sharpening and
+9.0528–9.1010 for dampening. RNN and feedback weights also differ after
+training; these are not checkpoints with a manually switched SST gain.
 
 ## Training pressure
 
@@ -139,7 +159,8 @@ channels per step and sticky acceleration in `{-1, 0, 1}`. During pretraining an
 a 2% halt probability applies to eligible transitions whose preceding speed
 is at least two channels per step. This changes the sequence; no halt or
 expectation label enters the model or loss. Each arm uses the same seed-specific
-data and readout-noise streams.
+data and readout-noise streams. Common pretraining and both arms use 12,000
+steps.
 
 ## Results and measurement definitions
 
@@ -161,39 +182,46 @@ pooled means, not averages of per-channel ratios.
 
 | Seed | Type / alpha | At 0° / first | At ±5° / first | Flanks ±15–30° / first | Mean expectation suppression |
 |---|---|---:|---:|---:|---:|
-| 8 | Sharpening / 0.05 | 1.1415 | 0.7886 | 0.9931 | 4.72% |
-| 9 | Sharpening / 0.05 | 1.1366 | 0.7885 | 0.9930 | 4.80% |
-| 10 | Sharpening / 0.05 | 1.1478 | 0.7901 | 0.9934 | 4.62% |
-| 8 | Dampening / 0.20 | 0.2932 | 0.2573 | 0.9560 | 31.39% |
-| 9 | Dampening / 0.20 | 0.2879 | 0.2527 | 0.9559 | 31.53% |
-| 10 | Dampening / 0.20 | 0.2857 | 0.2496 | 0.9564 | 31.68% |
+| 8 | Sharpening / 0.07 | 1.1145 | 0.7229 | 0.8966 | 10.12% |
+| 9 | Sharpening / 0.07 | 1.1104 | 0.7182 | 0.8946 | 10.40% |
+| 10 | Sharpening / 0.07 | 1.1107 | 0.7121 | 0.8934 | 10.62% |
+| 8 | Dampening / 0.70 | 0.0914 | 0.0723 | 0.4921 | 62.91% |
+| 9 | Dampening / 0.70 | 0.0902 | 0.0698 | 0.4912 | 63.38% |
+| 10 | Dampening / 0.70 | 0.0906 | 0.0669 | 0.4895 | 63.27% |
 
-Sharpening raises the exact expected channel while suppressing its neighbors;
-more distant flanks are almost spared. Dampening strongly suppresses the
-expected region and relatively spares distant flanks. It is not a perfectly
-monotonic central notch: ±5-degree neighbors are slightly more suppressed than
-the exact center, and raw expected activity peaks at ±15 degrees.
+All three sharpening endpoints raise the exact expected channel while
+suppressing its neighbors and flanks. All three dampening endpoints are more
+suppressed overall and have a genuine central-region dip; their raw maxima are
+at +20 degrees for seed 8 and -20 degrees for seeds 9 and 10. In seed 8, raw
+expected activity is 0.12993 at the center versus 0.22770 averaged at ±15
+degrees.
+
+On shared held-out seed-8 batches, stronger activity pressure reduced modeled
+activity from 0.8914 to 0.4363 but worsened normalized task cost from 0.3472 to
+0.5581 (next accuracy 0.8012 to 0.7555; current CE 1.8470 to 3.1895), so this is
+not a performance-free improvement.
 
 Expectation suppression is `100 * (1 - mean_expected_E / mean_unexpected_E)`,
 using all 36 channels at the last timestep. The expected population mean is
-lower in all six checkpoints. This is **not** a claim of lower expected activity
-at every orientation. In the JSON, `preferred_ratio` measures exactly 0 degrees;
+lower in all six checkpoints. This is **not** a claim of lower expected
+activity at every orientation. In the JSON, `preferred_ratio` measures exactly 0 degrees;
 the historical key `center_ratio` pools -5, 0, and +5 degrees instead.
 
 ## Train from scratch
 
 Run from the repository root, using a fresh output directory so the trainer
-does not resume an existing run. The full published settings are supplied below;
-the general-purpose trainer's default alpha values are not this published pair.
+does not resume an existing run. The matched checkpoint settings are supplied
+below; the general-purpose trainer's default alpha values are not this pair.
 
 ```bash
 for seed in 8 9 10; do
     CUBLAS_WORKSPACE_CONFIG=:4096:8 python harness/train_sweep.py \
         --seed "$seed" --device cuda:0 --out outputs/retrained \
-        --pretrain-steps 3000 --axis-steps 32000 \
+        --pretrain-steps 12000 --axis-steps 12000 \
         --batch 128 --sequence-length 12 --mismatch-prob 0.02 \
-        --lr 0.001 --clip 5 --alphas 0.05 0.20 \
+        --lr 0.001 --clip 5 --alphas 0.07 0.70 \
         --feedback-mode posterior --recurrent-cell rnn_tanh \
+        --axis-current-readout population_vector \
         --freeze-local-comp
 done
 ```
@@ -203,20 +231,19 @@ CPU and CUDA random-number streams can produce different fitted weights. The
 trainer enables deterministic PyTorch algorithms and saves optimizer and RNG
 states for same-backend resumption. Numerical identity across different devices,
 PyTorch builds, or CUDA libraries is not guaranteed. Included checkpoints are
-the reference for the published figures; the full training campaign was not
-rerun for this release.
+the reference for the figures.
 
 Evaluate a freshly trained pair with the existing assay:
 
 ```bash
 python tools/assay_emergent_task_energy_axis.py \
-    --run-dir outputs/retrained/seed_8 --alphas 0.05 0.20 \
+    --run-dir outputs/retrained/seed_8 --alphas 0.07 0.70 \
     --device cpu --out outputs/retrained/seed_8/assay.json
 ```
 
 It reports activity, aligned response shape, and held-out noisy decoding. For
-included checkpoints, use `--run-dir checkpoints/seed8/alpha0p05 --alphas 0.05`
-or `--run-dir checkpoints/seed8/alpha0p2 --alphas 0.20`, with an output path
+included checkpoints, use `--run-dir checkpoints/seed8/alpha0p07 --alphas 0.07`
+or `--run-dir checkpoints/seed8/alpha0p7 --alphas 0.70`, with an output path
 of your choice.
 
 ## Load a network in Python
@@ -233,7 +260,7 @@ device = torch.device("cpu")
 simple.device = tuned.device = device
 simple.prefs = torch.arange(36, device=device).float() * 5.0
 checkpoint = torch.load(
-    "checkpoints/seed8/alpha0p05/alpha_0p05_final.pt",
+    "checkpoints/seed8/alpha0p07/alpha_0p07_final.pt",
     map_location=device, weights_only=False,
 )
 assert checkpoint["model_architecture_version"] == tuned.MODEL_ARCHITECTURE_VERSION
@@ -252,7 +279,7 @@ with torch.no_grad():
 ```
 
 Checkpoints contain training state as well as weights; only load ones you trust.
-Changing `alpha0p05/alpha_0p05_final.pt` to `alpha0p2/alpha_0p2_final.pt` loads
+Changing `alpha0p07/alpha_0p07_final.pt` to `alpha0p7/alpha_0p7_final.pt` loads
 the dampening network.
 
 ## Code and artifact layout
@@ -260,12 +287,12 @@ the dampening network.
 | Path | Contents |
 |---|---|
 | `harness/tuned_emergence_lib.py` | Current circuit, fixed maps, feedback transforms, model configuration, and recurrent forward pass. `SimpleTunedNet.l23` implements SST/VIP/PV processing. |
-| `harness/train_sweep.py` | Sequences, losses, common pretraining, alpha-arm training, and checkpoints. Retains an optional constrained-training mode not used for the published pair. |
-| `harness/simple_net.py` | Imported orientation-encoding helpers and older reference implementations. Its legacy `SimpleNet`/GRU is not the released model. |
+| `harness/train_sweep.py` | Sequences, losses, common pretraining, alpha-arm training, and checkpoints. Retains an optional constrained-training mode not used for the checkpoint pair. |
+| `harness/simple_net.py` | Imported orientation-encoding helpers and older reference implementations. Its legacy `SimpleNet`/GRU is not the current model. |
 | `tools/assay_emergent_task_energy_axis.py` | Continuation/reversal histories, orientation alignment, activity and decoding measurements. |
 | `reproduce_figures.py` | CPU evaluation and plotting of all six endpoints; checks reference numbers. |
 | `tests/test_minimal_biology_circuit.py` | 38 existing tests covering circuit equations/signs, feedback timing, training policies/losses, resume behavior, and reproduction failure handling. |
-| `checkpoints/seed{8,9,10}/alpha{0p05,0p2}/` | Final model, seed-shared common pretrain, and original summary. Pretrains are duplicated per arm so each assay directory is self-contained. |
+| `checkpoints/seed{8,9,10}/alpha{0p07,0p7}/` | Final model, seed-shared 12,000-step common pretrain, and original summary. Pretrains are duplicated per arm so each assay directory is self-contained. |
 | `figures/` | Reproduced PNG/SVG profiles and JSON curve data. |
 | `requirements.txt` | Pinned package versions. |
 
@@ -273,7 +300,7 @@ Training summaries retain their original run paths and settings; corresponding
 checkpoints are packaged beside them. Historical alpha-0.0/0.5 models belong to
 the earlier architecture and remain on the
 [`c6-interneuron-networks` branch](https://github.com/Vishnu-Mohan-USyd/neuroips/tree/c6-interneuron-networks).
-Exploratory runs and session notes are not part of this release.
+Exploratory runs and session notes are not packaged here.
 
 Run the existing tests with:
 

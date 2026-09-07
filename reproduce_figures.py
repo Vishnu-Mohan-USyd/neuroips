@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduce the current split-SST sharpening and dampening checkpoints.
+"""Reproduce the current projected-output split-SST checkpoints.
 
 Self-contained: every path is resolved relative to this file, and the only
 external requirement is PyTorch (CPU is enough) and Matplotlib.
@@ -35,18 +35,18 @@ FLANK_OFFSETS = (-6, -5, -4, -3, 3, 4, 5, 6)
 PLOT_OFFSETS = tuple(range(-12, 13))
 
 ARMS = [
-    ("alpha0p05", "0p05", "Sharpening", "sharpening", "#2b7bb9"),
-    ("alpha0p2", "0p2", "Dampening", "dampening", "#cf3232"),
+    ("alpha0p07", "0p07", "Sharpening", "sharpening", "#2b7bb9"),
+    ("alpha0p7", "0p7", "Dampening", "dampening", "#cf3232"),
 ]
 SEEDS = (8, 9, 10)
 
 # Values produced by this script on the banked seed-8 checkpoints. Any drift
 # means the model code and these checkpoints have come apart.
 BANKED = {
-    ("8", "0p05"): {"center_ratio": 0.9119, "flank_ratio": 0.9931,
-                    "peak": 1.6226, "peak_at_deg": 0.0},
-    ("8", "0p2"): {"center_ratio": 0.2699, "flank_ratio": 0.9560,
-                   "peak": 0.6869, "peak_at_deg": -15.0},
+    ("8", "0p07"): {"center_ratio": 0.8596, "flank_ratio": 0.8966,
+                     "peak": 1.5841, "peak_at_deg": 0.0},
+    ("8", "0p7"): {"center_ratio": 0.0790, "flank_ratio": 0.4921,
+                    "peak": 0.2554, "peak_at_deg": 20.0},
 }
 TOL = 1e-3
 
