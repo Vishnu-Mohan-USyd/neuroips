@@ -466,12 +466,13 @@ def confidence_weighted_current_orientation_ce(
     noise_generator: torch.Generator,
     references: dict[str, float],
     current_decoder_noise: torch.Tensor | None = None,
+    current_readout: str = "population_vector",
 ) -> dict[str, torch.Tensor]:
-    """Return audited confidence-weighted circular current-orientation CE.
+    """Return noisy current-orientation CE with confidence diagnostics.
 
-    The resultant uses doubled orientation angles over the 36-channel basis.
-    Confidence scales only the decoded direction logits; decoder gain is
-    detached so this term does not train by simply inflating readout gain.
+    Population-vector logits use confidence-weighted doubled-angle direction.
+    Channel logits use all 36 noisy rectified rates directly; confidence and
+    resultant magnitude remain diagnostics. Decoder gain is detached.
     """
 
     if current_decoder_noise is None:
@@ -505,11 +506,16 @@ def confidence_weighted_current_orientation_ce(
     ) / (magnitude.unsqueeze(-1) + eps)
     sigma_vec = rates.new_tensor(references["sigma_train"] * math.sqrt(N / 2.0))
     confidence = magnitude / (magnitude + sigma_vec + eps)
-    logits = (
-        F.softplus(net.decoder_gain_raw).detach()
-        * confidence.unsqueeze(-1)
-        * direction
-    )
+    if current_readout == "population_vector":
+        logits = (
+            F.softplus(net.decoder_gain_raw).detach()
+            * confidence.unsqueeze(-1)
+            * direction
+        )
+    elif current_readout == "channel":
+        logits = F.softplus(net.decoder_gain_raw).detach() * activity
+    else:
+        raise ValueError(f"unknown current readout {current_readout!r}")
     current_ce = F.cross_entropy(
         logits.reshape(-1, N),
         channels.reshape(-1),
@@ -531,6 +537,7 @@ def task_activity_losses(
     center_feedback: bool = False,
     feedback_mode: str | None = None,
     current_decoder_noise: torch.Tensor | None = None,
+    current_readout: str = "population_vector",
 ) -> dict[str, torch.Tensor]:
     """Compute task and normalized modeled-population activity pressure.
 
@@ -546,6 +553,9 @@ def task_activity_losses(
         unless ``current_decoder_noise`` supplies that draw explicitly.
     current_decoder_noise:
         Optional fixed ``[B,S,36]`` noise tensor for paired evaluations.
+    current_readout:
+        ``population_vector`` for confidence-weighted direction logits or
+        ``channel`` for ordinary all-channel logits from the same noisy rates.
     references:
         Positive scalar activity references in arbitrary units, including
         ``R_ref`` and ``sigma_train``.
@@ -592,6 +602,7 @@ def task_activity_losses(
         noise_generator,
         references,
         current_decoder_noise=current_decoder_noise,
+        current_readout=current_readout,
     )
     task = 0.5 * next_ce / math.log(N) + 0.5 * current["current_ce"] / math.log(N)
     pv_scalar_seq = pv_scalar_from_pre_pv(net, pre_pv_seq)
@@ -787,15 +798,19 @@ def set_pretrain_parameter_policy(net: tuned.SimpleTunedNet) -> list[torch.nn.Pa
 
 
 def set_axis_parameter_policy(
-    net: tuned.SimpleTunedNet, freeze_local_comp: bool = False
+    net: tuned.SimpleTunedNet,
+    freeze_local_comp: bool = False,
+    learn_feedback_gain: bool = False,
 ) -> list[torch.nn.Parameter]:
     for parameter in net.parameters():
         parameter.requires_grad_(False)
     parameters = list(net.gru.parameters()) + list(net.W_fb.parameters())
     parameters.append(net.w_sf_fixed)
-    # Shared anatomy is initialized/settled, not learned during common
-    # pretraining or alpha arms. Axis fitting trains only the tanh-RNN, W_fb,
-    # and the existing nonnegative prediction-to-SOM coupling w_sf_fixed.
+    if learn_feedback_gain:
+        parameters.append(net.circ_raw)
+    # Shared anatomy is initialized/settled and frozen by default. Axis fitting
+    # trains the tanh-RNN, W_fb, and w_sf_fixed; the opt-in adds only the
+    # existing excitatory feedback gain w_ef from circ_raw.
     for parameter in parameters:
         parameter.requires_grad_(True)
     return parameters
@@ -1092,6 +1107,26 @@ def mask_fixed_vip_motif_grad(net: tuned.SimpleTunedNet) -> None:
     net.circ_raw.grad.detach().index_fill_(0, indices, 0.0)
 
 
+def mask_circ_raw_grad_to_feedback_gain(net: tuned.SimpleTunedNet) -> None:
+    if net.circ_raw.grad is None:
+        return
+    frozen = torch.ones_like(net.circ_raw.grad, dtype=torch.bool)
+    frozen[tuned.CIRC_INDEX["w_ef"]] = False
+    net.circ_raw.grad.detach().masked_fill_(frozen, 0.0)
+
+
+def zero_non_feedback_gain_optimizer_state(
+    optimizer: torch.optim.Optimizer,
+    net: tuned.SimpleTunedNet,
+) -> None:
+    state = optimizer.state.get(net.circ_raw, {})
+    frozen = torch.ones_like(net.circ_raw, dtype=torch.bool)
+    frozen[tuned.CIRC_INDEX["w_ef"]] = False
+    for value in state.values():
+        if isinstance(value, torch.Tensor) and value.shape == net.circ_raw.shape:
+            value.detach().masked_fill_(frozen, 0.0)
+
+
 def zero_fixed_vip_motif_optimizer_state(
     optimizer: torch.optim.Optimizer,
     net: tuned.SimpleTunedNet,
@@ -1201,8 +1236,14 @@ def run_alpha(
     )
     initial_local_comp_sha256 = optional_tensor_sha256(initial_local_comp_raw)
     task_weight = 1.0 - alpha
+    learn_feedback_gain = bool(getattr(args, "learn_feedback_gain", False))
+    axis_current_readout = getattr(
+        args, "axis_current_readout", "population_vector"
+    )
     optimizer = torch.optim.Adam(
-        set_axis_parameter_policy(net, args.freeze_local_comp),
+        set_axis_parameter_policy(
+            net, args.freeze_local_comp, learn_feedback_gain
+        ),
         lr=args.lr,
         betas=(0.9, 0.999),
         eps=1e-8,
@@ -1233,6 +1274,10 @@ def run_alpha(
             or float(saved["task_weight"]) != task_weight
             or bool(saved.get("freeze_local_comp", False))
             != args.freeze_local_comp
+            or bool(saved.get("learn_feedback_gain", False))
+            != learn_feedback_gain
+            or saved.get("axis_current_readout", "population_vector")
+            != axis_current_readout
             or saved_feedback_mode != args.feedback_mode
             or float(saved.get("mismatch_prob", 0.0)) != args.mismatch_prob
             or saved.get("model_architecture_version")
@@ -1244,7 +1289,7 @@ def run_alpha(
         net.load_state_dict(saved["state_dict"])
         assert_fixed_vip_motif(net)
         optimizer.load_state_dict(saved["optimizer_state_dict"])
-        zero_fixed_vip_motif_optimizer_state(optimizer, net)
+        zero_non_feedback_gain_optimizer_state(optimizer, net)
         restore_generator_state(data_generator, saved["data_generator_state"])
         restore_generator_state(noise_generator, saved["noise_generator_state"])
         start_step = int(saved["step"]) + 1
@@ -1269,6 +1314,8 @@ def run_alpha(
             "common_state_sha256": common_state_hash,
             "loaded_state_sha256": loaded_state_hash,
             "freeze_local_comp": args.freeze_local_comp,
+            "learn_feedback_gain": learn_feedback_gain,
+            "axis_current_readout": axis_current_readout,
             "center_feedback": args.center_feedback,
             "feedback_mode": args.feedback_mode,
             "local_comp_raw_initial_sha256": initial_local_comp_sha256,
@@ -1276,7 +1323,9 @@ def run_alpha(
         }
     )
     net.train()
-    parameters = set_axis_parameter_policy(net, args.freeze_local_comp)
+    parameters = set_axis_parameter_policy(
+        net, args.freeze_local_comp, learn_feedback_gain
+    )
     for step in range(start_step, args.axis_steps + 1):
         theta, channels = momentum_batch(
             args.batch,
@@ -1294,6 +1343,7 @@ def run_alpha(
             references,
             center_feedback=args.center_feedback,
             feedback_mode=args.feedback_mode,
+            current_readout=axis_current_readout,
         )
         objective = (
             task_weight * losses["task"]
@@ -1301,13 +1351,13 @@ def run_alpha(
         )
         optimizer.zero_grad(set_to_none=True)
         objective.backward()
-        mask_fixed_vip_motif_grad(net)
+        mask_circ_raw_grad_to_feedback_gain(net)
         gradient_norm = torch.nn.utils.clip_grad_norm_(parameters, args.clip)
-        mask_fixed_vip_motif_grad(net)
-        zero_fixed_vip_motif_optimizer_state(optimizer, net)
+        mask_circ_raw_grad_to_feedback_gain(net)
+        zero_non_feedback_gain_optimizer_state(optimizer, net)
         optimizer.step()
         enforce_fixed_vip_motif(net)
-        zero_fixed_vip_motif_optimizer_state(optimizer, net)
+        zero_non_feedback_gain_optimizer_state(optimizer, net)
         assert_fixed_vip_motif(net)
         if step == 1 or step % args.log_every == 0 or step == args.axis_steps:
             event_log.write(
@@ -1384,6 +1434,8 @@ def run_alpha(
                 feedback_mode=args.feedback_mode,
                 mismatch_prob=args.mismatch_prob,
             )
+            payload["learn_feedback_gain"] = learn_feedback_gain
+            payload["axis_current_readout"] = axis_current_readout
             atomic_torch_save(payload, latest_path)
             if step * 2 == args.axis_steps:
                 # kcontext DESIGN section 5: gates are evaluated at the mid-arm
@@ -1420,6 +1472,8 @@ def run_alpha(
         "common_state_sha256": common_state_hash,
         "loaded_state_sha256": loaded_state_hash,
         "freeze_local_comp": args.freeze_local_comp,
+        "learn_feedback_gain": learn_feedback_gain,
+        "axis_current_readout": axis_current_readout,
         "center_feedback": args.center_feedback,
         "feedback_mode": args.feedback_mode,
         "local_comp_raw_initial_sha256": initial_local_comp_sha256,
@@ -2121,6 +2175,18 @@ def parse_args() -> argparse.Namespace:
             "next/current task constraints instead of the alpha sweep."
         ),
     )
+    parser.add_argument(
+        "--learn-feedback-gain",
+        action="store_true",
+        default=False,
+        help="Train the existing excitatory feedback gain in every alpha arm.",
+    )
+    parser.add_argument(
+        "--axis-current-readout",
+        choices=("population_vector", "channel"),
+        default="population_vector",
+        help="Current-orientation readout used only in alpha arms.",
+    )
     parser.add_argument("--batch", type=int, default=128, help="Sequence batch size.")
     parser.add_argument(
         "--sequence-length", type=int, default=12, help="Abstract time steps per sequence."
@@ -2193,6 +2259,19 @@ def parse_args() -> argparse.Namespace:
         parser.error("alphas must lie in [0,1]")
     if args.task_weight is not None:
         parser.error("--task-weight is deprecated; objective uses 1 - alpha")
+    if args.learn_feedback_gain and args.constrained_efficient_coding:
+        parser.error(
+            "--learn-feedback-gain cannot be combined with "
+            "--constrained-efficient-coding"
+        )
+    if (
+        args.axis_current_readout != "population_vector"
+        and args.constrained_efficient_coding
+    ):
+        parser.error(
+            "nondefault --axis-current-readout cannot be combined with "
+            "--constrained-efficient-coding"
+        )
     try:
         validate_unique_alpha_slugs(args.alphas)
     except ValueError as error:
@@ -2295,6 +2374,8 @@ def main() -> None:
             "device": str(device),
             "training_mode": training_mode,
             "freeze_local_comp": args.freeze_local_comp,
+            "learn_feedback_gain": args.learn_feedback_gain,
+            "axis_current_readout": args.axis_current_readout,
             "center_feedback": args.center_feedback,
             "feedback_mode": args.feedback_mode,
             "training_compatibility_version": TRAINING_COMPATIBILITY_VERSION,
