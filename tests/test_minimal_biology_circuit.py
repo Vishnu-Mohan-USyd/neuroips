@@ -1798,3 +1798,153 @@ def test_reproduce_figures_does_not_write_curves_json_on_failures(
 
     assert reproduce_figures.main() == 1
     assert not (figure_root / "c6_curves.json").exists()
+
+
+def temporal_test_net():
+    config = copy.deepcopy(train_sweep.MODEL_CONFIG)
+    config.update(model_architecture_version=tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION,
+                  temporal_protocol=copy.deepcopy(tuned.TEMPORAL_PROTOCOL))
+    net = tuned.build_tuned_from_config(config).to(DEVICE)
+    with torch.no_grad():
+        net.w_sf_fixed.fill_(9.0)
+    return net
+
+
+def test_temporal_sst_kinetics_and_blank_charge_actual_firing() -> None:
+    net = temporal_test_net()
+    theta = torch.tensor([0.0, 35.0], device=DEVICE)
+    l4 = tuned.l4_code(theta)
+    feedback = F.one_hot(torch.tensor([0, 7], device=DEVICE), N := simple.N).float()
+    zeros = torch.zeros(2, N, device=DEVICE)
+    times = torch.tensor([0.0, 0.1, 0.2, 4.0, 30.0], device=DEVICE)
+    static_rates, static = net.l23(l4, feedback, return_internals=True)
+    rates, internals = net.l23(l4, feedback, return_internals=True,
+                               som_p_state=zeros, som_p_times=times)
+    target = static[-1]
+    assert target.max() > 0
+    assert torch.allclose(internals[-1], target[:, None] * (1 - torch.exp(-times))[None, :, None],
+                          atol=1e-6, rtol=1e-5)
+    assert torch.all(internals[-1] >= 0)
+    assert torch.all(rates >= 0)
+    assert torch.allclose(rates[:, -1], static_rates, atol=1e-6, rtol=1e-5)
+    assert torch.allclose(internals[0], 0.5 * (internals[-2] + internals[-1]))
+    blank_rates, blank = net.l23(torch.zeros_like(l4), feedback, return_internals=True,
+                                som_p_state=target, som_p_times=times)
+    assert torch.count_nonzero(blank_rates) == 0
+    assert torch.count_nonzero(blank[1]) == 0
+    assert torch.count_nonzero(blank[-2]) == 0
+    assert torch.allclose(blank[-1], target[:, None] * torch.exp(-times)[None, :, None])
+    assert torch.allclose(blank[0], 0.5 * blank[-1])
+
+
+def test_temporal_sequence_preserves_causality_early_readout_and_residual_state() -> None:
+    net = temporal_test_net()
+    theta = torch.tensor([[0.0, 10.0, 20.0], [45.0, 60.0, 75.0]], device=DEVICE)
+    seen = []
+    handle = net.gru.register_forward_pre_hook(lambda _module, args: seen.append(args[0].detach()))
+    try:
+        predictions, endpoints, trace = tuned.forward_seq_tuned(net, theta, return_timecourse=True)
+    finally:
+        handle.remove()
+    assert trace["rates"].shape == (2, 3, 41, 36)
+    assert len(seen) == 3
+    assert torch.equal(torch.stack(seen, 1), trace["rates"][:, :, [1, 2]].mean(2))
+    assert torch.equal(endpoints, trace["rates"][:, :, -1])
+    assert torch.equal(trace["rates"][:, 0], trace["rates"][:, 0, :1].expand(-1, 41, -1))
+    sst = trace["internals"][-1]
+    assert torch.count_nonzero(sst[:, 0]) == 0
+    assert sst[:, 1, -1].max() > 0
+    assert torch.allclose(sst[:, 1:, 0], sst[:, :-1, -1] * math.exp(-5))
+    assert torch.allclose(trace["gap_integral"], sst[:, :, -1].mean(-1) * (1-math.exp(-5))/40)
+    changed = theta.clone()
+    changed[:, -1] += 30
+    future_predictions, _, future_trace = tuned.forward_seq_tuned(net, changed, return_timecourse=True)
+    assert torch.equal(predictions[:, :-1], future_predictions[:, :-1])
+    assert torch.equal(trace["rates"][:, :-1], future_trace["rates"][:, :-1])
+    _, _, clamped = tuned.forward_seq_tuned(net, theta, return_timecourse=True,
+                                           clamp_final_probe_sst=True)
+    assert torch.equal(trace["rates"][:, :-1], clamped["rates"][:, :-1])
+    assert torch.equal(trace["rates"][:, -1, :3], clamped["rates"][:, -1, :3])
+    clamped_sst = clamped["internals"][-1][:, -1]
+    assert torch.equal(clamped_sst[:, 2:], clamped_sst[:, 2:3].expand(-1, 39, -1))
+
+
+def test_temporal_integral_reference_and_sampling_resolution() -> None:
+    net = temporal_test_net()
+    references = train_sweep.reference_values(net, DEVICE)
+    theta = torch.arange(36, device=DEVICE).float().unsqueeze(1) * 5.0
+    _, _, trace = tuned.forward_seq_tuned(net, theta, return_timecourse=True)
+    integrals = train_sweep.temporal_activity_integrals(net, trace)
+    assert references["J_ref"] == 4.0 * references["R_ref"]
+    assert torch.count_nonzero(integrals["gap_integral"]) == 0
+    assert float(integrals["cycle_integral"].mean() / references["J_ref"]) == pytest.approx(1.0, abs=1e-6)
+    theta = torch.tensor([[0.0, 10.0, 20.0]], device=DEVICE)
+    _, _, coarse = tuned.forward_seq_tuned(net, theta, return_timecourse=True)
+    config = tuned.model_config(net)
+    config["temporal_protocol"]["dt"] = 0.05
+    fine = tuned.build_tuned_from_config(config).to(DEVICE)
+    fine.load_state_dict(net.state_dict())
+    _, _, refined = tuned.forward_seq_tuned(fine, theta, return_timecourse=True)
+    assert torch.allclose(coarse["rates"], refined["rates"][:, :, ::2], atol=1e-6, rtol=1e-5)
+    a = train_sweep.temporal_activity_integrals(net, coarse)["cycle_integral"]
+    b = train_sweep.temporal_activity_integrals(fine, refined)["cycle_integral"]
+    assert torch.allclose(a, b, atol=1e-5, rtol=0.005)
+
+
+def test_temporal_loss_uses_two_instantaneous_early_decisions_and_full_cycle() -> None:
+    net = temporal_test_net()
+    train_sweep.set_axis_parameter_policy(net, freeze_local_comp=True)
+    references = train_sweep.reference_values(net, DEVICE)
+    theta = torch.tensor([[0.0, 10.0, 20.0], [45.0, 60.0, 75.0]], device=DEVICE)
+    channels = (theta / 5).long()
+    generator = make_test_generator(42)
+    noise = torch.randn((2, 3, 2, 36), device=DEVICE, generator=generator) * references["sigma_train"]
+    losses = train_sweep.task_activity_losses(net, theta, channels, generator, references,
+                                              current_decoder_noise=noise)
+    predictions, _, trace = tuned.forward_seq_tuned(net, theta, return_timecourse=True)
+    ces = [train_sweep.confidence_weighted_current_orientation_ce(
+        net, trace["rates"][:, :, time], channels, generator, references,
+        current_decoder_noise=noise[:, :, index],
+    )["current_ce"] for index, time in enumerate((1, 2))]
+    assert torch.allclose(losses["current_ce"], torch.stack(ces).mean())
+    next_ce = F.cross_entropy(predictions[:, :-1].reshape(-1, 36), channels[:, 1:].reshape(-1))
+    assert torch.allclose(losses["task"], (next_ce + torch.stack(ces).mean()) / (2 * math.log(36)))
+    integrals = train_sweep.temporal_activity_integrals(net, trace)
+    assert torch.allclose(losses["modeled_population_activity"],
+                          integrals["cycle_integral"].mean() / references["J_ref"])
+    (0.3 * losses["task"] + 0.7 * losses["modeled_population_activity"]).backward()
+    assert net.w_sf_fixed.grad is not None and torch.isfinite(net.w_sf_fixed.grad)
+    assert net.w_sf_fixed.grad.abs() > 0
+    assert all(parameter.grad is None for name, parameter in net.named_parameters()
+               if not name.startswith(("gru.", "W_fb.")) and name != "w_sf_fixed")
+    assert any(parameter.grad is not None and parameter.grad.abs().sum() > 0
+               for parameter in net.gru.parameters())
+
+
+def test_temporal_checkpoint_roundtrip_and_resume(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(train_sweep, "MODEL_CONFIG", copy.deepcopy(train_sweep.MODEL_CONFIG))
+    monkeypatch.setattr(sys, "argv", [
+        "train_sweep.py", "--temporal-v10", "--seed", "8", "--device", str(DEVICE),
+        "--out", str(tmp_path), "--pretrain-steps", "2", "--axis-steps", "2",
+        "--batch", "2", "--sequence-length", "3", "--alphas", "0.07", "0.70",
+        "--freeze-local-comp", "--log-every", "1", "--checkpoint-every", "1",
+    ])
+    train_sweep.main()
+    path = tmp_path / "seed_8" / "alpha_0p7_final.pt"
+    saved = torch.load(path, map_location=DEVICE)
+    net, _ = assay.load_arm(path, DEVICE)
+    theta = torch.tensor([[0.0, 10.0, 20.0]], device=DEVICE)
+    before = tuned.forward_seq_tuned(net, theta, return_timecourse=True)
+    rebuilt = tuned.build_tuned_from_config(tuned.model_config(net)).to(DEVICE)
+    rebuilt.load_state_dict(net.state_dict())
+    after = tuned.forward_seq_tuned(rebuilt, theta, return_timecourse=True)
+    assert torch.equal(before[0], after[0])
+    assert torch.equal(before[-1]["rates"], after[-1]["rates"])
+    train_sweep.main()
+    resumed = torch.load(path, map_location=DEVICE)
+    assert all(torch.equal(value, resumed["state_dict"][name])
+               for name, value in saved["state_dict"].items())
+    saved["tuned_net_config"]["temporal_protocol"]["dt"] = 0.05
+    torch.save(saved, path)
+    with pytest.raises(RuntimeError, match="metadata"):
+        train_sweep.main()

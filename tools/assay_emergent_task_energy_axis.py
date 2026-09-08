@@ -308,10 +308,16 @@ def shape_quantities(
 
 def load_arm(path: Path, device: torch.device) -> tuple[tuned.SimpleTunedNet, dict]:
     checkpoint = torch.load(path, map_location=device)
-    if checkpoint.get("model_architecture_version") != tuned.MODEL_ARCHITECTURE_VERSION:
+    architecture = checkpoint.get("model_architecture_version")
+    if architecture not in (
+        tuned.MODEL_ARCHITECTURE_VERSION,
+        tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION,
+    ):
         raise RuntimeError(
             "checkpoint architecture does not match current tuned circuit"
         )
+    if checkpoint["tuned_net_config"].get("model_architecture_version") != architecture:
+        raise RuntimeError("checkpoint architecture and model configuration disagree")
     net = tuned.build_tuned_from_config(checkpoint["tuned_net_config"]).to(device)
     net.load_state_dict(checkpoint["state_dict"])
     net.eval()
@@ -439,6 +445,305 @@ def assay_arm(
     return result, execution_config
 
 
+def temporal_window_indices(times: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    early = torch.stack([
+        torch.nonzero(torch.isclose(times, times.new_tensor(t), atol=1e-6),
+                      as_tuple=False).flatten()[0]
+        for t in (0.1, 0.2)
+    ])
+    late = torch.nonzero((times > 3.0 + 1e-6) & (times <= 4.0 + 1e-6),
+                         as_tuple=False).flatten()
+    return early, late
+
+
+def temporal_current_metrics(net, rates, labels, noise, references, generator):
+    """Use the training readout; positive confidence/gain leave top-1 unchanged."""
+    losses = train_sweep.confidence_weighted_current_orientation_ce(
+        net, rates, labels, generator, references, current_decoder_noise=noise,
+        current_readout="population_vector",
+    )
+    activity = F.relu(rates + noise)
+    x = activity @ net.readout_cos
+    y = activity @ net.readout_sin
+    predictions = (x.unsqueeze(-1) * net.readout_cos
+                   + y.unsqueeze(-1) * net.readout_sin).argmax(dim=-1)
+    return {
+        "current_ce": float(losses["current_ce"].item()),
+        "current_accuracy": float((predictions == labels).double().mean().item()),
+    }
+
+
+@torch.no_grad()
+def temporal_held_out(net, checkpoint, device):
+    """Eight fixed new history batches; two instantaneous early decisions each."""
+    data = train_sweep.make_generator(device, 930001)
+    noise_generator = train_sweep.make_generator(device, 930002)
+    references = checkpoint["references"]
+    totals = {}
+    for _ in range(8):
+        theta, channels = train_sweep.momentum_batch(
+            128, 12, device, data, mismatch_prob=0.02,
+        )
+        predictions, _, trace = tuned.forward_seq_tuned(
+            net, theta, feedback_mode=checkpoint["feedback_mode"],
+            return_timecourse=True,
+        )
+        early, _ = temporal_window_indices(trace["times"])
+        rates = trace["rates"].index_select(2, early)
+        labels = channels.unsqueeze(-1).expand(rates.shape[:-1])
+        noise = torch.randn(rates.shape, device=device, generator=noise_generator,
+                            dtype=rates.dtype) * references["sigma_train"]
+        metrics = temporal_current_metrics(
+            net, rates, labels, noise, references, noise_generator,
+        )
+        metrics["next_ce"] = float(F.cross_entropy(
+            predictions[:, :-1].reshape(-1, N), channels[:, 1:].reshape(-1),
+        ).item())
+        metrics["next_accuracy"] = float(
+            (predictions[:, :-1].argmax(-1) == channels[:, 1:]).double().mean().item()
+        )
+        integrals = train_sweep.temporal_activity_integrals(net, trace)
+        for key in ("on_integral", "gap_integral", "cycle_integral"):
+            metrics[key] = float(integrals[key].double().mean().item())
+        for key, value in metrics.items():
+            totals[key] = totals.get(key, 0.0) + value / 8.0
+    totals["normalized_cycle_activity"] = totals["cycle_integral"] / (
+        4.0 * references["R_ref"]
+    )
+    return totals
+
+
+@torch.no_grad()
+def temporal_probe(net, checkpoint, device, *, clamp=False, measurements=True):
+    theta_a, theta_b, finals = matched_pairs(device)
+    theta = torch.cat((theta_a, theta_b))
+    _, _, trace = tuned.forward_seq_tuned(
+        net, theta, feedback_mode=checkpoint["feedback_mode"],
+        return_timecourse=True, clamp_final_probe_sst=clamp,
+    )
+    integrals = train_sweep.temporal_activity_integrals(net, trace)
+    count = len(finals)
+    cycle = integrals["cycle_integral"][:, -1].double()
+    result = {"cycle_integral": {
+        "expected": float(cycle[:count].mean().item()),
+        "unexpected": float(cycle[count:].mean().item()),
+        "pooled": float(cycle.mean().item()),
+    }}
+    # Cumulative on-period cost and exact decay during the terminal blank.
+    times = trace["times"]
+    internals = trace["internals"]
+    populations = {
+        "final_e": trace["rates"][:, -1].mean(-1),
+        "som": internals[0][:, -1].mean(-1),
+        "vip": internals[1][:, -1].mean(-1),
+        "pv": train_sweep.pv_scalar_from_pre_pv(net, internals[3][:, -1]).squeeze(-1),
+    }
+    result["cycle_activity_components"] = {}
+    for name, activity in populations.items():
+        component = torch.trapezoid(activity, times, dim=-1) * train_sweep.MODELED_ACTIVITY_WEIGHTS[name]
+        if name == "som":
+            component = component + integrals["gap_integral"][:, -1]
+        result["cycle_activity_components"][name] = {
+            "expected": float(component[:count].double().mean().item()),
+            "unexpected": float(component[count:].double().mean().item()),
+            "pooled": float(component.double().mean().item()),
+        }
+    instantaneous = integrals["instantaneous"][:, -1]
+    increments = 0.5 * (instantaneous[:, 1:] + instantaneous[:, :-1]) * times.diff()
+    cumulative = torch.cat((torch.zeros_like(increments[:, :1]),
+                            increments.cumsum(dim=-1)), dim=-1)
+    blank_times = torch.arange(1, 51, device=device, dtype=times.dtype) / 10.0
+    blank_fraction = -torch.expm1(-blank_times) / (-math.expm1(-5.0))
+    cumulative = torch.cat((cumulative, cumulative[:, -1:]
+                            + integrals["gap_integral"][:, -1:] * blank_fraction), dim=-1)
+    result["cycle_times"] = torch.cat((times, 4.0 + blank_times)).cpu().tolist()
+    result["cumulative_activity"] = cumulative.double().mean(0).cpu().tolist()
+    if not measurements:
+        return result
+
+    rates = trace["rates"][:, -1]
+    steps = rates.shape[1]
+    labels = torch.cat((finals, finals))
+    aligned = align_rates(rates.flatten(0, 1), labels.repeat_interleave(steps))
+    aligned = aligned.reshape(2 * count, steps, N).double()
+    first_labels = (theta[:, 0] / STEP_DEG).round().long() % N
+    first = align_rates(trace["rates"][:, 0].flatten(0, 1),
+                        first_labels.repeat_interleave(steps))
+    baseline = first.reshape(2 * count, steps, N).double().mean(0)
+    expected, unexpected = aligned[:count].mean(0), aligned[count:].mean(0)
+    early, late = temporal_window_indices(times)
+    result.update({
+        "times": times.cpu().tolist(),
+        "offset_degrees": [offset * STEP_DEG for offset in OFFSETS],
+        "expected": expected.cpu().tolist(),
+        "unexpected": unexpected.cpu().tolist(),
+        "baseline": baseline.cpu().tolist(),
+        "windows": {},
+    })
+    for name, indices in (("early", early), ("late", late)):
+        e, u, b = (curve.index_select(0, indices).mean(0)
+                   for curve in (expected, unexpected, baseline))
+        def mean_offsets(curve, offsets):
+            return float(curve[[OFFSETS.index(i) for i in offsets]].mean().item())
+        center, flank15 = mean_offsets(e, (0,)), mean_offsets(e, (-3, 3))
+        result["windows"][name] = {
+            "expected": e.cpu().tolist(), "unexpected": u.cpu().tolist(),
+            "baseline": b.cpu().tolist(),
+            "preferred_ratio": center / mean_offsets(b, (0,)),
+            "shoulder_ratio": mean_offsets(e, (-1, 1)) / mean_offsets(b, (-1, 1)),
+            "flank_ratio": mean_offsets(e, FLANK_OFFSETS) / mean_offsets(b, FLANK_OFFSETS),
+            "center_rate": center, "flank15_rate": flank15,
+            "expected_mean": float(e.mean().item()),
+            "unexpected_mean": float(u.mean().item()),
+            "expectation_suppression_percent": 100.0 * float((1.0 - e.mean()/u.mean()).item()),
+        }
+    # The same fixed decoder/noise table is used for both conditions at every time.
+    generator = train_sweep.make_generator(device, DECODER_TEST_NOISE_SEED)
+    noise = torch.randn((32, count, N), device=device, generator=generator,
+                        dtype=rates.dtype) * checkpoint["references"]["sigma_train"]
+    result["decoding"] = {}
+    for name, condition in (("expected", rates[:count]), ("unexpected", rates[count:])):
+        values = [temporal_current_metrics(
+            net, condition[:, k].unsqueeze(0).expand_as(noise),
+            finals.unsqueeze(0).expand(noise.shape[:-1]), noise,
+            checkpoint["references"], generator,
+        ) for k in range(steps)]
+        result["decoding"][name] = {key: [row[key] for row in values] for key in values[0]}
+    return result
+
+
+def temporal_shape_gates(probe):
+    early, late = probe["windows"]["early"], probe["windows"]["late"]
+    return {
+        "early_sharpening": (early["preferred_ratio"] > 1.02
+                             and early["shoulder_ratio"] < 0.98
+                             and early["flank_ratio"] < 0.98),
+        "late_dampening": (late["preferred_ratio"] < 0.98
+                           and late["center_rate"] <= 0.95 * late["flank15_rate"]
+                           and late["expected_mean"] < early["expected_mean"]),
+    }
+
+
+def plot_temporal_assay(result, output_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    high = result["per_alpha"]["0.7"]
+    low = result["per_alpha"]["0.07"]
+    probe = high["probe"]
+    fig, axes = plt.subplots(2, 2, figsize=(10, 7))
+    for ax, window in zip(axes[0], ("early", "late")):
+        for field, color, style in (("baseline", "0.5", "--"),
+                                    ("unexpected", "#dd8b3a", "-"),
+                                    ("expected", "#b64944", "-")):
+            ax.plot(probe["offset_degrees"], probe["windows"][window][field],
+                    color=color, linestyle=style, label=field)
+        ax.set(title=f"High pressure: {window}", xlim=(-60, 60),
+               xlabel="Preferred orientation − stimulus (°)", ylabel="E activity")
+        ax.legend(frameon=False, fontsize=8)
+    for arm, color, label in ((low, "#236da8", "α=0.07"), (high, "#b64944", "α=0.70")):
+        for condition, style in (("expected", "-"), ("unexpected", "--")):
+            axes[1, 0].plot(arm["probe"]["times"],
+                            arm["probe"]["decoding"][condition]["current_accuracy"],
+                            color=color, linestyle=style, label=f"{label} {condition}")
+        axes[1, 1].plot(arm["probe"]["cycle_times"],
+                        arm["probe"]["cumulative_activity"], color=color, label=label)
+    axes[1, 1].plot(high["clamped_probe"]["cycle_times"],
+                    high["clamped_probe"]["cumulative_activity"],
+                    color="0.3", linestyle="--", label="α=0.70, SST held after 0.2")
+    axes[1, 0].set(xlabel="Time after onset (relative)", ylabel="Fixed-readout accuracy",
+                   ylim=(0, 1))
+    axes[1, 1].set(xlabel="Time after onset (relative)", ylabel="Cumulative activity proxy")
+    axes[1, 1].axvline(4, color="0.7", linestyle=":")
+    for ax in axes[1]:
+        ax.legend(frameon=False, fontsize=8)
+    for ax in axes.flat:
+        ax.spines[["top", "right"]].set_visible(False)
+    fig.suptitle(f"Temporal SST experiment · seed {result['metadata']['seed']}")
+    fig.tight_layout()
+    fig.savefig(output_path.with_suffix(".png"), dpi=180)
+    fig.savefig(output_path.with_suffix(".svg"))
+    plt.close(fig)
+
+
+@torch.no_grad()
+def assay_temporal_run(args, device, output_path):
+    if set(args.alphas) != {0.07, 0.70}:
+        raise ValueError("the temporal experiment requires paired --alphas 0.07 0.70")
+    common_net, common = load_arm(args.run_dir / "common_pretrain_final.pt", device)
+    result = {
+        "metadata": {
+            "seed": common["seed"], "device": str(device),
+            "architecture": common["model_architecture_version"],
+            "temporal_protocol": common_net.temporal_protocol,
+            "references": common["references"],
+            "pair_count": 216, "held_out_batches": 8, "held_out_batch_size": 128,
+            "held_out_sequence_length": 12, "held_out_mismatch_prob": 0.02,
+            "held_out_data_seed": 930001, "held_out_noise_seed": 930002,
+            "probe_noise_seed": DECODER_TEST_NOISE_SEED, "probe_noise_repeats": 32,
+            "readout": "fixed_population_vector; two instantaneous early decisions",
+            "activity_reference": 4.0 * common["references"]["R_ref"],
+        },
+        "common_pretrain": {
+            "probe": temporal_probe(common_net, common, device),
+            "held_out": temporal_held_out(common_net, common, device),
+        },
+        "per_alpha": {},
+    }
+    for alpha in (0.07, 0.70):
+        path = args.run_dir / f"alpha_{alpha_slug(alpha)}_final.pt"
+        net, checkpoint = load_arm(path, device)
+        if (net.temporal_protocol != common_net.temporal_protocol
+                or checkpoint["references"] != common["references"]
+                or checkpoint["feedback_mode"] != common["feedback_mode"]):
+            raise RuntimeError("temporal pair differs from common protocol/references/feedback")
+        row = {"checkpoint": str(path), "probe": temporal_probe(net, checkpoint, device),
+               "held_out": temporal_held_out(net, checkpoint, device)}
+        fine_config = tuned.model_config(net)
+        fine_config["temporal_protocol"] = dict(net.temporal_protocol, dt=0.05)
+        fine = tuned.build_tuned_from_config(fine_config).to(device)
+        fine.load_state_dict(net.state_dict(), strict=True)
+        fine.eval()
+        row["fine_held_out"] = temporal_held_out(fine, checkpoint, device)
+        row["fine_probe"] = temporal_probe(fine, checkpoint, device, measurements=False)
+        if alpha == 0.70:
+            row["clamped_probe"] = temporal_probe(net, checkpoint, device, clamp=True,
+                                                   measurements=False)
+            row["fine_clamped_probe"] = temporal_probe(fine, checkpoint, device, clamp=True,
+                                                        measurements=False)
+        result["per_alpha"][alpha_tag(alpha)] = row
+        print(f"alpha {alpha}: temporal assay complete", flush=True)
+    low, high = result["per_alpha"]["0.07"], result["per_alpha"]["0.7"]
+    saving = low["held_out"]["cycle_integral"] - high["held_out"]["cycle_integral"]
+    error = sum(abs(row["held_out"]["cycle_integral"]
+                    - row["fine_held_out"]["cycle_integral"]) for row in (low, high))
+    normal_j = high["probe"]["cycle_integral"]["pooled"]
+    clamp_j = high["clamped_probe"]["cycle_integral"]["pooled"]
+    control_error = (abs(normal_j - high["fine_probe"]["cycle_integral"]["pooled"])
+                     + abs(clamp_j - high["fine_clamped_probe"]["cycle_integral"]["pooled"]))
+    gates = temporal_shape_gates(high["probe"])
+    gates.update({
+        "early_accuracy_preserved": high["held_out"]["current_accuracy"]
+        >= low["held_out"]["current_accuracy"] - 0.05,
+        "activity_saving_vs_low_pressure": saving > error,
+        "activity_saving_vs_clamped_sst": clamp_j - normal_j > control_error,
+    })
+    result["acceptance"] = {
+        "gates": gates, "all_pass": all(gates.values()),
+        "common_pretrain_shape_gates": temporal_shape_gates(result["common_pretrain"]["probe"]),
+        "early_accuracy_drop_percentage_points": 100.0 * (
+            low["held_out"]["current_accuracy"] - high["held_out"]["current_accuracy"]),
+        "activity_saving_percent": 100.0 * saving / low["held_out"]["cycle_integral"],
+        "activity_resolution_difference_bound": error,
+        "clamp_activity_saving_percent": 100.0 * (clamp_j - normal_j) / clamp_j,
+        "clamp_resolution_difference_bound": control_error,
+    }
+    atomic_json_save(result, output_path)
+    plot_temporal_assay(result, output_path)
+    print(json.dumps(result["acceptance"], indent=2), flush=True)
+
+
 def atomic_json_save(payload: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -494,6 +799,9 @@ def main() -> None:
     common_checkpoint = torch.load(
         args.run_dir / "common_pretrain_final.pt", map_location=device
     )
+    if common_checkpoint.get("model_architecture_version") == tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION:
+        assay_temporal_run(args, device, output_path)
+        return
     common_local_comp_raw = common_checkpoint["state_dict"].get(
         "local_comp_strength_raw"
     )

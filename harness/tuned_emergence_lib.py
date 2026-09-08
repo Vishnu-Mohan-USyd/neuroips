@@ -30,6 +30,49 @@ FEEDBACK_MODES = (
     FEEDBACK_MODE_POSTERIOR_PRIOR_EXCESS,
 )
 MODEL_ARCHITECTURE_VERSION = "split_som_projected_output_tanh_v9"
+TEMPORAL_MODEL_ARCHITECTURE_VERSION = "split_som_projected_output_temporal_v10"
+TEMPORAL_PROTOCOL = {
+    "tau_p": 1.0,
+    "on_duration": 4.0,
+    "gap_duration": 5.0,
+    "dt": 0.1,
+    "early_times": [0.1, 0.2],
+    "late_window": [3.0, 4.0],
+    "time_units": "relative",
+    "predictor_readout": "mean_early_noiseless",
+    "current_task": "mean_noisy_instantaneous_ce",
+    "on_integral": "trapezoid",
+    "terminal_gap": True,
+    "sst_boundary": "sequence_zero_then_blank_decay",
+}
+
+
+def validate_temporal_protocol(protocol: dict | None) -> dict | None:
+    """Validate the fixed v10 protocol; dt may change for numerical checks."""
+    if protocol is None:
+        return None
+    if not isinstance(protocol, dict) or set(protocol) != set(TEMPORAL_PROTOCOL):
+        raise ValueError("temporal_protocol must contain the complete v10 protocol")
+    for key, expected in TEMPORAL_PROTOCOL.items():
+        if key != "dt" and protocol[key] != expected:
+            raise ValueError(f"temporal_protocol {key!r} does not match v10")
+    dt = float(protocol["dt"])
+    if not math.isfinite(dt) or dt <= 0.0:
+        raise ValueError("temporal_protocol dt must be finite and positive")
+    for boundary in (
+        protocol["on_duration"],
+        *protocol["early_times"],
+        *protocol["late_window"],
+    ):
+        steps = float(boundary) / dt
+        if not math.isclose(steps, round(steps), rel_tol=0.0, abs_tol=1e-8):
+            raise ValueError("temporal_protocol dt must sample every declared time")
+    return {
+        **protocol,
+        "dt": dt,
+        "early_times": list(protocol["early_times"]),
+        "late_window": list(protocol["late_window"]),
+    }
 
 
 def circular_distance_channels() -> torch.Tensor:
@@ -168,6 +211,7 @@ class SimpleTunedNet(nn.Module):
         recurrent_cell: str = "rnn_tanh",
         m_fixed_parameterization: str = M_FIXED_MODE_LEGACY_CLAMP,
         fixed_intrinsic_rheobases: bool = False,
+        temporal_protocol: dict | None = None,
     ):
         super().__init__()
         self.hidden = hidden
@@ -207,6 +251,12 @@ class SimpleTunedNet(nn.Module):
                 f"{M_FIXED_MODES}, got {self.m_fixed_parameterization!r}"
             )
         self.fixed_intrinsic_rheobases = bool(fixed_intrinsic_rheobases)
+        self.temporal_protocol = validate_temporal_protocol(temporal_protocol)
+        self.model_architecture_version = (
+            TEMPORAL_MODEL_ARCHITECTURE_VERSION
+            if self.temporal_protocol is not None
+            else MODEL_ARCHITECTURE_VERSION
+        )
         if self.recurrent_cell == "gru":
             self.gru = nn.GRUCell(N, hidden)
         elif self.recurrent_cell == "rnn_tanh":
@@ -337,6 +387,9 @@ class SimpleTunedNet(nn.Module):
         adapt_state: torch.Tensor | None = None,
         r_prev: torch.Tensor | None = None,
         return_internals: bool = False,
+        *,
+        som_p_state: torch.Tensor | None = None,
+        som_p_times: torch.Tensor | None = None,
     ):
         """Map ``[B,36]`` L4/feedback tensors to nonnegative L2/3 rates.
 
@@ -352,6 +405,11 @@ class SimpleTunedNet(nn.Module):
         accounting remains raw. ``return_internals`` additionally yields
         ``(S, V, som_gain, pre_pv_rate, post_pv_rate, exc_feedback_work,``
         ``S_B, S_P)``.
+
+        With an actual ``som_p_state[B,36]``, use that firing state directly.
+        Providing ``som_p_times[K]`` samples its exact exponential recruitment
+        toward the fixed current target and returns ``[B,K,*]`` tensors. This
+        relative-time recruitment is an engineering approximation.
         """
 
         drive = self.feedforward(l4)
@@ -376,6 +434,25 @@ class SimpleTunedNet(nn.Module):
         q_p = w_sf * pred_sens
         som_b = F.relu(q_b - theta_s - w_sv * v36)
         som_p = F.relu(q_p - theta_s - w_sv * v36)
+        if som_p_times is not None and som_p_state is None:
+            raise ValueError("som_p_times requires som_p_state")
+        if som_p_state is not None:
+            if som_p_state.shape != som_p.shape:
+                raise ValueError("som_p_state must match the [B,36] SST target")
+            if som_p_times is None:
+                som_p = som_p_state
+            else:
+                if self.temporal_protocol is None or som_p_times.ndim != 1:
+                    raise ValueError("SST time samples require a temporal net and [K] times")
+                scaled_times = som_p_times / self.temporal_protocol["tau_p"]
+                decay = torch.exp(-scaled_times)[None, :, None]
+                recruitment = -torch.expm1(-scaled_times)[None, :, None]
+                som_p = som_p_state[:, None, :] * decay + som_p[:, None, :] * recruitment
+                samples = som_p_times.numel()
+                drive = drive[:, None, :].expand(-1, samples, -1)
+                fb_pos = fb_pos[:, None, :].expand(-1, samples, -1)
+                som_b = som_b[:, None, :].expand(-1, samples, -1)
+                vip = vip[:, None, :].expand(-1, samples, -1)
         som = 0.5 * (som_b + som_p)
         m_effective = self.m_fixed_effective()
         som_gain = m_effective * som
@@ -506,6 +583,81 @@ def predictive_feedback_evidence(
     return F.relu(raw_logits)
 
 
+def _forward_seq_temporal(
+    net: SimpleTunedNet,
+    theta: torch.Tensor,
+    fb_scale: float,
+    center_feedback: bool,
+    feedback_mode: str | None,
+    return_internals: bool,
+    return_timecourse: bool,
+    clamp_final_probe_sst: bool,
+):
+    protocol = net.temporal_protocol
+    dt = protocol["dt"]
+    samples = round(protocol["on_duration"] / dt) + 1
+    times = torch.arange(
+        samples, device=theta.device, dtype=net.W_fb.weight.dtype
+    ) * dt
+    early_indices = [round(time / dt) for time in protocol["early_times"]]
+    gap_decay = math.exp(-protocol["gap_duration"] / protocol["tau_p"])
+    gap_factor = protocol["tau_p"] * (-math.expm1(
+        -protocol["gap_duration"] / protocol["tau_p"]
+    )) / 40.0
+    h = torch.zeros(
+        theta.shape[0], net.hidden, device=theta.device, dtype=net.W_fb.weight.dtype
+    )
+    pred_down = h.new_zeros(theta.shape[0], N)
+    som_p_state = torch.zeros_like(pred_down)
+    predictions, endpoints, rate_timecourses, gap_integrals = [], [], [], []
+    endpoint_internals = [[] for _ in range(8)]
+    temporal_internals = [[] for _ in range(8)]
+    for stimulus in range(theta.shape[1]):
+        state_times = times
+        if clamp_final_probe_sst and stimulus == theta.shape[1] - 1:
+            state_times = times.clamp_max(protocol["early_times"][-1])
+        rates, internals = net.l23(
+            l4_code(theta[:, stimulus]),
+            fb_scale * pred_down,
+            return_internals=True,
+            som_p_state=som_p_state,
+            som_p_times=state_times,
+        )
+        endpoints.append(rates[:, -1])
+        if return_internals:
+            for collected, values in zip(endpoint_internals, internals, strict=True):
+                collected.append(values[:, -1])
+        if return_timecourse:
+            rate_timecourses.append(rates)
+            for collected, values in zip(temporal_internals, internals, strict=True):
+                collected.append(values)
+        # Only the next real stimulus receives this new prediction. The early
+        # response is noiseless here; decoder noise is added only by the loss.
+        h = net.gru(rates[:, early_indices].mean(dim=1), h)
+        prediction = net.W_fb(h)
+        predictions.append(prediction)
+        pred_down = predictive_feedback_evidence(
+            prediction, center_feedback, feedback_mode
+        )
+        som_p_end = internals[-1][:, -1]
+        if return_timecourse:
+            gap_integrals.append(som_p_end.mean(dim=-1) * gap_factor)
+        # Blank sensory input makes all other accounted rates zero. Include
+        # the terminal blank as well; hidden predictor memory is held.
+        som_p_state = som_p_end * gap_decay
+    result = (torch.stack(predictions, 1), torch.stack(endpoints, 1))
+    if return_internals:
+        result += (tuple(torch.stack(values, 1) for values in endpoint_internals),)
+    if return_timecourse:
+        result += ({
+            "times": times,
+            "rates": torch.stack(rate_timecourses, 1),
+            "internals": tuple(torch.stack(values, 1) for values in temporal_internals),
+            "gap_integral": torch.stack(gap_integrals, 1),
+        },)
+    return result
+
+
 def forward_seq_tuned(
     net: SimpleTunedNet,
     theta: torch.Tensor,
@@ -513,6 +665,9 @@ def forward_seq_tuned(
     center_feedback: bool = False,
     feedback_mode: str | None = None,
     return_internals: bool = False,
+    *,
+    return_timecourse: bool = False,
+    clamp_final_probe_sst: bool = False,
 ):
     """Unroll the tuned network over degree-valued ``theta[B,S]``.
 
@@ -528,7 +683,21 @@ def forward_seq_tuned(
     is returned, each stacked to ``[B,S,·]``. ``S_P`` is raw firing, before
     its inhibitory output projection; the default
     two-tuple path is unchanged.
+
+    In v10, each stimulus has a fixed-input dwell followed by a true blank.
+    The predictor updates once using the mean noiseless E at 0.1 and 0.2.
+    ``return_timecourse`` appends a dict containing ``times[K]``,
+    ``rates[B,S,K,36]``, the eight corresponding internals, and the already
+    population-weighted ``gap_integral[B,S]``. The final-probe clamp is an
+    assay intervention: freeze actual S_P after 0.2 until offset, then decay.
     """
+    if net.temporal_protocol is not None:
+        return _forward_seq_temporal(
+            net, theta, fb_scale, center_feedback, feedback_mode,
+            return_internals, return_timecourse, clamp_final_probe_sst,
+        )
+    if return_timecourse or clamp_final_probe_sst:
+        raise ValueError("timecourse and SST clamp require a temporal v10 network")
     batch = theta.shape[0]
     h = torch.zeros(batch, net.hidden, device=device)
     pred_down = torch.zeros(batch, N, device=device)
@@ -597,7 +766,7 @@ def forward_seq_tuned(
 
 
 def model_config(net: SimpleTunedNet) -> dict:
-    return {
+    config = {
         "hidden": int(net.hidden),
         "ff_sigma_channels": float(net.ff_sigma_channels),
         "ff_gain": float(net.ff_gain),
@@ -624,20 +793,29 @@ def model_config(net: SimpleTunedNet) -> dict:
         "recurrent_cell": str(net.recurrent_cell),
         "m_fixed_parameterization": str(net.m_fixed_parameterization),
         "fixed_intrinsic_rheobases": bool(net.fixed_intrinsic_rheobases),
-        "model_architecture_version": MODEL_ARCHITECTURE_VERSION,
+        "model_architecture_version": net.model_architecture_version,
     }
+    if net.temporal_protocol is not None:
+        config["temporal_protocol"] = validate_temporal_protocol(net.temporal_protocol)
+    return config
 
 
 def build_tuned_from_config(config: dict | None = None) -> SimpleTunedNet:
     config = dict(config or {})
     requested_architecture = config.get("model_architecture_version")
+    temporal_protocol = validate_temporal_protocol(config.get("temporal_protocol"))
+    expected_architecture = (
+        TEMPORAL_MODEL_ARCHITECTURE_VERSION
+        if temporal_protocol is not None
+        else MODEL_ARCHITECTURE_VERSION
+    )
     if (
         requested_architecture is not None
-        and requested_architecture != MODEL_ARCHITECTURE_VERSION
+        and requested_architecture != expected_architecture
     ):
         raise ValueError(
             "model_architecture_version mismatch: "
-            f"expected {MODEL_ARCHITECTURE_VERSION!r}, "
+            f"expected {expected_architecture!r}, "
             f"got {requested_architecture!r}"
         )
     som_input_sigma_channels = float(
@@ -685,4 +863,5 @@ def build_tuned_from_config(config: dict | None = None) -> SimpleTunedNet:
         fixed_intrinsic_rheobases=bool(
             config.get("fixed_intrinsic_rheobases", False)
         ),
+        temporal_protocol=temporal_protocol,
     )

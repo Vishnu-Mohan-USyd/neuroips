@@ -37,6 +37,7 @@ N = 36
 STEP_DEG = 5.0
 ALPHAS = (0.004, 0.5)
 TRAINING_COMPATIBILITY_VERSION = "shared_divisive_som_population_activity_v8"
+TEMPORAL_TRAINING_COMPATIBILITY_VERSION = "early_deadline_cycle_activity_v10"
 FIXED_CANONICAL_VIP_MOTIF_GAINS = {
     "w_vd": 0.1,
     "w_sv": 0.1,
@@ -392,6 +393,31 @@ def modeled_population_activity_components(
     }
 
 
+def temporal_activity_integrals(
+    net: tuned.SimpleTunedNet,
+    timecourse: dict,
+) -> dict[str, torch.Tensor]:
+    """Integrate actual population activity over each stimulus and its blank."""
+    if net.temporal_protocol is None:
+        raise ValueError("temporal activity integrals require a v10 network")
+    som, vip, _, pre_pv, _, _, _, _ = timecourse["internals"]
+    pv = pv_scalar_from_pre_pv(net, pre_pv)
+    instantaneous = (
+        MODELED_ACTIVITY_WEIGHTS["final_e"] * timecourse["rates"].mean(dim=-1)
+        + MODELED_ACTIVITY_WEIGHTS["pv"] * pv.mean(dim=-1)
+        + MODELED_ACTIVITY_WEIGHTS["som"] * som.mean(dim=-1)
+        + MODELED_ACTIVITY_WEIGHTS["vip"] * vip.mean(dim=-1)
+    )
+    on_integral = torch.trapezoid(instantaneous, timecourse["times"], dim=-1)
+    gap_integral = timecourse["gap_integral"]
+    return {
+        "instantaneous": instantaneous,
+        "on_integral": on_integral,
+        "gap_integral": gap_integral,
+        "cycle_integral": on_integral + gap_integral,
+    }
+
+
 @torch.no_grad()
 def reference_values(net: tuned.SimpleTunedNet, device: torch.device) -> dict[str, float]:
     channels = torch.arange(N, device=device, dtype=torch.long)
@@ -430,7 +456,7 @@ def reference_values(net: tuned.SimpleTunedNet, device: torch.device) -> dict[st
         raise RuntimeError("R_ref must be finite and positive")
     if not torch.isfinite(a_ref) or not a_ref > 0:
         raise RuntimeError("A_ref must be finite and positive")
-    return {
+    references = {
         "R_ref": float(r_ref.item()),
         "modeled_population_activity_ref": float(r_ref.item()),
         "A_ref": float(a_ref.item()),
@@ -457,6 +483,9 @@ def reference_values(net: tuned.SimpleTunedNet, device: torch.device) -> dict[st
         # not work, ATP, or metabolic energy.
         "activity_work_ref": float(r_ref.item()),
     }
+    if net.temporal_protocol is not None:
+        references["J_ref"] = net.temporal_protocol["on_duration"] * references["R_ref"]
+    return references
 
 
 def confidence_weighted_current_orientation_ce(
@@ -572,7 +601,63 @@ def task_activity_losses(
         energy.
         Feedback computed after time ``t`` affects L2/3 only at ``t+1``; the
         first response has zero feedback state.
+
+        V10 instead averages the two instantaneous noisy current CEs at 0.1
+        and 0.2, keeps next targets on real stimulus transitions, and charges
+        the trapezoidal on-period plus exact blank activity integral J/J_ref.
+        Its current-decoder noise has shape [B,S,2,36].
     """
+
+    if net.temporal_protocol is not None:
+        predictions, _, _, timecourse = tuned.forward_seq_tuned(
+            net, theta, 1.0, center_feedback=center_feedback,
+            feedback_mode=feedback_mode, return_internals=True,
+            return_timecourse=True,
+        )
+        protocol = net.temporal_protocol
+        early_indices = [round(time / protocol["dt"]) for time in protocol["early_times"]]
+        early_rates = timecourse["rates"][:, :, early_indices, :]
+        early_channels = channels[:, :, None].expand(-1, -1, len(early_indices))
+        current = confidence_weighted_current_orientation_ce(
+            net, early_rates, early_channels, noise_generator, references,
+            current_decoder_noise=current_decoder_noise, current_readout=current_readout,
+        )
+        next_ce = F.cross_entropy(
+            predictions[:, :-1, :].reshape(-1, N), channels[:, 1:].reshape(-1)
+        )
+        task = 0.5 * next_ce / math.log(N) + 0.5 * current["current_ce"] / math.log(N)
+        integrals = temporal_activity_integrals(net, timecourse)
+        modeled_activity = integrals["cycle_integral"].mean() / references["J_ref"]
+        som, vip, som_gain, pre_pv, _, exc_feedback, _, som_p = timecourse["internals"]
+        duration = protocol["on_duration"] + protocol["gap_duration"]
+
+        def cycle_mean(values: torch.Tensor) -> torch.Tensor:
+            return torch.trapezoid(values, timecourse["times"], dim=-2) / duration
+
+        gap_som = (
+            0.5 * som_p[:, :, -1] * protocol["tau_p"]
+            * (-math.expm1(-protocol["gap_duration"] / protocol["tau_p"]))
+            / duration
+        )
+        activity = modeled_population_activity_components(
+            cycle_mean(timecourse["rates"]),
+            cycle_mean(som) + gap_som,
+            cycle_mean(vip),
+            cycle_mean(pv_scalar_from_pre_pv(net, pre_pv)),
+            cycle_mean(som_gain) + net.m_fixed_effective() * gap_som,
+            cycle_mean(exc_feedback),
+        )
+        return {
+            "next_ce": next_ce,
+            **current,
+            "task": task,
+            "modeled_population_activity": modeled_activity,
+            "energy": modeled_activity,
+            "on_activity_integral": integrals["on_integral"].mean(),
+            "gap_activity_integral": integrals["gap_integral"].mean(),
+            "cycle_activity_integral": integrals["cycle_integral"].mean(),
+            **activity,
+        }
 
     predictions, rates, internals = tuned.forward_seq_tuned(
         net,
@@ -838,6 +923,15 @@ def checkpoint_payload(
         center_feedback,
         feedback_mode,
     )
+    training_version = TRAINING_COMPATIBILITY_VERSION
+    net_config = MODEL_CONFIG
+    if net.temporal_protocol is not None:
+        training_version = TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        net_config = {
+            **MODEL_CONFIG,
+            **tuned.model_config(net),
+            "training_compatibility_version": training_version,
+        }
     return {
         "stage": stage,
         "mismatch_prob": mismatch_prob,
@@ -850,9 +944,9 @@ def checkpoint_payload(
         "optimizer_state_dict": optimizer.state_dict(),
         "data_generator_state": data_generator.get_state(),
         "noise_generator_state": noise_generator.get_state(),
-        "tuned_net_config": MODEL_CONFIG,
-        "model_architecture_version": tuned.MODEL_ARCHITECTURE_VERSION,
-        "training_compatibility_version": TRAINING_COMPATIBILITY_VERSION,
+        "tuned_net_config": net_config,
+        "model_architecture_version": net.model_architecture_version,
+        "training_compatibility_version": training_version,
         "fixed_canonical_vip_motif_gains": FIXED_CANONICAL_VIP_MOTIF_GAINS,
         "references": references,
         "freeze_local_comp": freeze_local_comp,
@@ -874,6 +968,11 @@ def run_pretrain(
     enforce_fixed_vip_motif(net)
     assert_fixed_vip_motif(net)
     references = reference_values(net, device)
+    training_version = (
+        TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        if net.temporal_protocol is not None
+        else TRAINING_COMPATIBILITY_VERSION
+    )
     net.ref_rate.fill_(references["R_ref"])
     optimizer = torch.optim.Adam(
         set_pretrain_parameter_policy(net), lr=args.lr, betas=(0.9, 0.999), eps=1e-8
@@ -901,9 +1000,11 @@ def run_pretrain(
             or saved_feedback_mode != args.feedback_mode
             or float(saved.get("mismatch_prob", 0.0)) != args.mismatch_prob
             or saved.get("model_architecture_version")
-            != tuned.MODEL_ARCHITECTURE_VERSION
+            != net.model_architecture_version
             or saved.get("training_compatibility_version")
-            != TRAINING_COMPATIBILITY_VERSION
+            != training_version
+            or saved.get("tuned_net_config", {}).get("temporal_protocol")
+            != net.temporal_protocol
         ):
             raise RuntimeError("pretrain checkpoint metadata does not match this run")
         net.load_state_dict(saved["state_dict"])
@@ -1222,6 +1323,11 @@ def run_alpha(
     event_log: EventLog,
 ) -> dict:
     net = tuned.build_tuned_from_config(MODEL_CONFIG).to(device)
+    training_version = (
+        TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        if net.temporal_protocol is not None
+        else TRAINING_COMPATIBILITY_VERSION
+    )
     net.load_state_dict(copy.deepcopy(common_state))
     assert_fixed_vip_motif(net)
     common_state_hash = state_sha256(common_state)
@@ -1281,9 +1387,11 @@ def run_alpha(
             or saved_feedback_mode != args.feedback_mode
             or float(saved.get("mismatch_prob", 0.0)) != args.mismatch_prob
             or saved.get("model_architecture_version")
-            != tuned.MODEL_ARCHITECTURE_VERSION
+            != net.model_architecture_version
             or saved.get("training_compatibility_version")
-            != TRAINING_COMPATIBILITY_VERSION
+            != training_version
+            or saved.get("tuned_net_config", {}).get("temporal_protocol")
+            != net.temporal_protocol
         ):
             raise RuntimeError(f"alpha {alpha} checkpoint metadata does not match")
         net.load_state_dict(saved["state_dict"])
@@ -2168,6 +2276,11 @@ def parse_args() -> argparse.Namespace:
         help="Steps in every alpha arm or the constrained candidate.",
     )
     parser.add_argument(
+        "--temporal-v10",
+        action="store_true",
+        help="Use the fixed early-deadline SST recruitment and blank-decay protocol.",
+    )
+    parser.add_argument(
         "--constrained-efficient-coding",
         action="store_true",
         help=(
@@ -2286,12 +2399,33 @@ def parse_args() -> argparse.Namespace:
     elif args.feedback_mode is None:
         args.feedback_mode = tuned.FEEDBACK_MODE_POSTERIOR
     args.center_feedback = args.feedback_mode == tuned.FEEDBACK_MODE_CENTERED
+    if args.temporal_v10 and (
+        args.constrained_efficient_coding
+        or args.learn_feedback_gain
+        or args.axis_current_readout != "population_vector"
+        or args.recurrent_cell != "rnn_tanh"
+        or args.feedback_mode != tuned.FEEDBACK_MODE_POSTERIOR
+        or not args.freeze_local_comp
+    ):
+        parser.error(
+            "--temporal-v10 requires alpha-axis training, the population-vector "
+            "task, posterior feedback, tanh RNN, frozen local competition, and "
+            "no feedback-gain learning"
+        )
     return args
 
 
 def main() -> None:
     args = parse_args()
     MODEL_CONFIG["recurrent_cell"] = args.recurrent_cell
+    if args.temporal_v10:
+        MODEL_CONFIG["temporal_protocol"] = copy.deepcopy(tuned.TEMPORAL_PROTOCOL)
+        MODEL_CONFIG["model_architecture_version"] = tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION
+        MODEL_CONFIG["training_compatibility_version"] = TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+    else:
+        MODEL_CONFIG.pop("temporal_protocol", None)
+        MODEL_CONFIG["model_architecture_version"] = tuned.MODEL_ARCHITECTURE_VERSION
+        MODEL_CONFIG["training_compatibility_version"] = TRAINING_COMPATIBILITY_VERSION
     device = choose_device(args.device)
     training_mode = (
         "constrained_efficient_coding"
@@ -2331,7 +2465,7 @@ def main() -> None:
                 "freeze_local_comp": args.freeze_local_comp,
                 "center_feedback": args.center_feedback,
                 "feedback_mode": args.feedback_mode,
-                "training_compatibility_version": TRAINING_COMPATIBILITY_VERSION,
+                "training_compatibility_version": MODEL_CONFIG["training_compatibility_version"],
                 "fixed_canonical_vip_motif_gains": FIXED_CANONICAL_VIP_MOTIF_GAINS,
                 "centered_feedback_property_check": centered_feedback_property,
                 "posterior_feedback_property_check": posterior_feedback_property,
@@ -2378,13 +2512,16 @@ def main() -> None:
             "axis_current_readout": args.axis_current_readout,
             "center_feedback": args.center_feedback,
             "feedback_mode": args.feedback_mode,
-            "training_compatibility_version": TRAINING_COMPATIBILITY_VERSION,
+            "training_compatibility_version": MODEL_CONFIG["training_compatibility_version"],
             "fixed_canonical_vip_motif_gains": FIXED_CANONICAL_VIP_MOTIF_GAINS,
             "centered_feedback_property_check": centered_feedback_property,
             "posterior_feedback_property_check": posterior_feedback_property,
             "references": references,
             "common_pretrain_state_sha256": state_sha256(common_state),
         }
+        if args.temporal_v10:
+            summary["model_architecture_version"] = MODEL_CONFIG["model_architecture_version"]
+            summary["temporal_protocol"] = copy.deepcopy(MODEL_CONFIG["temporal_protocol"])
         if constrained_result is None:
             summary["alphas"] = alpha_results
         else:

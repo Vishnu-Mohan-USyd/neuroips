@@ -1,6 +1,31 @@
 # Expectation suppression: sharpening and dampening in one circuit
 
-This release branch contains the current **projected-output split-SST, tanh-RNN
+This branch packages **all three network types**, their code, trained
+checkpoints, and measured results for seeds 8, 9, and 10:
+
+- **Sharpening:** the static v9 circuit trained at alpha 0.07 enhances the
+  expected orientation and suppresses its flanks.
+- **Dampening:** the same v9 architecture trained at alpha 0.70 suppresses
+  the expected orientation more strongly than its flanks.
+- **Temporal:** v10 adds one slowly recruited prediction-SST state, producing
+  early sharpening followed by late central suppression within a held stimulus.
+  Both temporal alpha arms are included.
+
+**Start with [the network guide](NETWORKS.md)** for the architecture and
+trained regimes of all three types, scientific assumptions, results, checkpoint evaluation,
+training commands, Python loading examples, and figure reproduction.
+
+![Temporal response shape across three seeds](figures/temporal_v10/temporal_shape_profile.png)
+
+Temporal networks are in [`checkpoints/temporal_v10/`](checkpoints/temporal_v10/)
+and their figures and numerical results are in
+[`figures/temporal_v10/`](figures/temporal_v10/). The training and assay entry
+points support both versions; `reproduce_figures.py` evaluates the original v9
+release described below.
+
+## Original v9 model and results
+
+The original v9 experiment contains the **projected-output split-SST, tanh-RNN
 model**, six trained endpoints, and the code needed to reproduce their
 activity–orientation curves for seeds **8, 9, and 10**.
 
@@ -305,12 +330,16 @@ the dampening network.
 
 | Path | Contents |
 |---|---|
-| `harness/tuned_emergence_lib.py` | Current circuit, fixed maps, feedback transforms, model configuration, and recurrent forward pass. `SimpleTunedNet.l23` implements SST/VIP/PV processing. |
-| `harness/train_sweep.py` | Sequences, losses, common pretraining, alpha-arm training, and checkpoints. Retains an optional constrained-training mode not used for the checkpoint pair. |
+| `NETWORKS.md` | Sharpening, dampening, and temporal architectures/regimes, results, packaged checkpoint usage, training, and figure reproduction. |
+| `harness/tuned_emergence_lib.py` | Shared v9/v10 circuit, fixed maps, feedback transforms, model configuration, and recurrent forward pass. `SimpleTunedNet.l23` implements SST/VIP/PV processing. |
+| `harness/train_sweep.py` | Sequences, losses, common pretraining, alpha-arm training, and checkpoints; `--temporal-v10` enables within-stimulus SST dynamics. Retains an optional constrained-training mode not used for either release. |
 | `harness/simple_net.py` | Imported orientation-encoding helpers and older reference implementations. Its legacy `SimpleNet`/GRU is not the current model. |
 | `tools/assay_emergent_task_energy_axis.py` | Continuation/reversal histories, orientation alignment, activity and decoding measurements. |
-| `reproduce_figures.py` | CPU evaluation and plotting of all six endpoints and their three-seed means; checks reference numbers. |
-| `tests/test_minimal_biology_circuit.py` | 38 existing tests covering circuit equations/signs, feedback timing, training policies/losses, resume behavior, and reproduction failure handling. |
+| `reproduce_figures.py` | CPU evaluation and plotting of the six original v9 endpoints and their three-seed means; checks reference numbers. |
+| `tools/plot_temporal_profile.py` | Replots the temporal response-shape figure from the three saved assay JSON files. |
+| `tests/test_minimal_biology_circuit.py` | 43 tests covering circuit equations/signs, feedback timing, training policies/losses, resume behavior, reproduction failure handling, and temporal kinetics/accounting. |
+| `checkpoints/temporal_v10/seed_{8,9,10}/` | One shared pretrain and both temporal final endpoints per seed, with the original training summary. |
+| `figures/temporal_v10/` | Temporal assay JSON and PNG/SVG files for each seed, plus the combined response-shape figure. |
 | `checkpoints/seed{8,9,10}/alpha{0p07,0p7}/` | Final model, seed-shared 12,000-step common pretrain, and original summary. Pretrains are duplicated per arm so each assay directory is self-contained. |
 | `figures/` | Reproduced individual and three-seed-mean PNG/SVG profiles plus JSON curve data. |
 | `archive/v8/checkpoints/seed{8,9,10}/alpha{0p05,0p2}/` | Historical v8 endpoints and metadata. |
