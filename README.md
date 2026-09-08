@@ -1,8 +1,8 @@
 # Expectation suppression: sharpening and dampening in one circuit
 
-This local branch contains the current **projected-output split-SST, tanh-RNN
-model** and the code for reproducing sharpening and dampening checkpoints for
-seeds **8, 9, and 10**.
+This release branch contains the current **projected-output split-SST, tanh-RNN
+model**, six trained endpoints, and the code needed to reproduce their
+activity–orientation curves for seeds **8, 9, and 10**.
 
 Both outcomes use the same architecture. For each seed, two copies of a shared
 task-pretrained network are trained with different population-activity penalties:
@@ -12,9 +12,8 @@ original population-vector task/readout and train only the RNN, `W_fb`, and
 `w_sf_fixed`; feedback-gain learning is not used. The architecture identifier
 is `split_som_projected_output_tanh_v9`.
 
-This work is on the local branch `c6-shared-task-energy-sharpening` and has not
-been pushed. Previous progress is preserved in local commit `34f9670` on
-`c6-biological-sharpening-dampening`.
+Within each seed, architecture, common initialization, task losses, batches,
+and readout-noise streams are shared; only `alpha` differs between the arms.
 
 This is a minimal rate-level modeling hypothesis, not a claim that the circuit
 matches every aspect of cortical biology. In particular, sensory–prediction
@@ -24,32 +23,43 @@ architectural assumptions, not discoveries made by training.
 ## Reproduce the checkpoint results
 
 ```bash
-git switch c6-shared-task-energy-sharpening
+git clone --branch c6-shared-task-energy-v9 --single-branch \
+    https://github.com/Vishnu-Mohan-USyd/neuroips.git
+cd neuroips
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 CUDA_VISIBLE_DEVICES="" python reproduce_figures.py
 ```
 
-Run these commands from the existing local checkout; the current branch cannot
-yet be obtained by cloning the remote repository. The last command loads the
-six packaged checkpoints on CPU; it does not train.
-It writes six PNGs, six SVGs, and `figures/c6_curves.json`, containing raw curves
-and numerical measurements. Missing or incompatible checkpoints cause failure.
-Seed-8 reference measurements are checked to tolerance `1e-3`. Paths resolve
-relative to the script, not the calling directory.
+The last command loads the six packaged checkpoints on CPU; it does not train.
+It writes six individual PNG/SVG pairs, a combined three-seed mean PNG/SVG, and
+`figures/c6_curves.json`, containing raw curves and numerical measurements.
+Missing or incompatible checkpoints cause failure. Seed-8 reference
+measurements are checked to tolerance `1e-3`. Paths resolve relative to the
+script, not the calling directory.
 
 Checked environment: Python **3.13.7**, PyTorch **2.10.0+cu130**, Matplotlib
 **3.10.8**, NumPy **2.3.5**, and pytest **9.0.2**. CUDA is not needed for
 checkpoint evaluation. Requirements pin the package versions; the installed
 PyTorch CPU/CUDA build depends on the installation environment.
 
+![Three-seed mean sharpening and dampening](figures/c6_shared_task_energy_seed_mean.png)
+
+[Combined figure SVG](figures/c6_shared_task_energy_seed_mean.svg). Solid curves
+show the current v9 three-seed means. The dotted v8 sharpening curve comes from
+archived curve data and is historical context, not the matched v9 comparison.
+
 | Sharpening, seed 8 | Dampening, seed 8 |
 |---|---|
 | ![Sharpening](figures/c6_sharpening_seed8.png) | ![Dampening](figures/c6_dampening_seed8.png) |
 
 [Sharpening SVG](figures/c6_sharpening_seed8.svg) ·
-[Dampening SVG](figures/c6_dampening_seed8.svg)
+[Dampening SVG](figures/c6_dampening_seed8.svg) ·
+[seed 9 sharpening](figures/c6_sharpening_seed9.svg) ·
+[seed 9 dampening](figures/c6_dampening_seed9.svg) ·
+[seed 10 sharpening](figures/c6_sharpening_seed10.svg) ·
+[seed 10 dampening](figures/c6_dampening_seed10.svg)
 
 ## Architecture
 
@@ -96,13 +106,17 @@ E = pre_PV / (1 + PV)
 
 `S_P` receives `D * (feedback @ K_pred.T)`, followed by a threshold and VIP
 inhibition. `K_pred` is a fixed, circular, peak-normalized Gaussian map, applied
-identically at every orientation. `pred_inhib_weight` is the already-existing
-positive, row-normalized circular Gaussian with sigma two orientation channels;
-the projection adds no parameter and preserves global mean. Its exact Gaussian
-width is an engineering approximation. Broad SOM targeting is qualitatively
-supported by [Wilson et al. (2012)](https://pmc.ncbi.nlm.nih.gov/articles/PMC3653570/),
-who found that SOM neurons affected targets spanning a broader range of
-orientation preferences. Both arms use this same projection and architecture.
+identically at every orientation. `pred_inhib_weight` is a fixed positive,
+row-normalized circular Gaussian with sigma = 2 orientation channels (10
+degrees); the projection adds no parameter and preserves global mean. This
+exact width is a designed engineering approximation: it is neither learned nor
+an empirical measurement. Broad SOM targeting is qualitatively supported by
+[Wilson et al. (2012)](https://pmc.ncbi.nlm.nih.gov/articles/PMC3653570/), who
+found that SOM neurons affected targets spanning a broader range of orientation
+preferences; that evidence does not establish this particular Gaussian map.
+The output projection was deliberately introduced to allow stronger flank
+suppression while retaining center enhancement. Both arms use this same fixed
+projection and architecture; the wiring itself does not emerge from training.
 No expected/unexpected flag is supplied. Nevertheless,
 **sensory–prediction multiplication is built into the circuit**. Modulation is
 bounded between zero and twice the basal response. Without sensory drive it
@@ -148,6 +162,11 @@ R = (5/6) * mean(E) + (37/480) * mean(PV)
     + (1/20) * mean(SST) + (19/480) * mean(VIP)
 loss = (1 - alpha) * T + alpha * R / R_ref
 ```
+
+The task term `T` is identical in both current arms. The alpha settings were
+selected after examining training results to obtain the two response regimes.
+Activity-component weights are fixed modelling assumptions shared by both arms,
+not learned values or measured metabolic costs.
 
 SST activity is the equal-mass mean of `S_B` and `S_P`. `R` is a dimensionless
 weighted activity proxy, **not ATP consumption or a full metabolic budget**.
@@ -290,17 +309,21 @@ the dampening network.
 | `harness/train_sweep.py` | Sequences, losses, common pretraining, alpha-arm training, and checkpoints. Retains an optional constrained-training mode not used for the checkpoint pair. |
 | `harness/simple_net.py` | Imported orientation-encoding helpers and older reference implementations. Its legacy `SimpleNet`/GRU is not the current model. |
 | `tools/assay_emergent_task_energy_axis.py` | Continuation/reversal histories, orientation alignment, activity and decoding measurements. |
-| `reproduce_figures.py` | CPU evaluation and plotting of all six endpoints; checks reference numbers. |
+| `reproduce_figures.py` | CPU evaluation and plotting of all six endpoints and their three-seed means; checks reference numbers. |
 | `tests/test_minimal_biology_circuit.py` | 38 existing tests covering circuit equations/signs, feedback timing, training policies/losses, resume behavior, and reproduction failure handling. |
 | `checkpoints/seed{8,9,10}/alpha{0p07,0p7}/` | Final model, seed-shared 12,000-step common pretrain, and original summary. Pretrains are duplicated per arm so each assay directory is self-contained. |
-| `figures/` | Reproduced PNG/SVG profiles and JSON curve data. |
+| `figures/` | Reproduced individual and three-seed-mean PNG/SVG profiles plus JSON curve data. |
+| `archive/v8/checkpoints/seed{8,9,10}/alpha{0p05,0p2}/` | Historical v8 endpoints and metadata. |
+| `archive/v8/figures/c6_curves.json` | Historical v8 curves used only for the dotted context in the combined figure. |
+| `archive/channel_task_exploration/{seed_8,seed_9,seed_10}/` | Rejected differing-task checkpoints and metadata; comparison JSON/PNG/SVG files sit beside the seed directories. |
 | `requirements.txt` | Pinned package versions. |
 
 Training summaries retain their original run paths and settings; corresponding
-checkpoints are packaged beside them. Historical alpha-0.0/0.5 models belong to
-the earlier architecture and remain on the
-[`c6-interneuron-networks` branch](https://github.com/Vishnu-Mohan-USyd/neuroips/tree/c6-interneuron-networks).
-Exploratory runs and session notes are not packaged here.
+checkpoints are packaged beside them. Everything under `archive/` is retained
+only for historical reference. Archived checkpoints are architecture- and/or
+task-incompatible with v9, are not the matched comparison reported above, and
+must not be substituted for the active endpoints. Their historical source state
+is preserved in commit `34f9670`.
 
 Run the existing tests with:
 

@@ -5,6 +5,6 @@ __pycache__/
 outputs/
 MEMORY.md
 BIOLOGY_ALIGNMENT_LOG.md
-# Historical checkpoint families remain local; this branch publishes v8 only.
+# Unpackaged historical checkpoint families remain local.
 checkpoints/seed*/alpha0p0/
 checkpoints/seed*/alpha0p5/
