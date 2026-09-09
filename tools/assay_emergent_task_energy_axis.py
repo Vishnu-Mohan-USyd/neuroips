@@ -312,6 +312,7 @@ def load_arm(path: Path, device: torch.device) -> tuple[tuned.SimpleTunedNet, di
     if architecture not in (
         tuned.MODEL_ARCHITECTURE_VERSION,
         tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION,
+        tuned.LEARNED_TEMPORAL_MODEL_ARCHITECTURE_VERSION,
     ):
         raise RuntimeError(
             "checkpoint architecture does not match current tuned circuit"
@@ -553,7 +554,13 @@ def temporal_probe(net, checkpoint, device, *, clamp=False, measurements=True):
     cumulative = torch.cat((torch.zeros_like(increments[:, :1]),
                             increments.cumsum(dim=-1)), dim=-1)
     blank_times = torch.arange(1, 51, device=device, dtype=times.dtype) / 10.0
-    blank_fraction = -torch.expm1(-blank_times) / (-math.expm1(-5.0))
+    if net.learn_temporal_kinetics:
+        _, tau_p = net.temporal_time_constants()
+        blank_fraction = -torch.expm1(-blank_times / tau_p) / (
+            -torch.expm1(-net.temporal_protocol["gap_duration"] / tau_p)
+        )
+    else:
+        blank_fraction = -torch.expm1(-blank_times) / (-math.expm1(-5.0))
     cumulative = torch.cat((cumulative, cumulative[:, -1:]
                             + integrals["gap_integral"][:, -1:] * blank_fraction), dim=-1)
     result["cycle_times"] = torch.cat((times, 4.0 + blank_times)).cpu().tolist()
@@ -799,7 +806,10 @@ def main() -> None:
     common_checkpoint = torch.load(
         args.run_dir / "common_pretrain_final.pt", map_location=device
     )
-    if common_checkpoint.get("model_architecture_version") == tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION:
+    if common_checkpoint.get("model_architecture_version") in (
+        tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION,
+        tuned.LEARNED_TEMPORAL_MODEL_ARCHITECTURE_VERSION,
+    ):
         assay_temporal_run(args, device, output_path)
         return
     common_local_comp_raw = common_checkpoint["state_dict"].get(

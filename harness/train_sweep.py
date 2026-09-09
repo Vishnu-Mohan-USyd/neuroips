@@ -38,6 +38,8 @@ STEP_DEG = 5.0
 ALPHAS = (0.004, 0.5)
 TRAINING_COMPATIBILITY_VERSION = "shared_divisive_som_population_activity_v8"
 TEMPORAL_TRAINING_COMPATIBILITY_VERSION = "early_deadline_cycle_activity_v10"
+LEARNED_TEMPORAL_TRAINING_COMPATIBILITY_VERSION = "learned_dual_route_cycle_activity_v11"
+TEMPORAL_CURRENT_CE_PENALTY_COEFFICIENT = 1000.0
 FIXED_CANONICAL_VIP_MOTIF_GAINS = {
     "w_vd": 0.1,
     "w_sv": 0.1,
@@ -567,6 +569,8 @@ def task_activity_losses(
     feedback_mode: str | None = None,
     current_decoder_noise: torch.Tensor | None = None,
     current_readout: str = "population_vector",
+    temporal_current_window: str = "early",
+    auxiliary_current_noise_generator: torch.Generator | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute task and normalized modeled-population activity pressure.
 
@@ -602,12 +606,19 @@ def task_activity_losses(
         Feedback computed after time ``t`` affects L2/3 only at ``t+1``; the
         first response has zero feedback state.
 
-        V10 instead averages the two instantaneous noisy current CEs at 0.1
-        and 0.2, keeps next targets on real stimulus transitions, and charges
-        the trapezoidal on-period plus exact blank activity integral J/J_ref.
-        Its current-decoder noise has shape [B,S,2,36].
+        V10 defaults to averaging the two instantaneous noisy current CEs at
+        0.1 and 0.2. The sustained window averages instantaneous CEs at every
+        positive on-period sample, retaining the primary generator's early
+        noise and drawing all remaining noise from the auxiliary generator.
+        Explicit current-decoder noise must match the selected window's
+        [B,S,K,36] rates. Both windows keep next targets on real stimulus
+        transitions and charge the same full-cycle activity integral J/J_ref.
     """
 
+    if temporal_current_window not in ("early", "sustained"):
+        raise ValueError(f"unknown temporal current window {temporal_current_window!r}")
+    if temporal_current_window == "sustained" and net.temporal_protocol is None:
+        raise ValueError("sustained current loss requires temporal v10")
     if net.temporal_protocol is not None:
         predictions, _, _, timecourse = tuned.forward_seq_tuned(
             net, theta, 1.0, center_feedback=center_feedback,
@@ -617,9 +628,32 @@ def task_activity_losses(
         protocol = net.temporal_protocol
         early_indices = [round(time / protocol["dt"]) for time in protocol["early_times"]]
         early_rates = timecourse["rates"][:, :, early_indices, :]
-        early_channels = channels[:, :, None].expand(-1, -1, len(early_indices))
+        current_rates = early_rates
+        if temporal_current_window == "sustained":
+            current_rates = timecourse["rates"][:, :, 1:, :]
+            if current_decoder_noise is None:
+                if auxiliary_current_noise_generator is None:
+                    raise ValueError("sustained current loss requires an auxiliary noise generator")
+                # Preserve the original primary draw and its early-time pairing.
+                early_noise = torch.randn(
+                    early_rates.shape, device=early_rates.device,
+                    dtype=early_rates.dtype, generator=noise_generator,
+                ) * references["sigma_train"]
+                early_positions = [index - 1 for index in early_indices]
+                remaining_positions = [
+                    index for index in range(current_rates.shape[2])
+                    if index not in early_positions
+                ]
+                current_decoder_noise = torch.empty_like(current_rates)
+                current_decoder_noise[:, :, early_positions, :] = early_noise
+                current_decoder_noise[:, :, remaining_positions, :] = torch.randn(
+                    (*current_rates.shape[:2], len(remaining_positions), N),
+                    device=current_rates.device, dtype=current_rates.dtype,
+                    generator=auxiliary_current_noise_generator,
+                ) * references["sigma_train"]
+        current_channels = channels[:, :, None].expand(-1, -1, current_rates.shape[2])
         current = confidence_weighted_current_orientation_ce(
-            net, early_rates, early_channels, noise_generator, references,
+            net, current_rates, current_channels, noise_generator, references,
             current_decoder_noise=current_decoder_noise, current_readout=current_readout,
         )
         next_ce = F.cross_entropy(
@@ -634,11 +668,18 @@ def task_activity_losses(
         def cycle_mean(values: torch.Tensor) -> torch.Tensor:
             return torch.trapezoid(values, timecourse["times"], dim=-2) / duration
 
-        gap_som = (
-            0.5 * som_p[:, :, -1] * protocol["tau_p"]
-            * (-math.expm1(-protocol["gap_duration"] / protocol["tau_p"]))
-            / duration
-        )
+        if net.learn_temporal_kinetics:
+            tau_p = net.temporal_time_constants()[1]
+            gap_som = (
+                0.5 * som_p[:, :, -1] * tau_p
+                * (-torch.expm1(-protocol["gap_duration"] / tau_p)) / duration
+            )
+        else:
+            gap_som = (
+                0.5 * som_p[:, :, -1] * protocol["tau_p"]
+                * (-math.expm1(-protocol["gap_duration"] / protocol["tau_p"]))
+                / duration
+            )
         activity = modeled_population_activity_components(
             cycle_mean(timecourse["rates"]),
             cycle_mean(som) + gap_som,
@@ -891,6 +932,8 @@ def set_axis_parameter_policy(
         parameter.requires_grad_(False)
     parameters = list(net.gru.parameters()) + list(net.W_fb.parameters())
     parameters.append(net.w_sf_fixed)
+    if net.learn_temporal_kinetics:
+        parameters.extend((net.temporal_tau_e_raw, net.temporal_tau_p_raw))
     if learn_feedback_gain:
         parameters.append(net.circ_raw)
     # Shared anatomy is initialized/settled and frozen by default. Axis fitting
@@ -918,6 +961,7 @@ def checkpoint_payload(
     center_feedback: bool = False,
     feedback_mode: str | None = None,
     mismatch_prob: float = 0.0,
+    temporal_current_window: str = "early",
 ) -> dict:
     resolved_feedback_mode = tuned.resolve_feedback_mode(
         center_feedback,
@@ -926,7 +970,10 @@ def checkpoint_payload(
     training_version = TRAINING_COMPATIBILITY_VERSION
     net_config = MODEL_CONFIG
     if net.temporal_protocol is not None:
-        training_version = TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        training_version = (
+            LEARNED_TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+            if net.learn_temporal_kinetics else TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        )
         net_config = {
             **MODEL_CONFIG,
             **tuned.model_config(net),
@@ -938,6 +985,7 @@ def checkpoint_payload(
         "seed": seed,
         "alpha": alpha,
         "task_weight": task_weight,
+        "temporal_current_window": temporal_current_window,
         "step": step,
         "target_steps": target_steps,
         "state_dict": net.state_dict(),
@@ -969,6 +1017,8 @@ def run_pretrain(
     assert_fixed_vip_motif(net)
     references = reference_values(net, device)
     training_version = (
+        LEARNED_TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        if net.learn_temporal_kinetics else
         TEMPORAL_TRAINING_COMPATIBILITY_VERSION
         if net.temporal_protocol is not None
         else TRAINING_COMPATIBILITY_VERSION
@@ -1005,6 +1055,15 @@ def run_pretrain(
             != training_version
             or saved.get("tuned_net_config", {}).get("temporal_protocol")
             != net.temporal_protocol
+            or saved.get("tuned_net_config", {}).get("sst_response_gain", False)
+            != net.sst_response_gain
+            or (
+                net.learn_temporal_kinetics
+                and any(
+                    saved.get("tuned_net_config", {}).get(key) != getattr(net, key)
+                    for key in ("learn_temporal_kinetics", "temporal_tau_e_init", "temporal_tau_p_init")
+                )
+            )
         ):
             raise RuntimeError("pretrain checkpoint metadata does not match this run")
         net.load_state_dict(saved["state_dict"])
@@ -1256,6 +1315,14 @@ def mechanism_statistics(net: tuned.SimpleTunedNet) -> dict[str, float]:
         f"gain_{name}": float(gains[index].item())
         for name, index in tuned.CIRC_INDEX.items()
     }
+    if net.learn_temporal_kinetics:
+        tau_e, tau_p = net.temporal_time_constants()
+        named.update(
+            temporal_tau_e=float(tau_e.detach().item()),
+            temporal_tau_p=float(tau_p.detach().item()),
+        )
+    if net.sst_response_gain:
+        named["sst_response_gain"] = True
     mean_m = float(net.m_fixed_effective().detach().item())
     raw_m = float(net.m_fixed.detach().item())
     w_sf = float(net.w_sf_effective().detach().item())
@@ -1324,6 +1391,8 @@ def run_alpha(
 ) -> dict:
     net = tuned.build_tuned_from_config(MODEL_CONFIG).to(device)
     training_version = (
+        LEARNED_TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        if net.learn_temporal_kinetics else
         TEMPORAL_TRAINING_COMPATIBILITY_VERSION
         if net.temporal_protocol is not None
         else TRAINING_COMPATIBILITY_VERSION
@@ -1346,6 +1415,20 @@ def run_alpha(
     axis_current_readout = getattr(
         args, "axis_current_readout", "population_vector"
     )
+    temporal_current_window = getattr(args, "temporal_current_window", "early")
+    temporal_current_ce_ceiling = getattr(args, "temporal_current_ce_ceiling", None)
+    temporal_current_ce_penalty_coefficient = getattr(
+        args, "temporal_current_ce_penalty_coefficient", TEMPORAL_CURRENT_CE_PENALTY_COEFFICIENT
+    )
+    if temporal_current_ce_ceiling is not None and (
+        not math.isfinite(temporal_current_ce_penalty_coefficient)
+        or temporal_current_ce_penalty_coefficient <= 0.0
+    ):
+        raise ValueError("the temporal current-CE penalty coefficient must be finite and positive")
+    current_ce_ceiling_metadata = {
+        "temporal_current_ce_ceiling": temporal_current_ce_ceiling,
+        "temporal_current_ce_penalty_coefficient": temporal_current_ce_penalty_coefficient,
+    }
     optimizer = torch.optim.Adam(
         set_axis_parameter_policy(
             net, args.freeze_local_comp, learn_feedback_gain
@@ -1356,6 +1439,17 @@ def run_alpha(
     )
     data_generator = make_generator(device, 400000 + args.seed)
     noise_generator = make_generator(device, 500000 + args.seed)
+    auxiliary_current_noise_generator = (
+        make_generator(device, 600000 + args.seed)
+        if temporal_current_window == "sustained" else None
+    )
+    current_window_kwargs = (
+        {
+            "temporal_current_window": temporal_current_window,
+            "auxiliary_current_noise_generator": auxiliary_current_noise_generator,
+        }
+        if temporal_current_window == "sustained" else {}
+    )
     mismatch_stats: dict[str, int] = {
         "events": 0,
         "eligible": 0,
@@ -1384,6 +1478,18 @@ def run_alpha(
             != learn_feedback_gain
             or saved.get("axis_current_readout", "population_vector")
             != axis_current_readout
+            or saved.get("temporal_current_window", "early")
+            != temporal_current_window
+            or saved.get("temporal_current_ce_ceiling") != temporal_current_ce_ceiling
+            or (
+                temporal_current_ce_ceiling is not None
+                and saved.get("temporal_current_ce_penalty_coefficient")
+                != temporal_current_ce_penalty_coefficient
+            )
+            or (
+                auxiliary_current_noise_generator is not None
+                and saved.get("auxiliary_current_noise_generator_state") is None
+            )
             or saved_feedback_mode != args.feedback_mode
             or float(saved.get("mismatch_prob", 0.0)) != args.mismatch_prob
             or saved.get("model_architecture_version")
@@ -1392,6 +1498,15 @@ def run_alpha(
             != training_version
             or saved.get("tuned_net_config", {}).get("temporal_protocol")
             != net.temporal_protocol
+            or saved.get("tuned_net_config", {}).get("sst_response_gain", False)
+            != net.sst_response_gain
+            or (
+                net.learn_temporal_kinetics
+                and any(
+                    saved.get("tuned_net_config", {}).get(key) != getattr(net, key)
+                    for key in ("learn_temporal_kinetics", "temporal_tau_e_init", "temporal_tau_p_init")
+                )
+            )
         ):
             raise RuntimeError(f"alpha {alpha} checkpoint metadata does not match")
         net.load_state_dict(saved["state_dict"])
@@ -1400,6 +1515,11 @@ def run_alpha(
         zero_non_feedback_gain_optimizer_state(optimizer, net)
         restore_generator_state(data_generator, saved["data_generator_state"])
         restore_generator_state(noise_generator, saved["noise_generator_state"])
+        if auxiliary_current_noise_generator is not None:
+            restore_generator_state(
+                auxiliary_current_noise_generator,
+                saved["auxiliary_current_noise_generator_state"],
+            )
         start_step = int(saved["step"]) + 1
         event_log.write(
             {"event": "alpha_resume", "alpha": alpha, "step": start_step - 1}
@@ -1424,6 +1544,8 @@ def run_alpha(
             "freeze_local_comp": args.freeze_local_comp,
             "learn_feedback_gain": learn_feedback_gain,
             "axis_current_readout": axis_current_readout,
+            "temporal_current_window": temporal_current_window,
+            **current_ce_ceiling_metadata,
             "center_feedback": args.center_feedback,
             "feedback_mode": args.feedback_mode,
             "local_comp_raw_initial_sha256": initial_local_comp_sha256,
@@ -1452,11 +1574,19 @@ def run_alpha(
             center_feedback=args.center_feedback,
             feedback_mode=args.feedback_mode,
             current_readout=axis_current_readout,
+            **current_window_kwargs,
         )
         objective = (
             task_weight * losses["task"]
             + alpha * losses["modeled_population_activity"]
         )
+        if temporal_current_ce_ceiling is not None:
+            # Engineering penalty approximation; held-out feasibility must be checked separately.
+            current_ce_excess = losses["current_ce"] - temporal_current_ce_ceiling
+            current_ce_penalty = (
+                temporal_current_ce_penalty_coefficient * F.relu(current_ce_excess).square()
+            )
+            objective = objective + current_ce_penalty
         optimizer.zero_grad(set_to_none=True)
         objective.backward()
         mask_circ_raw_grad_to_feedback_gain(net)
@@ -1475,6 +1605,10 @@ def run_alpha(
                     "task_weight": task_weight,
                     "step": step,
                     "objective": float(objective.item()),
+                    **({
+                        "current_ce_excess": float(current_ce_excess.item()),
+                        "current_ce_penalty": float(current_ce_penalty.item()),
+                    } if temporal_current_ce_ceiling is not None else {}),
                     "task": float(losses["task"].item()),
                     "modeled_population_activity": float(
                         losses["modeled_population_activity"].item()
@@ -1541,9 +1675,15 @@ def run_alpha(
                 center_feedback=args.center_feedback,
                 feedback_mode=args.feedback_mode,
                 mismatch_prob=args.mismatch_prob,
+                temporal_current_window=temporal_current_window,
             )
             payload["learn_feedback_gain"] = learn_feedback_gain
             payload["axis_current_readout"] = axis_current_readout
+            payload.update(current_ce_ceiling_metadata)
+            if auxiliary_current_noise_generator is not None:
+                payload["auxiliary_current_noise_generator_state"] = (
+                    auxiliary_current_noise_generator.get_state()
+                )
             atomic_torch_save(payload, latest_path)
             if step * 2 == args.axis_steps:
                 # kcontext DESIGN section 5: gates are evaluated at the mid-arm
@@ -1582,6 +1722,8 @@ def run_alpha(
         "freeze_local_comp": args.freeze_local_comp,
         "learn_feedback_gain": learn_feedback_gain,
         "axis_current_readout": axis_current_readout,
+        "temporal_current_window": temporal_current_window,
+        **current_ce_ceiling_metadata,
         "center_feedback": args.center_feedback,
         "feedback_mode": args.feedback_mode,
         "local_comp_raw_initial_sha256": initial_local_comp_sha256,
@@ -2281,6 +2423,37 @@ def parse_args() -> argparse.Namespace:
         help="Use the fixed early-deadline SST recruitment and blank-decay protocol.",
     )
     parser.add_argument(
+        "--temporal-current-window",
+        choices=("early", "sustained"),
+        default="early",
+        help="Current-CE sampling window in temporal alpha arms; common pretraining stays early-only.",
+    )
+    parser.add_argument(
+        "--temporal-current-ce-ceiling", type=float, default=None,
+        help="Optional current-CE ceiling for a squared-excess penalty in temporal alpha arms.",
+    )
+    parser.add_argument(
+        "--temporal-current-ce-penalty-coefficient", type=float,
+        default=TEMPORAL_CURRENT_CE_PENALTY_COEFFICIENT,
+        help="Positive coefficient of the temporal current-CE squared-excess penalty.",
+    )
+    parser.add_argument(
+        "--learn-temporal-kinetics", action="store_true",
+        help="Learn independent E-prediction and SST time constants in temporal alpha arms.",
+    )
+    parser.add_argument(
+        "--sst-response-gain", action="store_true",
+        help="Use a softplus SST firing-response gain after rectification, before temporal dynamics.",
+    )
+    parser.add_argument(
+        "--temporal-tau-e-init", type=float, default=1.0,
+        help="Initial excitatory prediction-activation time constant in relative units.",
+    )
+    parser.add_argument(
+        "--temporal-tau-p-init", type=float, default=1.0,
+        help="Initial prediction-SST time constant in relative units.",
+    )
+    parser.add_argument(
         "--constrained-efficient-coding",
         action="store_true",
         help=(
@@ -2399,9 +2572,34 @@ def parse_args() -> argparse.Namespace:
     elif args.feedback_mode is None:
         args.feedback_mode = tuned.FEEDBACK_MODE_POSTERIOR
     args.center_feedback = args.feedback_mode == tuned.FEEDBACK_MODE_CENTERED
+    if args.temporal_current_window == "sustained" and not args.temporal_v10:
+        parser.error("--temporal-current-window sustained requires --temporal-v10")
+    if args.temporal_current_ce_ceiling is not None:
+        if not args.temporal_v10:
+            parser.error("--temporal-current-ce-ceiling requires --temporal-v10")
+        if not math.isfinite(args.temporal_current_ce_ceiling) or args.temporal_current_ce_ceiling < 0.0:
+            parser.error("the temporal current-CE ceiling must be finite and nonnegative")
+        if (
+            not math.isfinite(args.temporal_current_ce_penalty_coefficient)
+            or args.temporal_current_ce_penalty_coefficient <= 0.0
+        ):
+            parser.error("the temporal current-CE penalty coefficient must be finite and positive")
+    if args.learn_temporal_kinetics and not args.temporal_v10:
+        parser.error("--learn-temporal-kinetics requires --temporal-v10")
+    if args.sst_response_gain and not args.learn_temporal_kinetics:
+        parser.error("--sst-response-gain requires --learn-temporal-kinetics")
+    if any(
+        not math.isfinite(value) or value <= 0.0
+        for value in (args.temporal_tau_e_init, args.temporal_tau_p_init)
+    ):
+        parser.error("initial temporal time constants must be finite and positive")
+    if not args.learn_temporal_kinetics and (
+        args.temporal_tau_e_init != 1.0 or args.temporal_tau_p_init != 1.0
+    ):
+        parser.error("custom temporal time constants require --learn-temporal-kinetics")
     if args.temporal_v10 and (
         args.constrained_efficient_coding
-        or args.learn_feedback_gain
+        or (args.learn_feedback_gain and not args.learn_temporal_kinetics)
         or args.axis_current_readout != "population_vector"
         or args.recurrent_cell != "rnn_tanh"
         or args.feedback_mode != tuned.FEEDBACK_MODE_POSTERIOR
@@ -2410,7 +2608,7 @@ def parse_args() -> argparse.Namespace:
         parser.error(
             "--temporal-v10 requires alpha-axis training, the population-vector "
             "task, posterior feedback, tanh RNN, frozen local competition, and "
-            "no feedback-gain learning"
+            "--learn-temporal-kinetics for feedback-gain learning"
         )
     return args
 
@@ -2418,10 +2616,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     MODEL_CONFIG["recurrent_cell"] = args.recurrent_cell
+    for key in ("learn_temporal_kinetics", "temporal_tau_e_init", "temporal_tau_p_init", "sst_response_gain"):
+        MODEL_CONFIG.pop(key, None)
     if args.temporal_v10:
         MODEL_CONFIG["temporal_protocol"] = copy.deepcopy(tuned.TEMPORAL_PROTOCOL)
         MODEL_CONFIG["model_architecture_version"] = tuned.TEMPORAL_MODEL_ARCHITECTURE_VERSION
         MODEL_CONFIG["training_compatibility_version"] = TEMPORAL_TRAINING_COMPATIBILITY_VERSION
+        if args.learn_temporal_kinetics:
+            MODEL_CONFIG.update(
+                learn_temporal_kinetics=True,
+                temporal_tau_e_init=args.temporal_tau_e_init,
+                temporal_tau_p_init=args.temporal_tau_p_init,
+                model_architecture_version=tuned.LEARNED_TEMPORAL_MODEL_ARCHITECTURE_VERSION,
+                training_compatibility_version=LEARNED_TEMPORAL_TRAINING_COMPATIBILITY_VERSION,
+            )
+            if args.sst_response_gain:
+                MODEL_CONFIG["sst_response_gain"] = True
     else:
         MODEL_CONFIG.pop("temporal_protocol", None)
         MODEL_CONFIG["model_architecture_version"] = tuned.MODEL_ARCHITECTURE_VERSION
@@ -2463,6 +2673,7 @@ def main() -> None:
                 "alphas": None if args.constrained_efficient_coding else args.alphas,
                 "task_weight": args.task_weight,
                 "freeze_local_comp": args.freeze_local_comp,
+                "temporal_current_window": args.temporal_current_window,
                 "center_feedback": args.center_feedback,
                 "feedback_mode": args.feedback_mode,
                 "training_compatibility_version": MODEL_CONFIG["training_compatibility_version"],
@@ -2510,6 +2721,7 @@ def main() -> None:
             "freeze_local_comp": args.freeze_local_comp,
             "learn_feedback_gain": args.learn_feedback_gain,
             "axis_current_readout": args.axis_current_readout,
+            "temporal_current_window": args.temporal_current_window,
             "center_feedback": args.center_feedback,
             "feedback_mode": args.feedback_mode,
             "training_compatibility_version": MODEL_CONFIG["training_compatibility_version"],
@@ -2522,6 +2734,14 @@ def main() -> None:
         if args.temporal_v10:
             summary["model_architecture_version"] = MODEL_CONFIG["model_architecture_version"]
             summary["temporal_protocol"] = copy.deepcopy(MODEL_CONFIG["temporal_protocol"])
+        if args.learn_temporal_kinetics:
+            summary.update(
+                learn_temporal_kinetics=True,
+                temporal_tau_e_init=args.temporal_tau_e_init,
+                temporal_tau_p_init=args.temporal_tau_p_init,
+            )
+        if args.sst_response_gain:
+            summary["sst_response_gain"] = True
         if constrained_result is None:
             summary["alphas"] = alpha_results
         else:

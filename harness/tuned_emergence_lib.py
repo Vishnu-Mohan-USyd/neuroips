@@ -31,6 +31,7 @@ FEEDBACK_MODES = (
 )
 MODEL_ARCHITECTURE_VERSION = "split_som_projected_output_tanh_v9"
 TEMPORAL_MODEL_ARCHITECTURE_VERSION = "split_som_projected_output_temporal_v10"
+LEARNED_TEMPORAL_MODEL_ARCHITECTURE_VERSION = "split_som_projected_output_learned_temporal_v11"
 TEMPORAL_PROTOCOL = {
     "tau_p": 1.0,
     "on_duration": 4.0,
@@ -212,6 +213,10 @@ class SimpleTunedNet(nn.Module):
         m_fixed_parameterization: str = M_FIXED_MODE_LEGACY_CLAMP,
         fixed_intrinsic_rheobases: bool = False,
         temporal_protocol: dict | None = None,
+        learn_temporal_kinetics: bool = False,
+        temporal_tau_e_init: float = 1.0,
+        temporal_tau_p_init: float = 1.0,
+        sst_response_gain: bool = False,
     ):
         super().__init__()
         self.hidden = hidden
@@ -252,7 +257,27 @@ class SimpleTunedNet(nn.Module):
             )
         self.fixed_intrinsic_rheobases = bool(fixed_intrinsic_rheobases)
         self.temporal_protocol = validate_temporal_protocol(temporal_protocol)
+        self.learn_temporal_kinetics = bool(learn_temporal_kinetics)
+        self.sst_response_gain = bool(sst_response_gain)
+        if self.sst_response_gain and not self.learn_temporal_kinetics:
+            raise ValueError("SST response gain requires learned temporal kinetics")
+        self.temporal_tau_e_init = float(temporal_tau_e_init)
+        self.temporal_tau_p_init = float(temporal_tau_p_init)
+        if self.learn_temporal_kinetics:
+            if self.temporal_protocol is None:
+                raise ValueError("learned temporal kinetics require a temporal protocol")
+            for route, initial in (("e", self.temporal_tau_e_init), ("p", self.temporal_tau_p_init)):
+                if not math.isfinite(initial) or initial <= 0.0:
+                    raise ValueError("initial temporal time constants must be finite and positive")
+                # Stable inverse softplus, with identical unrestricted maps for both routes.
+                raw = initial + math.log(-math.expm1(-initial))
+                self.register_parameter(
+                    f"temporal_tau_{route}_raw",
+                    nn.Parameter(torch.tensor(raw, dtype=torch.float32)),
+                )
         self.model_architecture_version = (
+            LEARNED_TEMPORAL_MODEL_ARCHITECTURE_VERSION
+            if self.learn_temporal_kinetics else
             TEMPORAL_MODEL_ARCHITECTURE_VERSION
             if self.temporal_protocol is not None
             else MODEL_ARCHITECTURE_VERSION
@@ -303,9 +328,10 @@ class SimpleTunedNet(nn.Module):
         self.circ_raw = nn.Parameter(torch.tensor(circ_init, dtype=torch.float32))
         # Candidate 6 (addendum 4 section 4): initialized from anatomy; the
         # effective value is nonnegative and can be trained during axis fitting.
-        self.w_sf_fixed = nn.Parameter(
-            torch.tensor(math.sqrt(C_FIELD), dtype=torch.float32)
-        )
+        w_sf_init = math.sqrt(C_FIELD)
+        if self.sst_response_gain:
+            w_sf_init = softplus_inverse(w_sf_init)
+        self.w_sf_fixed = nn.Parameter(torch.tensor(w_sf_init, dtype=torch.float32))
         m_init = math.sqrt(C_FIELD)
         if self.m_fixed_parameterization == M_FIXED_MODE_SOFTPLUS_RAW:
             m_init = softplus_inverse(m_init)
@@ -390,6 +416,7 @@ class SimpleTunedNet(nn.Module):
         *,
         som_p_state: torch.Tensor | None = None,
         som_p_times: torch.Tensor | None = None,
+        prediction_excitation: torch.Tensor | None = None,
     ):
         """Map ``[B,36]`` L4/feedback tensors to nonnegative L2/3 rates.
 
@@ -410,6 +437,14 @@ class SimpleTunedNet(nn.Module):
         Providing ``som_p_times[K]`` samples its exact exponential recruitment
         toward the fixed current target and returns ``[B,K,*]`` tensors. This
         relative-time recruitment is an engineering approximation.
+
+        Learned dual-route kinetics independently filter excitatory prediction
+        activation and actual SST firing, without imposing their relative speed.
+        ``prediction_excitation`` is effective synaptic/apical activation, not
+        another firing population; actual E remains the algebraic rate below.
+        Optional SST response gain scales rectified recruitment before firing
+        dynamics and activity accounting. This is a phenomenological firing-
+        response gain, not equivalent presynaptic plasticity.
         """
 
         drive = self.feedforward(l4)
@@ -431,9 +466,11 @@ class SimpleTunedNet(nn.Module):
         p36 = fb_pos @ self.K_pred.t()
         pred_sens = drive * p36
         q_b = g[CIRC_INDEX["w_sd"]] * b36
-        q_p = w_sf * pred_sens
+        q_p = pred_sens if self.sst_response_gain else w_sf * pred_sens
         som_b = F.relu(q_b - theta_s - w_sv * v36)
         som_p = F.relu(q_p - theta_s - w_sv * v36)
+        if self.sst_response_gain:
+            som_p = w_sf * som_p
         if som_p_times is not None and som_p_state is None:
             raise ValueError("som_p_times requires som_p_state")
         if som_p_state is not None:
@@ -444,7 +481,11 @@ class SimpleTunedNet(nn.Module):
             else:
                 if self.temporal_protocol is None or som_p_times.ndim != 1:
                     raise ValueError("SST time samples require a temporal net and [K] times")
-                scaled_times = som_p_times / self.temporal_protocol["tau_p"]
+                tau_p = (
+                    self.temporal_time_constants()[1]
+                    if self.learn_temporal_kinetics else self.temporal_protocol["tau_p"]
+                )
+                scaled_times = som_p_times / tau_p
                 decay = torch.exp(-scaled_times)[None, :, None]
                 recruitment = -torch.expm1(-scaled_times)[None, :, None]
                 som_p = som_p_state[:, None, :] * decay + som_p[:, None, :] * recruitment
@@ -456,10 +497,18 @@ class SimpleTunedNet(nn.Module):
         som = 0.5 * (som_b + som_p)
         m_effective = self.m_fixed_effective()
         som_gain = m_effective * som
-        exc_feedback_work = g[CIRC_INDEX["w_ef"]] * drive * fb_pos
+        if prediction_excitation is not None and prediction_excitation.shape != fb_pos.shape:
+            raise ValueError("prediction_excitation must match the sampled feedback shape")
+        exc_feedback_work = (
+            g[CIRC_INDEX["w_ef"]] * drive * fb_pos
+            if prediction_excitation is None else drive * prediction_excitation
+        )
         basal = drive / (1.0 + m_effective * som_b).clamp_min(1e-6)
         projected_som_p = som_p @ self.pred_inhib_weight.T
-        u = g[CIRC_INDEX["w_ef"]] * fb_pos - m_effective * projected_som_p
+        u = (
+            g[CIRC_INDEX["w_ef"]] * fb_pos
+            if prediction_excitation is None else prediction_excitation
+        ) - m_effective * projected_som_p
         pre_pv_rate = basal * (1.0 + torch.tanh(u))
         pv = (
             g[CIRC_INDEX["w_pv"]]
@@ -510,8 +559,14 @@ class SimpleTunedNet(nn.Module):
         return self.m_fixed.clamp_min(0.0)
 
     def w_sf_effective(self) -> torch.Tensor:
-        """Return the nonnegative prediction-to-SST/SOM coupling strength."""
+        """Return nonnegative SST input gain, or softplus firing-response gain."""
+        if self.sst_response_gain:
+            return F.softplus(self.w_sf_fixed)
         return self.w_sf_fixed.clamp_min(0.0)
+
+    def temporal_time_constants(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return independent positive E-activation and SST time constants."""
+        return F.softplus(self.temporal_tau_e_raw), F.softplus(self.temporal_tau_p_raw)
 
     def circuit_gains(self) -> torch.Tensor:
         """Return effective nonnegative circuit gains in ``CIRC_INDEX`` order."""
@@ -600,15 +655,25 @@ def _forward_seq_temporal(
         samples, device=theta.device, dtype=net.W_fb.weight.dtype
     ) * dt
     early_indices = [round(time / dt) for time in protocol["early_times"]]
-    gap_decay = math.exp(-protocol["gap_duration"] / protocol["tau_p"])
-    gap_factor = protocol["tau_p"] * (-math.expm1(
-        -protocol["gap_duration"] / protocol["tau_p"]
-    )) / 40.0
+    if net.learn_temporal_kinetics:
+        tau_e, tau_p = net.temporal_time_constants()
+        gap_decay = torch.exp(-protocol["gap_duration"] / tau_p)
+        gap_factor = tau_p * (-torch.expm1(-protocol["gap_duration"] / tau_p)) / 40.0
+        excitation_decay = torch.exp(-times / tau_e)[None, :, None]
+        excitation_recruitment = -torch.expm1(-times / tau_e)[None, :, None]
+        excitation_gap_decay = torch.exp(-protocol["gap_duration"] / tau_e)
+    else:
+        gap_decay = math.exp(-protocol["gap_duration"] / protocol["tau_p"])
+        gap_factor = protocol["tau_p"] * (-math.expm1(
+            -protocol["gap_duration"] / protocol["tau_p"]
+        )) / 40.0
     h = torch.zeros(
         theta.shape[0], net.hidden, device=theta.device, dtype=net.W_fb.weight.dtype
     )
     pred_down = h.new_zeros(theta.shape[0], N)
     som_p_state = torch.zeros_like(pred_down)
+    if net.learn_temporal_kinetics:
+        excitation_state = torch.zeros_like(pred_down)
     predictions, endpoints, rate_timecourses, gap_integrals = [], [], [], []
     endpoint_internals = [[] for _ in range(8)]
     temporal_internals = [[] for _ in range(8)]
@@ -616,12 +681,21 @@ def _forward_seq_temporal(
         state_times = times
         if clamp_final_probe_sst and stimulus == theta.shape[1] - 1:
             state_times = times.clamp_max(protocol["early_times"][-1])
+        excitation_kwargs = {}
+        if net.learn_temporal_kinetics:
+            target = net.circuit_gains()[CIRC_INDEX["w_ef"]] * F.relu(fb_scale * pred_down)
+            excitation = (
+                excitation_state[:, None, :] * excitation_decay
+                + target[:, None, :] * excitation_recruitment
+            )
+            excitation_kwargs["prediction_excitation"] = excitation
         rates, internals = net.l23(
             l4_code(theta[:, stimulus]),
             fb_scale * pred_down,
             return_internals=True,
             som_p_state=som_p_state,
             som_p_times=state_times,
+            **excitation_kwargs,
         )
         endpoints.append(rates[:, -1])
         if return_internals:
@@ -645,6 +719,10 @@ def _forward_seq_temporal(
         # Blank sensory input makes all other accounted rates zero. Include
         # the terminal blank as well; hidden predictor memory is held.
         som_p_state = som_p_end * gap_decay
+        if net.learn_temporal_kinetics:
+            # Both visually gated targets are zero during a true blank, even
+            # though predictor memory is held. Activation adds no population cost.
+            excitation_state = excitation[:, -1] * excitation_gap_decay
     result = (torch.stack(predictions, 1), torch.stack(endpoints, 1))
     if return_internals:
         result += (tuple(torch.stack(values, 1) for values in endpoint_internals),)
@@ -690,6 +768,8 @@ def forward_seq_tuned(
     ``rates[B,S,K,36]``, the eight corresponding internals, and the already
     population-weighted ``gap_integral[B,S]``. The final-probe clamp is an
     assay intervention: freeze actual S_P after 0.2 until offset, then decay.
+    Learned kinetics retain this schedule and learn both independent route
+    time constants; excitatory activation also decays naturally through blanks.
     """
     if net.temporal_protocol is not None:
         return _forward_seq_temporal(
@@ -797,6 +877,14 @@ def model_config(net: SimpleTunedNet) -> dict:
     }
     if net.temporal_protocol is not None:
         config["temporal_protocol"] = validate_temporal_protocol(net.temporal_protocol)
+    if net.learn_temporal_kinetics:
+        config.update(
+            learn_temporal_kinetics=True,
+            temporal_tau_e_init=net.temporal_tau_e_init,
+            temporal_tau_p_init=net.temporal_tau_p_init,
+        )
+    if net.sst_response_gain:
+        config["sst_response_gain"] = True
     return config
 
 
@@ -804,7 +892,10 @@ def build_tuned_from_config(config: dict | None = None) -> SimpleTunedNet:
     config = dict(config or {})
     requested_architecture = config.get("model_architecture_version")
     temporal_protocol = validate_temporal_protocol(config.get("temporal_protocol"))
+    learn_temporal_kinetics = bool(config.get("learn_temporal_kinetics", False))
     expected_architecture = (
+        LEARNED_TEMPORAL_MODEL_ARCHITECTURE_VERSION
+        if learn_temporal_kinetics else
         TEMPORAL_MODEL_ARCHITECTURE_VERSION
         if temporal_protocol is not None
         else MODEL_ARCHITECTURE_VERSION
@@ -864,4 +955,8 @@ def build_tuned_from_config(config: dict | None = None) -> SimpleTunedNet:
             config.get("fixed_intrinsic_rheobases", False)
         ),
         temporal_protocol=temporal_protocol,
+        learn_temporal_kinetics=learn_temporal_kinetics,
+        temporal_tau_e_init=float(config.get("temporal_tau_e_init", 1.0)),
+        temporal_tau_p_init=float(config.get("temporal_tau_p_init", 1.0)),
+        sst_response_gain=bool(config.get("sst_response_gain", False)),
     )
