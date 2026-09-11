@@ -1,68 +1,76 @@
-# Sharpening, dampening, and learned temporal responses
+# task-prioritized, energy-prioritized, and temporal networks
 
-A simple orientation-selective rate circuit learns different response shapes
-under task-accuracy and population-activity pressure. This branch includes
-**all three network types**, trained checkpoints, results, and reproduction code.
+a small orientation-selective rate circuit learns different response shapes
+under task and activity pressure. this working tree packages the **three main
+networks**, their checkpoints, numerical results, and reproduction code.
 
-| Network | Training regime | Response |
+| network | setting | response |
 |---|---|---|
-| **Sharpening, v9** | Low activity penalty (`alpha=0.07`). | Expected orientation enhanced; neighboring orientations and flanks suppressed. |
-| **Dampening, v9** | Higher activity penalty (`alpha=0.70`), same architecture. | Central suppression with relative flank sparing. |
-| **Temporal, v11** | Early decoding protected, activity charged throughout; both pathway kinetics learned. | Early sharpening followed by selective dampening relative to broader flanks; a narrow central peak persists. |
+| task-prioritized static | alpha .07 | expected center enhancement and flank suppression |
+| energy-prioritized static | alpha .70 | strong expected-center suppression with relative flank sparing |
+| temporal | alpha .30; peak decoding; uncapped 2×/3× starts | early enhancement followed by stronger proportional center suppression late |
 
-**[Read the network guide](NETWORKS.md)** for architecture, input and training,
-scientific assumptions, per-condition results, checkpoint loading, and usage.
+**[the complete network guide](NETWORKS.md)** covers architecture, stimulus,
+training, decoder definitions, results, usage, biological assumptions,
+validation, and the outcomes of the earlier experiments.
 
-The current temporal model learns the relative timing of excitatory prediction
-activation and SST recruitment. It is distinct from the retained historical
-v10 model, which prescribed slow SST kinetics.
+the main temporal model rewards one label-free peak snapshot anywhere in the
+stimulus window. both time constants are learned. 2× and 3× describe their
+initial difference; the fitted difference grows to approximately 152×.
+the result is initialization-dependent, and a small raw central peak remains
+late despite greater proportional center suppression.
 
-![Learned temporal response](figures/temporal_v11/temporal_response_minimal.png)
+## quick start
 
-![Accuracy and activity controls](figures/temporal_v11/temporal_controls_minimal.png)
-
-## Quick start
+from the repository root:
 
 ```bash
-git clone --branch networks-sharpening-dampening-temporal-v11 --single-branch \
-    https://github.com/Vishnu-Mohan-USyd/neuroips.git
-cd neuroips
-python3 -m venv .venv
-source .venv/bin/activate
 python -m pip install -r requirements.txt
-```
 
-Evaluate all six static sharpening/dampening checkpoints:
-
-```bash
 CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
-    python reproduce_figures.py
-```
+    python tools/evaluate_static.py
 
-Evaluate all fifteen learned temporal checkpoints, including the matched controls:
-
-```bash
 CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
-    python tools/evaluate_temporal.py \
-    --out outputs/temporal_v11_evaluation/results.json
+    python tools/evaluate_temporal.py --init-ratio 2
+
+CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
+    python tools/evaluate_temporal.py --init-ratio 3
 ```
 
-Recreate the two temporal figures from packaged results without evaluating or training:
+these evaluate all six static endpoints and all six temporal endpoints on cpu.
+fresh results are written under `outputs/`. see the guide for retraining,
+loading a single network, and interpreting each metric.
+
+## main results
+
+![static networks](figures/static/figure1_static_networks.png)
+
+the static figure uses one pooled condition-blind decoder per checkpoint and
+fold, tested on held-out velocity histories and noise. mean expected/unexpected
+decoding is **82.00%/59.55%** for the task-prioritized network and
+**8.74%/22.98%** for the energy-prioritized network.
+the original population-vector measurements are retained separately.
+
+![temporal network](figures/temporal/init_2x/temporal_response.png)
+
+both temporal starts produce the transition in all three seeds. early
+center/flank responses are approximately **1.79/.85** times baseline; late
+responses are **.10/.33**. selected-snapshot decoding is **49.2%**, next-stimulus
+accuracy **80.3%**, and cycle activity **.545** times its fixed reference.
+these temporal accuracy values use the training population-vector decoder,
+so they are not directly comparable to the static figure's decoder.
+
+## reproduce the figures
 
 ```bash
-python tools/plot_learned_temporal.py \
-    --results figures/temporal_v11/results.json \
-    --out-dir outputs/temporal_v11_figures
+python tools/plot_static_networks.py
+python tools/plot_learned_temporal.py --results results/temporal/init_2x.json
+python tools/plot_learned_temporal.py --results results/temporal/init_3x.json \
+    --out-dir outputs/temporal_figures_3x
 ```
 
-Three-seed fits and controls show that rewarding accuracy throughout removes
-late dampening at the tested activity weight; energy-only training suppresses
-responses immediately. These are conditional results in a rate model using a
-firing-activity proxy for energy. Full response shapes, early versus sustained
-accuracy, and modeling limitations are documented in [NETWORKS.md](NETWORKS.md).
-
-- [Static checkpoints](checkpoints/) and [numerical profiles](figures/c6_curves.json)
-- [Learned temporal checkpoints](checkpoints/temporal_v11/)
-- [Learned temporal numerical results](figures/temporal_v11/results.json)
-- [Shared circuit](harness/tuned_emergence_lib.py), [training](harness/train_sweep.py),
-  and [temporal training entry point](harness/train_temporal.py)
+the numerical results are in [results/static/main.json](results/static/main.json),
+[results/temporal/init_2x.json](results/temporal/init_2x.json), and
+[results/temporal/init_3x.json](results/temporal/init_3x.json).
+historical and scratch network artifacts remain local and are excluded from
+the main package; their scientific outcomes are documented in the guide.

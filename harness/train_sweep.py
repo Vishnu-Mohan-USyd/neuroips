@@ -610,15 +610,22 @@ def task_activity_losses(
         0.1 and 0.2. The sustained window averages instantaneous CEs at every
         positive on-period sample, retaining the primary generator's early
         noise and drawing all remaining noise from the auxiliary generator.
+        Peak selects one noiseless snapshot by orientation-resultant magnitude
+        and adds one [B,S,36] decoder-noise draw after selection. Its predictor
+        must use the same noiseless peak snapshot.
         Explicit current-decoder noise must match the selected window's
-        [B,S,K,36] rates. Both windows keep next targets on real stimulus
+        rates. All windows keep next targets on real stimulus
         transitions and charge the same full-cycle activity integral J/J_ref.
     """
 
-    if temporal_current_window not in ("early", "sustained"):
+    if temporal_current_window not in ("early", "sustained", "peak"):
         raise ValueError(f"unknown temporal current window {temporal_current_window!r}")
-    if temporal_current_window == "sustained" and net.temporal_protocol is None:
-        raise ValueError("sustained current loss requires temporal v10")
+    if temporal_current_window != "early" and net.temporal_protocol is None:
+        raise ValueError(f"{temporal_current_window} current loss requires temporal v10")
+    if temporal_current_window == "peak" and (
+        net.temporal_protocol["predictor_readout"] != "peak_evidence_noiseless"
+    ):
+        raise ValueError("peak current loss requires the noiseless peak predictor readout")
     if net.temporal_protocol is not None:
         predictions, _, _, timecourse = tuned.forward_seq_tuned(
             net, theta, 1.0, center_feedback=center_feedback,
@@ -651,7 +658,11 @@ def task_activity_losses(
                     device=current_rates.device, dtype=current_rates.dtype,
                     generator=auxiliary_current_noise_generator,
                 ) * references["sigma_train"]
-        current_channels = channels[:, :, None].expand(-1, -1, current_rates.shape[2])
+        if temporal_current_window == "peak":
+            current_rates, _ = tuned.select_peak_evidence(net, timecourse["rates"])
+            current_channels = channels
+        else:
+            current_channels = channels[:, :, None].expand(-1, -1, current_rates.shape[2])
         current = confidence_weighted_current_orientation_ce(
             net, current_rates, current_channels, noise_generator, references,
             current_decoder_noise=current_decoder_noise, current_readout=current_readout,
@@ -1417,10 +1428,14 @@ def run_alpha(
     )
     temporal_current_window = getattr(args, "temporal_current_window", "early")
     temporal_current_ce_ceiling = getattr(args, "temporal_current_ce_ceiling", None)
+    ce_constraint_method = getattr(args, "ce_constraint", "penalty")
+    if ce_constraint_method not in ("penalty", "dual"):
+        raise ValueError(f"unknown current-CE constraint method {ce_constraint_method!r}")
+    ce_constraint_lambda = 0.0
     temporal_current_ce_penalty_coefficient = getattr(
         args, "temporal_current_ce_penalty_coefficient", TEMPORAL_CURRENT_CE_PENALTY_COEFFICIENT
     )
-    if temporal_current_ce_ceiling is not None and (
+    if ce_constraint_method == "penalty" and temporal_current_ce_ceiling is not None and (
         not math.isfinite(temporal_current_ce_penalty_coefficient)
         or temporal_current_ce_penalty_coefficient <= 0.0
     ):
@@ -1429,6 +1444,11 @@ def run_alpha(
         "temporal_current_ce_ceiling": temporal_current_ce_ceiling,
         "temporal_current_ce_penalty_coefficient": temporal_current_ce_penalty_coefficient,
     }
+    if ce_constraint_method == "dual":
+        current_ce_ceiling_metadata.update(
+            temporal_current_ce_constraint_method="dual",
+            temporal_current_ce_lambda=ce_constraint_lambda,
+        )
     optimizer = torch.optim.Adam(
         set_axis_parameter_policy(
             net, args.freeze_local_comp, learn_feedback_gain
@@ -1450,6 +1470,8 @@ def run_alpha(
         }
         if temporal_current_window == "sustained" else {}
     )
+    if temporal_current_window == "peak":
+        current_window_kwargs["temporal_current_window"] = "peak"
     mismatch_stats: dict[str, int] = {
         "events": 0,
         "eligible": 0,
@@ -1481,8 +1503,15 @@ def run_alpha(
             or saved.get("temporal_current_window", "early")
             != temporal_current_window
             or saved.get("temporal_current_ce_ceiling") != temporal_current_ce_ceiling
+            or saved.get("temporal_current_ce_constraint_method", "penalty")
+            != ce_constraint_method
+            or (
+                ce_constraint_method == "dual"
+                and "temporal_current_ce_lambda" not in saved
+            )
             or (
                 temporal_current_ce_ceiling is not None
+                and ce_constraint_method == "penalty"
                 and saved.get("temporal_current_ce_penalty_coefficient")
                 != temporal_current_ce_penalty_coefficient
             )
@@ -1520,6 +1549,11 @@ def run_alpha(
                 auxiliary_current_noise_generator,
                 saved["auxiliary_current_noise_generator_state"],
             )
+        if ce_constraint_method == "dual":
+            ce_constraint_lambda = float(saved["temporal_current_ce_lambda"])
+            if not math.isfinite(ce_constraint_lambda) or ce_constraint_lambda < 0.0:
+                raise RuntimeError("checkpoint current-CE multiplier must be finite and nonnegative")
+            current_ce_ceiling_metadata["temporal_current_ce_lambda"] = ce_constraint_lambda
         start_step = int(saved["step"]) + 1
         event_log.write(
             {"event": "alpha_resume", "alpha": alpha, "step": start_step - 1}
@@ -1581,12 +1615,16 @@ def run_alpha(
             + alpha * losses["modeled_population_activity"]
         )
         if temporal_current_ce_ceiling is not None:
-            # Engineering penalty approximation; held-out feasibility must be checked separately.
             current_ce_excess = losses["current_ce"] - temporal_current_ce_ceiling
-            current_ce_penalty = (
-                temporal_current_ce_penalty_coefficient * F.relu(current_ce_excess).square()
-            )
-            objective = objective + current_ce_penalty
+            if ce_constraint_method == "dual":
+                current_ce_dual_term = ce_constraint_lambda * current_ce_excess
+                objective = objective + current_ce_dual_term
+            else:
+                # Engineering penalty approximation; held-out feasibility is checked separately.
+                current_ce_penalty = (
+                    temporal_current_ce_penalty_coefficient * F.relu(current_ce_excess).square()
+                )
+                objective = objective + current_ce_penalty
         optimizer.zero_grad(set_to_none=True)
         objective.backward()
         mask_circ_raw_grad_to_feedback_gain(net)
@@ -1594,6 +1632,11 @@ def run_alpha(
         mask_circ_raw_grad_to_feedback_gain(net)
         zero_non_feedback_gain_optimizer_state(optimizer, net)
         optimizer.step()
+        if ce_constraint_method == "dual" and temporal_current_ce_ceiling is not None:
+            ce_constraint_lambda = max(
+                0.0, ce_constraint_lambda + 1.0 * float(current_ce_excess.detach().item())
+            )
+            current_ce_ceiling_metadata["temporal_current_ce_lambda"] = ce_constraint_lambda
         enforce_fixed_vip_motif(net)
         zero_non_feedback_gain_optimizer_state(optimizer, net)
         assert_fixed_vip_motif(net)
@@ -1607,7 +1650,12 @@ def run_alpha(
                     "objective": float(objective.item()),
                     **({
                         "current_ce_excess": float(current_ce_excess.item()),
-                        "current_ce_penalty": float(current_ce_penalty.item()),
+                        **({
+                            "current_ce_dual_term": float(current_ce_dual_term.item()),
+                            "temporal_current_ce_lambda": ce_constraint_lambda,
+                        } if ce_constraint_method == "dual" else {
+                            "current_ce_penalty": float(current_ce_penalty.item()),
+                        }),
                     } if temporal_current_ce_ceiling is not None else {}),
                     "task": float(losses["task"].item()),
                     "modeled_population_activity": float(
@@ -2424,7 +2472,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--temporal-current-window",
-        choices=("early", "sustained"),
+        choices=("early", "sustained", "peak"),
         default="early",
         help="Current-CE sampling window in temporal alpha arms; common pretraining stays early-only.",
     )
@@ -2572,8 +2620,8 @@ def parse_args() -> argparse.Namespace:
     elif args.feedback_mode is None:
         args.feedback_mode = tuned.FEEDBACK_MODE_POSTERIOR
     args.center_feedback = args.feedback_mode == tuned.FEEDBACK_MODE_CENTERED
-    if args.temporal_current_window == "sustained" and not args.temporal_v10:
-        parser.error("--temporal-current-window sustained requires --temporal-v10")
+    if args.temporal_current_window != "early" and not args.temporal_v10:
+        parser.error(f"--temporal-current-window {args.temporal_current_window} requires --temporal-v10")
     if args.temporal_current_ce_ceiling is not None:
         if not args.temporal_v10:
             parser.error("--temporal-current-ce-ceiling requires --temporal-v10")
@@ -2690,6 +2738,8 @@ def main() -> None:
         common_state, references = run_pretrain(
             args, run_dir, device, event_log
         )
+        if args.temporal_current_window == "peak":
+            MODEL_CONFIG["temporal_protocol"]["predictor_readout"] = "peak_evidence_noiseless"
         if args.constrained_efficient_coding:
             constrained_result = run_constrained_efficient_coding(
                 common_state,

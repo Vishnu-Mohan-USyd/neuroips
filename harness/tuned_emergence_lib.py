@@ -49,14 +49,18 @@ TEMPORAL_PROTOCOL = {
 
 
 def validate_temporal_protocol(protocol: dict | None) -> dict | None:
-    """Validate the fixed v10 protocol; dt may change for numerical checks."""
+    """Validate the temporal protocol and its optional noiseless peak readout."""
     if protocol is None:
         return None
     if not isinstance(protocol, dict) or set(protocol) != set(TEMPORAL_PROTOCOL):
         raise ValueError("temporal_protocol must contain the complete v10 protocol")
     for key, expected in TEMPORAL_PROTOCOL.items():
-        if key != "dt" and protocol[key] != expected:
+        if key not in ("dt", "predictor_readout") and protocol[key] != expected:
             raise ValueError(f"temporal_protocol {key!r} does not match v10")
+    if protocol["predictor_readout"] not in (
+        "mean_early_noiseless", "peak_evidence_noiseless"
+    ):
+        raise ValueError("unknown temporal predictor readout")
     dt = float(protocol["dt"])
     if not math.isfinite(dt) or dt <= 0.0:
         raise ValueError("temporal_protocol dt must be finite and positive")
@@ -638,6 +642,28 @@ def predictive_feedback_evidence(
     return F.relu(raw_logits)
 
 
+def select_peak_evidence(
+    net: SimpleTunedNet, rates: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Select one noiseless snapshot from [..., K, 36], excluding onset index 0.
+
+    Squared orientation-resultant magnitude chooses the snapshot without a
+    label. Indices refer to the original K axis; exact ties select the first.
+    Gradients flow through the selected rates, not the discrete time choice.
+    """
+    if rates.ndim < 2 or rates.shape[-2] < 2 or rates.shape[-1] != N:
+        raise ValueError("peak evidence requires rates shaped [..., K>=2, 36]")
+    positive_rates = rates[..., 1:, :]
+    evidence = (positive_rates @ net.readout_cos).square() + (
+        positive_rates @ net.readout_sin
+    ).square()
+    indices = evidence.argmax(dim=-1) + 1
+    selected = rates.gather(
+        -2, indices[..., None, None].expand(*rates.shape[:-2], 1, N)
+    ).squeeze(-2)
+    return selected, indices
+
+
 def _forward_seq_temporal(
     net: SimpleTunedNet,
     theta: torch.Tensor,
@@ -705,9 +731,13 @@ def _forward_seq_temporal(
             rate_timecourses.append(rates)
             for collected, values in zip(temporal_internals, internals, strict=True):
                 collected.append(values)
-        # Only the next real stimulus receives this new prediction. The early
-        # response is noiseless here; decoder noise is added only by the loss.
-        h = net.gru(rates[:, early_indices].mean(dim=1), h)
+        # Only the next real stimulus receives this new prediction. Snapshot
+        # selection is noiseless; decoder noise is added only by the loss.
+        if protocol["predictor_readout"] == "peak_evidence_noiseless":
+            predictor_rates, _ = select_peak_evidence(net, rates)
+        else:
+            predictor_rates = rates[:, early_indices].mean(dim=1)
+        h = net.gru(predictor_rates, h)
         prediction = net.W_fb(h)
         predictions.append(prediction)
         pred_down = predictive_feedback_evidence(

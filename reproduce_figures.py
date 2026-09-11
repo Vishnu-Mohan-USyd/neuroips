@@ -7,13 +7,13 @@ external requirement is PyTorch (CPU is enough) and Matplotlib.
     python3 reproduce_figures.py
 
 Writes individual and seed-mean raw response curves as PNG/SVG plus
-figures/c6_curves.json. The mean comparison uses archived v8 curve data for
-its original-sharpening reference. Checks the seed-8 values banked in BANKED
+c6_curves.json in the selected output directory. Checks the seed-8 values banked in BANKED
 below and exits non-zero if a checkpoint is missing, incompatible, or fails
 reproduction.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -37,8 +37,8 @@ FLANK_OFFSETS = (-6, -5, -4, -3, 3, 4, 5, 6)
 PLOT_OFFSETS = tuple(range(-12, 13))
 
 ARMS = [
-    ("alpha0p07", "0p07", "Sharpening", "sharpening", "#2b7bb9"),
-    ("alpha0p7", "0p7", "Dampening", "dampening", "#cf3232"),
+    ("alpha0p07", "0p07", "task-prioritized", "sharpening", "#2b7bb9"),
+    ("alpha0p7", "0p7", "energy-prioritized", "dampening", "#cf3232"),
 ]
 SEEDS = (8, 9, 10)
 
@@ -60,45 +60,34 @@ def build_paths() -> None:
 
 def plot_seed_mean(curves: dict[str, dict]) -> None:
     """Render the shared-axis comparison from the same checkpoint responses."""
-    archived = json.loads(
-        (HERE / "archive/v8/figures/c6_curves.json").read_text()
-    )
-
     def mean_curve(slug: str, field: str) -> list[float]:
         return torch.tensor(
             [curves[f"seed{seed}_{slug}"][field] for seed in SEEDS],
             dtype=torch.float64,
         ).mean(dim=0).tolist()
 
-    original = torch.tensor(
-        [archived[f"seed{seed}_0p05"]["curve_adapted"] for seed in SEEDS],
-        dtype=torch.float64,
-    ).mean(dim=0).tolist()
     degrees = curves[f"seed{SEEDS[0]}_{ARMS[0][1]}"]["curves_offsets_deg"]
     fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharey=True)
-    ymax = max(original)
+    ymax = 0.0
     for ax, (_, slug, phenotype, kind, _) in zip(axes, ARMS):
         first = mean_curve(slug, "curve_baseline_t0")
         unexpected = mean_curve(slug, "curve_unexpected")
         expected = mean_curve(slug, "curve_adapted")
         ymax = max(ymax, max(first), max(unexpected), max(expected))
         ax.plot(degrees, first, color="#777777", linestyle="--",
-                linewidth=1.8, label="First response")
-        if kind == "sharpening":
-            ax.plot(degrees, original, color="#82b4d7", linestyle=":",
-                    linewidth=2, label="Expected — original")
+                linewidth=1.8, label="first response")
         ax.plot(degrees, unexpected, color="#dd8b3a", linewidth=1.7,
-                label="Unexpected")
+                label="unexpected")
         ax.plot(degrees, expected,
                 color="#236da8" if kind == "sharpening" else "#b64944",
-                linewidth=2.3, label="Expected")
+                linewidth=2.3, label="expected")
         alpha = float(slug.replace("p", "."))
         ax.set(title=f"{phenotype} · α = {alpha:.2f}", xlim=(-60, 60),
-               xlabel="Orientation offset (°)")
+               xlabel="orientation offset (°)")
         ax.set_xticks([-60, -30, 0, 30, 60])
         ax.spines[["top", "right"]].set_visible(False)
         ax.legend(frameon=False, fontsize=8, loc="upper right")
-    axes[0].set_ylabel("Activity (a.u.)")
+    axes[0].set_ylabel("activity (a.u.)")
     axes[0].set_ylim(0, ymax * 1.12)
     fig.tight_layout()
     fig.savefig(FIGS / "c6_shared_task_energy_seed_mean.png", dpi=180)
@@ -106,7 +95,12 @@ def plot_seed_mean(curves: dict[str, dict]) -> None:
     plt.close(fig)
 
 
-def main() -> int:
+def main(argv=()) -> int:
+    global FIGS
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=FIGS,
+                        help="directory for fresh response plots and numerical results")
+    FIGS = parser.parse_args(argv).out
     build_paths()
     import simple_net as simple           # noqa: E402
     import tuned_emergence_lib as tuned   # noqa: E402
@@ -120,7 +114,7 @@ def main() -> int:
     import assay_emergent_task_energy_axis as assay  # noqa: E402
     assert assay.tuned is tuned, "assay must bind the harness library"
 
-    FIGS.mkdir(exist_ok=True)
+    FIGS.mkdir(parents=True, exist_ok=True)
     dump: dict[str, dict] = {}
     failures: list[str] = []
 
@@ -269,4 +263,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

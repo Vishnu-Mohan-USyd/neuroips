@@ -8,3 +8,13 @@ BIOLOGY_ALIGNMENT_LOG.md
 # Unpackaged historical checkpoint families remain local.
 checkpoints/seed*/alpha0p0/
 checkpoints/seed*/alpha0p5/
+# Historical experiments remain on disk, outside the main-network package.
+archive/
+checkpoints/temporal_v10/
+checkpoints/temporal_v11/
+figures/temporal_v10/
+figures/temporal_v11/
+figures/c6_*.png
+figures/c6_*.svg
+figures/c6_shared_task_energy_seed_mean.json
+tools/plot_temporal_profile.py

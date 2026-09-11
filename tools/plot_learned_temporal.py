@@ -1,161 +1,147 @@
-"""Recreate the two learned-temporal response and training-control figures."""
+"""plot the main temporal response and linked orientation snapshots."""
 
 import argparse
 import json
 from pathlib import Path
-
+import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter, MultipleLocator
-import numpy as np
-
-ROOT = Path(__file__).resolve().parents[1]
-SEEDS = ("8", "9", "10")
-COLORS = {"early": "#078291", "late": "#CE5F27", "baseline": "#65727C",
-          "preferred": "#2867AA", "broad": "#D77C19", "near": "#8B5BAE"}
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results", type=Path,
-                        default=ROOT / "figures" / "temporal_v11" / "results.json")
-    parser.add_argument("--out-dir", type=Path,
-                        default=ROOT / "outputs" / "temporal_v11_figures")
-    return parser.parse_args()
-
-
-def curves(results, condition):
-    probes = [results["runs"][f"fitted_{condition}"][seed]["probe"] for seed in SEEDS]
-    return {
-        "offsets": np.asarray(probes[0]["offset_degrees"]),
-        "times": np.asarray(probes[0]["times"]),
-        "expected": np.asarray([probe["expected"] for probe in probes]),
-        "baseline": np.asarray([probe["baseline"] for probe in probes]),
-        **{f"{window}_{kind}": np.asarray([probe["windows"][window][kind] for probe in probes])
-           for window in ("early", "late") for kind in ("expected", "baseline")},
-    }
-
-
-def band(ax, x, values, color, label, linestyle="-", early_points=False):
-    mean = values.mean(0)
-    ax.fill_between(x, values.min(0), values.max(0), color=color, alpha=.16, linewidth=0)
-    line, = ax.plot(x, mean, color=color, lw=2.5, ls=linestyle, label=label)
-    if early_points:
-        indices = np.flatnonzero(np.isclose(x, .1) | np.isclose(x, .2))
-        ax.scatter(x[indices], mean[indices], color=color, s=17,
-                   edgecolors="white", linewidths=.5, zorder=4)
-    return line
-
-
-def style_axis(ax, *, time=False, percent=False):
-    ax.spines[["top", "right"]].set_visible(False)
-    ax.spines[["bottom", "left"]].set_color("#91A1AE")
-    ax.tick_params(colors="#5F7285", labelsize=11)
-    ax.grid(axis="y", color="#E3EAF0", linewidth=.8)
-    ax.set_axisbelow(True)
-    if time:
-        ax.set_xlim(0, 4)
-        ax.xaxis.set_major_locator(MultipleLocator(1))
-        ax.set_xlabel("Time (relative units)")
-        ax.axvspan(.1, .2, color=COLORS["early"], alpha=.07)
-        ax.axvspan(3.1, 4, color=COLORS["late"], alpha=.05)
-    else:
-        ax.set_xlim(-40, 40)
-        ax.xaxis.set_major_locator(MultipleLocator(20))
-        ax.set_xlabel("Orientation offset (°)")
-    if percent:
-        ax.set_ylim(-100, 112)
-        ax.yaxis.set_major_locator(MultipleLocator(50))
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _pos: f"{value:+.0f}" if value > 0 else f"{value:.0f}"))
-        ax.axhline(0, color=COLORS["baseline"], lw=1.1, ls="--")
-        ax.set_ylabel("Change from baseline (%)")
-
-
-def temporal_panel(ax, data, near=False):
-    offsets = data["offsets"]
-    groups = [(offsets == 0, "preferred", "Preferred: 0°", "-"),
-              ((np.abs(offsets) >= 15) & (np.abs(offsets) <= 30),
-               "broad", "Flanks: ±15–30°", "-")]
-    if near:
-        groups.append((np.abs(offsets) == 15, "near", "Flanks: ±15°", "--"))
-    lines = []
-    for mask, color, label, linestyle in groups:
-        # Normalize each seed's group aggregate before averaging across seeds.
-        values = 100 * (data["expected"][:, :, mask].mean(-1)
-                        / data["baseline"][:, :, mask].mean(-1) - 1)
-        lines.append(band(ax, data["times"], values, COLORS[color], label,
-                          linestyle, early_points=True))
-    style_axis(ax, time=True, percent=True)
-    return lines
-
-
-def save_figure(fig, out_dir, name):
-    for suffix in ("png", "svg"):
-        fig.savefig(out_dir / f"{name}.{suffix}", dpi=220, facecolor="white")
-    plt.close(fig)
+from matplotlib.lines import Line2D
+from matplotlib.patches import ConnectionPatch
+from matplotlib.ticker import FuncFormatter
 
 
 def main():
-    args = parse_args()
-    results = json.loads(args.results.read_text())
-    data = {condition: curves(results, condition)
-            for condition in ("joint", "accuracy_only", "energy_only", "sustained", "fast_sst")}
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 12,
-                         "axes.labelsize": 13, "axes.labelcolor": "#203D53",
-                         "text.color": "#183348", "legend.fontsize": 11,
-                         "axes.titlesize": 15, "axes.titleweight": "bold"})
+    root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--results", type=Path, default=root / "results/temporal/init_2x.json")
+    parser.add_argument("--out-dir", type=Path, default=root / "outputs/temporal_figures")
+    args = parser.parse_args()
+    out = args.out_dir
+    out.mkdir(parents=True, exist_ok=True)
+    main_results = json.loads(args.results.read_text())["runs"]
+    seeds = ("8","9","10")
+    ink, muted, spine = "#223B4C", "#788691", "#8D99A2"
+    blue, orange, purple = "#286CA5", "#D48829", "#9565A3"
+    plt.rcParams.update({
+        "font.family":"DejaVu Sans", "font.size":11,
+        "text.color":ink, "axes.labelcolor":ink, "axes.edgecolor":spine,
+        "axes.labelsize":12, "axes.linewidth":.7, "axes.titlesize":13,
+        "xtick.color":muted,"ytick.color":muted, "xtick.labelsize":10,"ytick.labelsize":10,
+        "svg.fonttype":"none","pdf.fonttype":42,"savefig.facecolor":"white",
+    })
 
-    fig, axes = plt.subplots(2, 2, figsize=(14.5, 9.25))
-    fig.subplots_adjust(left=.078, right=.985, bottom=.09, top=.895, wspace=.25, hspace=.35)
-    fig.suptitle("Expected stimulus · early accuracy + energy", x=.078, y=.973,
-                 ha="left", fontsize=19, fontweight="bold")
-    joint = data["joint"]
-    mask = np.abs(joint["offsets"]) <= 40
-    offsets = joint["offsets"][mask]
-    ax = axes[0, 0]
-    band(ax, offsets, joint["early_expected"][:, mask], COLORS["early"], "Early: t = 0.1, 0.2")
-    band(ax, offsets, joint["late_expected"][:, mask], COLORS["late"], "Late: t = 3.1–4.0")
-    band(ax, offsets, joint["early_baseline"][:, mask], COLORS["baseline"], "Baseline", "--")
-    style_axis(ax)
-    ax.set_ylim(0, 1.1 * max(joint[f"{window}_{kind}"][:, mask].max()
-                            for window in ("early", "late") for kind in ("expected", "baseline")))
-    ax.set_ylabel("Rate (a.u.)")
-    ax.set_title("A  Response shape", loc="left", pad=14)
-    ax.legend(frameon=False, loc="upper right")
+    def rows(source, key):
+        result = [source[key][seed] for seed in seeds]
+        assert all(r["step"] == 24000 and r["window"] == "peak" for r in result)
+        return result
 
-    ax = axes[0, 1]
-    for window in ("early", "late"):
-        ratio = 100 * (joint[f"{window}_expected"] / joint[f"{window}_baseline"] - 1)
-        band(ax, offsets, ratio[:, mask], COLORS[window], window.capitalize())
-    style_axis(ax, percent=True)
-    ax.set_title("B  Relative response", loc="left", pad=14)
-    ax.legend(frameon=False, loc="upper right")
+    joint = rows(main_results,"fitted_joint")
+    times = np.asarray(joint[0]["probe"]["times"])
+    offsets = np.asarray(joint[0]["probe"]["offset_degrees"])
+    visible = np.abs(offsets) <= 40
+    center = offsets == 0
+    flanks = (np.abs(offsets) >= 15) & (np.abs(offsets) <= 30)
 
-    for ax, condition, title in ((axes[1, 0], "joint", "C  Equal initial kinetics"),
-                                 (axes[1, 1], "fast_sst", "D  SST initially 10× faster")):
-        temporal_panel(ax, data[condition], near=True)
-        ax.set_title(title, loc="left", pad=14)
-        ax.legend(frameon=False, loc="upper right")
-    fig.text(.985, .015, "Mean and range · 3 seeds", ha="right", color="#6C7A86", fontsize=10)
-    save_figure(fig, args.out_dir, "temporal_response_minimal")
+    def arrays(records):
+        return (np.asarray([r["probe"]["expected"] for r in records]),
+                np.asarray([r["probe"]["baseline"] for r in records]))
 
-    fig, axes = plt.subplots(2, 2, figsize=(14.5, 9.25))
-    fig.subplots_adjust(left=.078, right=.985, bottom=.09, top=.84, wspace=.25, hspace=.36)
-    fig.suptitle("Expected stimulus · training controls", x=.078, y=.973,
-                 ha="left", fontsize=19, fontweight="bold")
-    for ax, condition, title in ((axes[0, 0], "joint", "A  Early accuracy + energy"),
-                                 (axes[0, 1], "accuracy_only", "B  Accuracy only"),
-                                 (axes[1, 0], "sustained", "C  Sustained accuracy + energy"),
-                                 (axes[1, 1], "energy_only", "D  Energy only")):
-        lines = temporal_panel(ax, data[condition])
-        ax.set_title(title, loc="left", pad=14)
-    fig.legend(lines, [line.get_label() for line in lines], loc="upper center",
-               bbox_to_anchor=(.57, .937), ncol=2, frameon=False)
-    fig.text(.985, .015, "Mean and range · 3 seeds", ha="right", color="#6C7A86", fontsize=10)
-    save_figure(fig, args.out_dir, "temporal_controls_minimal")
-    print(args.out_dir)
+    def response_change(records, mask):
+        e,b = arrays(records)
+        return 100*(e[:,:,mask].mean(-1)/b[:,:,mask].mean(-1)-1)
+
+    def band(ax,x,y,color,ls="-",lw=2.3,alpha=.16,zorder=3):
+        ax.fill_between(x,y.min(0),y.max(0),color=color,alpha=alpha,lw=0,zorder=zorder-1)
+        return ax.plot(x,y.mean(0),color=color,lw=lw,ls=ls,zorder=zorder)[0]
+
+    def style(ax, xticks, yticks, xlabel=None, ylabel=None, show_y=True):
+        ax.spines[["top","right"]].set_visible(False)
+        ax.spines["bottom"].set_position(("outward",5))
+        ax.spines["left"].set_position(("outward",5))
+        ax.spines["bottom"].set_bounds(xticks[0],xticks[-1])
+        ax.spines["left"].set_bounds(yticks[0],yticks[-1])
+        ax.set_xticks(xticks); ax.set_yticks(yticks)
+        ax.tick_params(length=3.5,width=.65,pad=6)
+        if xlabel: ax.set_xlabel(xlabel,labelpad=11)
+        if ylabel: ax.set_ylabel(ylabel,labelpad=10)
+        if not show_y:
+            ax.spines["left"].set_visible(False)
+            ax.tick_params(axis="y",left=False,labelleft=False)
+
+    def letter(ax, text, x=-.105, y=1.075):
+        ax.text(x,y,text,transform=ax.transAxes,fontsize=23,weight="bold",ha="left",va="bottom")
+
+    def save(fig,stem):
+        for ext in ("png","svg","pdf"):
+            fig.savefig(out/f"{stem}.{ext}",dpi=230,facecolor="white")
+        plt.close(fig)
+        print(stem,flush=True)
+
+    # Response snapshots linked to their actual locations in the full timecourse.
+    fig=plt.figure(figsize=(14.8,9.4),facecolor="white")
+    fig.text(.075,.955,"temporal response",fontsize=20,weight="bold",ha="left")
+    fig.text(.075,.918,"expected stimulus · peak decoding",fontsize=11.5,color=muted)
+    snap_axes=[fig.add_axes([.075+i*.235,.585,.205,.27]) for i in range(4)]
+    trace_ax=fig.add_axes([.075,.10,.91,.345])
+    e,b=arrays(joint)
+    snapshot_times=(.1,1.,2.,4.)
+    snap_indices=[int(np.argmin(abs(times-t))) for t in snapshot_times]
+    for n,(ax,index,t) in enumerate(zip(snap_axes,snap_indices,snapshot_times)):
+        for lo,hi in ((-30,-15),(15,30)):
+            ax.axvspan(lo,hi,color=orange,alpha=.065,lw=0,zorder=0)
+        band(ax,offsets[visible],b[:,index,visible],spine,ls=(0,(4,3)),lw=1.6,alpha=0)
+        band(ax,offsets[visible],e[:,index,visible],ink,lw=2.3)
+        ax.scatter([0],[e[:,index,center].mean()],s=27,color=blue,edgecolors="white",lw=.7,zorder=5)
+        ax.scatter(offsets[flanks],e[:,index,flanks].mean(0),s=13,color=orange,edgecolors="white",lw=.35,zorder=5)
+        ax.set_xlim(-40,40); ax.set_ylim(0,2.85)
+        style(ax,[-30,0,30],[0,1,2],ylabel="rate (a.u.)" if n==0 else None,show_y=n==0)
+        ax.set_xticklabels(["−30°","0°","+30°"])
+        ax.set_title(f"t = {t:.1f}",weight="bold",pad=14)
+        letter(ax,chr(97+n),x=-.13,y=1.06)
+        connector=ConnectionPatch(xyA=(0,-.21),coordsA=ax.get_xaxis_transform(),
+            xyB=(t,1.01),coordsB=trace_ax.get_xaxis_transform(),
+            color="#B1BFCA",lw=.9,clip_on=False,zorder=0)
+        fig.add_artist(connector)
+        trace_ax.axvline(t,color="#C5D0D8",lw=.85,ls=(0,(3,4)),zorder=0)
+    fig.text(.54,.512,"orientation offset",ha="center",color=muted,fontsize=11)
+    fig.legend([Line2D([0],[0],color=ink,lw=2.3),
+                Line2D([0],[0],color=spine,lw=1.6,ls=(0,(4,3)))],
+               ["expected","baseline"],loc="upper right",bbox_to_anchor=(.985,.948),
+               frameon=False,ncol=2,fontsize=11,handlelength=2.2,columnspacing=1.8)
+
+    # Explicitly scaled late inset; retains the small central bump and off-center maxima.
+    late_ax=snap_axes[-1].inset_axes([.53,.52,.45,.42])
+    index=snap_indices[-1]
+    band(late_ax,offsets[visible],e[:,index,visible],ink,lw=1.5)
+    late_ax.set_xlim(-35,35); late_ax.set_ylim(0,.22)
+    style(late_ax,[-30,0,30],[0,.1,.2])
+    late_ax.tick_params(labelsize=7,length=2,pad=2)
+    late_ax.set_xticklabels(["−30","0","30"])
+    late_ax.set_title("zoom",fontsize=8.5,pad=5)
+    late_ax.yaxis.set_major_formatter(FuncFormatter(lambda v,p:f"{v:g}"))
+
+    for mask,color in ((center,blue),(flanks,orange)):
+        values=response_change(joint,mask)
+        band(trace_ax,times,values,color)
+        trace_ax.scatter(times[snap_indices],values.mean(0)[snap_indices],s=33,
+                         color=color,edgecolors="white",linewidths=.9,zorder=5)
+    trace_ax.axhline(0,color=spine,ls=(0,(4,3)),lw=.85,zorder=1)
+    trace_ax.set_xlim(-.03,4.06); trace_ax.set_ylim(-100,105)
+    style(trace_ax,[0,1,2,3,4],[-100,-50,0,50,100],
+          xlabel="time (relative units)",ylabel="change from baseline (%)")
+    trace_ax.yaxis.set_major_formatter(FuncFormatter(lambda v,p:f"+{v:.0f}" if v>0 else f"{v:.0f}"))
+    letter(trace_ax,"e",x=-.06,y=1.07)
+    trace_ax.legend([
+        Line2D([0],[0],color=blue,lw=2.3),
+        Line2D([0],[0],color=orange,lw=2.3)],
+        ["center: 0°","flanks: ±15–30°"],
+        loc="center right",bbox_to_anchor=(.995,.65),ncol=2,frameon=False,
+        fontsize=10.5,handlelength=2.4,columnspacing=2,labelspacing=.9)
+    fig.text(.985,.018,"3 seeds · mean and range",ha="right",fontsize=9.5,color=muted)
+    save(fig,"temporal_response")
+
 
 
 if __name__ == "__main__":

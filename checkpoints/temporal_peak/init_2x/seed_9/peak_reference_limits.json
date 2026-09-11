@@ -1,0 +1,20 @@
+{
+  "batch": 128,
+  "batches": 8,
+  "calibration_data_seed": 920001,
+  "calibration_noise_seed": 920002,
+  "ceiling": 1.795329973101616,
+  "device": "cuda:0",
+  "measurements": {
+    "current_ce": 1.795329973101616,
+    "next_ce": 0.6648872941732407
+  },
+  "mismatch_prob": 0.02,
+  "penalty_coefficient": 10000.0,
+  "performance_tolerance": 0.0,
+  "predictor_readout": "peak_evidence_noiseless",
+  "seed": 9,
+  "sequence_length": 12,
+  "source_checkpoint": "checkpoints/seed9/alpha0p07/common_pretrain_final.pt",
+  "temporal_current_window": "peak"
+}
